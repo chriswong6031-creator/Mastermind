@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>narrator-bot — prototype</title>
+<style>
+:root{
+  --bg:#0b0e11; --panel:#121821; --panel2:#1a2230; --line:#222b37; --line2:#313c4b;
+  --text:#e6edf3; --muted:#8b97a6; --dim:#5b6675;
+  --up:#3fb950; --upbg:#11341d; --down:#f85149; --downbg:#3a1715;
+  --warn:#d6a02a; --warnbg:#3a2c0c; --link:#58a6ff; --gold:#d9a93f; --goldbg:#3a2e10; --act:#db6d28;
+  --num:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}
+html[data-theme="light"]{
+  --bg:#f6f7f9; --panel:#ffffff; --panel2:#eef1f4; --line:#e2e6eb; --line2:#cfd6de;
+  --text:#1a2230; --muted:#5b6675; --dim:#8a94a2;
+  --up:#1a7f37; --upbg:#e7f3ea; --down:#c4322b; --downbg:#fbeae9; --warn:#9a6700; --warnbg:#fbf2dc;
+  --link:#0969da; --gold:#8a6d1f; --goldbg:#f6edd6; --act:#bc4c1a;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;line-height:1.5}
+.num{font-family:var(--num);font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
+.wrap{max-width:980px;margin:0 auto;padding:0 18px 48px}
+header{position:sticky;top:0;background:var(--bg);border-bottom:1px solid var(--line);z-index:5}
+.bar{max-width:980px;margin:0 auto;padding:11px 18px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.brand{font-weight:600;letter-spacing:.02em}
+.hb{width:9px;height:9px;border-radius:50%;background:var(--up);display:inline-block;animation:hb 2.4s ease-in-out infinite}
+@keyframes hb{50%{opacity:.32}}
+@media (prefers-reduced-motion:reduce){.hb{animation:none}}
+.tabs{display:flex;gap:4px;margin-left:auto;flex-wrap:wrap}
+.tab{font-size:13px;color:var(--muted);background:none;border:1px solid transparent;border-radius:7px;padding:5px 11px;cursor:pointer}
+.tab:hover{color:var(--text);background:var(--panel)}
+.tab.on{color:var(--text);background:var(--panel);border-color:var(--line2)}
+.tgl{font-size:12px;color:var(--muted);background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:5px 9px;cursor:pointer}
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:12px;padding:2px 9px;border-radius:7px}
+.paper{background:var(--warnbg);color:var(--warn)}
+.lbl{font-size:11px;letter-spacing:.05em;color:var(--dim);text-transform:none}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+.grid{display:grid;gap:12px}
+.screen{display:none;padding-top:16px}
+.screen.on{display:block;animation:fade .18s ease}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+.q{display:flex;align-items:center;justify-content:center;font-size:11px;height:34px;border:1px solid var(--line);border-radius:7px;color:var(--dim)}
+.q.on{background:var(--goldbg);color:var(--gold);border-color:transparent;font-weight:500}
+.mc{background:var(--panel2);border-radius:8px;padding:9px 11px}
+.mc .v{font-family:var(--num);font-variant-numeric:tabular-nums;font-size:19px;font-weight:500}
+.track{height:5px;background:var(--bg);border:1px solid var(--line);border-radius:3px;margin-top:6px;overflow:hidden}
+.track>i{display:block;height:100%}
+.prow{display:flex;align-items:center;justify-content:space-between;padding:8px 11px;background:var(--panel2);border-left:3px solid var(--line2);margin-bottom:7px}
+.prow.pulse{animation:pl 1.2s ease}
+@keyframes pl{0%{box-shadow:0 0 0 0 var(--link)}40%{box-shadow:0 0 0 2px var(--link)}100%{box-shadow:0 0 0 0 transparent}}
+.chip{display:inline-flex;align-items:center;gap:4px;font-size:12px;padding:2px 8px;border-radius:7px}
+.c-up{background:var(--upbg);color:var(--up)} .c-down{background:var(--downbg);color:var(--down)}
+.c-warn{background:var(--warnbg);color:var(--warn)} .c-mut{border:1px solid var(--line);color:var(--muted)}
+.frow{display:flex;gap:9px;align-items:baseline;padding:6px 0;border-bottom:1px solid var(--line);font-size:13px}
+.frow:last-child{border-bottom:none}
+table{width:100%;border-collapse:collapse;table-layout:fixed;font-size:12.5px}
+th{text-align:left;font-size:10px;letter-spacing:.05em;color:var(--dim);font-weight:400;padding:7px 6px;border-bottom:1px solid var(--line2)}
+td{padding:8px 6px;border-bottom:1px solid var(--line);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dc{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--up);padding:16px}
+.ev{font-size:12px;padding:3px 9px;border-radius:7px;background:var(--panel2);border:1px solid var(--line)}
+.lv{background:var(--panel2);border-radius:8px;padding:9px 11px}
+.lvv{font-family:var(--num);font-variant-numeric:tabular-nums;font-size:15px;font-weight:500;margin-top:2px}
+.fals{background:var(--upbg);border-radius:8px;padding:10px 12px}
+.nav-mini{display:flex;align-items:center;gap:2px;font-size:12px;color:var(--muted);flex-wrap:wrap}
+.nav-mini a{color:var(--muted);text-decoration:none;padding:0 7px}
+.nav-mini a.on{color:var(--text);font-weight:500}
+.foot{text-align:center;font-size:11px;color:var(--dim);padding:14px 0}
+h1{font-size:18px;font-weight:500;margin:0}
+@media(max-width:760px){.hero{grid-template-columns:1fr!important}.metrics{grid-template-columns:repeat(2,1fr)!important}.cols{grid-template-columns:1fr!important}.levels{grid-template-columns:repeat(2,1fr)!important}}
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <span class="brand">narrator-bot</span>
+    <span class="hb" id="hb" aria-hidden="true"></span>
+    <span class="lbl">live · last analysis <span class="num" id="ago">4m</span> ago</span>
+    <span class="pill paper">&#128274; paper</span>
+    <div class="tabs" role="tablist">
+      <button class="tab on" data-s="cmd">Command center</button>
+      <button class="tab" data-s="dec">Decision card</button>
+      <button class="tab" data-s="trk">Track record</button>
+      <button class="tab" data-s="pub">Public page</button>
+    </div>
+    <button class="tgl" id="tgl">&#9788; light</button>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- ============ COMMAND CENTER ============ -->
+  <section class="screen on" data-screen="cmd">
+    <div class="panel hero grid" style="grid-template-columns:150px 1fr;margin-bottom:12px">
+      <div>
+        <div class="lbl" style="margin-bottom:6px">Regime quadrant</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px">
+          <div class="q on">Q1 · gold</div><div class="q">Q2</div><div class="q">Q3</div><div class="q">Q4</div>
+        </div>
+        <div style="margin-top:10px;display:flex;flex-direction:column;gap:6px">
+          <div style="display:flex;justify-content:space-between;font-size:12px"><span class="lbl">macro risk</span><span style="color:var(--warn)">moderate</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:12px"><span class="lbl">liquidity</span><span style="color:var(--down)">&#9660; contracting</span></div>
+        </div>
+      </div>
+      <div>
+        <h1>Goldilocks — disinflation, tightening liquidity</h1>
+        <div style="font-size:13px;color:var(--muted);margin:5px 0 12px">Constructive on AI-infra breadth; gross held back by the liquidity drain.</div>
+        <div class="metrics grid" style="grid-template-columns:repeat(4,1fr)">
+          <div class="mc"><div class="lbl">gross</div><div class="v">72%</div><div class="track"><i style="width:72%;background:var(--link)"></i></div><div class="lbl" style="margin-top:3px">target 100%</div></div>
+          <div class="mc"><div class="lbl">cash</div><div class="v">28.0%</div></div>
+          <div class="mc"><div class="lbl">decisions open</div><div class="v">5</div></div>
+          <div class="mc"><div class="lbl">last analysis</div><div class="v" style="color:var(--up)">4m</div><div class="lbl" style="margin-top:3px">within cadence</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="cols grid" style="grid-template-columns:1fr 1fr">
+      <div class="panel">
+        <div class="lbl" style="margin-bottom:8px">Top positions</div>
+        <div class="prow" id="p-nvda" style="border-left-color:var(--up)"><span><b class="num" style="font-weight:500">NVDA</b> <span class="lbl">AI-infra</span></span><span style="display:flex;gap:8px;align-items:center"><span class="chip c-up">&#9650; add</span><span class="num">10.5%</span></span></div>
+        <div class="prow"><span><b class="num" style="font-weight:500">AVGO</b> <span class="lbl">AI-infra</span></span><span style="display:flex;gap:8px;align-items:center"><span class="chip c-mut">hold</span><span class="num">8.0%</span></span></div>
+        <div class="prow" style="border-left-color:var(--warn)"><span><b class="num" style="font-weight:500">TLT</b> <span class="lbl">duration</span></span><span style="display:flex;gap:8px;align-items:center"><span class="chip c-warn">&#9660; trim</span><span class="num">3.5%</span></span></div>
+        <div class="prow" style="opacity:.6"><span><b class="num" style="font-weight:500">SMCI</b> <span class="lbl">AI-infra · score 78</span></span><span style="display:flex;gap:8px;align-items:center"><span class="chip c-mut">&#128274; cycle-blocked</span><span class="num">0.0%</span></span></div>
+      </div>
+      <div class="panel">
+        <div class="lbl" style="margin-bottom:8px">Live feed</div>
+        <div id="feed">
+          <div class="frow"><span class="num lbl" style="min-width:40px">12:04</span><span style="color:var(--link)">&#9889;</span><span><b style="font-weight:500">gate fired</b> · breadth tier woke the brain</span></div>
+          <div class="frow"><span class="num lbl" style="min-width:40px">11:58</span><span style="color:var(--up)">&#43;</span><span><b style="font-weight:500">thesis opened</b> · add NVDA, prob 0.71</span></div>
+          <div class="frow"><span class="num lbl" style="min-width:40px">11:41</span><span style="color:var(--warn)">&#9660;</span><span><b style="font-weight:500">position changed</b> · TLT trimmed 5.5 &#8594; 3.5%</span></div>
+          <div class="frow"><span class="num lbl" style="min-width:40px">09:30</span><span style="color:var(--dim)">&#128190;</span><span><b style="font-weight:500">ingest done</b> · EOD bars + options greeks</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ DECISION CARD ============ -->
+  <section class="screen" data-screen="dec">
+    <div class="dc">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span class="chip c-up" style="font-weight:500">&#9650; add · overweight</span>
+          <span class="num" style="font-size:18px;font-weight:500">NVDA</span>
+          <span style="font-size:12px;color:var(--muted)">NVIDIA · AI infrastructure</span>
+        </div>
+        <span class="chip c-mut">conviction high · <span class="num">0.71</span></span>
+      </div>
+      <p style="font-size:14px;line-height:1.6;margin:12px 0 10px">AI-infra capex re-accelerating; NVDA breadth leadership intact, dealer gamma supportive above 1,150. Sizing on the drawdown cone, not direction; gross trimmed for the liquidity drain.</p>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px">
+        <span class="ev" style="color:var(--up)">&#9650; breadth +</span>
+        <span class="ev">gamma wall <span class="num">1,150</span></span>
+        <span class="ev">RS <span class="num">92</span>&#7510;&#7580;&#7511;</span>
+        <span class="ev" style="color:var(--warn)">&#9888; crowding <span class="num">.55</span></span>
+      </div>
+      <div class="levels grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:12px">
+        <div class="lv"><div class="lbl">add-trigger</div><div class="lvv">&#8250;1,205</div><div class="lbl" style="margin-top:2px">daily close</div></div>
+        <div class="lv"><div class="lbl">stop</div><div class="lvv" style="color:var(--down)">&#8249;1,090</div><div class="lbl" style="margin-top:2px">daily close</div></div>
+        <div class="lv"><div class="lbl">target</div><div class="lvv">1,420</div></div>
+        <div class="lv"><div class="lbl">exp. move 21d</div><div class="lvv">&#177;8.4%</div></div>
+      </div>
+      <div class="fals" style="margin-bottom:10px">
+        <div class="lbl" style="color:var(--up);margin-bottom:3px">&#127919; falsifier · scorable</div>
+        <div style="font-size:13px;color:var(--up);line-height:1.5">Falsified if NVDA closes below <span class="num">1,090</span>, or AI-infra basket underperforms SPY by &gt;<span class="num">5%</span> — by <span class="num">2026-07-15</span>.</div>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;border-top:1px solid var(--line);padding-top:10px">
+        <span style="font-size:12px;color:var(--muted)"><b style="font-weight:500">dissent:</b> rate-shock tail; XLK rate-beta elevated.</span>
+        <span style="font-size:12px;color:var(--dim)">prob <span class="num">0.71</span> · rolling Brier <span class="num">0.21</span> · <span class="num">4</span> hit / <span class="num">1</span> miss</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ TRACK RECORD ============ -->
+  <section class="screen" data-screen="trk">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:12px">
+      <h1>Track record &amp; calibration</h1>
+      <span class="chip c-up"><span class="num">68%</span> not-falsified · n=<span class="num">140</span></span>
+    </div>
+    <div class="grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:12px">
+      <div class="mc"><div class="lbl">brier</div><div class="v" style="color:var(--up)">0.21</div><div class="lbl" style="margin-top:2px">skill significant</div></div>
+      <div class="mc"><div class="lbl">skill vs base</div><div class="v">+0.04</div></div>
+      <div class="mc"><div class="lbl">hit / miss / open</div><div class="v"><span style="color:var(--up)">24</span> / <span style="color:var(--down)">11</span> / 5</div></div>
+      <div class="mc"><div class="lbl">past check-by</div><div class="v" style="color:var(--warn)">2</div></div>
+    </div>
+    <div class="panel" style="margin-bottom:12px">
+      <div class="lbl" style="margin-bottom:6px">Reliability — stated probability vs realized outcome</div>
+      <svg width="100%" viewBox="0 0 360 240" role="img" style="max-width:430px;display:block;margin:0 auto">
+        <title>Calibration reliability diagram</title>
+        <line x1="40" y1="215" x2="345" y2="215" stroke="var(--line2)"/>
+        <line x1="40" y1="215" x2="40" y2="15" stroke="var(--line2)"/>
+        <line x1="40" y1="215" x2="345" y2="15" stroke="var(--line2)" stroke-dasharray="4 4"/>
+        <polyline points="131,171 162,147 192,127 235,99 253,91" fill="none" stroke="var(--link)" stroke-width="1.4" opacity="0.55"/>
+        <circle cx="131" cy="171" r="4" fill="var(--up)"/><circle cx="162" cy="147" r="7" fill="var(--up)"/>
+        <circle cx="192" cy="127" r="6" fill="var(--up)"/><circle cx="235" cy="99" r="5" fill="var(--warn)"/>
+        <circle cx="253" cy="91" r="5" fill="var(--warn)"/>
+        <text x="40" y="231" fill="var(--dim)" font-size="11" font-family="var(--num)">.40</text>
+        <text x="190" y="231" fill="var(--dim)" font-size="11" font-family="var(--num)" text-anchor="middle">stated prob</text>
+        <text x="345" y="231" fill="var(--dim)" font-size="11" font-family="var(--num)" text-anchor="end">.90</text>
+        <text x="34" y="215" fill="var(--dim)" font-size="11" font-family="var(--num)" text-anchor="end">.40</text>
+        <text x="34" y="19" fill="var(--dim)" font-size="11" font-family="var(--num)" text-anchor="end">.90</text>
+      </svg>
+      <div style="text-align:center;font-size:12px;color:var(--muted);margin-top:4px">Stated <span class="num">60%</span> &#8594; realized <span class="num">57%</span> · dot size &#8733; &#8730;n</div>
+    </div>
+    <div class="panel">
+      <div class="lbl" style="margin-bottom:6px">Thesis ledger</div>
+      <table>
+        <colgroup><col style="width:8%"><col style="width:14%"><col style="width:11%"><col style="width:9%"><col style="width:27%"><col style="width:17%"><col style="width:14%"></colgroup>
+        <thead><tr><th>#</th><th>subject</th><th>lean</th><th>prob</th><th>falsifier</th><th>check-by</th><th>status</th></tr></thead>
+        <tbody>
+          <tr><td class="num">140</td><td class="num">NVDA</td><td style="color:var(--up)">add</td><td class="num">0.71</td><td>close &#8249;1,090</td><td class="num">2026-07-15</td><td><span class="chip c-mut">open</span></td></tr>
+          <tr><td class="num">137</td><td class="num">TLT</td><td style="color:var(--down)">avoid</td><td class="num">0.65</td><td>rel &#8250;+3% vs SPY</td><td class="num">2026-06-12</td><td><span class="chip c-up">hit</span></td></tr>
+          <tr><td class="num">131</td><td class="num">SMCI</td><td style="color:var(--up)">add</td><td class="num">0.58</td><td>close &#8249;42</td><td class="num">2026-06-05</td><td><span class="chip c-down">miss</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ============ PUBLIC PAGE ============ -->
+  <section class="screen" data-screen="pub">
+    <div style="display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line2);padding-bottom:9px;margin-bottom:12px">
+      <div class="nav-mini"><b style="color:var(--text)">Macro dashboard</b><span style="color:var(--line2);margin:0 4px">·</span><a href="#">Regime</a><a href="#">Baskets</a><a href="#">Options</a><a href="#" class="on">Portfolio</a></div>
+      <span class="pill paper">&#128274; paper</span>
+    </div>
+    <div class="panel" style="display:grid;grid-template-columns:120px 1fr auto;gap:16px;align-items:center;margin-bottom:12px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px">
+        <div class="q on">Q1</div><div class="q">Q2</div><div class="q">Q3</div><div class="q">Q4</div>
+      </div>
+      <div>
+        <div class="lbl" style="color:var(--warn);margin-bottom:2px">paper · display-only</div>
+        <h1>Goldilocks — narrative paper book</h1>
+        <div style="font-size:12px;color:var(--muted)">daily gated synthesis + event interrupts</div>
+      </div>
+      <div style="display:grid;grid-template-columns:auto auto;gap:6px 18px;text-align:right">
+        <div><div class="lbl">gross</div><div class="num" style="font-size:15px;font-weight:500">72%</div></div>
+        <div><div class="lbl">as of</div><div class="num" style="font-size:15px;font-weight:500">06-17</div></div>
+        <div><div class="lbl">macro risk</div><div class="num" style="font-size:15px;font-weight:500;color:var(--warn)">mod.</div></div>
+        <div><div class="lbl">liquidity</div><div class="num" style="font-size:15px;font-weight:500;color:var(--down)">contr.</div></div>
+      </div>
+    </div>
+    <div class="panel" style="margin-bottom:12px">
+      <div class="lbl" style="margin-bottom:6px">Positions book</div>
+      <table>
+        <colgroup><col style="width:11%"><col style="width:16%"><col style="width:10%"><col style="width:10%"><col style="width:20%"><col style="width:11%"><col style="width:22%"></colgroup>
+        <thead><tr><th>ticker</th><th>theme</th><th>weight</th><th>size</th><th>entry / stop</th><th>dd-tail</th><th>verdict</th></tr></thead>
+        <tbody>
+          <tr><td class="num" style="font-weight:500">NVDA</td><td>AI-infra</td><td class="num">10.5%</td><td>full</td><td class="num">1,205 / 1,090</td><td class="num" style="color:var(--down)">&#8722;14%</td><td><span class="chip c-up">add</span></td></tr>
+          <tr><td class="num" style="font-weight:500">TLT</td><td>duration</td><td class="num">3.5%</td><td>half</td><td class="num" style="color:var(--dim)">&#8212;</td><td class="num" style="color:var(--down)">&#8722;9%</td><td><span class="chip c-warn">trim</span></td></tr>
+          <tr style="opacity:.55"><td class="num" style="font-weight:500">SMCI</td><td>AI-infra · <span class="num">78</span>/100</td><td class="num">0.0%</td><td class="num" style="color:var(--dim)">&#8212;</td><td class="num" style="color:var(--dim)">&#8212;</td><td class="num" style="color:var(--dim)">&#8212;</td><td><span class="chip c-mut">&#128274; cycle-blocked</span></td></tr>
+        </tbody>
+      </table>
+      <div class="lbl" style="margin-top:8px">&#9432; a high theme score with 0% size is deliberate discipline — conviction and size are separate channels.</div>
+    </div>
+    <div class="panel">
+      <div class="lbl" style="margin-bottom:8px">Narrative board</div>
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">
+        <div style="width:150px"><div style="font-weight:500">AI infrastructure</div><div class="lbl">dominant</div></div>
+        <div style="flex:1"><div style="height:7px;background:var(--panel2);border-radius:4px;overflow:hidden"><i style="display:block;height:100%;width:78%;background:var(--up)"></i></div></div>
+        <div class="num" style="width:42px;text-align:right;font-weight:500">78</div>
+        <span class="chip c-up" style="width:90px;justify-content:center">accumulate</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px">
+        <div style="width:150px"><div style="font-weight:500">Duration / rates</div><div class="lbl">fading</div></div>
+        <div style="flex:1"><div style="height:7px;background:var(--panel2);border-radius:4px;overflow:hidden"><i style="display:block;height:100%;width:41%;background:var(--warn)"></i></div></div>
+        <div class="num" style="width:42px;text-align:right;font-weight:500">41</div>
+        <span class="chip c-warn" style="width:90px;justify-content:center">trim</span>
+      </div>
+    </div>
+    <div class="foot">Paper-only / display-only. Accountability, not alpha. Not investment advice. · &#20165;&#32440;&#38754;&#23637;&#31034;&#65292;&#38750;&#25237;&#36164;&#24314;&#35758;&#12290;</div>
+  </section>
+
+</div>
+
+<script>
+(function(){
+  var root=document.documentElement;
+  document.querySelectorAll('.tab').forEach(function(t){
+    t.addEventListener('click',function(){
+      document.querySelectorAll('.tab').forEach(function(x){x.classList.remove('on')});
+      t.classList.add('on');
+      var s=t.getAttribute('data-s');
+      document.querySelectorAll('.screen').forEach(function(sc){
+        sc.classList.toggle('on', sc.getAttribute('data-screen')===s);
+      });
+    });
+  });
+  var tgl=document.getElementById('tgl');
+  tgl.addEventListener('click',function(){
+    var dark=root.getAttribute('data-theme')==='dark';
+    root.setAttribute('data-theme', dark?'light':'dark');
+    tgl.innerHTML = dark? '☾ dark':'☀ light';
+  });
+  // simulated "breathing": tick the ago clock + occasionally pulse on a gate event
+  var mins=4;
+  var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  setInterval(function(){ mins++; document.getElementById('ago').textContent=mins+'m'; }, 30000);
+  if(!reduce){
+    setInterval(function(){
+      var hb=document.getElementById('hb'); if(!hb) return;
+      hb.style.boxShadow='0 0 0 4px var(--link)';
+      setTimeout(function(){hb.style.boxShadow='none';},600);
+      var nv=document.getElementById('p-nvda'); if(nv){nv.classList.remove('pulse');void nv.offsetWidth;nv.classList.add('pulse');}
+    }, 9000);
+  }
+})();
+</script>
+</body>
+</html>

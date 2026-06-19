@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+.DS_Store
+.pytest_cache/
+# local Phase 0 uses a symlink here; production replaces it with a real submodule
+vendor/macro
+# local data the bot writes (the published copy lives in the macro repo's site/)
+data/portfolio/*.json
+data/brain/*.jsonl
+data/brain/*.json
+data/signal_archive/*.parquet
+!data/**/.gitkeep

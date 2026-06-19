@@ -1,0 +1,41 @@
+# narrator-bot — Claude brain config (Phase 0 stub)
+# The brain runs on a 3-tier gated cadence, NEVER a continuous loop.
+
+llm:
+  # Messages API with ANTHROPIC_API_KEY — NOT a Claude Code subscription token.
+  api_key_env: ANTHROPIC_API_KEY
+  tiers:
+    pm:      { model: claude-opus-4-8,  effort: high }   # adjudicator / risk synthesis
+    analyst: { model: claude-haiku-4-5, effort: low }    # 4-way panel fan-out
+    deep:    { model: claude-fable-5,   effort: high }    # gated; off until evals justify
+  deep_enabled: false
+  max_tokens: 8000
+  monthly_cost_cap_usd: 75
+
+gate:
+  interval_days: 1          # cadence floor (carry forward if nothing material changed)
+  triggers:                 # any of these forces a fresh synthesis
+    - regime_flip
+    - macro_risk_band
+    - theme_alert
+    - prediction_due
+    - crash_overlay
+
+decision:
+  prob_floor: 0.50          # de-confidencing clamp
+  prob_ceil: 0.85
+  horizon_min_d: 5
+  horizon_max_d: 60
+  samples: 5                # median-of-N to kill one-shot overconfidence
+  base_rate_shrink: 0.30    # p = 0.7*p_model + 0.3*base_rate
+
+paper:
+  is_paper: true            # NEVER auto-executes
+  skill_gate_brier: 0.25    # rolling Brier below this (with n>=N_min) flips paper->skill-proven
+  skill_gate_n_min: 60
+
+polygon:
+  api_key_env: POLYGON_API_KEY
+  # entitlement probed: delayed/EOD stocks + options greeks; NO real-time tape/quotes.
+  realtime: false
+  universe: [SPY, QQQ, IWM, DIA, NVDA, AAPL, TSLA, AMD, META, MSFT, AVGO, SMCI]
