@@ -23,8 +23,12 @@ def enforce_book_caps(positions: list[dict]) -> dict:
     name_cap = cfg["caps"]["name_cap"]
 
     breaches = []
-    # single-name cap (ours, tighter) — subtract-only clamp
+    # single-name cap (ours, tighter) — subtract-only clamp.
+    # Leadership-sleeve holdings are diversified ETFs/baskets, not single-name concentration,
+    # so the name cap applies only to discretionary single names (conviction sleeve).
     for p in positions:
+        if p.get("sleeve") == "leadership":
+            continue
         if p["weight"] > name_cap:
             breaches.append({"code": "D6", "kind": "name", "subject": p["ticker"],
                              "weight": round(p["weight"], 4), "cap": name_cap})

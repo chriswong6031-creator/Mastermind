@@ -11,4 +11,5 @@ data/portfolio/*.json
 data/brain/*.jsonl
 data/brain/*.json
 data/signal_archive/*.parquet
+data/*.db
 !data/**/.gitkeep
