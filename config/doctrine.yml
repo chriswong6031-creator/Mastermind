@@ -1,0 +1,64 @@
+# narrator-bot — thematic rotation & leadership doctrine parameters
+# All tunable; defaults are heuristic starting points (mark refinements as you backtest).
+# Nothing here is a scored alpha leg — these are display/audit + sizing-veto thresholds.
+
+# ---- confirmation scorecard (6 dims; mirrors theme_scoring leg weights) ----
+scorecard:
+  weights: { trend: 0.34, breadth: 0.22, impulse: 0.10, macro: 0.20, crowding: 0.14 }
+  confluence:
+    initial_dims: [rs, breadth]          # 1+2 -> small initial size (Stage 1)
+    full_size_gate: catalyst             # dim 5 is mandatory for full size (Stage 2)
+    forbid_single_dim: true              # acting on one dimension alone is forbidden
+  rs_down_day_lookback_d: 63             # dim 1b "holds up on down days"
+
+# ---- Stage 0-4 lifecycle classifier thresholds ----
+stages:
+  latent_rs_pctile_max: 0.50
+  latent_breadth_pct50_max: 0.50
+  ignition_rs_pctile_max: 0.65
+  recognition_score_min: 62
+  crowded_z: 1.0
+  fourth_deriv_pct_parabolic: 0.30       # Stage 3->4 tell, AND rs_pctile >= 0.80
+
+# ---- three-sleeve architecture + firebreaks ----
+sleeves:
+  leadership_target: [0.40, 0.60]        # narrative_rotation.allocate() AS-IS, equal-weight
+  conviction_target: [0.20, 0.40]        # top_picks + stock_score half-Kelly, falsifiable
+  cash_floor: [0.05, 0.20]               # sized, NOT residual
+  leadership_rebalance_days: 21          # mechanical monthly cadence (mirror masterminds._REBAL)
+  leadership_equal_weight: true          # rank-IC ~ 0; never apply Kelly to this sleeve
+
+caps:
+  theme_cap_book: 0.25                   # FIREBREAK A2.1 — cross-sleeve, the NEW glue
+  name_cap: 0.08                         # keep OUR tighter value (vs doctrine 0.10-0.15)
+  leadership_pos_cap_of_sleeve: 0.30     # narrative_rotation.POS_CAP, per-theme of the sleeve
+
+cash:
+  # binding cash = max(macro_implied, rotation_floor) — rotation floor is ORTHOGONAL to macro_risk
+  rotation_floor: 0.05                   # the operator's failure was 0% cash in a benign tape
+  no_rotation_capacity:                  # detector D3 trip
+    cash_max: 0.03
+    top_theme_concentration_min: 0.22    # near the 0.25 book cap
+
+# ---- time stop (NEW — the part that failed the operator) ----
+time_stop:
+  default_window_td: 63                  # ~3 months; per-position override at entry
+  unresolved_rel_entry_max: 0.0          # still <= entry on a rel-return basis
+  rs_leader_gap_min: 0.10                # held RS lags the current leader by >= this and widening
+
+# ---- bottleneck migration chains (REAL config.yml theme ids) ----
+bottleneck:
+  chains:
+    ai_buildout:
+      first_order:  [ai_semiconductors]
+      second_order: [memory_storage, semicap_equipment]
+      third_order:  [data_center_power, grid_electrification, nuclear_power,
+                     copper_steel_electrify, rare_earth_critical_min]
+  order_layer_scored: false              # DISPLAY-ONLY tag, never a scored axis
+  de_overlap: per_parent_per_order       # <=1 basket per (parent, order_layer)
+
+# ---- failure-mode detectors ----
+detectors:
+  modes: [self, operator]                # self = hard sizing veto; operator = read-only advisory
+  operator_holdings_source: "WATCHLIST.md"
+  enabled: [D1, D2, D3, D4, D5, D6]
