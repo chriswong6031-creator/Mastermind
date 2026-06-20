@@ -164,6 +164,23 @@ async def get_news(args):
                   "note": "Public-record financial news flow. Context-only — informs narrative, never sizes alone."})
 
 
+@tool("get_quote",
+      "Live (15-min delayed) market price(s) via Polygon for one or more tickers — the Brain's "
+      "real-time price read: mark held positions, sanity-check an entry level, or confirm a move "
+      "is real before forming a thesis. Returns {TICKER: price}. Prices are delayed and for "
+      "reference/marks only — never a trade trigger on their own.",
+      {"type": "object", "properties": {"tickers": {"type": "array", "items": {"type": "string"}}},
+       "required": ["tickers"]})
+async def get_quote(args):
+    from data_layer import polygon
+    tks = [str(t) for t in (args.get("tickers") or []) if t]
+    px = polygon.quotes(tks)
+    if not any(v is not None for v in px.values()):
+        return _ok("no live quotes available — Polygon layer offline or unkeyed (set POLYGON_API_KEY).")
+    return _json({"quotes": px,
+                  "note": "Live 15-min delayed prices (Polygon). For marks/entry checks — not a signal."})
+
+
 @tool("read_signal", "Read a published signal/data JSON by path (allowlisted to the dashboard + bot data roots).",
       {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]})
 async def read_signal(args):
@@ -217,7 +234,7 @@ async def recommend_action(args):
 
 
 _READ = [get_regime, get_themes, get_standouts, get_portfolio, get_decision_matrix, get_divergences,
-         get_altdata, get_news, get_quiver_strategy, get_quiver_compare, read_signal]
+         get_altdata, get_news, get_quote, get_quiver_strategy, get_quiver_compare, read_signal]
 _ACTION = [save_research_note, propose_thesis, flag_emerging_theme, recommend_action]
 _ALL = _READ + _ACTION
 SERVER_NAME = "bot"

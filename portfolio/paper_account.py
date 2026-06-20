@@ -160,6 +160,34 @@ def nav(prices: dict[str, float]) -> float:
     return state["cash"] + mktval
 
 
+def positions_pnl(prices: dict[str, float]) -> dict[str, dict]:
+    """Per-ticker live P&L from the account's average-cost lots, marked to `prices`.
+
+    Returns {TICKER: {shares, avg_cost, current_price, market_value,
+                      unrealized_pnl, unrealized_pct}}. Values are None when a
+    live price is missing (offline) so callers can render an honest dash."""
+    state = _load_account()
+    out: dict[str, dict] = {}
+    for ticker, pos in state.get("positions", {}).items():
+        shares = float(pos.get("shares") or 0.0)
+        avg = float(pos.get("avg_cost") or 0.0)
+        px = prices.get(ticker)
+        rec = {
+            "shares": shares,
+            "avg_cost": round(avg, 4) if avg else None,
+            "current_price": round(px, 4) if px else None,
+            "market_value": None,
+            "unrealized_pnl": None,
+            "unrealized_pct": None,
+        }
+        if px and avg and shares:
+            rec["market_value"] = round(shares * px, 2)
+            rec["unrealized_pnl"] = round((px - avg) * shares, 2)
+            rec["unrealized_pct"] = round((px / avg - 1) * 100, 2)
+        out[ticker] = rec
+    return out
+
+
 def rebalance(
     target_weights: dict[str, float],
     prices: dict[str, float],

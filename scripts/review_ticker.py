@@ -27,8 +27,9 @@ from portfolio import lenses
 
 _PROPOSALS = Path(__file__).resolve().parent.parent / "data" / "brain" / "proposals.jsonl"
 
-REVIEW_PROMPT = """You are the Mastermind research desk. Review ONE name for the paper book: {ticker}.
-Today is {asof}; the macro regime is {quad} ({quad_name}).
+REVIEW_PROMPT = """You are the Brain — the Mastermind's decision-making reasoning layer. Review ONE
+name for the paper book: {ticker}. Today is {asof}; the macro regime is {quad} ({quad_name}).
+You can pull live (delayed) Polygon prices with get_quote to mark the name and sanity-check entries.
 
 APPROACH FROM ALL SIDES. Before any verdict you MUST:
   1. call get_decision_matrix("{ticker}") and address EVERY lens with status in

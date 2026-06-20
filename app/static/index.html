@@ -1213,6 +1213,46 @@ body.page-mm td.l { text-align: left; }
 }
 .mm-rej-confluence.neg { color: var(--down); }
 .mm-rej-confluence.neu { color: var(--muted); }
+
+/* ── collapsible panels (Brain Activity / Evaluated): click header to toggle ── */
+body.page-mm .panel.mm-collapsible > h2.mm-coll-h2 { cursor: pointer; user-select: none; }
+body.page-mm .panel.mm-collapsible > h2.mm-coll-h2:hover { color: var(--text); }
+body.page-mm .panel.mm-collapsed > :not(h2) { display: none !important; }
+body.page-mm .mm-coll-chev { display: inline-block; transition: transform .15s ease; margin-right: 7px; color: var(--muted); font-size: 10px; vertical-align: middle; }
+body.page-mm .panel:not(.mm-collapsed) > h2 .mm-coll-chev { transform: rotate(90deg); }
+
+/* ── help icon (sleeve / RS%ile explainers) — hover/focus popover ─────────── */
+body.page-mm .mm-help { position: relative; display: inline-flex; align-items: center; justify-content: center;
+  width: 13px; height: 13px; margin-left: 4px; border-radius: 50%; border: 1px solid var(--line);
+  color: var(--muted); font-size: 9px; font-weight: 700; cursor: help; line-height: 1; vertical-align: middle; }
+body.page-mm .mm-help:hover, body.page-mm .mm-help:focus { color: var(--text); border-color: var(--muted); outline: none; }
+body.page-mm .mm-help .mm-help-pop { position: absolute; z-index: 50; bottom: calc(100% + 7px); left: 50%; transform: translateX(-50%);
+  width: 230px; max-width: 70vw; padding: 9px 11px; border-radius: 8px; background: var(--panel2); border: 1px solid var(--line);
+  box-shadow: 0 8px 24px rgba(0,0,0,.28); color: var(--text); font-size: 11px; font-weight: 400; line-height: 1.45;
+  text-align: left; white-space: normal; opacity: 0; visibility: hidden; transition: opacity .12s ease; pointer-events: none; }
+body.page-mm .mm-help:hover .mm-help-pop, body.page-mm .mm-help:focus .mm-help-pop { opacity: 1; visibility: visible; }
+
+/* ── live P&L cells ──────────────────────────────────────────────────────── */
+body.page-mm td.mm-pnl-pos { color: var(--up); font-variant-numeric: tabular-nums; }
+body.page-mm td.mm-pnl-neg { color: var(--down); font-variant-numeric: tabular-nums; }
+body.page-mm .mm-side-chip { display: inline-block; padding: 1px 8px; border-radius: 5px; font-size: 10px; font-weight: 700; letter-spacing: .03em; }
+body.page-mm .mm-side-chip.buy  { background: color-mix(in srgb, var(--up) 15%, var(--panel2));   color: var(--up); }
+body.page-mm .mm-side-chip.sell { background: color-mix(in srgb, var(--down) 15%, var(--panel2)); color: var(--down); }
+
+/* ── macro metrics strip ─────────────────────────────────────────────────── */
+body.page-mm .mm-macro-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--line);
+  border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+@media (max-width: 760px) { body.page-mm .mm-macro-grid { grid-template-columns: repeat(2, 1fr); } }
+body.page-mm .mm-macro-cell { background: var(--panel); padding: 12px 14px; }
+body.page-mm .mm-macro-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: 5px; }
+body.page-mm .mm-macro-value { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums;
+  font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; }
+body.page-mm .mm-macro-sub { font-size: 11px; color: var(--muted); margin-top: 3px; }
+body.page-mm .mm-macro-tag { display: inline-block; padding: 1px 7px; border-radius: 5px; font-size: 10px; font-weight: 700; margin-top: 4px; }
+body.page-mm .mm-macro-tag.warn { background: color-mix(in srgb, var(--warn) 16%, var(--panel2)); color: var(--warn); }
+body.page-mm .mm-macro-tag.calm { background: color-mix(in srgb, var(--up) 16%, var(--panel2)); color: var(--up); }
+body.page-mm .mm-macro-tag.hot  { background: color-mix(in srgb, var(--down) 16%, var(--panel2)); color: var(--down); }
+body.page-mm .mm-macro-tag.neu  { background: color-mix(in srgb, var(--muted) 16%, var(--panel2)); color: var(--muted); }
 </style>
 </head>
 <body class="page-mm">
@@ -1237,10 +1277,12 @@ body.page-mm td.l { text-align: left; }
       <div class="mm-hero-main" id="hero-main">
         <div class="mm-hero-eyebrow" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px">
           <span><span class="mm-hb"></span>&nbsp; MASTERMIND &mdash; PAPER PORTFOLIO</span>
-          <!-- header control row: theme + lang toggles -->
+          <!-- header control row: theme + lang toggles. theme.js wires the click
+               (addEventListener) and sets the labels on DOMContentLoaded — do NOT add
+               an inline onclick here or it double-fires and the toggle cancels itself. -->
           <span class="mm-hero-ctrls" style="display:flex;gap:8px;align-items:center;flex-shrink:0">
-            <button class="theme-btn" onclick="window.toggleTheme()" style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:3px 11px;font-size:11px;cursor:pointer;color:var(--text);font-weight:600"></button>
-            <button class="lang-btn" onclick="window.toggleLang()" style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:3px 11px;font-size:11px;cursor:pointer;color:var(--text);font-weight:600"></button>
+            <button class="theme-btn" type="button" style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:3px 11px;font-size:11px;cursor:pointer;color:var(--text);font-weight:600"></button>
+            <button class="lang-btn" type="button" style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:3px 11px;font-size:11px;cursor:pointer;color:var(--text);font-weight:600"></button>
           </span>
         </div>
         <div class="mm-hero-name" id="hero-quad-name">Loading…</div>
@@ -1313,6 +1355,14 @@ body.page-mm td.l { text-align: left; }
         <div class="mm-perf-stat-sub" id="perf-cash-lbl"><span class="l-en">cash: —</span><span class="l-zh">现金: —</span></div>
       </div>
     </div>
+  </div>
+</div>
+
+<!-- ── MACRO REGIME VITALS ────────────────────────────────────────────────── -->
+<div class="mm-section">
+  <div class="panel span12" id="macro-metrics" style="grid-column:span 12">
+    <h2><span class="l-en">Macro Dashboard &mdash; Regime Vitals</span><span class="l-zh">宏观仪表盘 &mdash; 市场体征</span> <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px"><span class="l-en">the rates / dollar / vol backdrop</span><span class="l-zh">利率/美元/波动率环境</span></span></h2>
+    <div class="mm-empty"><span class="mm-empty-icon">⊙</span><span class="l-en">Loading macro…</span><span class="l-zh">加载宏观数据中…</span></div>
   </div>
 </div>
 
@@ -1390,16 +1440,16 @@ body.page-mm td.l { text-align: left; }
 
 <!-- ── DEEP ACTIVITY LOG ──────────────────────────────────────────────────── -->
 <div class="mm-section">
-  <div class="panel span12" id="runs" style="grid-column:span 12">
-    <h2><span class="l-en">Brain Activity &mdash; Full Trace</span><span class="l-zh">脑波活动 &mdash; 完整追踪</span> <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px"><span class="l-en">expand a run for complete step-by-step reasoning</span><span class="l-zh">展开运行记录查看完整推理过程</span></span></h2>
+  <div class="panel span12 mm-collapsible mm-collapsed" id="runs" style="grid-column:span 12">
+    <h2 class="mm-coll-h2" onclick="toggleCollapse('runs')"><span class="mm-coll-chev">&#9654;</span><span class="l-en">Brain Activity &mdash; Full Trace</span><span class="l-zh">脑波活动 &mdash; 完整追踪</span> <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px"><span class="l-en">expand a run for complete step-by-step reasoning</span><span class="l-zh">展开运行记录查看完整推理过程</span></span></h2>
     <div class="mm-empty"><span class="mm-empty-icon">⊙</span><span class="l-en">Loading run history…</span><span class="l-zh">加载运行历史中…</span></div>
   </div>
 </div>
 
 <!-- ── REJECTED NAMES ─────────────────────────────────────────────────────── -->
 <div class="mm-section">
-  <div class="panel span12" id="rejected" style="grid-column:span 12">
-    <h2><span class="l-en">Evaluated &mdash; Not Held, and Why</span><span class="l-zh">已评估 &mdash; 未持仓及原因</span> <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px"><span class="l-en">the discipline made visible</span><span class="l-zh">让纪律透明化</span></span></h2>
+  <div class="panel span12 mm-collapsible mm-collapsed" id="rejected" style="grid-column:span 12">
+    <h2 class="mm-coll-h2" onclick="toggleCollapse('rejected')"><span class="mm-coll-chev">&#9654;</span><span class="l-en">Evaluated &mdash; Not Held, and Why</span><span class="l-zh">已评估 &mdash; 未持仓及原因</span> <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px"><span class="l-en">the discipline made visible</span><span class="l-zh">让纪律透明化</span></span></h2>
     <div class="mm-empty"><span class="mm-empty-icon">⊙</span><span class="l-en">Loading rejected names…</span><span class="l-zh">加载剔除标的中…</span></div>
   </div>
 </div>
@@ -1550,6 +1600,54 @@ var I18N = {
   'quad.Reflation.says':  { en: 'Growth and inflation both rising — real assets, energy, industrials lead.', zh: '增长与通胀双升 — 实物资产、能源、工业领涨。' },
   'quad.Stagflation.says':{ en: 'Growth falling, inflation sticky — defensive tilt, commodities, cash heavy.', zh: '增长下行，通胀黏性 — 防御性配置，商品与现金超配。' },
   'quad.Growth-Scare.says':{ en: 'Growth slowing, inflation falling — duration, quality, and defensive growth favored.', zh: '增长放缓，通胀回落 — 久期、质地和防御性成长受青睐。' },
+  // ── Macro regime strip ──
+  'macro.title':          { en: 'Macro Dashboard — Regime Vitals', zh: '宏观仪表盘 — 市场体征' },
+  'macro.subtitle':       { en: 'the rates / dollar / vol backdrop that drives positioning now', zh: '驱动当前仓位的利率/美元/波动率环境' },
+  'macro.loading':        { en: 'Loading macro…', zh: '加载宏观数据中…' },
+  'macro.empty':          { en: 'Macro data unavailable.', zh: '宏观数据暂不可用。' },
+  'macro.curve':          { en: 'Yield Curve (2s10s)', zh: '收益率曲线 (2s10s)' },
+  'macro.real10y':        { en: 'Real 10Y Yield', zh: '实际10年期收益率' },
+  'macro.dxy':            { en: 'Dollar (DXY)', zh: '美元指数 (DXY)' },
+  'macro.vix':            { en: 'Volatility (VIX)', zh: '波动率 (VIX)' },
+  'macro.curve_pos':      { en: 'upward-sloping', zh: '正向陡峭' },
+  'macro.curve_inv':      { en: 'inverted', zh: '倒挂' },
+  'macro.10y':            { en: '10Y nominal', zh: '10年期名义' },
+  'macro.band_calm':      { en: 'calm', zh: '平静' },
+  'macro.band_normal':    { en: 'normal', zh: '正常' },
+  'macro.band_elevated':  { en: 'elevated', zh: '偏高' },
+  'macro.band_stress':    { en: 'stress', zh: '承压' },
+  'macro.reg_restrictive':{ en: 'restrictive', zh: '偏紧' },
+  'macro.reg_neutral':    { en: 'neutral', zh: '中性' },
+  'macro.reg_accommodative': { en: 'accommodative', zh: '宽松' },
+  'macro.dir_rising':     { en: 'rising', zh: '上行' },
+  'macro.dir_falling':    { en: 'falling', zh: '下行' },
+  'macro.dir_flat':       { en: 'flat', zh: '走平' },
+  'macro.1d':             { en: '1d', zh: '日内' },
+  'macro.pctile':         { en: 'pctile', zh: '百分位' },
+  // ── Positions: live price, unrealized, verdict gerunds, help ──
+  'pos.entry_px':         { en: 'Entry', zh: '成本价' },
+  'pos.current_px':       { en: 'Current', zh: '现价' },
+  'pos.unrealized':       { en: 'Unrealized P&L', zh: '未实现盈亏' },
+  'pos.v_hold':           { en: 'HOLDING', zh: '持有中' },
+  'pos.v_add':            { en: 'ADDING', zh: '加仓中' },
+  'pos.v_trim':           { en: 'TRIMMING', zh: '减仓中' },
+  'pos.v_reduce':         { en: 'REDUCING', zh: '减仓中' },
+  'pos.v_avoid':          { en: 'AVOID', zh: '回避' },
+  'pos.v_watch':          { en: 'WATCHING', zh: '观察中' },
+  'help.sleeve':          { en: "The book splits into two sleeves. Leadership: broad sector/factor ETFs that rank top of the universe by 12-month relative strength and sit above their 200-day trend — owning the leaders mechanically. Conviction: hand-picked single names from the Brain's narrative theses, sized by multi-lens confluence.", zh: '组合分为两类仓位。领航仓：按12个月相对强弱排名居前、且站上200日趋势线的板块/因子ETF — 机械化持有领涨者。重仓：由"大脑"的叙事论点精选的个股，按多维度汇聚度定仓位。' },
+  'help.rs':              { en: 'Relative-Strength percentile — NOT RSI. Where this name\'s trailing 252-day return ranks against the universe: 100 = strongest momentum vs peers, 50 = middle, 0 = weakest. A cross-sectional leadership rank, not an overbought/oversold oscillator.', zh: '相对强弱百分位 — 不是RSI。该标的过去252日回报在全市场中的排名：100=动量最强，50=居中，0=最弱。这是横截面的领涨排名，并非超买超卖指标。' },
+  // ── Trade blotter ──
+  'trades.blotter_sub':   { en: 'Complete blotter — every individual fill', zh: '完整成交记录 — 每一笔交易' },
+  'trades.date':          { en: 'Date', zh: '日期' },
+  'trades.action':        { en: 'Action', zh: '操作' },
+  'trades.buy':           { en: 'BUY', zh: '买入' },
+  'trades.sell':          { en: 'SELL', zh: '卖出' },
+  'trades.shares':        { en: 'Shares', zh: '股数' },
+  'trades.price':         { en: 'Price', zh: '价格' },
+  'trades.exit_px':       { en: 'Exit Price', zh: '退出价格' },
+  'trades.unrealized':    { en: 'Unrealized', zh: '未实现' },
+  'trades.realized':      { en: 'Realized', zh: '已实现' },
+  'trades.no_history':    { en: 'No fills yet — trades appear here as the book transacts.', zh: '暂无成交 — 组合交易后将在此显示。' },
 };
 
 function t(key) {
@@ -1557,6 +1655,19 @@ function t(key) {
   var entry = I18N[key];
   if (!entry) return key;
   return entry[lg] || entry['en'] || key;
+}
+
+// hover/focus "?" help icon — popover text from an I18N key
+function helpIcon(key) {
+  return '<span class="mm-help" tabindex="0" role="note" onclick="event.stopPropagation()">?<span class="mm-help-pop">' + esc(t(key)) + '</span></span>';
+}
+
+// colored P&L cell -> {txt, cls}. null pnl renders an honest dash.
+function pnlCell(pnl, pct) {
+  if (pnl == null) return { txt: '—', cls: '' };
+  var txt = (pnl >= 0 ? '+$' : '-$') + Math.abs(Math.round(pnl)).toLocaleString()
+          + (pct != null ? ' <span style="opacity:.7">(' + (pct >= 0 ? '+' : '') + pct.toFixed(1) + '%)</span>' : '');
+  return { txt: txt, cls: pnl >= 0 ? 'mm-pnl-pos' : 'mm-pnl-neg' };
 }
 
 // ── tiny markdown renderer ──────────────────────────────────────────────────
@@ -1650,9 +1761,27 @@ var fmtTsShort = function(s) {
 // ── state ────────────────────────────────────────────────────────────────────
 var _book = null, _trades = null, _activity = [], _research = [], _competitors = null, _regime = null;
 var _expandedIdx = null;
-var _perf = null, _runs = [], _rejected = [];
+var _perf = null, _runs = [], _rejected = [], _macro = null;
 // run drilldown cache
 var _runLogCache = {};
+
+// ── collapsible panels (Brain Activity / Evaluated): default collapsed, click to toggle, persisted ──
+var _collapsed = { runs: true, rejected: true };
+try {
+  ['runs', 'rejected'].forEach(function (id) {
+    var v = localStorage.getItem('mm_coll_' + id);
+    if (v !== null) _collapsed[id] = (v === '1');
+  });
+} catch (e) {}
+function applyColl(id) {
+  var el = E(id);
+  if (el) el.classList.toggle('mm-collapsed', !!_collapsed[id]);
+}
+window.toggleCollapse = function (id) {
+  _collapsed[id] = !_collapsed[id];
+  try { localStorage.setItem('mm_coll_' + id, _collapsed[id] ? '1' : '0'); } catch (e) {}
+  applyColl(id);
+};
 
 // quad meta — names/says resolved at render time via t() so lang switches work
 var QUAD_META = {
@@ -2004,7 +2133,7 @@ function stepDotClass(type) {
 }
 
 function runsH2() {
-  return '<h2><span class="l-en">Brain Activity &mdash; Full Trace</span><span class="l-zh">脑波活动 &mdash; 完整追踪</span> <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px">' + t('runs.subtitle') + '</span></h2>';
+  return '<h2 class="mm-coll-h2" onclick="toggleCollapse(\'runs\')"><span class="mm-coll-chev">&#9654;</span><span class="l-en">Brain Activity &mdash; Full Trace</span><span class="l-zh">脑波活动 &mdash; 完整追踪</span> <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px">' + t('runs.subtitle') + '</span></h2>';
 }
 
 function renderRuns() {
@@ -2139,7 +2268,7 @@ window.toggleStepDetail = function(id, btn) {
 
 // ── REJECTED NAMES ────────────────────────────────────────────────────────────
 function rejH2() {
-  return '<h2><span class="l-en">Evaluated &mdash; Not Held, and Why</span><span class="l-zh">已评估 &mdash; 未持仓及原因</span> <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px">' + t('rej.subtitle') + '</span></h2>';
+  return '<h2 class="mm-coll-h2" onclick="toggleCollapse(\'rejected\')"><span class="mm-coll-chev">&#9654;</span><span class="l-en">Evaluated &mdash; Not Held, and Why</span><span class="l-zh">已评估 &mdash; 未持仓及原因</span> <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px">' + t('rej.subtitle') + '</span></h2>';
 }
 
 function renderRejected() {
@@ -2195,6 +2324,75 @@ function renderRejected() {
 
   html += '</div>';
   el.innerHTML = html;
+}
+
+// ── MACRO REGIME VITALS ───────────────────────────────────────────────────────
+function macroH2() {
+  return '<h2><span class="l-en">Macro Dashboard &mdash; Regime Vitals</span><span class="l-zh">宏观仪表盘 &mdash; 市场体征</span> <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px">' + t('macro.subtitle') + '</span></h2>';
+}
+function _macroTag(txt, cls) { return '<span class="mm-macro-tag ' + cls + '">' + txt + '</span>'; }
+function _regWord(r) {
+  var k = { restrictive: 'macro.reg_restrictive', neutral: 'macro.reg_neutral', accommodative: 'macro.reg_accommodative' }[r];
+  return k ? t(k) : (r || '—');
+}
+function _dirWord(d) {
+  var k = { rising: 'macro.dir_rising', falling: 'macro.dir_falling', flat: 'macro.dir_flat' }[d];
+  return k ? t(k) : (d || '');
+}
+function _macroCell(label, value, sub, tag) {
+  return '<div class="mm-macro-cell"><div class="mm-macro-label">' + label + '</div>'
+       + '<div class="mm-macro-value">' + value + '</div>'
+       + '<div class="mm-macro-sub">' + (sub || '&nbsp;') + '</div>'
+       + (tag || '') + '</div>';
+}
+function renderMacro() {
+  var el = E('macro-metrics');
+  if (!el) return;
+  var m = _macro;
+  if (!m || (!m.yield_curve && !m.real_yield && !m.dxy && !m.vix)) {
+    el.innerHTML = macroH2() + '<div class="mm-empty"><span class="mm-empty-icon">○</span>' + t('macro.empty') + '</div>';
+    return;
+  }
+  var cells = '';
+
+  var yc = m.yield_curve;
+  if (yc) {
+    var bp = yc.curve_2s10s != null ? Math.round(yc.curve_2s10s * 100) : null;
+    var inv = bp != null && bp < 0;
+    var val = bp != null ? (bp > 0 ? '+' : '') + bp + ' bp' : '—';
+    var sub = yc.nominal_10y != null ? t('macro.10y') + ' ' + yc.nominal_10y.toFixed(2) + '%' : '';
+    cells += _macroCell(t('macro.curve'), val, sub,
+      _macroTag(inv ? t('macro.curve_inv') : t('macro.curve_pos'), inv ? 'hot' : 'neu'));
+  }
+
+  var ry = m.real_yield;
+  if (ry) {
+    var rval = ry.real_10y != null ? ry.real_10y.toFixed(2) + '%' : '—';
+    var regCls = ry.regime === 'restrictive' ? 'warn' : ry.regime === 'accommodative' ? 'calm' : 'neu';
+    var pctStr = ry.pctile != null ? Math.round(ry.pctile * 100) + 'th ' + t('macro.pctile') : '';
+    var chgStr = ry.chg_63d_bp != null ? ((ry.chg_63d_bp > 0 ? '+' : '') + ry.chg_63d_bp + 'bp/63d') : '';
+    var rsub = [pctStr, chgStr].filter(Boolean).join(' · ');
+    cells += _macroCell(t('macro.real10y'), rval, rsub,
+      _macroTag(_regWord(ry.regime) + (ry.direction ? ' · ' + _dirWord(ry.direction) : ''), regCls));
+  }
+
+  var dx = m.dxy;
+  if (dx) {
+    var dval = dx.value != null ? dx.value.toFixed(2) : '—';
+    var dsub = dx.chg_pct != null ? ((dx.chg_pct > 0 ? '+' : '') + dx.chg_pct.toFixed(2) + '% ' + t('macro.1d')) : '';
+    var ddir = dx.chg_pct > 0.02 ? 'macro.dir_rising' : dx.chg_pct < -0.02 ? 'macro.dir_falling' : 'macro.dir_flat';
+    cells += _macroCell(t('macro.dxy'), dval, dsub, _macroTag(t(ddir), 'neu'));
+  }
+
+  var vx = m.vix;
+  if (vx) {
+    var vval = vx.value != null ? vx.value.toFixed(2) : '—';
+    var vsub = vx.chg_pct != null ? ((vx.chg_pct > 0 ? '+' : '') + vx.chg_pct.toFixed(2) + '% ' + t('macro.1d')) : '';
+    var bandCls = { calm: 'calm', normal: 'neu', elevated: 'warn', stress: 'hot' }[vx.band] || 'neu';
+    cells += _macroCell(t('macro.vix'), vval, vsub, _macroTag(t('macro.band_' + (vx.band || 'normal')), bandCls));
+  }
+
+  el.innerHTML = macroH2() + '<div class="mm-macro-grid">' + cells + '</div>';
 }
 
 // ── HERO ─────────────────────────────────────────────────────────────────────
@@ -2303,19 +2501,31 @@ function renderPositions() {
     var conflStr = tf.confluence != null ? (tf.confluence > 0 ? '+' : '') + tf.confluence.toFixed(2) : (p.confluence != null ? (p.confluence > 0 ? '+' : '') + p.confluence.toFixed(2) : '—');
     var rsStr = p.rs_pctile != null ? p.rs_pctile.toFixed(1) : '—';
 
+    // live marks (Polygon): entry = true avg-cost basis, current price, unrealized P&L
+    var entryPx = (p.cost_basis != null ? p.cost_basis : p.entry_price);
+    var entryStr = entryPx != null ? '$' + Number(entryPx).toFixed(2) : '—';
+    var curStr = p.current_price != null ? '$' + Number(p.current_price).toFixed(2) : '—';
+    var u = pnlCell(p.unrealized_pnl, p.unrealized_pct);
+    // verdict → gerund (HOLDING / ADDING / TRIMMING …); CSS class stays the raw verdict
+    var vKey = { hold: 'pos.v_hold', add: 'pos.v_add', trim: 'pos.v_trim', reduce: 'pos.v_reduce', avoid: 'pos.v_avoid', watch: 'pos.v_watch' }[verdict];
+    var vLabel = vKey ? t(vKey) : verdict.toUpperCase();
+
     rows += '<tr class="pos-row" data-idx="' + i + '" onclick="toggleExpand(' + i + ')">' +
       '<td><span class="pos-ticker">' + esc(p.ticker) + '</span></td>' +
       '<td class="l"><span class="mm-sleeve-chip ' + sleeveClass + '">' + sleeveName + '</span></td>' +
       '<td>' + (p.stage != null ? p.stage : '—') + '</td>' +
       '<td style="font-variant-numeric:tabular-nums;font-weight:700">' + pct(p.weight) + '</td>' +
-      '<td><span class="mm-verdict-chip ' + verdict + '">' + verdict + '</span></td>' +
+      '<td style="font-variant-numeric:tabular-nums">' + entryStr + '</td>' +
+      '<td style="font-variant-numeric:tabular-nums">' + curStr + '</td>' +
+      '<td class="' + u.cls + '">' + u.txt + '</td>' +
+      '<td><span class="mm-verdict-chip ' + verdict + '">' + vLabel + '</span></td>' +
       '<td>' + rsStr + '</td>' +
       '<td>' + conflStr + '</td>' +
       '<td class="l" style="font-size:11.5px;color:var(--muted)">' + heldStr + '</td>' +
     '</tr>';
 
     // expandable thesis
-    rows += '<tr class="mm-expand-row" id="expand-' + i + '" style="display:none"><td colspan="8">';
+    rows += '<tr class="mm-expand-row" id="expand-' + i + '" style="display:none"><td colspan="11">';
     rows += '<div class="mm-thesis-panel">';
 
     // zh fallback helper for this position's thesis
@@ -2397,7 +2607,17 @@ function renderPositions() {
   el.innerHTML = '<h2><span class="l-en">Positions</span><span class="l-zh">持仓</span> <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px">' + t('pos.subtitle') + '</span></h2>' +
     '<table>' +
     '<thead><tr>' +
-    '<th>' + t('pos.ticker') + '</th><th class="l">' + t('pos.sleeve') + '</th><th>' + t('pos.stage') + '</th><th>' + t('pos.weight') + '</th><th>' + t('pos.verdict') + '</th><th>' + t('pos.rs_pctile') + '</th><th>' + t('pos.confluence') + '</th><th class="l">' + t('pos.held_since') + '</th>' +
+    '<th>' + t('pos.ticker') + '</th>'
+    + '<th class="l">' + t('pos.sleeve') + helpIcon('help.sleeve') + '</th>'
+    + '<th>' + t('pos.stage') + '</th>'
+    + '<th>' + t('pos.weight') + '</th>'
+    + '<th>' + t('pos.entry_px') + '</th>'
+    + '<th>' + t('pos.current_px') + '</th>'
+    + '<th>' + t('pos.unrealized') + '</th>'
+    + '<th>' + t('pos.verdict') + '</th>'
+    + '<th>' + t('pos.rs_pctile') + helpIcon('help.rs') + '</th>'
+    + '<th>' + t('pos.confluence') + '</th>'
+    + '<th class="l">' + t('pos.held_since') + '</th>' +
     '</tr></thead>' +
     '<tbody>' + rows + '</tbody>' +
     '</table>';
@@ -2420,58 +2640,49 @@ window.toggleExpand = function(idx) {
   if (thisRow) thisRow.style.background = isOpen ? '' : 'color-mix(in srgb, var(--link) 10%, var(--panel))';
 };
 
-// ── TRADE HISTORY ────────────────────────────────────────────────────────────
+// ── TRADE HISTORY ─ complete per-fill blotter (every individual buy/sell) ──────
 function renderTrades() {
   var el = E('trades');
-  var data = _trades || { open: [], closed: [] };
-  var open = data.open || [];
-  var closed = data.closed || [];
+  var data = _trades || {};
+  var hist = data.history || [];
 
-  if (!open.length && !closed.length) {
-    el.innerHTML = '<h2><span class="l-en">Trade History</span><span class="l-zh">交易历史</span></h2><div class="mm-empty"><span class="mm-empty-icon">○</span>' + t('trades.empty') + '</div>';
+  var h2 = '<h2><span class="l-en">Trade History</span><span class="l-zh">交易历史</span> <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px">' + t('trades.blotter_sub') + '</span></h2>';
+
+  if (!hist.length) {
+    el.innerHTML = h2 + '<div class="mm-empty"><span class="mm-empty-icon">○</span>' + t('trades.no_history') + '</div>';
     return;
   }
 
-  var html = '<h2><span class="l-en">Trade History</span><span class="l-zh">交易历史</span></h2>';
+  var html = h2 + '<table><thead><tr>' +
+    '<th class="l">' + t('trades.date') + '</th>' +
+    '<th>' + t('trades.ticker') + '</th>' +
+    '<th>' + t('trades.action') + '</th>' +
+    '<th>' + t('trades.shares') + '</th>' +
+    '<th>' + t('trades.price') + '</th>' +
+    '<th>' + t('trades.exit_px') + '</th>' +
+    '<th>' + t('trades.unrealized') + '</th>' +
+    '<th>' + t('trades.realized') + '</th>' +
+    '</tr></thead><tbody>';
 
-  if (open.length) {
-    html += '<table><thead><tr>' +
-      '<th>' + t('trades.ticker') + '</th><th class="l">' + t('trades.sleeve') + '</th><th>' + t('trades.opened') + '</th><th>' + t('trades.held_d') + '</th><th>' + t('trades.entry_wt') + '</th><th>' + t('trades.curr_wt') + '</th><th>' + t('trades.entry_px') + '</th>' +
-      '</tr></thead><tbody>';
-    open.forEach(function(tr) {
-      html += '<tr>' +
-        '<td><span class="pos-ticker">' + esc(tr.ticker||'—') + '</span></td>' +
-        '<td class="l"><span class="mm-sleeve-chip ' + (tr.sleeve === 'conviction' ? 'conv' : 'lead') + '">' + esc(tr.sleeve||'—') + '</span></td>' +
-        '<td style="font-variant-numeric:tabular-nums">' + fmtDate(tr.opened_at) + '</td>' +
-        '<td>' + (tr.held_days != null ? tr.held_days : '—') + '</td>' +
-        '<td style="font-variant-numeric:tabular-nums">' + (tr.entry_weight != null ? (tr.entry_weight*100).toFixed(1)+'%' : '—') + '</td>' +
-        '<td style="font-variant-numeric:tabular-nums">' + (tr.current_weight != null ? (tr.current_weight*100).toFixed(1)+'%' : '—') + '</td>' +
-        '<td style="font-variant-numeric:tabular-nums">' + (tr.entry_price != null ? '$'+Number(tr.entry_price).toFixed(2) : '—') + '</td>' +
-      '</tr>';
-    });
-    html += '</tbody></table>';
-  }
-
-  if (closed.length) {
-    html += '<div class="mm-trades-sub-h">' + t('trades.closed_sub') + '</div>';
-    html += '<table><thead><tr>' +
-      '<th>' + t('trades.ticker') + '</th><th class="l">' + t('trades.sleeve') + '</th><th>' + t('trades.opened') + '</th><th>' + t('trades.closed') + '</th><th>' + t('trades.held_d') + '</th><th class="l">' + t('trades.exit_reason') + '</th>' +
-      '</tr></thead><tbody>';
-    closed.forEach(function(tr) {
-      html += '<tr>' +
-        '<td><span class="pos-ticker">' + esc(tr.ticker||'—') + '</span></td>' +
-        '<td class="l"><span class="mm-sleeve-chip ' + (tr.sleeve === 'conviction' ? 'conv' : 'lead') + '">' + esc(tr.sleeve||'—') + '</span></td>' +
-        '<td style="font-variant-numeric:tabular-nums">' + fmtDate(tr.opened_at) + '</td>' +
-        '<td style="font-variant-numeric:tabular-nums">' + fmtDate(tr.closed_at) + '</td>' +
-        '<td>' + (tr.held_days != null ? tr.held_days : '—') + '</td>' +
-        '<td class="l" style="color:var(--muted);font-size:12px">' + esc(tr.exit_reason||'—') + '</td>' +
-      '</tr>';
-    });
-    html += '</tbody></table>';
-  } else if (open.length) {
-    html += '<div class="mm-trades-sub-h" style="color:var(--muted);font-style:italic;font-weight:400;text-transform:none;letter-spacing:0;font-size:12px;border:none;padding-top:10px">' + t('trades.no_closed') + '</div>';
-  }
-
+  hist.forEach(function(r) {
+    var isBuy = r.action === 'buy';
+    var shares = r.shares != null ? Number(r.shares).toLocaleString(undefined, { maximumFractionDigits: 1 }) : '—';
+    var price = r.price != null ? '$' + Number(r.price).toFixed(2) : '—';
+    var exitPx = r.exit_price != null ? '$' + Number(r.exit_price).toFixed(2) : '—';
+    var u = pnlCell(r.unrealized_pnl, r.unrealized_pct);
+    var rr = pnlCell(r.realized_pnl, r.realized_pct);
+    html += '<tr>' +
+      '<td class="l" style="font-variant-numeric:tabular-nums;color:var(--muted)">' + fmtDate(r.date) + '</td>' +
+      '<td><span class="pos-ticker">' + esc(r.ticker || '—') + '</span></td>' +
+      '<td><span class="mm-side-chip ' + (isBuy ? 'buy' : 'sell') + '">' + (isBuy ? t('trades.buy') : t('trades.sell')) + '</span></td>' +
+      '<td style="font-variant-numeric:tabular-nums">' + shares + '</td>' +
+      '<td style="font-variant-numeric:tabular-nums">' + price + '</td>' +
+      '<td style="font-variant-numeric:tabular-nums">' + exitPx + '</td>' +
+      '<td class="' + u.cls + '">' + u.txt + '</td>' +
+      '<td class="' + rr.cls + '">' + rr.txt + '</td>' +
+    '</tr>';
+  });
+  html += '</tbody></table>';
   el.innerHTML = html;
 }
 
@@ -2606,7 +2817,7 @@ function renderFooter() {
 
 // ── FETCH + RENDER ────────────────────────────────────────────────────────────
 async function fetchAll() {
-  var [bookRes, tradesRes, actRes, researchRes, compRes, regimeRes, perfRes, runsRes] = await Promise.allSettled([
+  var [bookRes, tradesRes, actRes, researchRes, compRes, regimeRes, perfRes, runsRes, macroRes] = await Promise.allSettled([
     fetch('/api/portfolio').then(function(r) { return r.ok ? r.json() : null; }).catch(function() { return null; }),
     fetch('/api/trades').then(function(r)    { return r.ok ? r.json() : null; }).catch(function() { return null; }),
     fetch('/api/activity').then(function(r)  { return r.ok ? r.json() : [];   }).catch(function() { return []; }),
@@ -2615,6 +2826,7 @@ async function fetchAll() {
     fetch('/regime').then(function(r)         { return r.ok ? r.json() : null; }).catch(function() { return null; }),
     fetch('/api/performance').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
     fetch('/api/runs').then(function(r)       { return r.ok ? r.json() : [];   }).catch(function() { return []; }),
+    fetch('/api/macro').then(function(r)      { return r.ok ? r.json() : null; }).catch(function() { return null; }),
   ]);
 
   _book        = bookRes.status    === 'fulfilled' ? bookRes.value    : null;
@@ -2625,6 +2837,7 @@ async function fetchAll() {
   _regime      = regimeRes.status  === 'fulfilled' ? regimeRes.value  : null;
   _perf        = perfRes.status    === 'fulfilled' ? perfRes.value    : null;
   _runs        = (runsRes.status   === 'fulfilled' ? runsRes.value    : null) || [];
+  _macro       = macroRes.status   === 'fulfilled' ? macroRes.value   : null;
 
   // extract rejected from portfolio
   _rejected = (_book && _book.rejected) ? _book.rejected : [];
@@ -2635,6 +2848,7 @@ async function fetchAll() {
   }
 
   renderPerformance();
+  renderMacro();
   renderEquityCurve();
   renderHero();
   renderAllocation();
@@ -2646,6 +2860,8 @@ async function fetchAll() {
   renderRejected();
   renderCompetitors();
   renderFooter();
+  applyColl('runs');
+  applyColl('rejected');
 
   var now = new Date();
   E('updated').textContent = t('hero.updated') + ' ' + now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -2656,6 +2872,7 @@ document.addEventListener('langchange', function() {
   // Re-render all sections to pick up the new language.
   // Data is already cached; no re-fetch needed.
   renderPerformance();
+  renderMacro();
   renderEquityCurve();
   renderHero();
   renderAllocation();

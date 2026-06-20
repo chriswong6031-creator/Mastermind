@@ -37,6 +37,29 @@ def _data() -> Path:
     return _PROJECT_ROOT / "data"
 
 
+def _macro_data() -> Path:
+    """Return the vendored macro engine's data/ directory (read-only)."""
+    return _PROJECT_ROOT / "vendor" / "macro" / "data"
+
+
+def _account_tickers() -> list[str]:
+    """Tickers currently held in the paper account (for live marks)."""
+    try:
+        acct = json.loads((_data() / "portfolio" / "account.json").read_text())
+        return list((acct.get("positions") or {}).keys())
+    except Exception:
+        return []
+
+
+def _live_prices(tickers: list[str]) -> dict[str, float]:
+    """Live (delayed) quotes for `tickers`; {} if the Polygon layer is unavailable."""
+    try:
+        from data_layer import polygon
+        return {k: v for k, v in polygon.quotes(tickers).items() if v is not None}
+    except Exception:
+        return {}
+
+
 def _latest_quiver(strategy_dir: Path) -> dict[str, Any] | None:
     """Return the parsed JSON from the newest date-named file in a strategy dir."""
     try:
@@ -146,6 +169,26 @@ def api_portfolio() -> JSONResponse:
         payload = json.loads(path.read_text())
 
         # ------------------------------------------------------------------
+        # Live marks: attach current price + unrealized P&L to each position
+        # (Polygon delayed quotes via the account's avg-cost lots). Degrades to
+        # nulls offline so the client always renders an honest dash.
+        # ------------------------------------------------------------------
+        try:
+            from portfolio import paper_account
+            prices = _live_prices(_account_tickers())
+            pnl = paper_account.positions_pnl(prices) if prices else {}
+            for pos in payload.get("positions", []):
+                rec = pnl.get(pos.get("ticker"))
+                if rec:
+                    pos["cost_basis"] = rec.get("avg_cost")   # true avg-cost basis
+                    pos["current_price"] = rec.get("current_price")
+                    pos["market_value"] = rec.get("market_value")
+                    pos["unrealized_pnl"] = rec.get("unrealized_pnl")
+                    pos["unrealized_pct"] = rec.get("unrealized_pct")
+        except Exception:
+            pass
+
+        # ------------------------------------------------------------------
         # Inject zh fields from the cache (read-only — no LLM in this path)
         # ------------------------------------------------------------------
 
@@ -234,14 +277,86 @@ def api_research() -> JSONResponse:
 
 @router.get("/api/trades")
 def api_trades() -> JSONResponse:
+    """Open/closed position summaries PLUS a complete per-fill blotter (`history`):
+    every individual buy/sell, with realized P&L on sells and live unrealized P&L
+    on still-open buy remainders."""
     try:
-        from portfolio import position_log
+        from portfolio import position_log, trade_history
+        prices = _live_prices(_account_tickers())
         return JSONResponse({
             "open": position_log.open_positions(),
             "closed": position_log.closed_positions(),
+            "history": trade_history.history(prices),
         })
     except Exception as exc:
-        return JSONResponse({"open": [], "closed": [], "error": str(exc)})
+        return JSONResponse({"open": [], "closed": [], "history": [], "error": str(exc)})
+
+
+@router.get("/api/macro")
+def api_macro() -> JSONResponse:
+    """Key macro reads for the current regime: yield-curve regime, real 10y yield,
+    DXY, VIX. Curve/real-yield come from the macro engine's rate-transmission state
+    (calibrated, EN/ZH labelled); DXY/VIX levels + 1d change from the engine price
+    store. Levels are EOD-grade (indices aren't on the delayed equity-snapshot key)."""
+    out: dict[str, Any] = {"as_of": None, "yield_curve": None, "real_yield": None,
+                           "dxy": None, "vix": None}
+    # --- engine rate-transmission state (curve + real yields) ---
+    try:
+        regime = json.loads((_macro_data() / "regime" / "latest.json").read_text())
+        out["as_of"] = regime.get("date")
+        rates = (((regime.get("rate_inflation_transmission") or {}).get("state") or {})
+                 .get("rates") or {})
+        if rates:
+            out["yield_curve"] = {
+                "regime": rates.get("regime"),
+                "direction": rates.get("direction"),
+                "curve_2s10s": rates.get("curve_2s10s"),
+                "nominal_10y": rates.get("nominal_10y"),
+                "policy_gap": rates.get("policy_gap"),
+                "label_en": (rates.get("label") or {}).get("en"),
+                "label_zh": (rates.get("label") or {}).get("zh"),
+            }
+            out["real_yield"] = {
+                "real_10y": rates.get("real_10y"),
+                "pctile": rates.get("real_10y_pctile"),
+                "chg_63d_bp": rates.get("real_10y_chg_63d_bp"),
+                "regime": rates.get("regime"),
+                "direction": rates.get("direction"),
+            }
+    except Exception:
+        pass
+
+    # --- DXY + VIX levels + 1d change from the engine yahoo store ---
+    def _level_chg(ticker: str) -> dict | None:
+        try:
+            import bot  # noqa: F401  -> vendor/macro on sys.path
+            from lib import store
+            df = store.read("yahoo", ticker)
+            if df is None or "close" not in getattr(df, "columns", []):
+                return None
+            s = df["close"].astype(float).dropna()
+            if len(s) == 0:
+                return None
+            last = float(s.iloc[-1])
+            prev = float(s.iloc[-2]) if len(s) > 1 else last
+            return {"value": round(last, 2),
+                    "chg": round(last - prev, 2),
+                    "chg_pct": round((last / prev - 1) * 100, 2) if prev else 0.0}
+        except Exception:
+            return None
+
+    dxy = _level_chg("DX-Y.NYB")
+    vix = _level_chg("^VIX")
+    if dxy:
+        out["dxy"] = dxy
+    if vix:
+        # plain-English vol regime band
+        v = vix["value"]
+        band = ("calm" if v < 15 else "normal" if v < 20
+                else "elevated" if v < 30 else "stress")
+        vix["band"] = band
+        out["vix"] = vix
+    return JSONResponse(out)
 
 
 @router.get("/api/activity")
