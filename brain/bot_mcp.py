@@ -84,6 +84,21 @@ async def get_portfolio(args):
     return _json(_read_json(_ROOT / "data" / "portfolio" / "latest.json") or {"status": "no book yet"})
 
 
+@tool("get_decision_matrix", "The MULTI-SIDED decision matrix for a name or theme — every lens (valuation, quality, growth, narrative, leadership, asymmetry, risk, policy/admin tilt, Fed, institutional flows, options, rate sensitivity, cross-asset, conviction) with its read + honest status, plus the confluence/divergence synthesis. ALWAYS call this before any verdict.",
+      {"type": "object", "properties": {"subject": {"type": "string"}, "kind": {"type": "string", "enum": ["name", "theme"]}}, "required": ["subject"]})
+async def get_decision_matrix(args):
+    from portfolio import lenses
+    return _json(lenses.full(args["subject"], args.get("kind", "name")))
+
+
+@tool("get_divergences", "Just the divergence patterns for a subject — where the lenses DISAGREE (the edge or the trap): distribution, early_edge, high_confluence_buy, crowded_top, policy_early.",
+      {"type": "object", "properties": {"subject": {"type": "string"}, "kind": {"type": "string", "enum": ["name", "theme"]}}, "required": ["subject"]})
+async def get_divergences(args):
+    from portfolio import lenses
+    s = lenses.synthesize(lenses.decision_matrix(args["subject"], args.get("kind", "name")))
+    return _json({"divergences": s["divergences"], "confluence": s["confluence"], "vetoes": s["vetoes"]})
+
+
 @tool("read_signal", "Read a published signal/data JSON by path (allowlisted to the dashboard + bot data roots).",
       {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]})
 async def read_signal(args):
@@ -136,7 +151,7 @@ async def recommend_action(args):
     return _ok(f"recommendation logged: {args['action']} {args['ticker']} (paper, for review).")
 
 
-_READ = [get_regime, get_themes, get_standouts, get_portfolio, read_signal]
+_READ = [get_regime, get_themes, get_standouts, get_portfolio, get_decision_matrix, get_divergences, read_signal]
 _ACTION = [save_research_note, propose_thesis, flag_emerging_theme, recommend_action]
 _ALL = _READ + _ACTION
 SERVER_NAME = "bot"

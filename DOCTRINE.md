@@ -140,6 +140,36 @@ before any single name; the field is brain-authored but anchored to which order-
 Delivered bluntly, no moralizing — the operator chose a check on their own psychology over a
 yes-man.
 
+## Approach from all sides — the multi-lens decision matrix
+
+A real decision triangulates every side, not just narrative/RS. `portfolio/lenses.py` assembles
+a **decision matrix** per name/theme from the live engine — each lens a row with its read and an
+honest status:
+
+| Side | Lens(es) | Status |
+|---|---|---|
+| Fundamental | valuation (value_z, cheap, fwd P/E), quality (accounting), growth (rev/eps CAGR), solvency (Altman/Piotroski) | context/partial |
+| Narrative | thematic leadership/stage, conviction band, within-basket leader | partial |
+| Potential | upside/downside asymmetry (cone mfe vs dd) | partial |
+| Risk | **drawdown cone (dd_tail)**, **extension veto (parabolic)**, crowding, macro stress | **validated** + context |
+| Policy | administration tilt (targeted/starved), Fed path | context |
+| Flows | 13F smart money, active-ETF accumulation, per-theme flow divergence | context |
+| Positioning | options gamma/walls/expected move | context |
+| Macro fit | rate/inflation sensitivity, cross-asset absorption | context |
+
+**Three rules — never a weighted blend** (blended thematic momentum is rank-IC≈0; averaging 24
+lenses would be the worst overfit here):
+1. **Matrix** — show every lens with its tag; never average them. Validated lenses hold authority;
+   context lenses inform conviction but can't drive size alone.
+2. **Confluence gates size** — how many honest lenses agree, subject to the hard vetoes (parabolic /
+   Altman distress / cycle-blocked → size 0 regardless of how bullish the rest).
+3. **Divergence is the edge or the trap** — `distribution` (hot + expensive + 13F-exiting → avoid),
+   `early_edge` (cheap + flows-in + quiet → asymmetry), `high_confluence_buy` (all sides align + vetoes
+   pass), `crowded_top` (extended + flows rolling), `policy_early` (policy tailwind + cheap before the
+   crowd). Name which side leads.
+
+Armed Claude calls `get_decision_matrix` / `get_divergences` and must address every lens before a verdict.
+
 ## Operating protocol (a theme query)
 
 1. Locate the **stage** (§ lifecycle). 2. Run the **scorecard** (enumerate, tag `(unverified)`).
