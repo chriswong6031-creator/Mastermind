@@ -124,6 +124,29 @@ async def get_divergences(args):
     return _json({"divergences": s["divergences"], "confluence": s["confluence"], "vetoes": s["vetoes"]})
 
 
+@tool("get_altdata", "Alternative-data flow + Trump-family/administration linkage for a NAME — cross-signal convergence across congress/insider/government-contract/lobbying/Trump-trade channels, plus whether the name sits in the latent-stake entity graph (e.g. American Bitcoin -> Hut 8, branded crypto but the value accrues to an AI-power-infra parent). A QUALITATIVE research signal: politically-linked smart-money flow. Public-record + CONTEXT-ONLY (never a scored axis) — informs narrative/conviction, never sizes alone.",
+      {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]})
+async def get_altdata(args):
+    t = (args.get("ticker") or "").upper()
+    bt = (_read_json(_V / "site" / "altdata" / "by_ticker.json")
+          or _read_json(_V / "data" / "altdata" / "by_ticker.json") or {})
+    rec = (bt.get("tickers") or {}).get(t)
+    latent = _read_json(_V / "site" / "altdata" / "latent.json") or {}
+    graph = None
+    for w in (latent.get("watch") or []):
+        if (w.get("ticker") or "").upper() == t:
+            graph = {"in_graph": True, "themes": [th.get("en") for th in (w.get("themes") or [])],
+                     "trump_people": w.get("trump_people"), "top_holder": (w.get("top_holder") or {}).get("owner"),
+                     "alt_corroborated": w.get("alt_corroborated"), "note": w.get("note")}
+            break
+    mismatch = next((m for m in (latent.get("mismatches") or [])
+                     if t in {(m.get("repointed_ticker") or "").upper(), (m.get("entity_ticker") or "").upper()}), None)
+    if rec is None and graph is None and mismatch is None:
+        return _ok(f"no alt-data signal for {t} — not flagged by any political/insider/contract channel.")
+    return _json({"ticker": t, "flow": rec, "latent_graph": graph, "label_mismatch": mismatch,
+                  "note": "Public-record alt-data (Quiver + SEC EDGAR). Context-only — informs narrative, never sizes alone."})
+
+
 @tool("read_signal", "Read a published signal/data JSON by path (allowlisted to the dashboard + bot data roots).",
       {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]})
 async def read_signal(args):
@@ -177,7 +200,7 @@ async def recommend_action(args):
 
 
 _READ = [get_regime, get_themes, get_standouts, get_portfolio, get_decision_matrix, get_divergences,
-         get_quiver_strategy, get_quiver_compare, read_signal]
+         get_altdata, get_quiver_strategy, get_quiver_compare, read_signal]
 _ACTION = [save_research_note, propose_thesis, flag_emerging_theme, recommend_action]
 _ALL = _READ + _ACTION
 SERVER_NAME = "bot"

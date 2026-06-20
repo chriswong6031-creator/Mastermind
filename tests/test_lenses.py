@@ -46,3 +46,40 @@ def test_mcp_decision_matrix_tool():
     d = json.loads(out["content"][0]["text"])
     assert d["subject"] == "NVDA" and "synthesis" in d
     assert "mcp__bot__get_decision_matrix" in bot_mcp.TOOL_NAMES
+
+
+# ---------------- alt-data flow lens (Quiver / TrumpFlow) ----------------
+def test_altdata_lens_surfaces_even_without_stockdata(monkeypatch):
+    bt = {"tickers": {"EFX": {"convergence_score": 2, "channels": ["gov_contract", "trump"],
+                              "trump_linked": True, "gov_contract_usd_30d": 7e7, "trump_side": "buy"}}}
+    monkeypatch.setattr(lenses, "_load", lambda rel: bt if "altdata/by_ticker" in rel else None)
+    rows = {r["lens"]: r for r in lenses.decision_matrix("EFX", "name")["rows"]}
+    assert "altdata_flow" in rows                                   # present even with no S&P stockdata
+    r = rows["altdata_flow"]
+    assert r["status"] == "context" and r["direction"] == "bull"    # never validated; buy-side flow
+    assert r["value"]["convergence_score"] == 2 and r["value"]["trump_linked"] is True
+    assert "convergence" in r["note"]
+
+
+def test_altdata_divergence_patterns():
+    trap = lenses._divergences([{"lens": "altdata_flow", "direction": "bull", "value": {}},
+                                {"lens": "extension", "direction": "bear", "value": {}}])
+    assert any(x["pattern"] == "political_crowd_trap" for x in trap)
+    early = lenses._divergences([{"lens": "altdata_flow", "direction": "bull", "value": {}},
+                                 {"lens": "valuation", "direction": "neutral", "value": {}}])
+    assert any(x["pattern"] == "political_flow_early" for x in early)
+
+
+def test_get_altdata_tool(monkeypatch):
+    bt = {"tickers": {"EFX": {"convergence_score": 2, "channels": ["gov_contract", "trump"], "trump_linked": True}}}
+    latent = {"watch": [{"ticker": "HUT", "themes": [{"en": "AI power & data-center infrastructure"}],
+                         "trump_people": ["Eric Trump"], "top_holder": {"owner": "BlackRock"}}],
+              "mismatches": [{"entity_ticker": "ABTC", "repointed_ticker": "HUT", "real_theme": {"en": "AI infra"}}]}
+    monkeypatch.setattr(bot_mcp, "_read_json",
+                        lambda p: bt if "by_ticker" in str(p) else latent if "latent" in str(p) else None)
+    d = json.loads(asyncio.run(bot_mcp.get_altdata.handler({"ticker": "EFX"}))["content"][0]["text"])
+    assert d["ticker"] == "EFX" and d["flow"]["convergence_score"] == 2
+    # HUT carries no direct flow row but resolves the latent graph + the ABTC->HUT label mismatch
+    d2 = json.loads(asyncio.run(bot_mcp.get_altdata.handler({"ticker": "HUT"}))["content"][0]["text"])
+    assert d2["latent_graph"]["in_graph"] is True and d2["label_mismatch"]["repointed_ticker"] == "HUT"
+    assert "mcp__bot__get_altdata" in bot_mcp.TOOL_NAMES
