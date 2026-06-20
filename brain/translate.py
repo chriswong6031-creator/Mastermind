@@ -144,7 +144,9 @@ def _call_haiku(texts: list[str]) -> dict[str, str]:
             "translation — no commentary, no markdown code fences.\n\n"
             f"Input:\n{index_json}"
         )
-        out = cli_bridge.reason_sync(prompt, role="scout")
+        # role 'scout' = haiku via the subscription OAuth (NOT a metered key / DeepSeek);
+        # log_run=False so these utility translations never appear in the activity log.
+        out = cli_bridge.reason_sync(prompt, role="scout", log_run=False)
         raw = (out.get("text") or "").strip()
 
         # tolerate code fences / surrounding prose — extract the outermost JSON object

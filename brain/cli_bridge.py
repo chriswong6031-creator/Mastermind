@@ -75,7 +75,8 @@ async def reason(prompt: str, *, role: str = "pm", model: str | None = None,
                  system: str | None = None, append_system: str | None = None,
                  allowed_tools: list[str] | None = None, add_dirs: list[str] | None = None,
                  max_turns: int | None = None, cwd: str | None = None,
-                 arm: bool = False, resume: str | None = None) -> dict:
+                 arm: bool = False, resume: str | None = None,
+                 log_run: bool = True) -> dict:
     """Run a headless Claude Code reasoning pass. With arm=True, attaches the bot's MCP
     tools (read the dashboard + write conclusions back) + WebSearch/WebFetch and runs a
     multi-turn research loop. Returns {ok, text, model, role, armed, tools_used, cost_usd,
@@ -103,16 +104,18 @@ async def reason(prompt: str, *, role: str = "pm", model: str | None = None,
         return {**base, "ok": False, "backend": "none", "text": None,
                 "error": "claude CLI not installed (npm i -g @anthropic-ai/claude-code)"}
 
-    # --- run-log: open a new run for this session ---
+    # --- run-log: open a new run for this session (skipped for utility calls
+    #     like translation — log_run=False — so they don't clutter the activity log) ---
     _run_id: str | None = None
-    try:
-        from brain import runlog as _rl
-        _kind = "research" if arm else "daily"
-        _run_id = _rl.start_run(_kind, title=prompt[:120])
-        _rl.log_step(_run_id, "reasoning", "session start",
-                     f"prompt={prompt[:300]} role={role} model={mdl} armed={arm} turns={turns}")
-    except Exception:
-        pass
+    if log_run:
+        try:
+            from brain import runlog as _rl
+            _kind = "research" if arm else "daily"
+            _run_id = _rl.start_run(_kind, title=prompt[:120])
+            _rl.log_step(_run_id, "reasoning", "session start",
+                         f"prompt={prompt[:300]} role={role} model={mdl} armed={arm} turns={turns}")
+        except Exception:
+            pass
 
     if _SDK:
         try:
