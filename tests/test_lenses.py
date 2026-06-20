@@ -26,8 +26,10 @@ def test_synthesis_and_divergence_on_nvda():
     s = lenses.full("NVDA", "name")["synthesis"]
     assert "confluence" in s and -1 <= s["confluence"] <= 1
     assert s["size_authority"] in ("up", "down", "hold", "blocked")
-    # NVDA: high-conviction + expensive + 13F-selling -> the distribution trap
-    assert any(d["pattern"] == "distribution" for d in s["divergences"])
+    # NVDA is a cheap-for-growth leader (PEG ~0.25) — after the valuation/13F fix it must NOT be
+    # caught in the 'distribution' trap (the false-reject the raw value factor + 1-name 13F margin
+    # used to manufacture). See test_nvda_growth_leader_passes_gate for the full regression.
+    assert not any(d["pattern"] == "distribution" for d in s["divergences"])
 
 
 def test_hard_veto_caps_size():
@@ -83,3 +85,35 @@ def test_get_altdata_tool(monkeypatch):
     d2 = json.loads(asyncio.run(bot_mcp.get_altdata.handler({"ticker": "HUT"}))["content"][0]["text"])
     assert d2["latent_graph"]["in_graph"] is True and d2["label_mismatch"]["repointed_ticker"] == "HUT"
     assert "mcp__bot__get_altdata" in bot_mcp.TOOL_NAMES
+
+
+# --- AVGO/NVDA alignment: growth-adjusted valuation + 13F min-sample gate (the NVDA false-reject) ---
+def test_valuation_dir_is_growth_adjusted():
+    # cheap-for-growth leader (NVDA-like): expensive on the value factor but PEG<0.8 -> NOT bear
+    dirv, peg = lenses._valuation_dir(-1.05, 48.0, 16.6, 66.9, -6.6)   # rev_cagr leads (eps noisy/neg)
+    assert dirv == "bull" and peg is not None and peg < 0.8
+    # fairly-valued-for-growth (AVGO-like): expensive factor but PEG ~1 -> neutral, not bear
+    dirv2, _ = lenses._valuation_dir(-0.9, None, 21.3, 21.7, -5.5)
+    assert dirv2 == "neutral"
+    # genuinely expensive (no growth to justify it) -> bear
+    assert lenses._valuation_dir(-1.0, 20.0, 40.0, 5.0, None)[0] == "bear"
+    # cheap on the factor itself -> bull regardless of growth
+    assert lenses._valuation_dir(0.6, 70.0, None, None, None)[0] == "bull"
+
+
+def test_flows_13f_min_sample_margin_gate():
+    assert lenses._flows_13f_dir(1, 2) == "neutral"     # 1-name margin = noise, not distribution
+    assert lenses._flows_13f_dir(3, 1) == "bull"        # >=2 net buyers
+    assert lenses._flows_13f_dir(1, 4) == "bear"        # >=2 net sellers
+    assert lenses._flows_13f_dir(2, 2) == "neutral"
+    assert lenses._flows_13f_dir(None, None) is None    # no 13F coverage
+
+
+def test_nvda_growth_leader_passes_gate():
+    # regression: NVDA must no longer be a tight-factor false-reject. With PEG-aware valuation and
+    # the 13F gate, the 'distribution' divergence does not fire and the gate sizes it.
+    f = lenses.full("NVDA")
+    rows = {r["lens"]: r for r in f["rows"]}
+    assert rows["valuation"]["direction"] != "bear"
+    assert "distribution" not in [d["pattern"] for d in f["synthesis"]["divergences"]]
+    assert f["synthesis"]["size_authority"] == "up" and not f["synthesis"]["vetoes"]

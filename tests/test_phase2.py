@@ -32,8 +32,13 @@ def test_phase2_multiname_book_and_gate():
         syn = lenses.full(p["ticker"], "name")["synthesis"]
         assert syn["size_authority"] == "up" and not syn["vetoes"]   # confirmed + veto-clear
         assert p["weight"] <= 0.08 + 1e-9                            # name cap
-    # vetoed/hot names (distribution, distress, cycle-blocked) are NOT sized
-    assert "NVDA" not in {p["ticker"] for p in conv}                # NVDA = distribution -> 0
+    # NVDA is a cheap-for-growth leader (PEG ~0.25): after the valuation/13F alignment fix it
+    # CLEARS the gate (no longer the raw-value-factor 'distribution' false-reject). It is eligible
+    # for the conviction sleeve — the old 'NVDA must be excluded' assertion encoded the bug.
+    assert lenses.full("NVDA", "name")["synthesis"]["size_authority"] == "up"
+    # genuine hard vetoes (parabolic / distress / cycle-blocked) still exclude a name from the book
+    for p in conv:
+        assert not lenses.full(p["ticker"], "name")["synthesis"]["vetoes"]
     assert out["sleeves"]["cash"] >= 0.05
 
     # the gate carries forward when nothing material changed

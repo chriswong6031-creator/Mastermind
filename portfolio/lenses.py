@@ -40,6 +40,32 @@ def _row(lens, value, status, direction, note=""):
     return {"lens": lens, "value": value, "status": status, "direction": direction, "note": note}
 
 
+def _valuation_dir(value_z, cheap, fwd, rev_cagr, eps_cagr):
+    """GROWTH-ADJUSTED valuation direction + the PEG used. The raw value factor (P/B, P/S, EY)
+    structurally flags every hyper-growth leader 'expensive'; we consult forward-P/E-vs-growth so
+    a cheap-for-growth name (low PEG) is not mislabelled. Growth = revenue CAGR first (trailing EPS
+    CAGR is noisy/negative on a window), matching the growth lens. Returns (direction, peg)."""
+    gr = rev_cagr if (rev_cagr and rev_cagr > 0) else (eps_cagr if (eps_cagr and eps_cagr > 0) else None)
+    peg = round(fwd / gr, 2) if (fwd and gr) else None
+    cheap_factor = (value_z or 0) > 0.3 or (cheap or 50) > 65
+    expensive_factor = (value_z or 0) < -0.3 or (cheap or 50) < 35
+    if cheap_factor or (peg is not None and peg < 0.8):
+        return "bull", peg                        # cheap on factors, or cheap-for-growth (low PEG)
+    if expensive_factor and (peg is None or peg > 2.0):
+        return "bear", peg                        # expensive AND not justified by growth
+    return "neutral", peg                          # expensive on factors but growth-justified
+
+
+def _flows_13f_dir(nb, ns):
+    """13F direction with a MIN-SAMPLE + MARGIN gate: a 1-name margin across a handful of curated
+    VIP funds is noise for a mega-cap with thousands of holders, so require a >=2 net margin to fire
+    a direction (else neutral). None when no 13F coverage exists."""
+    if nb is None:
+        return None
+    _nb, _ns = nb or 0, ns or 0
+    return "bull" if (_nb - _ns) >= 2 else "bear" if (_ns - _nb) >= 2 else "neutral"
+
+
 # ---------------- alt-data flow lens (Signal Intelligence Desk / Quiver / TrumpFlow) ----------------
 def _intelligence() -> dict:
     """The unified per-ticker News+Intelligence bundle (macro engine.intelligence) — one
@@ -175,12 +201,20 @@ def _name_rows(t: str) -> list[dict]:
         base = ([ad] if ad else []) + ([nw] if nw else [])
         return base + [_row("conviction", None, "missing", None, "no stockdata")]
 
-    # valuation
+    # valuation — GROWTH-ADJUSTED (the NVDA false-reject fix). The raw value-factor z (built from
+    # P/B, P/S, earnings yield) structurally flags EVERY hyper-growth leader as 'expensive': NVDA's
+    # value_z=-1.05 comes from a ~32x P/B and ~24x P/S, not from being dear vs its growth. The old
+    # formula read only value_z + trailing_pe, so it (a) subtracted a bull AND (b) armed the
+    # 'distribution' divergence (lead+valuation-bear+13F-bear) — wrongly rejecting a 16.6x-forward /
+    # 67% rev-growth (PEG~0.25) leader. We now consult forward P/E vs growth (PEG, using revenue
+    # CAGR like the growth lens — trailing EPS CAGR is noisy/negative on a window): a cheap-for-
+    # growth name is NOT 'expensive'.
     vz = _g(d, "valuation.value_z")
     cheap = _g(d, "valuation.trailing_pe.cheap")
     fwd = _g(d, "valuation.forward_pe")
-    dirv = "bull" if (vz or 0) > 0.3 or (cheap or 50) > 65 else "bear" if (vz or 0) < -0.3 or (cheap or 50) < 35 else "neutral"
-    rows.append(_row("valuation", {"value_z": vz, "cheap_pctile": cheap, "forward_pe": fwd,
+    dirv, peg = _valuation_dir(vz, cheap, fwd, _g(d, "financials.multiyear.rev_cagr"),
+                               _g(d, "financials.multiyear.eps_cagr"))
+    rows.append(_row("valuation", {"value_z": vz, "cheap_pctile": cheap, "forward_pe": fwd, "peg": peg,
                                    "basis": "forward" if fwd else "trailing-only"}, "context", dirv))
 
     # quality / accounting
@@ -221,11 +255,15 @@ def _name_rows(t: str) -> list[dict]:
     rows.append(_row("extension", {"grade": grade, "parabolic": para, "pct_vs_200dma": pv2}, "validated",
                      "bear" if (para or grade in ("stretched", "parabolic") or (pv2 or 0) >= 30) else "neutral"))
 
-    # flows — 13F smart money
+    # flows — 13F smart money. MIN-SAMPLE + MARGIN gate (the NVDA false-reject fix): a 1-name
+    # margin across a handful of curated VIP funds is noise for a mega-cap with thousands of
+    # institutional holders — NVDA fired 'bear' (distribution) on 1 buying vs 2 selling while
+    # TigerGlobal's +9.1% NVDA add was tagged 'hold' (uncounted). Require >=3 tracked decisions
+    # AND a >=2 net margin before firing a direction; otherwise the signal is too thin → neutral.
     nb, ns = _g(d, "smart_money.n_buying"), _g(d, "smart_money.n_selling")
-    dirf = "bull" if (nb or 0) > (ns or 0) else "bear" if (ns or 0) > (nb or 0) else "neutral"
+    dirf = _flows_13f_dir(nb, ns)
     rows.append(_row("flows_13f", {"n_buying": nb, "n_selling": ns, "vip": _g(d, "smart_money.vip")},
-                     "context" if (nb is not None) else "missing", dirf if nb is not None else None))
+                     "context" if (nb is not None) else "missing", dirf))
 
     # flows — active ETF accumulation
     if flows:
