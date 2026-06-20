@@ -1,0 +1,35 @@
+"""The daily loop + scheduler wiring."""
+from pathlib import Path
+
+import bot  # noqa: F401
+
+_DB = Path(__file__).resolve().parent.parent / "data" / "bot.db"
+_SCHED = Path(__file__).resolve().parent.parent / "data" / "scheduler.sqlite"
+
+
+def _clean():
+    for p in (_DB, _SCHED):
+        if p.exists():
+            p.unlink()
+
+
+def test_daily_loop_deterministic():
+    _clean()
+    from bot import daily
+    out = daily.run_daily(armed=False)            # offline: book only, no Claude/Quiver
+    assert out["book"]["ran"] is True
+    assert out["book"]["sleeves"]["cash"] >= 0.05
+    # armed steps are skipped without armed=True
+    assert "competitor" not in out and "research" not in out
+    _clean()
+
+
+def test_scheduler_registers_daily_job():
+    _clean()
+    from app import scheduler
+    s = scheduler.start()
+    if s is None:                                  # apscheduler not installed -> graceful no-op
+        return
+    assert any(j.id == "daily_loop" for j in s.get_jobs())
+    s.shutdown(wait=False)
+    _clean()

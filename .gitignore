@@ -17,3 +17,4 @@ data/brain/proposals.jsonl
 jobs/
 !data/**/.gitkeep
 data/quiver/
+data/*.sqlite

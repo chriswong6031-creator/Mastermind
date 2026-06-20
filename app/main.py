@@ -64,6 +64,19 @@ if FastAPI is not None:
         return await cli_bridge.reason(
             req.prompt, role=req.role, append_system=req.append_system, max_turns=req.max_turns)
 
+    @app.on_event("startup")
+    def _start_scheduler():
+        from app import scheduler
+        app.state.scheduler = scheduler.start()   # daily loop on cron; None if apscheduler absent
+
+    @app.post("/daily")
+    def daily(force: bool = False) -> dict:
+        """Manually fire the daily loop (gated book + armed research + competitor edge note)."""
+        from bot.daily import run_daily
+        out = run_daily(force=force)
+        return {k: out.get(k) for k in ("asof", "research", "competitor")} | {
+            "book_ran": (out.get("book") or {}).get("ran")}
+
     @app.post("/research")
     async def research(req: ResearchReq) -> dict:
         """An ARMED, multi-turn research session: Claude reads the dashboard (MCP tools),
