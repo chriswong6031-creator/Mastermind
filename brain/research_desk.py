@@ -52,6 +52,38 @@ For each GENUINE edge you'd stake your reputation on:
   - if it's a new narrative, call flag_emerging_theme(name, stage, tickers, rationale)
 Then call save_research_note to summarize your conclusions and reasoning chain.
 
+REQUIRED: every save_research_note body MUST be 250-500 words and contain ALL of these sections
+(use these exact markdown headings so the parser can find them):
+
+## Thesis
+1-3 sentences: the core claim, why NOW, and the expected outcome if correct.
+
+## Mechanism
+The causal chain — what is actually happening operationally/financially/structurally that
+makes this true. Not the conclusion; the plumbing that produces it.
+
+## 2nd- and 3rd-order effects
+Who else is touched? Supply-chain winners/losers, competitors that benefit or get hurt,
+credit/refinancing knock-ons, labor / regulatory ripple effects. At least 3 specific points.
+
+## Affected tickers
+- Primary: the direct beneficiaries or victims (the subject + close peers).
+- Secondary: 1-2 steps removed (suppliers, customers, substitutes, competitive set).
+- Short candidates: names that are hurt if the thesis is right.
+
+## What to watch
+Specific measurable catalysts with approximate dates or thresholds — earnings dates, policy
+announcements, data releases, price/volume triggers. At least 3 concrete watchpoints.
+
+## Risk & invalidation
+What specific evidence would prove this WRONG? Be precise — e.g. "revenue guidance cut >10%
+in the next quarterly report" or "Fed hikes instead of cutting by September." Vague invalidators
+(e.g. 'macro worsens') are not acceptable. The falsifier must be concrete.
+
+## Lens summary
+A compact table of the key lenses you checked (at minimum the validated + context lenses):
+| Lens | Direction | Key value | Note |
+
 Nothing you do executes a trade — the engine gates sizing and the falsifier. Propose, don't size."""
 
 
@@ -60,7 +92,12 @@ def run_daily_research(asof: str | None = None, *, max_turns: int | None = None)
     degrades gracefully (ok=False) when unauthenticated."""
     regime = json.loads((Path(cli_bridge._ROOT) / "vendor" / "macro" / "data" / "regime" / "latest.json").read_text())
     asof = asof or regime["date"]
-    prompt = RESEARCH_PROMPT.format(asof=asof, quad=regime["quad"], quad_name=regime.get("quad_name", ""))
+    # NB: targeted replace (not str.format) — the prompt body contains literal
+    # braces (e.g. "{validated, context, partial}") that .format() misreads as fields.
+    prompt = (RESEARCH_PROMPT
+              .replace("{asof}", asof)
+              .replace("{quad}", regime["quad"])
+              .replace("{quad_name}", regime.get("quad_name", "")))
     if not cli_bridge.available():
         return {"ok": False, "error": "claude CLI/SDK not available", "asof": asof}
     return cli_bridge.research_sync(prompt, role="deep", max_turns=max_turns)

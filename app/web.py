@@ -91,6 +91,18 @@ def dashboard() -> FileResponse:
     return FileResponse(_STATIC / "index.html", media_type="text/html")
 
 
+@router.get("/theme.css", include_in_schema=False)
+def theme_css() -> FileResponse:
+    """Serve the macro design-system stylesheet the dashboard links."""
+    return FileResponse(_STATIC / "theme.css", media_type="text/css")
+
+
+@router.get("/theme.js", include_in_schema=False)
+def theme_js() -> FileResponse:
+    """Serve the macro theme toggle script (optional; dark renders without it)."""
+    return FileResponse(_STATIC / "theme.js", media_type="application/javascript")
+
+
 @router.get("/api/portfolio")
 def api_portfolio() -> JSONResponse:
     path = _data() / "portfolio" / "latest.json"
@@ -131,6 +143,114 @@ def api_research() -> JSONResponse:
         return JSONResponse(out)
     except Exception:
         return JSONResponse([])
+
+
+@router.get("/api/trades")
+def api_trades() -> JSONResponse:
+    try:
+        from portfolio import position_log
+        return JSONResponse({
+            "open": position_log.open_positions(),
+            "closed": position_log.closed_positions(),
+        })
+    except Exception as exc:
+        return JSONResponse({"open": [], "closed": [], "error": str(exc)})
+
+
+@router.get("/api/activity")
+def api_activity() -> JSONResponse:
+    """Reverse-chronological activity timeline (cap 60).
+
+    Assembles events from:
+      - positions_ledger history entries  (kind "trade")
+      - decisions[] in latest.json        (kind "decision")
+      - research note files               (kind "research")
+      - runs table via latest.json as_of  (kind "run")
+    """
+    events: list[dict] = []
+
+    # --- trades from ledger history ---
+    try:
+        ledger_path = _data() / "portfolio" / "positions_ledger.json"
+        if ledger_path.exists():
+            ledger = json.loads(ledger_path.read_text())
+            for key, entry in ledger.items():
+                for h in entry.get("history", []):
+                    ts = h.get("ts") or ""
+                    ev = h.get("event", "")
+                    ticker = entry.get("ticker", key.split(":")[-1])
+                    weight = h.get("weight")
+                    w_str = f" ({round((weight or 0)*100, 1)}%)" if weight is not None else ""
+                    events.append({
+                        "ts": ts,
+                        "kind": "trade",
+                        "title": f"{ev.upper()} {ticker}{w_str}",
+                        "detail": (
+                            f"{entry.get('sleeve', '')} sleeve | "
+                            f"{'open' if entry.get('still_open') else 'closed'}"
+                        ),
+                    })
+    except Exception:
+        pass
+
+    # --- decisions from latest.json ---
+    try:
+        portfolio_path = _data() / "portfolio" / "latest.json"
+        if portfolio_path.exists():
+            portfolio = json.loads(portfolio_path.read_text())
+            asof = portfolio.get("as_of", "")
+            for d in portfolio.get("decisions", []):
+                events.append({
+                    "ts": d.get("logged_at") or asof or "",
+                    "kind": "decision",
+                    "title": f"Decision: {d.get('lean', 'watch').upper()} {d.get('subject', '?')}",
+                    "detail": (d.get("thesis") or "")[:200],
+                })
+            # top-level run event
+            if asof:
+                regime = (portfolio.get("regime") or {})
+                events.append({
+                    "ts": asof,
+                    "kind": "run",
+                    "title": f"Book rebuilt — {asof}",
+                    "detail": (
+                        f"Quad: {regime.get('quad_name') or regime.get('quad')} | "
+                        f"gross={portfolio.get('gross', 0)*100:.1f}% "
+                        f"cash={portfolio.get('cash', 0)*100:.1f}%"
+                    ),
+                })
+    except Exception:
+        pass
+
+    # --- research notes (deduped on title+body, newest kept) ---
+    try:
+        notes_dir = _data() / "research" / "notes"
+        if notes_dir.exists():
+            parsed = [n for n in (_parse_note(p) for p in notes_dir.glob("*.md"))
+                      if n and n.get("date")]
+            parsed.sort(key=lambda n: n["_sort_key"], reverse=True)
+            seen: set[tuple[str, str]] = set()
+            for note in parsed:
+                key = (note["title"], note["body_md"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                tickers_str = (", ".join(note["tickers"]) if note.get("tickers") else "")
+                events.append({
+                    "ts": note["date"],
+                    "kind": "research",
+                    "title": note["title"],
+                    "detail": (
+                        (f"Tickers: {tickers_str} | " if tickers_str else "")
+                        + (note.get("body_md") or "")[:160]
+                    ),
+                })
+    except Exception:
+        pass
+
+    # sort newest first, cap at 60
+    events.sort(key=lambda e: e.get("ts") or "", reverse=True)
+    return JSONResponse(events[:60])
 
 
 @router.get("/api/competitors")
