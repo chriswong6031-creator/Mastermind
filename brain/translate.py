@@ -187,7 +187,7 @@ def translate_book(book: dict[str, Any]) -> None:
     # positions
     for pos in book.get("positions", []):
         tf = pos.get("thesis_full") or {}
-        for field in ("summary", "why_now", "sizing_rationale"):
+        for field in ("summary", "why_now", "sizing_rationale", "what_would_prove_wrong"):
             v = tf.get(field)
             if v:
                 texts.append(v)

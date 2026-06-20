@@ -2366,7 +2366,8 @@ function renderPositions() {
 
     // falsifier
     if (tf.what_would_prove_wrong) {
-      rows += '<div class="mm-fals-box"><strong>' + t('thesis.falsifier') + '</strong>' + esc(tf.what_would_prove_wrong) + '</div>';
+      var falsTxt = (isZh && zhTf.what_would_prove_wrong) ? zhTf.what_would_prove_wrong : tf.what_would_prove_wrong;
+      rows += '<div class="mm-fals-box"><strong>' + t('thesis.falsifier') + '</strong>' + esc(falsTxt) + '</div>';
     }
 
     // sizing rationale — prefer zh

@@ -162,7 +162,7 @@ def api_portfolio() -> JSONResponse:
             if not tf:
                 continue
             zh_tf: dict[str, Any] = {}
-            for field in ("summary", "why_now", "sizing_rationale"):
+            for field in ("summary", "why_now", "sizing_rationale", "what_would_prove_wrong"):
                 v = tf.get(field)
                 if v:
                     zh = _cached_zh(v)
