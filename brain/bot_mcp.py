@@ -84,6 +84,31 @@ async def get_portfolio(args):
     return _json(_read_json(_ROOT / "data" / "portfolio" / "latest.json") or {"status": "no book yet"})
 
 
+@tool("get_quiver_strategy", "A competitor Quiver AI strategy's latest scraped snapshot — holdings, recent trades/rebalances, metrics, and the AI's per-pick justification. For learning their process.",
+      {"type": "object", "properties": {"name": {"type": "string", "enum": ["chatgpt_enhanced", "claude_enhanced", "chatgpt_standard", "claude_standard"]}}, "required": ["name"]})
+async def get_quiver_strategy(args):
+    from data_layer import quiver
+    snap = quiver.latest_snapshot(args["name"])
+    if not snap:
+        return _ok("no snapshot yet — run scripts/quiver_pull.py")
+    return _json({k: snap[k] for k in ["strategy", "model", "scraped", "metrics", "holdings",
+                                       "recently_opened", "recently_closed", "recently_rebalanced", "top_picks"]})
+
+
+@tool("get_quiver_compare", "Compare all four competitor Quiver AI strategies (ChatGPT/Claude x Enhanced/Standard) — model, metrics, holdings, turnover — to infer their process and where we can beat them.", {})
+async def get_quiver_compare(args):
+    from data_layer import quiver
+    out = {}
+    for k in quiver.STRATEGIES:
+        s = quiver.latest_snapshot(k)
+        if s:
+            out[k] = {"model": s["model"], "metrics": s["metrics"],
+                      "holdings": [(h["ticker"], h["pct_nav"]) for h in s["holdings"]],
+                      "turnover": {"opened": len(s["recently_opened"]), "closed": len(s["recently_closed"]),
+                                   "rebalanced": len(s["recently_rebalanced"])}}
+    return _json(out)
+
+
 @tool("get_decision_matrix", "The MULTI-SIDED decision matrix for a name or theme — every lens (valuation, quality, growth, narrative, leadership, asymmetry, risk, policy/admin tilt, Fed, institutional flows, options, rate sensitivity, cross-asset, conviction) with its read + honest status, plus the confluence/divergence synthesis. ALWAYS call this before any verdict.",
       {"type": "object", "properties": {"subject": {"type": "string"}, "kind": {"type": "string", "enum": ["name", "theme"]}}, "required": ["subject"]})
 async def get_decision_matrix(args):
@@ -151,7 +176,8 @@ async def recommend_action(args):
     return _ok(f"recommendation logged: {args['action']} {args['ticker']} (paper, for review).")
 
 
-_READ = [get_regime, get_themes, get_standouts, get_portfolio, get_decision_matrix, get_divergences, read_signal]
+_READ = [get_regime, get_themes, get_standouts, get_portfolio, get_decision_matrix, get_divergences,
+         get_quiver_strategy, get_quiver_compare, read_signal]
 _ACTION = [save_research_note, propose_thesis, flag_emerging_theme, recommend_action]
 _ALL = _READ + _ACTION
 SERVER_NAME = "bot"
