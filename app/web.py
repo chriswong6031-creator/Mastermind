@@ -11,6 +11,15 @@ from typing import Any
 from fastapi import APIRouter
 from fastapi.responses import FileResponse, JSONResponse
 
+# Lazy import so the module loads even if brain/ isn't fully initialised yet
+def _cached_zh(text: str):
+    """Safe wrapper: returns None if brain.translate isn't available."""
+    try:
+        from brain.translate import cached_zh
+        return cached_zh(text)
+    except Exception:
+        return None
+
 router = APIRouter()
 
 _STATIC = Path(__file__).parent / "static"
@@ -135,6 +144,53 @@ def api_portfolio() -> JSONResponse:
         return JSONResponse({"error": "no book yet"}, status_code=404)
     try:
         payload = json.loads(path.read_text())
+
+        # ------------------------------------------------------------------
+        # Inject zh fields from the cache (read-only — no LLM in this path)
+        # ------------------------------------------------------------------
+
+        # disclaimer_zh
+        disclaimer = payload.get("disclaimer")
+        if disclaimer:
+            zh_d = _cached_zh(disclaimer)
+            if zh_d:
+                payload["disclaimer_zh"] = zh_d
+
+        # positions[].thesis_full._zh
+        for pos in payload.get("positions", []):
+            tf = pos.get("thesis_full")
+            if not tf:
+                continue
+            zh_tf: dict[str, Any] = {}
+            for field in ("summary", "why_now", "sizing_rationale"):
+                v = tf.get(field)
+                if v:
+                    zh = _cached_zh(v)
+                    if zh:
+                        zh_tf[field] = zh
+            bull_zh = [_cached_zh(b) for b in (tf.get("bull") or [])]
+            if any(zh for zh in bull_zh):
+                zh_tf["bull"] = [zh if zh else b for zh, b in zip(bull_zh, tf.get("bull", []))]
+            bear_zh = [_cached_zh(b) for b in (tf.get("bear") or [])]
+            if any(zh for zh in bear_zh):
+                zh_tf["bear"] = [zh if zh else b for zh, b in zip(bear_zh, tf.get("bear", []))]
+            if zh_tf:
+                tf["_zh"] = zh_tf
+
+        # rejected[]._zh
+        for rej in payload.get("rejected", []):
+            zh_rej: dict[str, Any] = {}
+            reason = rej.get("reason")
+            if reason:
+                zh_r = _cached_zh(reason)
+                if zh_r:
+                    zh_rej["reason"] = zh_r
+            bear_zh = [_cached_zh(b) for b in (rej.get("bear") or [])]
+            if any(zh for zh in bear_zh):
+                zh_rej["bear"] = [zh if zh else b for zh, b in zip(bear_zh, rej.get("bear", []))]
+            if zh_rej:
+                rej["_zh"] = zh_rej
+
         return JSONResponse(payload)
     except Exception as exc:
         return JSONResponse({"error": str(exc)}, status_code=500)
@@ -163,8 +219,14 @@ def api_research() -> JSONResponse:
                 continue
             seen.add(key)
             deduped.append(n)
-        # strip internal sort key, cap at 30
-        out = [{k: v for k, v in n.items() if k != "_sort_key"} for n in deduped[:30]]
+        # strip internal sort key, cap at 30; inject zh fields from cache
+        out = []
+        for n in deduped[:30]:
+            note = {k: v for k, v in n.items() if k != "_sort_key"}
+            # keys are always present (null when uncached) so the client can rely on them
+            note["title_zh"] = _cached_zh(note.get("title") or "")
+            note["body_md_zh"] = _cached_zh(note.get("body_md") or "")
+            out.append(note)
         return JSONResponse(out)
     except Exception:
         return JSONResponse([])

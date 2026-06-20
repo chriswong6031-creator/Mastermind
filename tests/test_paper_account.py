@@ -136,14 +136,30 @@ def test_mark_appends_nav_history(tmp_account: None) -> None:
 
 def test_performance_contract_shape(tmp_account: None) -> None:
     from portfolio import paper_account
+    from unittest import mock
+    from datetime import date, timedelta
 
-    # populate a few NAV rows manually via mark()
-    paper_account.rebalance({"AAPL": 0.5, "MSFT": 0.3}, _PRICES_1, "2026-01-02")
-    paper_account.mark(_PRICES_1, "2026-01-02")
-    paper_account.mark(_PRICES_2, "2026-01-03")
-    paper_account.mark(_PRICES_DOWN, "2026-01-04")
+    # Use dates that sit within the SPY window we'll mock: 5 days ago through today
+    today = date.today()
+    d0 = (today - timedelta(days=4)).isoformat()
+    d1 = (today - timedelta(days=3)).isoformat()
+    d2 = (today - timedelta(days=2)).isoformat()
+    d3 = (today - timedelta(days=1)).isoformat()
 
-    perf = paper_account.performance()
+    # Fake SPY history covering the same 5-day span
+    fake_spy_history = [
+        (d0, 400.0), (d1, 410.0), (d2, 405.0), (d3, 415.0), (today.isoformat(), 420.0),
+    ]
+
+    # inception set to d1 so d0 is pre-inception and d1..today are realized
+    with mock.patch.object(paper_account, "_INCEPTION_DATE", d1), \
+         mock.patch.object(paper_account, "_load_spy_history", return_value=fake_spy_history):
+        paper_account.rebalance({"AAPL": 0.5, "MSFT": 0.3}, _PRICES_1, d1)
+        paper_account.mark(_PRICES_1, d1)
+        paper_account.mark(_PRICES_2, d2)
+        paper_account.mark(_PRICES_DOWN, d3)
+
+        perf = paper_account.performance()
 
     # required top-level keys
     required_keys = {
@@ -163,11 +179,153 @@ def test_performance_contract_shape(tmp_account: None) -> None:
         assert "date" in item
         assert "nav" in item
         assert "kind" in item
-        assert item["kind"] in ("hypothetical", "realized")
+        # kind must never be "hypothetical" — no backfill of our allocation
+        assert item["kind"] in ("pre_inception", "realized"), (
+            f"Unexpected kind={item['kind']!r} — hypothetical backfill must be removed"
+        )
 
-    # realized rows are tagged correctly
+    # realized rows are tagged correctly (we have 3 mark() calls above, d1/d2/d3)
     realized = [s for s in perf["series"] if s["kind"] == "realized"]
     assert len(realized) >= 3
+
+
+def test_no_hypothetical_series_points(tmp_account: None) -> None:
+    """CRITICAL: no series point may ever have kind=='hypothetical'."""
+    from portfolio import paper_account
+    from datetime import date, timedelta
+
+    today = date.today()
+    d0 = (today - timedelta(days=1)).isoformat()
+
+    paper_account.rebalance({"AAPL": 0.5, "MSFT": 0.3}, _PRICES_1, d0)
+    paper_account.mark(_PRICES_1, d0)
+
+    # Even with a latest.json present, performance() must not emit hypothetical rows
+    paper_account._DATA.mkdir(parents=True, exist_ok=True)
+    latest_path = paper_account._DATA / "latest.json"
+    import json
+    latest_path.write_text(json.dumps({
+        "positions": [
+            {"ticker": "AAPL", "weight": 0.5},
+            {"ticker": "MSFT", "weight": 0.3},
+        ]
+    }))
+
+    perf = paper_account.performance()
+    hypothetical = [s for s in perf["series"] if s["kind"] == "hypothetical"]
+    assert hypothetical == [], (
+        f"Found {len(hypothetical)} hypothetical points — should be zero"
+    )
+
+
+def test_pre_inception_nav_is_flat(tmp_account: None) -> None:
+    """Pre-inception series points must have nav == starting_nav ($1,000,000)."""
+    from portfolio import paper_account
+    from unittest import mock
+    import pandas as pd
+
+    # Inject a fake SPY history spanning dates before and after inception
+    # inception is today; fake history includes dates from 5 days ago through today
+    from datetime import date, timedelta
+    today = date.today()
+    dates = [today - timedelta(days=i) for i in range(4, -1, -1)]  # oldest first
+
+    fake_spy = pd.Series(
+        [400.0, 405.0, 410.0, 408.0, 412.0],
+        index=pd.to_datetime(dates),
+        name="SPY",
+    )
+
+    def fake_fetch(ticker: str):
+        if ticker == "SPY":
+            return fake_spy
+        return None
+
+    with mock.patch.object(paper_account, "_fetch_price_series", side_effect=fake_fetch):
+        # Set inception to "today" (dates[4]) and add one realized mark
+        inception = today.isoformat()
+        with mock.patch.object(paper_account, "_INCEPTION_DATE", inception):
+            # Write one realized NAV row for today
+            paper_account.mark({"SPY": 412.0}, today.isoformat())
+            perf = paper_account.performance()
+
+    series = perf["series"]
+    assert len(series) > 0, "series must not be empty when SPY history is available"
+
+    pre = [s for s in series if s["kind"] == "pre_inception"]
+    realized = [s for s in series if s["kind"] == "realized"]
+
+    # Pre-inception nav must be flat at $1M
+    for pt in pre:
+        assert pt["nav"] == 1_000_000, (
+            f"Pre-inception nav={pt['nav']} on {pt['date']} — expected 1,000,000"
+        )
+
+    # SPY nav must vary (real history, not flat)
+    if len(series) >= 2:
+        spy_vals = [s["spy_nav"] for s in series if s.get("spy_nav") is not None]
+        if len(spy_vals) >= 2:
+            assert len(set(spy_vals)) > 1, "spy_nav must vary — should reflect real history"
+
+
+def test_spy_nav_varies(tmp_account: None) -> None:
+    """spy_nav across the series must not be a single constant value."""
+    from portfolio import paper_account
+    from unittest import mock
+    import pandas as pd
+    from datetime import date, timedelta
+
+    today = date.today()
+    dates = [today - timedelta(days=i) for i in range(9, -1, -1)]
+    # Prices deliberately move around
+    prices = [400.0, 410.0, 405.0, 420.0, 415.0, 430.0, 425.0, 440.0, 435.0, 450.0]
+    fake_spy = pd.Series(prices, index=pd.to_datetime(dates), name="SPY")
+
+    def fake_fetch(ticker: str):
+        if ticker == "SPY":
+            return fake_spy
+        return None
+
+    paper_account.mark({"SPY": 450.0}, today.isoformat())
+
+    with mock.patch.object(paper_account, "_fetch_price_series", side_effect=fake_fetch):
+        perf = paper_account.performance()
+
+    spy_vals = [s["spy_nav"] for s in perf["series"] if s.get("spy_nav") is not None]
+    assert len(spy_vals) >= 2, "Need at least 2 SPY data points to check variance"
+    assert len(set(spy_vals)) > 1, "spy_nav must vary — should reflect real S&P history, not be flat"
+
+
+def test_realized_uses_nav_history(tmp_account: None) -> None:
+    """Realized series points must use actual nav from nav_history, not repriced weights."""
+    from portfolio import paper_account
+    from unittest import mock
+    from datetime import date, timedelta
+
+    today = date.today()
+    d0 = (today - timedelta(days=2)).isoformat()
+    d1 = (today - timedelta(days=1)).isoformat()
+
+    # inception set to d0 so both d0 and d1 are realized
+    fake_spy_history = [(d0, 400.0), (d1, 410.0), (today.isoformat(), 420.0)]
+
+    with mock.patch.object(paper_account, "_INCEPTION_DATE", d0), \
+         mock.patch.object(paper_account, "_load_spy_history", return_value=fake_spy_history):
+        paper_account.rebalance({"AAPL": 0.5}, _PRICES_1, d0)
+        paper_account.mark(_PRICES_1, d0)   # nav ~= $1M (positions at cost)
+        paper_account.mark(_PRICES_2, d1)   # prices up 10% -> nav ~$1.05M
+
+        perf = paper_account.performance()
+
+    realized = [s for s in perf["series"] if s["kind"] == "realized"]
+
+    # The realized nav values should differ (price moved), not be a flat $1M
+    realized_navs = [s["nav"] for s in realized]
+    assert len(realized_navs) >= 2
+    # At least one realized nav should differ from starting nav
+    assert any(abs(v - 1_000_000) > 1.0 for v in realized_navs), (
+        "Realized navs are all $1M — they should reflect actual marked NAV from nav_history"
+    )
 
 
 def test_max_drawdown_computed(tmp_account: None) -> None:

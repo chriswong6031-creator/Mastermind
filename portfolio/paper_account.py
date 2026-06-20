@@ -326,78 +326,23 @@ def mark(prices: dict[str, float], asof: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# backfill (hypothetical equity curve over the prior ~90 sessions)
+# SPY history loader (used by performance() for the comparison line only)
 # ---------------------------------------------------------------------------
 
-def build_backfill(target_weights: dict[str, float]) -> list[dict]:
-    """Build a hypothetical curve repricing today's target weights over the
-    prior 90 trading sessions.  Returns a list of series items (oldest-first)
-    with kind="hypothetical".  Returns [] if price data is unavailable.
+def _load_spy_history(window: int = 91) -> "list[tuple[str, float]] | list":
+    """Return [(date_str, close), ...] for SPY over the last `window` sessions.
 
-    The curve is HONEST: it reflects the current allocation repriced over
-    prior sessions.  It does NOT represent realized fills.
+    Uses the same store loader as _fetch_price_series so it works offline as
+    long as the engine price cache is populated.  Returns [] if unavailable.
     """
-    try:
-        import pandas as pd
-        import numpy as np
-    except ImportError:
+    s = _fetch_price_series("SPY")
+    if s is None or len(s) == 0:
         return []
-
-    tickers = list(target_weights.keys())
-    all_tickers = tickers + ["SPY"]
-
-    # build aligned price DataFrame
-    frames: dict[str, "pd.Series"] = {}
-    for t in all_tickers:
-        s = _fetch_price_series(t)
-        if s is not None and len(s) > 0:
-            frames[t] = s
-
-    if "SPY" not in frames or not any(t in frames for t in tickers):
-        return []
-
     try:
-        df = pd.DataFrame(frames).sort_index().dropna(how="all")
-        # last 91 rows (90 backtested sessions + the current day we'll drop in realized)
-        df = df.tail(91)
-        # forward-fill then back-fill to handle staggered series
-        df = df.ffill().bfill()
-        if len(df) < 2:
-            return []
+        s = s.sort_index().tail(window)
+        return [(idx.date().isoformat(), float(v)) for idx, v in s.items()]
     except Exception:
         return []
-
-    # normalise weights across available tickers
-    available_w = {t: w for t, w in target_weights.items() if t in df.columns}
-    total_w = sum(available_w.values())
-    if total_w <= 0:
-        return []
-    norm_w = {t: w / total_w for t, w in available_w.items()}
-
-    # SPY benchmark: $1M in SPY at the series start
-    spy0 = df["SPY"].iloc[0]
-    spy_shares_hyp = _STARTING_NAV / spy0 if spy0 > 0 else 0.0
-
-    # portfolio: weight * NAV at the series start, then rebalanced (held-weight approach)
-    # We use a simple held-weight return — same as a daily-rebalanced index
-    port_return_series = pd.Series(0.0, index=df.index)
-    for t, w in norm_w.items():
-        s = df[t]
-        pct = s.pct_change().fillna(0.0)
-        port_return_series += w * pct
-
-    nav_series = _STARTING_NAV * (1 + port_return_series).cumprod()
-    spy_nav_series = spy_shares_hyp * df["SPY"]
-
-    rows: list[dict] = []
-    for idx in df.index:
-        rows.append({
-            "date": idx.date().isoformat(),
-            "nav": round(float(nav_series.loc[idx]), 2),
-            "spy_nav": round(float(spy_nav_series.loc[idx]), 2),
-            "kind": "hypothetical",
-        })
-    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -407,8 +352,15 @@ def build_backfill(target_weights: dict[str, float]) -> list[dict]:
 def performance() -> dict:
     """Assemble the /api/performance contract.
 
-    Prepends the hypothetical backfill (kind='hypothetical') to the realized
-    forward track (kind='realized').  Returns a safe minimal payload on error.
+    Series is HONEST:
+      - spy_nav = real SPY history normalised to $1,000,000 at the first date
+        of the window (S&P actual up/down, scaled to a $1M start).
+      - nav (our portfolio) = $1,000,000 FLAT for every date before
+        inception_date; from inception onward it uses the real marked NAV from
+        nav_history.jsonl.  No hypothetical repricing of our allocation ever.
+      - kind = "pre_inception" for the flat prefix, "realized" from inception.
+
+    Returns a safe minimal payload on error.
     """
     _base: dict[str, Any] = {
         "inception_date": _INCEPTION_DATE,
@@ -428,19 +380,25 @@ def performance() -> dict:
     try:
         state = _load_account()
         realized_rows = _load_jsonl(_NAV_PATH)
-        if not realized_rows:
-            return _base
 
         inception_date = state.get("inception_date", _INCEPTION_DATE)
 
-        # current values from the latest realized row
-        latest = realized_rows[-1]
-        current_nav = float(latest["nav"])
-        cash = float(latest["cash"])
-        invested = float(latest.get("invested", 0.0))
-        spy_nav_latest = latest.get("spy_nav")
+        # current values (fall back to starting NAV if no realized rows yet)
+        if realized_rows:
+            latest = realized_rows[-1]
+            current_nav = float(latest["nav"])
+            cash = float(latest["cash"])
+            invested = float(latest.get("invested", 0.0))
+            spy_nav_latest = latest.get("spy_nav")
+        else:
+            current_nav = _STARTING_NAV
+            cash = state.get("cash", _STARTING_NAV)
+            invested = 0.0
+            spy_nav_latest = None
 
         total_return_pct = (current_nav - _STARTING_NAV) / _STARTING_NAV * 100
+
+        # vs_spy_pct: compare our return SINCE INCEPTION vs SPY since inception
         vs_spy_pct: float = 0.0
         if spy_nav_latest:
             spy_return = (float(spy_nav_latest) - _STARTING_NAV) / _STARTING_NAV * 100
@@ -453,7 +411,7 @@ def performance() -> dict:
             if prev_nav > 0:
                 day_change_pct = round((current_nav - prev_nav) / prev_nav * 100, 4)
 
-        # max drawdown over realized track
+        # max drawdown over realized track only
         import numpy as np
         nav_arr = [float(r["nav"]) for r in realized_rows]
         max_drawdown_pct = 0.0
@@ -463,48 +421,57 @@ def performance() -> dict:
             max_drawdown_pct = round(float(drawdowns.min()), 4)
 
         # ---- build series ----
-        # 1) load target weights from latest portfolio
-        target_weights: dict[str, float] = {}
-        try:
-            port_path = _DATA / "latest.json"
-            if port_path.exists():
-                p = json.loads(port_path.read_text())
-                for pos in p.get("positions", []):
-                    t = pos.get("ticker")
-                    w = pos.get("weight")
-                    if t and w:
-                        target_weights[t] = float(w)
-        except Exception:
-            pass
+        # Load SPY history for the chart window (the benchmark line).
+        spy_history = _load_spy_history(91)  # list of (date_str, close)
 
-        # 2) hypothetical prefix
-        hypo_rows: list[dict] = []
-        if target_weights:
-            hypo_rows = build_backfill(target_weights)
-            # trim so the backfill ends BEFORE the first realized row
-            if hypo_rows and realized_rows:
-                first_realized_date = realized_rows[0]["date"]
-                hypo_rows = [r for r in hypo_rows if r["date"] < first_realized_date]
+        series: list[dict] = []
 
-        # 3) realized rows: ensure they have kind tag + spy_nav
-        real_series = [
-            {
-                "date": r["date"],
-                "nav": float(r["nav"]),
-                "spy_nav": float(r["spy_nav"]) if r.get("spy_nav") is not None else None,
-                "kind": "realized",
+        if spy_history:
+            # Normalise SPY so spy_nav == $1M at the first date of the window
+            spy0 = spy_history[0][1]
+            spy_scale = _STARTING_NAV / spy0 if spy0 > 0 else 1.0
+
+            # Build a quick lookup from the realized rows for nav by date
+            realized_by_date: dict[str, float] = {
+                r["date"]: float(r["nav"]) for r in realized_rows
             }
-            for r in realized_rows
-        ]
 
-        series = hypo_rows + real_series
+            for date_str, spy_close in spy_history:
+                spy_nav_val = round(spy_close * spy_scale, 2)
+
+                if date_str < inception_date:
+                    # Pre-inception: our portfolio is flat at $1M — we did not exist yet
+                    series.append({
+                        "date": date_str,
+                        "nav": _STARTING_NAV,
+                        "spy_nav": spy_nav_val,
+                        "kind": "pre_inception",
+                    })
+                else:
+                    # Realized: use real NAV from nav_history.jsonl if available,
+                    # otherwise stay flat (today's book hasn't run yet)
+                    nav_val = realized_by_date.get(date_str, _STARTING_NAV)
+                    series.append({
+                        "date": date_str,
+                        "nav": nav_val,
+                        "spy_nav": spy_nav_val,
+                        "kind": "realized",
+                    })
+        else:
+            # No SPY data (fully offline / price store empty): emit realized rows only
+            for r in realized_rows:
+                series.append({
+                    "date": r["date"],
+                    "nav": float(r["nav"]),
+                    "spy_nav": float(r["spy_nav"]) if r.get("spy_nav") is not None else None,
+                    "kind": "realized",
+                })
 
         note = (
-            "Hypothetical = current allocation repriced over prior sessions (not realized); "
-            f"live paper track begins {inception_date}."
+            f"Portfolio starts at ${_STARTING_NAV:,.0f} on {inception_date}; "
+            "flat until the live daily track accrues. "
+            "S&P 500 shown over the same window for comparison (real history)."
         )
-        if not hypo_rows:
-            note = f"Live paper track begins {inception_date}. Equity curve accrues forward."
 
         return {
             "inception_date": inception_date,

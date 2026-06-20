@@ -1224,7 +1224,7 @@ body.page-mm td.l { text-align: left; }
 
       <!-- LEFT: 2×2 quad mini-map -->
       <div>
-        <div class="mm-hero-eyebrow" style="margin-bottom:7px;text-align:center">Regime</div>
+        <div class="mm-hero-eyebrow" style="margin-bottom:7px;text-align:center"><span class="l-en">Regime</span><span class="l-zh">市场状态</span></div>
         <div class="mm-qmini" id="qmini">
           <div class="mm-qm q2"></div>
           <div class="mm-qm q1"></div>
@@ -1235,8 +1235,13 @@ body.page-mm td.l { text-align: left; }
 
       <!-- CENTER: regime + identity -->
       <div class="mm-hero-main" id="hero-main">
-        <div class="mm-hero-eyebrow">
-          <span class="mm-hb"></span>&nbsp; MASTERMIND &mdash; PAPER PORTFOLIO
+        <div class="mm-hero-eyebrow" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px">
+          <span><span class="mm-hb"></span>&nbsp; MASTERMIND &mdash; PAPER PORTFOLIO</span>
+          <!-- header control row: theme + lang toggles -->
+          <span class="mm-hero-ctrls" style="display:flex;gap:8px;align-items:center;flex-shrink:0">
+            <button class="theme-btn" onclick="window.toggleTheme()" style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:3px 11px;font-size:11px;cursor:pointer;color:var(--text);font-weight:600"></button>
+            <button class="lang-btn" onclick="window.toggleLang()" style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:3px 11px;font-size:11px;cursor:pointer;color:var(--text);font-weight:600"></button>
+          </span>
         </div>
         <div class="mm-hero-name" id="hero-quad-name">Loading…</div>
         <div id="hero-says" class="mm-hero-says"></div>
@@ -1251,20 +1256,20 @@ body.page-mm td.l { text-align: left; }
       <!-- RIGHT: vitals strip -->
       <div class="mm-hero-vitals" id="hero-vitals">
         <div class="mm-v-group">
-          <div class="mm-v-label">Gross Exposure</div>
+          <div class="mm-v-label"><span class="l-en">Gross Exposure</span><span class="l-zh">总敞口</span></div>
           <div class="mm-v-chip" id="v-gross">—</div>
         </div>
         <div class="mm-v-group">
-          <div class="mm-v-label">Cash</div>
+          <div class="mm-v-label"><span class="l-en">Cash</span><span class="l-zh">现金</span></div>
           <div class="mm-v-chip" id="v-cash">—</div>
         </div>
         <div class="mm-v-group">
-          <div class="mm-v-label">Liquidity Overlay</div>
+          <div class="mm-v-label"><span class="l-en">Liquidity Overlay</span><span class="l-zh">流动性叠加</span></div>
           <div class="mm-v-chip" id="v-liq">—</div>
         </div>
         <div class="mm-v-group">
-          <div class="mm-v-label">Track Record</div>
-          <div class="mm-v-chip" id="v-tr">building</div>
+          <div class="mm-v-label"><span class="l-en">Track Record</span><span class="l-zh">跟踪记录</span></div>
+          <div class="mm-v-chip" id="v-tr"><span class="l-en">building</span><span class="l-zh">积累中</span></div>
         </div>
       </div>
 
@@ -1275,37 +1280,37 @@ body.page-mm td.l { text-align: left; }
 <!-- ── PERFORMANCE HEADER ─────────────────────────────────────────────────── -->
 <div class="mm-section">
   <div class="panel span12" id="performance" style="grid-column:span 12">
-    <h2>Performance — $1M Paper Account</h2>
+    <h2><span class="l-en">Performance — $1M Paper Account</span><span class="l-zh">业绩 — $1M 模拟账户</span></h2>
     <div class="mm-perf-grid" id="perf-grid">
       <!-- NAV big number -->
       <div class="mm-perf-nav">
-        <div class="mm-perf-nav-label">Current NAV</div>
+        <div class="mm-perf-nav-label"><span class="l-en">Current NAV</span><span class="l-zh">当前净值</span></div>
         <div class="mm-perf-nav-value" id="perf-nav">$1,000,000</div>
       </div>
       <div class="mm-perf-divider"></div>
       <!-- Total return -->
       <div class="mm-perf-stat">
-        <div class="mm-perf-stat-label">Total Return</div>
+        <div class="mm-perf-stat-label"><span class="l-en">Total Return</span><span class="l-zh">总回报</span></div>
         <div class="mm-perf-stat-value neu" id="perf-ret">+0.00%</div>
-        <div class="mm-perf-stat-sub" id="perf-since">since inception</div>
+        <div class="mm-perf-stat-sub" id="perf-since"><span class="l-en">since inception</span><span class="l-zh">自成立以来</span></div>
       </div>
       <!-- vs SPY -->
       <div class="mm-perf-stat">
-        <div class="mm-perf-stat-label">vs SPY</div>
+        <div class="mm-perf-stat-label"><span class="l-en">vs SPY</span><span class="l-zh">相对标普500</span></div>
         <div class="mm-perf-stat-value neu" id="perf-spy">+0.00%</div>
-        <div class="mm-perf-stat-sub">alpha vs benchmark</div>
+        <div class="mm-perf-stat-sub"><span class="l-en">alpha vs benchmark</span><span class="l-zh">相对基准超额</span></div>
       </div>
       <!-- Day change -->
       <div class="mm-perf-stat">
-        <div class="mm-perf-stat-label">Today</div>
+        <div class="mm-perf-stat-label"><span class="l-en">Today</span><span class="l-zh">今日</span></div>
         <div class="mm-perf-stat-value neu" id="perf-day">+0.00%</div>
-        <div class="mm-perf-stat-sub">day change</div>
+        <div class="mm-perf-stat-sub"><span class="l-en">day change</span><span class="l-zh">日内涨跌</span></div>
       </div>
       <!-- Max drawdown -->
       <div class="mm-perf-stat">
-        <div class="mm-perf-stat-label">Max Drawdown</div>
+        <div class="mm-perf-stat-label"><span class="l-en">Max Drawdown</span><span class="l-zh">最大回撤</span></div>
         <div class="mm-perf-stat-value neu" id="perf-dd">—</div>
-        <div class="mm-perf-stat-sub" id="perf-cash-lbl">cash: —</div>
+        <div class="mm-perf-stat-sub" id="perf-cash-lbl"><span class="l-en">cash: —</span><span class="l-zh">现金: —</span></div>
       </div>
     </div>
   </div>
@@ -1314,20 +1319,16 @@ body.page-mm td.l { text-align: left; }
 <!-- ── EQUITY CURVE ───────────────────────────────────────────────────────── -->
 <div class="mm-section">
   <div class="panel span12" id="equity-curve" style="grid-column:span 12">
-    <h2>Equity Curve</h2>
-    <!-- legend -->
+    <h2><span class="l-en">Equity Curve</span><span class="l-zh">净值曲线</span></h2>
+    <!-- legend — updated: no hypothetical segment; portfolio is flat pre-inception then live -->
     <div class="mm-ec-legend" id="ec-legend">
       <span class="mm-ec-leg-item">
         <span class="mm-ec-leg-line" style="background:var(--up)"></span>
-        <span>Portfolio NAV (realized)</span>
-      </span>
-      <span class="mm-ec-leg-item">
-        <span class="mm-ec-leg-line" style="background:var(--up);opacity:.38;border-top:2px dashed var(--up);height:0;margin-top:1px"></span>
-        <span>Hypothetical back-fill</span>
+        <span id="ec-leg-portfolio">Portfolio (live since —)</span>
       </span>
       <span class="mm-ec-leg-item">
         <span class="mm-ec-leg-line" style="background:var(--muted);opacity:.55;border-top:2px dashed var(--muted);height:0;margin-top:1px"></span>
-        <span>SPY $1M reference</span>
+        <span class="l-en">S&amp;P 500 ($1M ref)</span><span class="l-zh">标普500（$1M参考）</span>
       </span>
       <span style="margin-left:auto;font-size:11px;color:var(--muted)" id="ec-range-label"></span>
     </div>
@@ -1344,7 +1345,7 @@ body.page-mm td.l { text-align: left; }
 <!-- ── ALLOCATION ─────────────────────────────────────────────────────────── -->
 <div class="mm-section">
   <div class="panel span12" id="alloc" style="grid-column:span 12">
-    <h2>Allocation</h2>
+    <h2><span class="l-en">Allocation</span><span class="l-zh">仓位分配</span></h2>
     <div class="mm-sleeve-bar" id="sleeve-bar">
       <div class="mm-sleeve-seg mm-seg-lead" id="seg-lead" style="width:50%" title="Leadership">50%</div>
       <div class="mm-sleeve-seg mm-seg-conv" id="seg-conv" style="width:8%"  title="Conviction">8%</div>
@@ -1362,52 +1363,52 @@ body.page-mm td.l { text-align: left; }
 <!-- ── POSITIONS ──────────────────────────────────────────────────────────── -->
 <div class="mm-section">
   <div class="panel span12" id="positions" style="grid-column:span 12">
-    <h2>Positions</h2>
-    <div class="mm-empty"><span class="mm-empty-icon">⊙</span>Loading positions…</div>
+    <h2><span class="l-en">Positions</span><span class="l-zh">持仓</span></h2>
+    <div class="mm-empty"><span class="mm-empty-icon">⊙</span><span class="l-en">Loading positions…</span><span class="l-zh">加载持仓中…</span></div>
   </div>
 </div>
 
 <!-- ── TRADE HISTORY ──────────────────────────────────────────────────────── -->
 <div class="mm-section">
   <div class="panel span12" id="trades" style="grid-column:span 12">
-    <h2>Trade History</h2>
-    <div class="mm-empty"><span class="mm-empty-icon">⊙</span>Loading trades…</div>
+    <h2><span class="l-en">Trade History</span><span class="l-zh">交易历史</span></h2>
+    <div class="mm-empty"><span class="mm-empty-icon">⊙</span><span class="l-en">Loading trades…</span><span class="l-zh">加载交易中…</span></div>
   </div>
 </div>
 
 <!-- ── BRAIN LOG + RESEARCH (side-by-side on wide screens) ─────────────────── -->
 <div class="mm-section grid">
   <div class="panel span6" id="brainlog">
-    <h2>Brain Log</h2>
-    <div class="mm-empty"><span class="mm-empty-icon">⊙</span>Loading activity…</div>
+    <h2><span class="l-en">Brain Log</span><span class="l-zh">脑波日志</span></h2>
+    <div class="mm-empty"><span class="mm-empty-icon">⊙</span><span class="l-en">Loading activity…</span><span class="l-zh">加载动态中…</span></div>
   </div>
   <div class="panel span6" id="research">
-    <h2>Research Feed</h2>
-    <div class="mm-empty"><span class="mm-empty-icon">⊙</span>Loading research…</div>
+    <h2><span class="l-en">Research Feed</span><span class="l-zh">研究动态</span></h2>
+    <div class="mm-empty"><span class="mm-empty-icon">⊙</span><span class="l-en">Loading research…</span><span class="l-zh">加载研究中…</span></div>
   </div>
 </div>
 
 <!-- ── DEEP ACTIVITY LOG ──────────────────────────────────────────────────── -->
 <div class="mm-section">
   <div class="panel span12" id="runs" style="grid-column:span 12">
-    <h2>Brain Activity &mdash; Full Trace <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px">expand a run for complete step-by-step reasoning</span></h2>
-    <div class="mm-empty"><span class="mm-empty-icon">⊙</span>Loading run history…</div>
+    <h2><span class="l-en">Brain Activity &mdash; Full Trace</span><span class="l-zh">脑波活动 &mdash; 完整追踪</span> <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px"><span class="l-en">expand a run for complete step-by-step reasoning</span><span class="l-zh">展开运行记录查看完整推理过程</span></span></h2>
+    <div class="mm-empty"><span class="mm-empty-icon">⊙</span><span class="l-en">Loading run history…</span><span class="l-zh">加载运行历史中…</span></div>
   </div>
 </div>
 
 <!-- ── REJECTED NAMES ─────────────────────────────────────────────────────── -->
 <div class="mm-section">
   <div class="panel span12" id="rejected" style="grid-column:span 12">
-    <h2>Evaluated &mdash; Not Held, and Why <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px">the discipline made visible</span></h2>
-    <div class="mm-empty"><span class="mm-empty-icon">⊙</span>Loading rejected names…</div>
+    <h2><span class="l-en">Evaluated &mdash; Not Held, and Why</span><span class="l-zh">已评估 &mdash; 未持仓及原因</span> <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px"><span class="l-en">the discipline made visible</span><span class="l-zh">让纪律透明化</span></span></h2>
+    <div class="mm-empty"><span class="mm-empty-icon">⊙</span><span class="l-en">Loading rejected names…</span><span class="l-zh">加载剔除标的中…</span></div>
   </div>
 </div>
 
 <!-- ── COMPETITOR COMPARE ─────────────────────────────────────────────────── -->
 <div class="mm-section">
   <div class="panel span12" id="competitors" style="grid-column:span 12">
-    <h2>Competitor Compare — Quiver</h2>
-    <div class="mm-empty"><span class="mm-empty-icon">⊙</span>Loading competitors…</div>
+    <h2><span class="l-en">Competitor Compare — Quiver</span><span class="l-zh">竞品对比 — Quiver</span></h2>
+    <div class="mm-empty"><span class="mm-empty-icon">⊙</span><span class="l-en">Loading competitors…</span><span class="l-zh">加载竞品数据中…</span></div>
   </div>
 </div>
 
@@ -1420,6 +1421,143 @@ body.page-mm td.l { text-align: left; }
 <script src="/theme.js" defer></script>
 <script>
 'use strict';
+
+// ── i18n dictionary ──────────────────────────────────────────────────────────
+var I18N = {
+  // Performance section
+  'perf.title':           { en: 'Performance — $1M Paper Account', zh: '业绩 — $1M 模拟账户' },
+  'perf.current_nav':     { en: 'Current NAV', zh: '当前净值' },
+  'perf.total_return':    { en: 'Total Return', zh: '总回报' },
+  'perf.since_inception': { en: 'since inception', zh: '自成立以来' },
+  'perf.since':           { en: 'since', zh: '自' },
+  'perf.vs_spy':          { en: 'vs SPY', zh: '相对标普500' },
+  'perf.alpha_vs_bench':  { en: 'alpha vs benchmark', zh: '相对基准超额' },
+  'perf.today':           { en: 'Today', zh: '今日' },
+  'perf.day_change':      { en: 'day change', zh: '日内涨跌' },
+  'perf.max_drawdown':    { en: 'Max Drawdown', zh: '最大回撤' },
+  'perf.cash_lbl':        { en: 'cash:', zh: '现金:' },
+  // Equity curve
+  'ec.title':             { en: 'Equity Curve', zh: '净值曲线' },
+  'ec.portfolio_live':    { en: 'Portfolio (live since', zh: '组合（实盘自' },
+  'ec.spy_ref':           { en: 'S&P 500 ($1M ref)', zh: '标普500（$1M参考）' },
+  'ec.loading':           { en: 'Loading equity curve…', zh: '加载净值曲线中…' },
+  'ec.no_data':           { en: 'Live track accruing — no series data yet', zh: '实盘追踪中，暂无数据' },
+  'ec.tooltip_realized':  { en: '(realized)', zh: '（实盘）' },
+  'ec.tooltip_pre':       { en: '(pre-inception)', zh: '（成立前）' },
+  'ec.nav':               { en: 'NAV:', zh: '净值:' },
+  'ec.spy_lbl':           { en: 'SPY ref:', zh: '标普参考:' },
+  'ec.vs_spy':            { en: 'vs SPY:', zh: '相对标普:' },
+  // Allocation
+  'alloc.title':          { en: 'Allocation', zh: '仓位分配' },
+  'alloc.leadership':     { en: 'Leadership', zh: '领航仓' },
+  'alloc.conviction':     { en: 'Conviction', zh: '重仓' },
+  'alloc.cash':           { en: 'Cash', zh: '现金' },
+  'alloc.gross':          { en: 'gross', zh: '总持仓' },
+  // Positions section
+  'pos.title':            { en: 'Positions', zh: '持仓' },
+  'pos.subtitle':         { en: 'click a row for full thesis', zh: '点击行查看完整论点' },
+  'pos.empty':            { en: "No positions yet — the book builds on the next daily run.", zh: '暂无持仓 — 下次每日运行后将更新。' },
+  'pos.loading':          { en: 'Loading positions…', zh: '加载持仓中…' },
+  'pos.ticker':           { en: 'Ticker', zh: '代码' },
+  'pos.sleeve':           { en: 'Sleeve', zh: '仓位类型' },
+  'pos.stage':            { en: 'Stage', zh: '阶段' },
+  'pos.weight':           { en: 'Weight', zh: '权重' },
+  'pos.verdict':          { en: 'Verdict', zh: '判断' },
+  'pos.rs_pctile':        { en: 'RS %ile', zh: 'RS百分位' },
+  'pos.confluence':       { en: 'Confluence', zh: '汇聚分' },
+  'pos.held_since':       { en: 'Held Since', zh: '持仓自' },
+  // Thesis labels inside expand panel
+  'thesis.why_now':       { en: 'Why Now', zh: '为何现在' },
+  'thesis.case_for':      { en: 'The Case For', zh: '看多理由' },
+  'thesis.case_against':  { en: 'The Case Against', zh: '看空理由' },
+  'thesis.hard_vetoes':   { en: 'Hard Vetoes', zh: '强制否决' },
+  'thesis.divergences':   { en: 'Signal Divergences', zh: '信号背离' },
+  'thesis.falsifier':     { en: '✗ What Would Prove This Wrong', zh: '✗ 何时证伪' },
+  'thesis.sizing_rat':    { en: 'Sizing Rationale', zh: '仓位理由' },
+  'thesis.no_bull':       { en: 'No bull case items', zh: '暂无看多理由' },
+  'thesis.no_bear':       { en: 'No bear case items', zh: '暂无看空理由' },
+  'thesis.prob_correct':  { en: 'Prob Correct', zh: '正确概率' },
+  // Trade history
+  'trades.title':         { en: 'Trade History', zh: '交易历史' },
+  'trades.loading':       { en: 'Loading trades…', zh: '加载交易中…' },
+  'trades.empty':         { en: 'No trade history yet — positions accrue here as the ledger is updated.', zh: '暂无交易历史 — 账本更新后将显示。' },
+  'trades.ticker':        { en: 'Ticker', zh: '代码' },
+  'trades.sleeve':        { en: 'Sleeve', zh: '仓位类型' },
+  'trades.opened':        { en: 'Opened', zh: '开仓日期' },
+  'trades.held_d':        { en: 'Held (d)', zh: '持有天数' },
+  'trades.entry_wt':      { en: 'Entry Weight', zh: '开仓权重' },
+  'trades.curr_wt':       { en: 'Current Weight', zh: '当前权重' },
+  'trades.entry_px':      { en: 'Entry Price', zh: '开仓价格' },
+  'trades.closed_sub':    { en: 'Closed Positions', zh: '已平仓' },
+  'trades.closed':        { en: 'Closed', zh: '平仓日期' },
+  'trades.exit_reason':   { en: 'Exit Reason', zh: '退出原因' },
+  'trades.no_closed':     { en: 'No closed positions yet.', zh: '暂无已平仓记录。' },
+  // Brain log
+  'brain.title':          { en: 'Brain Log', zh: '脑波日志' },
+  'brain.loading':        { en: 'Loading activity…', zh: '加载动态中…' },
+  'brain.empty':          { en: 'No activity yet — runs, decisions, and research appear here.', zh: '暂无活动 — 运行、决策及研究将显示于此。' },
+  // Research feed
+  'research.title':       { en: 'Research Feed', zh: '研究动态' },
+  'research.loading':     { en: 'Loading research…', zh: '加载研究中…' },
+  'research.empty':       { en: 'No research notes yet — notes appear here after runs.', zh: '暂无研究笔记 — 运行后将显示。' },
+  'research.show_more':   { en: 'Show more ↓', zh: '展开 ↓' },
+  'research.show_less':   { en: 'Show less ↑', zh: '收起 ↑' },
+  // Runs / brain activity
+  'runs.title':           { en: 'Brain Activity — Full Trace', zh: '脑波活动 — 完整追踪' },
+  'runs.subtitle':        { en: 'expand a run for complete step-by-step reasoning', zh: '展开运行记录查看完整推理过程' },
+  'runs.loading':         { en: 'Loading run history…', zh: '加载运行历史中…' },
+  'runs.empty':           { en: 'No runs logged yet — runs appear here after the bot executes.', zh: '暂无运行记录 — 机器人执行后将显示。' },
+  'runs.click_to_load':   { en: 'Click header to load full trace…', zh: '点击标题加载完整追踪…' },
+  'runs.loading_trace':   { en: 'Loading step trace…', zh: '加载步骤追踪中…' },
+  'runs.fail_trace':      { en: 'Failed to load step trace.', zh: '加载步骤追踪失败。' },
+  'runs.err_trace':       { en: 'Error loading trace.', zh: '追踪加载出错。' },
+  'runs.no_steps':        { en: 'No steps recorded for this run.', zh: '本次运行无步骤记录。' },
+  'runs.show_full':       { en: 'Show full ↓', zh: '展开 ↓' },
+  'runs.hide':            { en: 'Hide ↑', zh: '收起 ↑' },
+  // Rejected
+  'rej.title':            { en: 'Evaluated — Not Held, and Why', zh: '已评估 — 未持仓及原因' },
+  'rej.subtitle':         { en: 'the discipline made visible', zh: '让纪律透明化' },
+  'rej.loading':          { en: 'Loading rejected names…', zh: '加载剔除标的中…' },
+  'rej.empty':            { en: "No rejected names — either the book hasn't run yet or all evaluated names passed.", zh: '暂无剔除标的 — 账本未运行或所有标的均通过评估。' },
+  'rej.note':             { en: 'Names evaluated by the conviction gate but not held. Vetoes are hard rules (parabolic extension, distress, cycle-blocked). Bear bullets show the exact risk factors that kept them out. Sorted worst-confluence first.', zh: '经过信念门槛评估但未持仓的标的。否决为强制规则（抛物线延伸、财务困境、周期封锁）。看空条目列出了被剔除的具体风险因素。按汇聚分最差排序。' },
+  'rej.confluence':       { en: 'Confluence:', zh: '汇聚分:' },
+  // Competitors
+  'comp.title':           { en: 'Competitor Compare — Quiver', zh: '竞品对比 — Quiver' },
+  'comp.loading':         { en: 'Loading competitors…', zh: '加载竞品数据中…' },
+  'comp.empty':           { en: 'No competitor data yet — pull from Quiver to compare.', zh: '暂无竞品数据 — 请从Quiver拉取。' },
+  'comp.positions':       { en: 'positions', zh: '仓位' },
+  'comp.picks':           { en: 'picks', zh: '精选' },
+  'comp.scraped':         { en: 'scraped', zh: '采集于' },
+  'comp.top_holdings':    { en: 'Top Holdings', zh: '主要持仓' },
+  // Hero / regime section
+  'hero.regime':          { en: 'Regime', zh: '市场状态' },
+  'hero.gross_exp':       { en: 'Gross Exposure', zh: '总敞口' },
+  'hero.cash':            { en: 'Cash', zh: '现金' },
+  'hero.liq_overlay':     { en: 'Liquidity Overlay', zh: '流动性叠加' },
+  'hero.track_record':    { en: 'Track Record', zh: '跟踪记录' },
+  'hero.building':        { en: 'building', zh: '积累中' },
+  'hero.updated':         { en: 'updated', zh: '更新于' },
+  'hero.as_of':           { en: 'as of', zh: '截至' },
+  // Footer
+  'footer.disc':          { en: 'Paper-only / display-only. Accountability, not alpha. Not investment advice.', zh: '仅限模拟 / 仅供展示。追责透明，非追求超额。本页面不构成投资建议。' },
+  // Quad names
+  'quad.Goldilocks':      { en: 'Goldilocks', zh: '金发姑娘（增长+低通胀）' },
+  'quad.Reflation':       { en: 'Reflation',  zh: '再通胀（增长+高通胀）' },
+  'quad.Stagflation':     { en: 'Stagflation',zh: '滞涨（萎缩+高通胀）' },
+  'quad.Growth-Scare':    { en: 'Growth-Scare',zh: '增长恐慌（萎缩+低通胀）' },
+  // Quad says
+  'quad.Goldilocks.says': { en: 'Growth strong, inflation contained — full-risk posture, leadership sleeve broad.', zh: '增长强劲，通胀受控 — 满仓风险资产，领航仓广泛布局。' },
+  'quad.Reflation.says':  { en: 'Growth and inflation both rising — real assets, energy, industrials lead.', zh: '增长与通胀双升 — 实物资产、能源、工业领涨。' },
+  'quad.Stagflation.says':{ en: 'Growth falling, inflation sticky — defensive tilt, commodities, cash heavy.', zh: '增长下行，通胀黏性 — 防御性配置，商品与现金超配。' },
+  'quad.Growth-Scare.says':{ en: 'Growth slowing, inflation falling — duration, quality, and defensive growth favored.', zh: '增长放缓，通胀回落 — 久期、质地和防御性成长受青睐。' },
+};
+
+function t(key) {
+  var lg = document.documentElement.getAttribute('data-lang') || 'en';
+  var entry = I18N[key];
+  if (!entry) return key;
+  return entry[lg] || entry['en'] || key;
+}
 
 // ── tiny markdown renderer ──────────────────────────────────────────────────
 function renderMd(src) {
@@ -1516,12 +1654,12 @@ var _perf = null, _runs = [], _rejected = [];
 // run drilldown cache
 var _runLogCache = {};
 
-// quad meta
+// quad meta — names/says resolved at render time via t() so lang switches work
 var QUAD_META = {
-  Q1: { name: 'Goldilocks', color: 'var(--q1)', says: 'Growth strong, inflation contained — full-risk posture, leadership sleeve broad.' },
-  Q2: { name: 'Reflation',  color: 'var(--q2)', says: 'Growth and inflation both rising — real assets, energy, industrials lead.' },
-  Q3: { name: 'Stagflation',color: 'var(--q3)', says: 'Growth falling, inflation sticky — defensive tilt, commodities, cash heavy.' },
-  Q4: { name: 'Growth-Scare',color:'var(--q4)', says: 'Growth slowing, inflation falling — duration, quality, and defensive growth favored.' },
+  Q1: { nameKey: 'quad.Goldilocks', color: 'var(--q1)', saysKey: 'quad.Goldilocks.says' },
+  Q2: { nameKey: 'quad.Reflation',  color: 'var(--q2)', saysKey: 'quad.Reflation.says'  },
+  Q3: { nameKey: 'quad.Stagflation',color: 'var(--q3)', saysKey: 'quad.Stagflation.says'},
+  Q4: { nameKey: 'quad.Growth-Scare',color:'var(--q4)',saysKey: 'quad.Growth-Scare.says'},
 };
 
 // ── FORMAT HELPERS ────────────────────────────────────────────────────────────
@@ -1547,7 +1685,9 @@ function renderPerformance() {
   var navEl = E('perf-nav');
   if (navEl) navEl.textContent = fmtNav(p.current_nav);
 
-  // Total return
+  // Performance stat labels (re-written each render so langchange updates them)
+  var navLblEl = E('perf-nav') && E('perf-nav').previousElementSibling;
+  // labels are static HTML with l-en/l-zh spans (handled by CSS), but sub-lines need JS
   var retEl = E('perf-ret');
   if (retEl) {
     var r = fmtPctSign(p.total_return_pct);
@@ -1557,7 +1697,9 @@ function renderPerformance() {
 
   // Since label
   var sinceEl = E('perf-since');
-  if (sinceEl) sinceEl.textContent = p.inception_date ? 'since ' + fmtDate(p.inception_date) : 'since inception';
+  if (sinceEl) sinceEl.textContent = p.inception_date
+    ? t('perf.since') + ' ' + fmtDate(p.inception_date)
+    : t('perf.since_inception');
 
   // vs SPY
   var spyEl = E('perf-spy');
@@ -1586,11 +1728,14 @@ function renderPerformance() {
   // cash sub-label
   var cashLbl = E('perf-cash-lbl');
   if (cashLbl && p.cash != null) {
-    cashLbl.textContent = 'cash: ' + fmtNav(p.cash);
+    cashLbl.textContent = t('perf.cash_lbl') + ' ' + fmtNav(p.cash);
   }
 }
 
 // ── EQUITY CURVE ──────────────────────────────────────────────────────────────
+// Series kinds: "pre_inception" (flat $1M) and "realized" (live NAV).
+// We draw: flat $1M line for pre_inception → solid NAV line for realized.
+// No "hypothetical" / dashed segment. SPY always shows real up/down.
 function renderEquityCurve() {
   var wrap = E('ec-wrap');
   if (!wrap) return;
@@ -1601,6 +1746,13 @@ function renderEquityCurve() {
   var noteEl = E('ec-note');
   if (noteEl) noteEl.textContent = (p && p.note) || '';
 
+  // Update legend label with realized_since date
+  var legPortEl = E('ec-leg-portfolio');
+  if (legPortEl) {
+    var rsDate = p && p.realized_since ? p.realized_since.slice(0,10) : '—';
+    legPortEl.textContent = t('ec.portfolio_live') + ' ' + rsDate + (document.documentElement.getAttribute('data-lang') === 'zh' ? '）' : ')');
+  }
+
   // Range label
   var rangeEl = E('ec-range-label');
   if (rangeEl && series.length) {
@@ -1608,8 +1760,34 @@ function renderEquityCurve() {
   }
 
   if (!series.length) {
-    wrap.innerHTML = '<div class="mm-empty" style="padding:40px 0"><span class="mm-empty-icon">◌</span>Live track accruing — no series data yet</div><div class="mm-ec-tooltip" id="ec-tooltip"></div>';
+    wrap.innerHTML = '<div class="mm-empty" style="padding:40px 0"><span class="mm-empty-icon">◌</span>' + t('ec.no_data') + '</div><div class="mm-ec-tooltip" id="ec-tooltip"></div>';
     return;
+  }
+
+  // Build nav values: pre_inception points are pinned at starting_nav ($1M flat);
+  // realized points use their actual nav value from the series.
+  var startNav = (p && p.starting_nav) || 1000000;
+  var navVals = series.map(function(s) {
+    // Support both the old "hypothetical" kind and the new "pre_inception" kind
+    if (s.kind === 'pre_inception' || s.kind === 'hypothetical') return startNav;
+    return s.nav;
+  });
+  var spyVals = series.map(function(s) { return s.spy_nav; });
+
+  // find realized_since index (first realized point)
+  var realizedSince = p && p.realized_since ? p.realized_since.slice(0,10) : null;
+  var n = series.length;
+  var realIdx = -1;
+  if (realizedSince) {
+    for (var i = 0; i < n; i++) {
+      if (series[i].date >= realizedSince || series[i].kind === 'realized') { realIdx = i; break; }
+    }
+  }
+  // Also detect via kind field directly
+  if (realIdx < 0) {
+    for (var i = 0; i < n; i++) {
+      if (series[i].kind === 'realized') { realIdx = i; break; }
+    }
   }
 
   // dimensions
@@ -1619,35 +1797,18 @@ function renderEquityCurve() {
   var IW = W - PAD.l - PAD.r;
   var IH = H - PAD.t - PAD.b;
 
-  // data extents
-  var navVals = series.map(function(s) { return s.nav; });
-  var spyVals = series.map(function(s) { return s.spy_nav; });
-  var allVals = navVals.concat(spyVals);
+  // data extents — use actual (not clamped) nav vals for range, then overlay flat
+  var realNavVals = series.map(function(s) { return s.nav; });
+  var allVals = realNavVals.concat(spyVals);
   var minV = Math.min.apply(null, allVals);
   var maxV = Math.max.apply(null, allVals);
   var pad = (maxV - minV) * 0.06 || 5000;
   minV -= pad; maxV += pad;
-  var n = series.length;
-
-  // find realized_since index
-  var realizedSince = p && p.realized_since ? p.realized_since.slice(0,10) : null;
-  var realIdx = -1;
-  if (realizedSince) {
-    for (var i = 0; i < n; i++) {
-      if (series[i].date >= realizedSince) { realIdx = i; break; }
-    }
-  }
 
   // coordinate mappers
   function xOf(i) { return PAD.l + (n <= 1 ? IW/2 : (i / (n-1)) * IW); }
   function yOf(v) { return PAD.t + IH - ((v - minV) / (maxV - minV)) * IH; }
 
-  // build polyline point strings — split NAV into hypothetical and realized segments
-  function pointStr(vals, fromIdx, toIdx) {
-    var pts = '';
-    for (var k = fromIdx; k <= toIdx; k++) pts += xOf(k).toFixed(1) + ',' + yOf(vals[k]).toFixed(1) + ' ';
-    return pts.trim();
-  }
   function pathStr(vals, fromIdx, toIdx) {
     var d = '';
     for (var k = fromIdx; k <= toIdx; k++) {
@@ -1682,20 +1843,13 @@ function renderEquityCurve() {
     return ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][parseInt(parts[1],10)-1] + ' ' + parseInt(parts[2],10);
   }
 
-  // area fill for realized portion (or whole if no split)
+  // area fill for realized portion
   var areaStart = realIdx >= 0 ? realIdx : 0;
   var areaPath = 'M' + xOf(areaStart).toFixed(1) + ' ' + (PAD.t + IH).toFixed(1) + ' ';
   for (var k = areaStart; k < n; k++) areaPath += 'L' + xOf(k).toFixed(1) + ' ' + yOf(navVals[k]).toFixed(1) + ' ';
   areaPath += 'L' + xOf(n-1).toFixed(1) + ' ' + (PAD.t + IH).toFixed(1) + ' Z';
 
-  // hypothetical area (lighter)
-  var hypoEnd = realIdx >= 0 ? realIdx : n-1;
-  var hypoArea = 'M' + xOf(0).toFixed(1) + ' ' + (PAD.t + IH).toFixed(1) + ' ';
-  for (var k = 0; k <= hypoEnd; k++) hypoArea += 'L' + xOf(k).toFixed(1) + ' ' + yOf(navVals[k]).toFixed(1) + ' ';
-  hypoArea += 'L' + xOf(hypoEnd).toFixed(1) + ' ' + (PAD.t + IH).toFixed(1) + ' Z';
-
-  // zero-line (starting nav)
-  var startNav = (p && p.starting_nav) || 1000000;
+  // zero-line at starting nav
   var zeroY = yOf(startNav);
 
   // unique defs id
@@ -1703,15 +1857,11 @@ function renderEquityCurve() {
 
   var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" xmlns="http://www.w3.org/2000/svg" style="overflow:visible">';
 
-  // defs: gradients
+  // defs: gradient
   svg += '<defs>';
   svg += '<linearGradient id="grad-up-' + uid + '" x1="0" y1="0" x2="0" y2="1">';
   svg += '<stop offset="0%" stop-color="var(--up)" stop-opacity="0.28"/>';
   svg += '<stop offset="100%" stop-color="var(--up)" stop-opacity="0.02"/>';
-  svg += '</linearGradient>';
-  svg += '<linearGradient id="grad-hypo-' + uid + '" x1="0" y1="0" x2="0" y2="1">';
-  svg += '<stop offset="0%" stop-color="var(--up)" stop-opacity="0.10"/>';
-  svg += '<stop offset="100%" stop-color="var(--up)" stop-opacity="0.01"/>';
   svg += '</linearGradient>';
   svg += '<clipPath id="clip-inner-' + uid + '"><rect x="' + PAD.l + '" y="' + PAD.t + '" width="' + IW + '" height="' + IH + '"/></clipPath>';
   svg += '</defs>';
@@ -1724,31 +1874,34 @@ function renderEquityCurve() {
     svg += '<text x="' + (PAD.l - 7) + '" y="' + (parseFloat(gy) + 4) + '" text-anchor="end" font-size="10" fill="var(--muted)" font-family="SF Mono,ui-monospace,Menlo,monospace" font-variant-numeric="tabular-nums">' + fmtNavShort(y) + '</text>';
   });
 
-  // zero / inception line
+  // zero / inception baseline (dashed)
   if (zeroY >= PAD.t && zeroY <= PAD.t + IH) {
     svg += '<line x1="' + PAD.l + '" y1="' + zeroY.toFixed(1) + '" x2="' + (PAD.l + IW) + '" y2="' + zeroY.toFixed(1) + '" stroke="var(--muted)" stroke-width="1" stroke-dasharray="4 3" opacity="0.35"/>';
   }
 
-  // SPY dashed reference line
-  var spyPath = pathStr(spyVals, 0, n-1);
   svg += '<g clip-path="url(#clip-inner-' + uid + ')">';
+
+  // SPY dashed reference line (always shows real SPY movement)
+  var spyPath = pathStr(spyVals, 0, n-1);
   svg += '<path d="' + spyPath + '" fill="none" stroke="var(--muted)" stroke-width="1.5" stroke-dasharray="5 3" opacity="0.5"/>';
 
-  // hypothetical area + line
-  if (hypoEnd > 0) {
-    svg += '<path d="' + hypoArea + '" fill="url(#grad-hypo-' + uid + ')"/>';
-    svg += '<path d="' + pathStr(navVals, 0, hypoEnd) + '" fill="none" stroke="var(--up)" stroke-width="1.8" stroke-dasharray="6 3" opacity="0.45"/>';
+  // Pre-inception: flat line at $1M (solid, no fill, muted)
+  if (realIdx > 0) {
+    svg += '<path d="' + pathStr(navVals, 0, realIdx) + '" fill="none" stroke="var(--up)" stroke-width="1.8" opacity="0.5"/>';
   }
 
-  // realized area + solid line
-  if (areaStart < n - 1 || realIdx < 0) {
+  // Realized: solid line + area fill
+  if (realIdx >= 0 && realIdx < n - 1) {
     svg += '<path d="' + areaPath + '" fill="url(#grad-up-' + uid + ')"/>';
     svg += '<path d="' + pathStr(navVals, areaStart, n-1) + '" fill="none" stroke="var(--up)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>';
+  } else if (realIdx < 0) {
+    // all data is pre-inception/flat — draw as flat solid line anyway
+    svg += '<path d="' + pathStr(navVals, 0, n-1) + '" fill="none" stroke="var(--up)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" opacity="0.45"/>';
   }
 
   svg += '</g>';
 
-  // realized_since vertical marker
+  // LIVE vertical marker
   if (realIdx >= 0 && realIdx < n) {
     var rx = xOf(realIdx).toFixed(1);
     svg += '<line x1="' + rx + '" y1="' + PAD.t + '" x2="' + rx + '" y2="' + (PAD.t + IH) + '" stroke="var(--info)" stroke-width="1.5" stroke-dasharray="3 2" opacity="0.7"/>';
@@ -1788,19 +1941,22 @@ function renderEquityCurve() {
       var fi = Math.round((relX / IW) * (n - 1));
       fi = Math.max(0, Math.min(n - 1, fi));
       var pt = series[fi];
-      var navDiff = pt.nav - pt.spy_nav;
-      var kindTxt = pt.kind === 'hypothetical' ? ' (hypothetical)' : ' (realized)';
+      // tooltip NAV = flat $1M for pre_inception, actual nav for realized
+      var displayNav = (pt.kind === 'pre_inception' || pt.kind === 'hypothetical') ? startNav : pt.nav;
+      var navDiff = displayNav - pt.spy_nav;
+      var isPre = (pt.kind === 'pre_inception' || pt.kind === 'hypothetical');
+      var kindTxt = isPre ? ' ' + t('ec.tooltip_pre') : ' ' + t('ec.tooltip_realized');
       tooltipEl.innerHTML =
         '<strong>' + pt.date + '</strong>' + kindTxt + '<br>' +
-        'NAV: <strong style="color:var(--up)">' + fmtNav(pt.nav) + '</strong><br>' +
-        'SPY ref: ' + fmtNav(pt.spy_nav) + '<br>' +
-        'vs SPY: <strong style="color:' + (navDiff >= 0 ? 'var(--up)' : 'var(--down)') + '">' + (navDiff >= 0 ? '+' : '') + fmtNav(navDiff) + '</strong>';
+        t('ec.nav') + ' <strong style="color:var(--up)">' + fmtNav(displayNav) + '</strong><br>' +
+        t('ec.spy_lbl') + ' ' + fmtNav(pt.spy_nav) + '<br>' +
+        t('ec.vs_spy') + ' <strong style="color:' + (navDiff >= 0 ? 'var(--up)' : 'var(--down)') + '">' + (navDiff >= 0 ? '+' : '') + fmtNav(navDiff) + '</strong>';
 
       // position tooltip
-      var ttW = 190, ttH = 80;
+      var ttW = 200, ttH = 90;
       var scaleBack = rect.width / W;
       var pxX = (xOf(fi) - PAD.l) * scaleBack + rect.left - wrap.getBoundingClientRect().left;
-      var pxY = (yOf(pt.nav) - PAD.t) * (rect.height / H);
+      var pxY = (yOf(displayNav) - PAD.t) * (rect.height / H);
       var left = pxX + 12;
       if (left + ttW > wrap.clientWidth) left = pxX - ttW - 12;
       tooltipEl.style.left = left + 'px';
@@ -1847,16 +2003,20 @@ function stepDotClass(type) {
   return 't-' + (type || 'reasoning').replace(/_/g, '_');
 }
 
+function runsH2() {
+  return '<h2><span class="l-en">Brain Activity &mdash; Full Trace</span><span class="l-zh">脑波活动 &mdash; 完整追踪</span> <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px">' + t('runs.subtitle') + '</span></h2>';
+}
+
 function renderRuns() {
   var el = E('runs');
   if (!el) return;
   var runs = _runs || [];
   if (!runs.length) {
-    el.innerHTML = '<h2>Brain Activity &mdash; Full Trace <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px">expand a run for complete step-by-step reasoning</span></h2><div class="mm-empty"><span class="mm-empty-icon">○</span>No runs logged yet — runs appear here after the bot executes.</div>';
+    el.innerHTML = runsH2() + '<div class="mm-empty"><span class="mm-empty-icon">○</span>' + t('runs.empty') + '</div>';
     return;
   }
 
-  var html = '<h2>Brain Activity &mdash; Full Trace <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px">expand a run for complete step-by-step reasoning</span></h2>';
+  var html = runsH2();
   html += '<div class="mm-run-list">';
 
   runs.forEach(function(r, ri) {
@@ -1875,7 +2035,7 @@ function renderRuns() {
       html += '<div class="mm-run-summary open" id="run-sum-' + ri + '">' + esc(r.summary) + '</div>';
     }
     // step trace (hidden, lazy loaded)
-    html += '<div class="mm-run-steps" id="run-steps-' + ri + '"><div class="mm-run-steps-loading">Click header to load full trace…</div></div>';
+    html += '<div class="mm-run-steps" id="run-steps-' + ri + '"><div class="mm-run-steps-loading">' + t('runs.click_to_load') + '</div></div>';
     html += '</div>';
   });
 
@@ -1904,16 +2064,16 @@ window.toggleRun = function(ri, runId) {
     return;
   }
 
-  stepsEl.innerHTML = '<div class="mm-run-steps-loading">Loading step trace…</div>';
+  stepsEl.innerHTML = '<div class="mm-run-steps-loading">' + t('runs.loading_trace') + '</div>';
   fetch('/api/runlog?run_id=' + encodeURIComponent(runId))
     .then(function(r) { return r.ok ? r.json() : null; })
     .then(function(data) {
-      if (!data) { stepsEl.innerHTML = '<div class="mm-run-steps-loading" style="color:var(--down)">Failed to load step trace.</div>'; return; }
+      if (!data) { stepsEl.innerHTML = '<div class="mm-run-steps-loading" style="color:var(--down)">' + t('runs.fail_trace') + '</div>'; return; }
       _runLogCache[runId] = data.steps || [];
       renderSteps(ri, _runLogCache[runId]);
     })
     .catch(function() {
-      stepsEl.innerHTML = '<div class="mm-run-steps-loading" style="color:var(--down)">Error loading trace.</div>';
+      stepsEl.innerHTML = '<div class="mm-run-steps-loading" style="color:var(--down)">' + t('runs.err_trace') + '</div>';
     });
 };
 
@@ -1921,7 +2081,7 @@ function renderSteps(ri, steps) {
   var stepsEl = E('run-steps-' + ri);
   if (!stepsEl) return;
   if (!steps || !steps.length) {
-    stepsEl.innerHTML = '<div class="mm-run-steps-loading">No steps recorded for this run.</div>';
+    stepsEl.innerHTML = '<div class="mm-run-steps-loading">' + t('runs.no_steps') + '</div>';
     return;
   }
 
@@ -1954,7 +2114,7 @@ function renderSteps(ri, steps) {
     if (fullDetail) {
       html += '<div class="mm-step-detail">' + esc(shortDetail) + (needsToggle ? '…' : '') + '</div>';
       if (needsToggle) {
-        html += '<button class="mm-step-detail-toggle" onclick="toggleStepDetail(\'' + detailId + '\',this)">Show full ↓</button>';
+        html += '<button class="mm-step-detail-toggle" onclick="toggleStepDetail(\'' + detailId + '\',this)">' + t('runs.show_full') + '</button>';
         html += '<div class="mm-step-detail-full" id="' + detailId + '">' + esc(fullDetail) + '</div>';
       }
     }
@@ -1970,38 +2130,47 @@ window.toggleStepDetail = function(id, btn) {
   if (!el) return;
   if (el.style.display === 'block') {
     el.style.display = 'none';
-    btn.textContent = 'Show full ↓';
+    btn.textContent = t('runs.show_full');
   } else {
     el.style.display = 'block';
-    btn.textContent = 'Hide ↑';
+    btn.textContent = t('runs.hide');
   }
 };
 
 // ── REJECTED NAMES ────────────────────────────────────────────────────────────
+function rejH2() {
+  return '<h2><span class="l-en">Evaluated &mdash; Not Held, and Why</span><span class="l-zh">已评估 &mdash; 未持仓及原因</span> <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px">' + t('rej.subtitle') + '</span></h2>';
+}
+
 function renderRejected() {
   var el = E('rejected');
   if (!el) return;
   var rej = _rejected || [];
-
-  var header = '<h2>Evaluated &mdash; Not Held, and Why <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px">the discipline made visible</span></h2>';
+  var isZh = document.documentElement.getAttribute('data-lang') === 'zh';
 
   if (!rej.length) {
-    el.innerHTML = header + '<div class="mm-empty"><span class="mm-empty-icon">○</span>No rejected names — either the book hasn\'t run yet or all evaluated names passed.</div>';
+    el.innerHTML = rejH2() + '<div class="mm-empty"><span class="mm-empty-icon">○</span>' + t('rej.empty') + '</div>';
     return;
   }
 
-  var html = header;
-  html += '<div class="mm-rej-note">Names evaluated by the conviction gate but not held. Vetoes are hard rules (parabolic extension, distress, cycle-blocked). Bear bullets show the exact risk factors that kept them out. Sorted worst-confluence first.</div>';
+  var html = rejH2();
+  html += '<div class="mm-rej-note">' + t('rej.note') + '</div>';
   html += '<div class="mm-rej-grid">';
 
   rej.forEach(function(r) {
     var conflV = r.confluence;
     var conflStr = conflV != null ? ((conflV > 0 ? '+' : '') + conflV.toFixed(2)) : '—';
     var conflCls = conflV != null && conflV < -0.05 ? 'neg' : 'neu';
+    var zhRej = r._zh || {};
+
+    // reason — prefer zh
+    var reasonText = (isZh && zhRej.reason) ? zhRej.reason : (r.reason || '—');
+    // bear — prefer zh array
+    var bearArr = (isZh && zhRej.bear && zhRej.bear.length) ? zhRej.bear : (r.bear || []);
 
     html += '<div class="mm-rej-card">';
     html += '<div class="mm-rej-ticker">' + esc(r.ticker || '—') + '</div>';
-    html += '<div class="mm-rej-reason">' + esc(r.reason || '—') + '</div>';
+    html += '<div class="mm-rej-reason">' + esc(reasonText) + '</div>';
 
     // veto chips
     if (r.vetoes && r.vetoes.length) {
@@ -2013,14 +2182,14 @@ function renderRejected() {
     }
 
     // top 3 bear bullets
-    var bears = (r.bear || []).slice(0, 3);
+    var bears = bearArr.slice(0, 3);
     if (bears.length) {
       html += '<ul class="mm-rej-bears">';
       bears.forEach(function(b) { html += '<li>' + esc(b) + '</li>'; });
       html += '</ul>';
     }
 
-    html += '<div class="mm-rej-confluence ' + conflCls + '">Confluence: ' + conflStr + '</div>';
+    html += '<div class="mm-rej-confluence ' + conflCls + '">' + t('rej.confluence') + ' ' + conflStr + '</div>';
     html += '</div>';
   });
 
@@ -2034,24 +2203,26 @@ function renderHero() {
   var r = (b.regime) || _regime || {};
   var tr = b.track_record || {};
   var quad = r.quad || '';
-  var meta = QUAD_META[quad] || { name: quad || 'Unknown', color: 'var(--muted)', says: '' };
+  var meta = QUAD_META[quad] || { nameKey: null, color: 'var(--muted)', saysKey: null };
+  var quadName = meta.nameKey ? t(meta.nameKey) : (quad || '—');
+  var quadSays = meta.saysKey ? t(meta.saysKey) : '';
 
   // quad name + says
-  E('hero-quad-name').textContent = meta.name || quad || '—';
+  E('hero-quad-name').textContent = quadName;
   E('hero-quad-name').style.color = meta.color;
-  E('hero-says').textContent = (r.quad_name && r.quad_name !== meta.name ? r.quad_name + ' — ' : '') + meta.says;
+  E('hero-says').textContent = (r.quad_name && r.quad_name !== quad ? r.quad_name + ' — ' : '') + quadSays;
 
   // as-of
-  E('hero-asof').textContent = b.as_of ? 'as of ' + fmtDateVerbose(b.as_of) : (r.as_of ? 'as of ' + fmtDateVerbose(r.as_of) : '');
+  E('hero-asof').textContent = b.as_of ? t('hero.as_of') + ' ' + fmtDateVerbose(b.as_of) : (r.as_of ? t('hero.as_of') + ' ' + fmtDateVerbose(r.as_of) : '');
 
   // track record chip
   if (tr.n != null) {
     var n = tr.n || 0;
-    var hr = tr.hit_rate != null ? (tr.hit_rate * 100).toFixed(0) + '% hit rate' : 'building';
+    var hr = tr.hit_rate != null ? (tr.hit_rate * 100).toFixed(0) + '% hit rate' : t('hero.building');
     E('hero-tr').textContent = 'n=' + n + ' · ' + hr;
   }
 
-  // vitals
+  // vitals — label elements are HTML with l-en/l-zh spans; chip values are JS
   if (b.gross != null) {
     E('v-gross').textContent = pctInt(b.gross);
     E('v-gross').className = 'mm-v-chip tone-' + (b.gross >= 0.7 ? 'up' : b.gross >= 0.4 ? 'info' : 'warn');
@@ -2067,7 +2238,7 @@ function renderHero() {
 
   if (tr.status) {
     var n = tr.n || 0;
-    E('v-tr').textContent = n > 0 ? ((tr.hit_rate * 100).toFixed(0) + '% · n=' + n) : 'building · n=' + n;
+    E('v-tr').textContent = n > 0 ? ((tr.hit_rate * 100).toFixed(0) + '% · n=' + n) : t('hero.building') + ' · n=' + n;
     E('v-tr').className = 'mm-v-chip tone-' + (n >= 5 ? (tr.hit_rate >= 0.6 ? 'up' : 'warn') : 'muted');
   }
 
@@ -2089,21 +2260,18 @@ function renderAllocation() {
   var cash = (sl.cash || 0) * 100;
 
   E('seg-lead').style.width = lead.toFixed(1) + '%';
-  E('seg-lead').title = 'Leadership ' + lead.toFixed(0) + '%';
   E('seg-lead').textContent = lead >= 5 ? lead.toFixed(0) + '%' : '';
 
   E('seg-conv').style.width = conv.toFixed(1) + '%';
-  E('seg-conv').title = 'Conviction ' + conv.toFixed(0) + '%';
   E('seg-conv').textContent = conv >= 5 ? conv.toFixed(0) + '%' : '';
 
   E('seg-cash').style.width = cash.toFixed(1) + '%';
-  E('seg-cash').title = 'Cash ' + cash.toFixed(0) + '%';
   E('seg-cash').textContent = cash >= 5 ? cash.toFixed(0) + '%' : '';
 
-  E('lbl-lead').textContent = 'Leadership ' + lead.toFixed(0) + '%';
-  E('lbl-conv').textContent = 'Conviction ' + conv.toFixed(0) + '%';
-  E('lbl-cash').textContent = 'Cash ' + cash.toFixed(0) + '%';
-  E('lbl-gross').textContent = b.gross != null ? pctInt(b.gross) + ' gross' : '';
+  E('lbl-lead').textContent = t('alloc.leadership') + ' ' + lead.toFixed(0) + '%';
+  E('lbl-conv').textContent = t('alloc.conviction') + ' ' + conv.toFixed(0) + '%';
+  E('lbl-cash').textContent = t('alloc.cash') + ' ' + cash.toFixed(0) + '%';
+  E('lbl-gross').textContent = b.gross != null ? pctInt(b.gross) + ' ' + t('alloc.gross') : '';
 }
 
 // ── POSITIONS ─────────────────────────────────────────────────────────────────
@@ -2113,7 +2281,7 @@ function renderPositions() {
   var el = E('positions');
 
   if (!positions.length) {
-    el.innerHTML = '<h2>Positions</h2><div class="mm-empty"><span class="mm-empty-icon">○</span>No positions yet — the book builds on the next daily run.</div>';
+    el.innerHTML = '<h2><span class="l-en">Positions</span><span class="l-zh">持仓</span></h2><div class="mm-empty"><span class="mm-empty-icon">○</span>' + t('pos.empty') + '</div>';
     return;
   }
 
@@ -2124,7 +2292,7 @@ function renderPositions() {
   positions.forEach(function(p, i) {
     var isConv = p.sleeve === 'conviction';
     var sleeveClass = isConv ? 'conv' : 'lead';
-    var sleeveName = isConv ? 'Conviction' : 'Leadership';
+    var sleeveName = isConv ? t('alloc.conviction') : t('alloc.leadership');
     var verdict = (p.verdict || 'hold').toLowerCase();
     var tf = p.thesis_full || {};
     var heldStr = '';
@@ -2150,64 +2318,73 @@ function renderPositions() {
     rows += '<tr class="mm-expand-row" id="expand-' + i + '" style="display:none"><td colspan="8">';
     rows += '<div class="mm-thesis-panel">';
 
-    // summary
-    if (tf.summary) {
-      rows += '<div style="font-size:13.5px;color:var(--text);line-height:1.5;margin-bottom:10px">' + esc(tf.summary) + '</div>';
-    }
-    if (tf.why_now) {
-      rows += '<div style="font-size:12.5px;color:var(--muted);margin-bottom:12px"><span style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--info);margin-right:6px">Why Now</span>' + esc(tf.why_now) + '</div>';
+    // zh fallback helper for this position's thesis
+    var zhTf = tf._zh || {};
+
+    // summary — prefer zh when in zh mode
+    var sumText = (document.documentElement.getAttribute('data-lang') === 'zh' && zhTf.summary) ? zhTf.summary : tf.summary;
+    if (sumText) {
+      rows += '<div style="font-size:13.5px;color:var(--text);line-height:1.5;margin-bottom:10px">' + esc(sumText) + '</div>';
     }
 
-    // bull vs bear grid
-    var bull = tf.bull || [];
-    var bear = tf.bear || [];
+    // why_now
+    var whyText = (document.documentElement.getAttribute('data-lang') === 'zh' && zhTf.why_now) ? zhTf.why_now : tf.why_now;
+    if (whyText) {
+      rows += '<div style="font-size:12.5px;color:var(--muted);margin-bottom:12px"><span style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--info);margin-right:6px">' + t('thesis.why_now') + '</span>' + esc(whyText) + '</div>';
+    }
+
+    // bull vs bear grid — prefer zh arrays when in zh mode
+    var isZh = document.documentElement.getAttribute('data-lang') === 'zh';
+    var bull = (isZh && zhTf.bull && zhTf.bull.length) ? zhTf.bull : (tf.bull || []);
+    var bear = (isZh && zhTf.bear && zhTf.bear.length) ? zhTf.bear : (tf.bear || []);
     if (bull.length || bear.length) {
       rows += '<div class="mm-thesis-grid">';
-      rows += '<div class="mm-thesis-col bull"><div class="mm-thesis-col-h">The Case For</div><ul>';
+      rows += '<div class="mm-thesis-col bull"><div class="mm-thesis-col-h">' + t('thesis.case_for') + '</div><ul>';
       if (bull.length) bull.forEach(function(b) { rows += '<li>' + esc(b) + '</li>'; });
-      else rows += '<li class="empty">No bull case items</li>';
+      else rows += '<li class="empty">' + t('thesis.no_bull') + '</li>';
       rows += '</ul></div>';
-      rows += '<div class="mm-thesis-col bear"><div class="mm-thesis-col-h">The Case Against</div><ul>';
+      rows += '<div class="mm-thesis-col bear"><div class="mm-thesis-col-h">' + t('thesis.case_against') + '</div><ul>';
       if (bear.length) bear.forEach(function(b) { rows += '<li>' + esc(b) + '</li>'; });
-      else rows += '<li class="empty">No bear case items</li>';
+      else rows += '<li class="empty">' + t('thesis.no_bear') + '</li>';
       rows += '</ul></div>';
       rows += '</div>';
     }
 
     // vetoes
     if (tf.vetoes && tf.vetoes.length) {
-      rows += '<div style="margin:8px 0 4px"><span style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--act);margin-right:6px">Hard Vetoes</span>';
+      rows += '<div style="margin:8px 0 4px"><span style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--act);margin-right:6px">' + t('thesis.hard_vetoes') + '</span>';
       tf.vetoes.forEach(function(v) { rows += '<span class="mm-veto-chip">' + esc(v) + '</span>'; });
       rows += '</div>';
     }
 
     // divergences
     if (tf.divergences && tf.divergences.length) {
-      rows += '<div style="margin:8px 0 4px"><span style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--info);margin-right:6px">Signal Divergences</span>';
+      rows += '<div style="margin:8px 0 4px"><span style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--info);margin-right:6px">' + t('thesis.divergences') + '</span>';
       tf.divergences.forEach(function(d) { rows += '<span class="mm-div-chip">' + esc(d) + '</span>'; });
       rows += '</div>';
     }
 
     // falsifier
     if (tf.what_would_prove_wrong) {
-      rows += '<div class="mm-fals-box"><strong>✗ What Would Prove This Wrong</strong>' + esc(tf.what_would_prove_wrong) + '</div>';
+      rows += '<div class="mm-fals-box"><strong>' + t('thesis.falsifier') + '</strong>' + esc(tf.what_would_prove_wrong) + '</div>';
     }
 
-    // sizing rationale
+    // sizing rationale — prefer zh
+    var sizText = (isZh && zhTf.sizing_rationale) ? zhTf.sizing_rationale : tf.sizing_rationale;
     var hasNums = tf.confluence != null || tf.prob_correct != null;
     rows += '<div class="mm-sizing-card">';
     rows += '<div class="mm-sizing-text">';
-    if (tf.sizing_rationale) rows += '<strong style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;display:block;color:var(--muted);margin-bottom:4px">Sizing Rationale</strong>' + esc(tf.sizing_rationale);
+    if (sizText) rows += '<strong style="font-size:10px;text-transform:uppercase;letter-spacing:.07em;display:block;color:var(--muted);margin-bottom:4px">' + t('thesis.sizing_rat') + '</strong>' + esc(sizText);
     rows += '</div>';
     if (hasNums) {
       rows += '<div class="mm-sizing-nums">';
       if (tf.confluence != null) {
         var cval = tf.confluence;
         var ccol = cval > 0 ? 'var(--up)' : cval < 0 ? 'var(--down)' : 'var(--muted)';
-        rows += '<div class="mm-sizing-num"><div class="val" style="color:' + ccol + '">' + (cval > 0 ? '+' : '') + cval.toFixed(2) + '</div><div class="lbl">Confluence</div></div>';
+        rows += '<div class="mm-sizing-num"><div class="val" style="color:' + ccol + '">' + (cval > 0 ? '+' : '') + cval.toFixed(2) + '</div><div class="lbl">' + t('pos.confluence') + '</div></div>';
       }
       if (tf.prob_correct != null) {
-        rows += '<div class="mm-sizing-num"><div class="val" style="color:var(--info)">' + (tf.prob_correct * 100).toFixed(0) + '%</div><div class="lbl">Prob Correct</div></div>';
+        rows += '<div class="mm-sizing-num"><div class="val" style="color:var(--info)">' + (tf.prob_correct * 100).toFixed(0) + '%</div><div class="lbl">' + t('thesis.prob_correct') + '</div></div>';
       }
       rows += '</div>';
     }
@@ -2216,10 +2393,10 @@ function renderPositions() {
     rows += '</div></td></tr>';
   });
 
-  el.innerHTML = '<h2>Positions <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px">click a row for full thesis</span></h2>' +
+  el.innerHTML = '<h2><span class="l-en">Positions</span><span class="l-zh">持仓</span> <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px">' + t('pos.subtitle') + '</span></h2>' +
     '<table>' +
     '<thead><tr>' +
-    '<th>Ticker</th><th class="l">Sleeve</th><th>Stage</th><th>Weight</th><th>Verdict</th><th>RS %ile</th><th>Confluence</th><th class="l">Held Since</th>' +
+    '<th>' + t('pos.ticker') + '</th><th class="l">' + t('pos.sleeve') + '</th><th>' + t('pos.stage') + '</th><th>' + t('pos.weight') + '</th><th>' + t('pos.verdict') + '</th><th>' + t('pos.rs_pctile') + '</th><th>' + t('pos.confluence') + '</th><th class="l">' + t('pos.held_since') + '</th>' +
     '</tr></thead>' +
     '<tbody>' + rows + '</tbody>' +
     '</table>';
@@ -2250,48 +2427,48 @@ function renderTrades() {
   var closed = data.closed || [];
 
   if (!open.length && !closed.length) {
-    el.innerHTML = '<h2>Trade History</h2><div class="mm-empty"><span class="mm-empty-icon">○</span>No trade history yet — positions accrue here as the ledger is updated.</div>';
+    el.innerHTML = '<h2><span class="l-en">Trade History</span><span class="l-zh">交易历史</span></h2><div class="mm-empty"><span class="mm-empty-icon">○</span>' + t('trades.empty') + '</div>';
     return;
   }
 
-  var html = '<h2>Trade History</h2>';
+  var html = '<h2><span class="l-en">Trade History</span><span class="l-zh">交易历史</span></h2>';
 
   if (open.length) {
     html += '<table><thead><tr>' +
-      '<th>Ticker</th><th class="l">Sleeve</th><th>Opened</th><th>Held (d)</th><th>Entry Weight</th><th>Current Weight</th><th>Entry Price</th>' +
+      '<th>' + t('trades.ticker') + '</th><th class="l">' + t('trades.sleeve') + '</th><th>' + t('trades.opened') + '</th><th>' + t('trades.held_d') + '</th><th>' + t('trades.entry_wt') + '</th><th>' + t('trades.curr_wt') + '</th><th>' + t('trades.entry_px') + '</th>' +
       '</tr></thead><tbody>';
-    open.forEach(function(t) {
+    open.forEach(function(tr) {
       html += '<tr>' +
-        '<td><span class="pos-ticker">' + esc(t.ticker||'—') + '</span></td>' +
-        '<td class="l"><span class="mm-sleeve-chip ' + (t.sleeve === 'conviction' ? 'conv' : 'lead') + '">' + esc(t.sleeve||'—') + '</span></td>' +
-        '<td style="font-variant-numeric:tabular-nums">' + fmtDate(t.opened_at) + '</td>' +
-        '<td>' + (t.held_days != null ? t.held_days : '—') + '</td>' +
-        '<td style="font-variant-numeric:tabular-nums">' + (t.entry_weight != null ? (t.entry_weight*100).toFixed(1)+'%' : '—') + '</td>' +
-        '<td style="font-variant-numeric:tabular-nums">' + (t.current_weight != null ? (t.current_weight*100).toFixed(1)+'%' : '—') + '</td>' +
-        '<td style="font-variant-numeric:tabular-nums">' + (t.entry_price != null ? '$'+Number(t.entry_price).toFixed(2) : '—') + '</td>' +
+        '<td><span class="pos-ticker">' + esc(tr.ticker||'—') + '</span></td>' +
+        '<td class="l"><span class="mm-sleeve-chip ' + (tr.sleeve === 'conviction' ? 'conv' : 'lead') + '">' + esc(tr.sleeve||'—') + '</span></td>' +
+        '<td style="font-variant-numeric:tabular-nums">' + fmtDate(tr.opened_at) + '</td>' +
+        '<td>' + (tr.held_days != null ? tr.held_days : '—') + '</td>' +
+        '<td style="font-variant-numeric:tabular-nums">' + (tr.entry_weight != null ? (tr.entry_weight*100).toFixed(1)+'%' : '—') + '</td>' +
+        '<td style="font-variant-numeric:tabular-nums">' + (tr.current_weight != null ? (tr.current_weight*100).toFixed(1)+'%' : '—') + '</td>' +
+        '<td style="font-variant-numeric:tabular-nums">' + (tr.entry_price != null ? '$'+Number(tr.entry_price).toFixed(2) : '—') + '</td>' +
       '</tr>';
     });
     html += '</tbody></table>';
   }
 
   if (closed.length) {
-    html += '<div class="mm-trades-sub-h">Closed Positions</div>';
+    html += '<div class="mm-trades-sub-h">' + t('trades.closed_sub') + '</div>';
     html += '<table><thead><tr>' +
-      '<th>Ticker</th><th class="l">Sleeve</th><th>Opened</th><th>Closed</th><th>Held (d)</th><th class="l">Exit Reason</th>' +
+      '<th>' + t('trades.ticker') + '</th><th class="l">' + t('trades.sleeve') + '</th><th>' + t('trades.opened') + '</th><th>' + t('trades.closed') + '</th><th>' + t('trades.held_d') + '</th><th class="l">' + t('trades.exit_reason') + '</th>' +
       '</tr></thead><tbody>';
-    closed.forEach(function(t) {
+    closed.forEach(function(tr) {
       html += '<tr>' +
-        '<td><span class="pos-ticker">' + esc(t.ticker||'—') + '</span></td>' +
-        '<td class="l"><span class="mm-sleeve-chip ' + (t.sleeve === 'conviction' ? 'conv' : 'lead') + '">' + esc(t.sleeve||'—') + '</span></td>' +
-        '<td style="font-variant-numeric:tabular-nums">' + fmtDate(t.opened_at) + '</td>' +
-        '<td style="font-variant-numeric:tabular-nums">' + fmtDate(t.closed_at) + '</td>' +
-        '<td>' + (t.held_days != null ? t.held_days : '—') + '</td>' +
-        '<td class="l" style="color:var(--muted);font-size:12px">' + esc(t.exit_reason||'—') + '</td>' +
+        '<td><span class="pos-ticker">' + esc(tr.ticker||'—') + '</span></td>' +
+        '<td class="l"><span class="mm-sleeve-chip ' + (tr.sleeve === 'conviction' ? 'conv' : 'lead') + '">' + esc(tr.sleeve||'—') + '</span></td>' +
+        '<td style="font-variant-numeric:tabular-nums">' + fmtDate(tr.opened_at) + '</td>' +
+        '<td style="font-variant-numeric:tabular-nums">' + fmtDate(tr.closed_at) + '</td>' +
+        '<td>' + (tr.held_days != null ? tr.held_days : '—') + '</td>' +
+        '<td class="l" style="color:var(--muted);font-size:12px">' + esc(tr.exit_reason||'—') + '</td>' +
       '</tr>';
     });
     html += '</tbody></table>';
   } else if (open.length) {
-    html += '<div class="mm-trades-sub-h" style="color:var(--muted);font-style:italic;font-weight:400;text-transform:none;letter-spacing:0;font-size:12px;border:none;padding-top:10px">No closed positions yet.</div>';
+    html += '<div class="mm-trades-sub-h" style="color:var(--muted);font-style:italic;font-weight:400;text-transform:none;letter-spacing:0;font-size:12px;border:none;padding-top:10px">' + t('trades.no_closed') + '</div>';
   }
 
   el.innerHTML = html;
@@ -2301,12 +2478,12 @@ function renderTrades() {
 function renderBrainLog() {
   var el = E('brainlog');
   if (!_activity.length) {
-    el.innerHTML = '<h2>Brain Log</h2><div class="mm-empty"><span class="mm-empty-icon">○</span>No activity yet — runs, decisions, and research appear here.</div>';
+    el.innerHTML = '<h2><span class="l-en">Brain Log</span><span class="l-zh">脑波日志</span></h2><div class="mm-empty"><span class="mm-empty-icon">○</span>' + t('brain.empty') + '</div>';
     return;
   }
 
   var ICONS = { trade: '↕', decision: '◉', research: '◎', run: '▷' };
-  var html = '<h2>Brain Log</h2><div class="mm-timeline">';
+  var html = '<h2><span class="l-en">Brain Log</span><span class="l-zh">脑波日志</span></h2><div class="mm-timeline">';
   _activity.forEach(function(e, i) {
     var kind = e.kind || 'run';
     var isLast = i === _activity.length - 1;
@@ -2331,26 +2508,30 @@ function renderBrainLog() {
 function renderResearch() {
   var el = E('research');
   if (!_research.length) {
-    el.innerHTML = '<h2>Research Feed</h2><div class="mm-empty"><span class="mm-empty-icon">○</span>No research notes yet — notes appear here after runs.</div>';
+    el.innerHTML = '<h2><span class="l-en">Research Feed</span><span class="l-zh">研究动态</span></h2><div class="mm-empty"><span class="mm-empty-icon">○</span>' + t('research.empty') + '</div>';
     return;
   }
   var COLLAPSE_LINES = 12;
-  var html = '<h2>Research Feed</h2>';
+  var isZh = document.documentElement.getAttribute('data-lang') === 'zh';
+  var html = '<h2><span class="l-en">Research Feed</span><span class="l-zh">研究动态</span></h2>';
   _research.forEach(function(n, ni) {
-    var chips = (n.tickers||[]).map(function(t) { return '<span class="mm-ticker-chip">' + esc(t) + '</span>'; }).join('');
-    var body = renderMd(n.body_md || '');
-    var bodyLines = (n.body_md||'').split('\n').length;
+    var chips = (n.tickers||[]).map(function(tk) { return '<span class="mm-ticker-chip">' + esc(tk) + '</span>'; }).join('');
+    // zh title + body — fall back to english when _zh missing
+    var title = (isZh && n.title_zh) ? n.title_zh : (n.title || '—');
+    var bodyMd = (isZh && n.body_md_zh) ? n.body_md_zh : (n.body_md || '');
+    var body = renderMd(bodyMd);
+    var bodyLines = bodyMd.split('\n').length;
     var collapse = bodyLines > COLLAPSE_LINES;
     var bodyId = 'rb-' + ni;
     html += '<div class="mm-research-card">' +
-      '<div class="mm-research-title">' + esc(n.title||'—') + '</div>' +
+      '<div class="mm-research-title">' + esc(title) + '</div>' +
       '<div class="mm-research-meta">' +
         '<span>' + (n.date ? n.date.slice(0,10) : '—') + '</span>' +
         (chips ? chips : '') +
       '</div>';
     if (collapse) {
       html += '<div class="mm-research-body" id="' + bodyId + '" style="max-height:220px;overflow:hidden;position:relative">' + body + '</div>' +
-        '<button class="mm-research-collapse-toggle" onclick="toggleResearch(\'' + bodyId + '\',this)">Show more ↓</button>';
+        '<button class="mm-research-collapse-toggle" onclick="toggleResearch(\'' + bodyId + '\',this)">' + t('research.show_more') + '</button>';
     } else {
       html += '<div class="mm-research-body">' + body + '</div>';
     }
@@ -2364,10 +2545,10 @@ window.toggleResearch = function(id, btn) {
   if (!el) return;
   if (el.style.maxHeight === 'none' || el.style.maxHeight === '') {
     el.style.maxHeight = '220px';
-    btn.textContent = 'Show more ↓';
+    btn.textContent = t('research.show_more');
   } else {
     el.style.maxHeight = 'none';
-    btn.textContent = 'Show less ↑';
+    btn.textContent = t('research.show_less');
   }
 };
 
@@ -2376,13 +2557,13 @@ function renderCompetitors() {
   var el = E('competitors');
   var data = _competitors;
   if (!data || !data.strategies || !data.strategies.length) {
-    el.innerHTML = '<h2>Competitor Compare — Quiver</h2><div class="mm-empty"><span class="mm-empty-icon">○</span>No competitor data yet — pull from Quiver to compare.</div>';
+    el.innerHTML = '<h2><span class="l-en">Competitor Compare — Quiver</span><span class="l-zh">竞品对比 — Quiver</span></h2><div class="mm-empty"><span class="mm-empty-icon">○</span>' + t('comp.empty') + '</div>';
     return;
   }
   var note = data.note || '';
   var strats = data.strategies;
 
-  var html = '<h2>Competitor Compare — Quiver</h2>';
+  var html = '<h2><span class="l-en">Competitor Compare — Quiver</span><span class="l-zh">竞品对比 — Quiver</span></h2>';
   if (note) html += '<div class="mm-comp-note">' + esc(note) + '</div>';
   html += '<div class="mm-comp-grid">';
 
@@ -2395,14 +2576,14 @@ function renderCompetitors() {
     var metricRows = Object.entries(metrics).slice(0,6).map(function(kv) {
       return '<div class="mm-comp-metric"><div class="mk">' + esc(kv[0]) + '</div><div class="mv">' + esc(String(kv[1])) + '</div></div>';
     }).join('');
-    var topH = (s.top_holdings||[]).map(function(t) { return '<span class="mm-ticker-chip">' + esc(t) + '</span>'; }).join(' ');
+    var topH = (s.top_holdings||[]).map(function(tk) { return '<span class="mm-ticker-chip">' + esc(tk) + '</span>'; }).join(' ');
 
     html += '<div class="mm-comp-card ' + cardClass + '">' +
       '<div class="mm-comp-name">' + esc(s.slug||s.strategy||'—') + '</div>' +
       '<span class="mm-comp-model-badge ' + modelClass + '">' + esc(s.model||'unknown') + '</span>' +
-      '<div class="mm-comp-sub">scraped ' + esc(s.scraped||'—') + ' &middot; ' + (s.n_holdings||0) + ' positions &middot; ' + (s.n_top_picks||0) + ' picks</div>' +
+      '<div class="mm-comp-sub">' + t('comp.scraped') + ' ' + esc(s.scraped||'—') + ' &middot; ' + (s.n_holdings||0) + ' ' + t('comp.positions') + ' &middot; ' + (s.n_top_picks||0) + ' ' + t('comp.picks') + '</div>' +
       (metricRows ? '<div class="mm-comp-metrics">' + metricRows + '</div>' : '') +
-      (topH ? '<div class="mm-comp-holdings-h">Top Holdings</div><div style="line-height:2">' + topH + '</div>' : '') +
+      (topH ? '<div class="mm-comp-holdings-h">' + t('comp.top_holdings') + '</div><div style="line-height:2">' + topH + '</div>' : '') +
     '</div>';
   });
   html += '</div>';
@@ -2412,7 +2593,13 @@ function renderCompetitors() {
 // ── FOOTER ────────────────────────────────────────────────────────────────────
 function renderFooter() {
   var b = _book || {};
-  var disc = b.disclaimer || 'Paper-only / display-only. Accountability, not alpha. Not investment advice.';
+  var isZh = document.documentElement.getAttribute('data-lang') === 'zh';
+  var disc;
+  if (isZh) {
+    disc = (b.disclaimer_zh) ? b.disclaimer_zh : t('footer.disc');
+  } else {
+    disc = b.disclaimer || t('footer.disc');
+  }
   E('footer-disc').textContent = disc;
 }
 
@@ -2460,8 +2647,39 @@ async function fetchAll() {
   renderFooter();
 
   var now = new Date();
-  E('updated').textContent = 'updated ' + now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  E('updated').textContent = t('hero.updated') + ' ' + now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
+
+// ── langchange — re-render all sections from cached data ─────────────────────
+document.addEventListener('langchange', function() {
+  // Re-render all sections to pick up the new language.
+  // Data is already cached; no re-fetch needed.
+  renderPerformance();
+  renderEquityCurve();
+  renderHero();
+  renderAllocation();
+  renderPositions();
+  renderTrades();
+  renderBrainLog();
+  renderResearch();
+  renderRuns();
+  renderRejected();
+  renderCompetitors();
+  renderFooter();
+  // Update equity curve legend
+  var p = _perf;
+  var legPortEl = E('ec-leg-portfolio');
+  if (legPortEl && p) {
+    var rsDate = p.realized_since ? p.realized_since.slice(0,10) : '—';
+    legPortEl.textContent = t('ec.portfolio_live') + ' ' + rsDate + (document.documentElement.getAttribute('data-lang') === 'zh' ? '）' : ')');
+  }
+  // Update "updated" timestamp label
+  var updEl = E('updated');
+  if (updEl) {
+    var ts = updEl.textContent.replace(/^[^0-9]*/, '');
+    updEl.textContent = t('hero.updated') + ' ' + ts;
+  }
+});
 
 fetchAll();
 setInterval(fetchAll, 60000);
