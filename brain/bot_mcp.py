@@ -164,6 +164,32 @@ async def get_news(args):
                   "note": "Public-record financial news flow. Context-only — informs narrative, never sizes alone."})
 
 
+@tool("get_intelligence",
+      "The UNIFIED News & Intelligence read for a NAME — both sides of the tape in ONE call: "
+      "(1) news_flow (demand-side: what the market is SAYING — recent headline count, sentiment lean, "
+      "top headlines) and (2) the alt-data signal (supply-side: what political/insider/contract/"
+      "affiliation money is DOING — signal_score 0-100, action, conviction, channels, affiliations). "
+      "Shown SIDE BY SIDE, never blended — the divergence between them is the edge (early = flow into a "
+      "QUIET tape; crowded/late = flow into a LOUD tape). CONTEXT-ONLY — informs conviction, never sizes alone.",
+      {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]})
+async def get_intelligence(args):
+    t = (args.get("ticker") or "").upper()
+    uni = (_read_json(_V / "site" / "intelligence" / "by_ticker.json")
+           or _read_json(_V / "data" / "intelligence" / "by_ticker.json") or {})
+    rec = (uni.get("tickers") or {}).get(t)
+    if rec is None:
+        # the unified bundle isn't published yet — compose from the standalone feeds
+        news = ((_read_json(_V / "site" / "news" / "by_ticker.json") or {}).get("tickers") or {}).get(t)
+        mm = (_read_json(_V / "site" / "altdata" / "mastermind.json") or {}).get("signals") or []
+        alt = next((s for s in mm if (s.get("ticker") or "").upper() == t), None)
+        if news is None and alt is None:
+            return _ok(f"no news or alt-data intelligence for {t}.")
+        rec = {"ticker": t, "news": news, "alt": alt, "has_news": bool(news), "has_alt": bool(alt)}
+    return _json({"ticker": t, **rec,
+                  "note": "News flow (what the tape says) + alt-data signal (what smart money does), side "
+                          "by side. Context-only — the divergence between them is the read; never sizes alone."})
+
+
 @tool("get_quote",
       "Live (15-min delayed) market price(s) via Polygon for one or more tickers — the Brain's "
       "real-time price read: mark held positions, sanity-check an entry level, or confirm a move "
@@ -234,7 +260,7 @@ async def recommend_action(args):
 
 
 _READ = [get_regime, get_themes, get_standouts, get_portfolio, get_decision_matrix, get_divergences,
-         get_altdata, get_news, get_quote, get_quiver_strategy, get_quiver_compare, read_signal]
+         get_altdata, get_news, get_intelligence, get_quote, get_quiver_strategy, get_quiver_compare, read_signal]
 _ACTION = [save_research_note, propose_thesis, flag_emerging_theme, recommend_action]
 _ALL = _READ + _ACTION
 SERVER_NAME = "bot"

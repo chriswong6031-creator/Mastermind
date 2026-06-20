@@ -40,27 +40,79 @@ def _row(lens, value, status, direction, note=""):
     return {"lens": lens, "value": value, "status": status, "direction": direction, "note": note}
 
 
-# ---------------- alt-data flow lens (Quiver / TrumpFlow) ----------------
+# ---------------- alt-data flow lens (Signal Intelligence Desk / Quiver / TrumpFlow) ----------------
+def _intelligence() -> dict:
+    """The unified per-ticker News+Intelligence bundle (macro engine.intelligence) — one
+    file, two facts per name ({news, alt}). Falls back to the standalone feeds when absent."""
+    return ((_load("site/intelligence/by_ticker.json") or {}).get("tickers")
+            or (_load("data/intelligence/by_ticker.json") or {}).get("tickers") or {})
+
+
 def _altdata_by_ticker() -> dict:
-    """Per-ticker alternative-data substrate published by the macro engine
-    (engine/altdata_signals). Tries the site contract, then the data store."""
+    """Per-ticker alt-data substrate (engine/altdata_signals, by_ticker.v2)."""
     return _load("site/altdata/by_ticker.json") or _load("data/altdata/by_ticker.json") or {}
 
 
+def _altdata_mastermind() -> list:
+    """The Signal Intelligence Desk's scored emit (engine/altdata_emit, mastermind.v1)."""
+    return (_load("site/altdata/mastermind.json") or _load("data/altdata/mastermind.json") or {}).get("signals") or []
+
+
+def _alt_record(t: str):
+    """Best alt-data read for a name: the unified bundle's alt sub-object → the scored
+    mastermind signal → the unscored by_ticker.v2 record (only if it has a real channel)."""
+    t = t.upper()
+    uni = _intelligence().get(t)
+    if uni and uni.get("alt"):
+        return uni["alt"]
+    for s in _altdata_mastermind():
+        if (s.get("ticker") or "").upper() == t:
+            return {**s, "scored": True}
+    rec = (_altdata_by_ticker().get("tickers") or {}).get(t)
+    if rec and (rec.get("channels") or rec.get("convergence_score")):
+        return {**rec, "scored": False}
+    return None
+
+
 def _altdata_row(t: str):
-    """Politician/insider/government-contract/Trump-trade convergence on a name.
-    CONTEXT-ONLY (unproven, display-only in the macro engine) — it informs conviction and
-    surfaces divergences, but never drives size alone. None when the name isn't flagged."""
-    rec = (_altdata_by_ticker().get("tickers") or {}).get(t.upper())
+    """Political/insider/government-contract/affiliation SIGNAL on a name — the supply-side
+    'what smart money is DOING' read (vs news_flow's demand-side 'what the tape is SAYING').
+    CONTEXT-ONLY — informs conviction + the early-edge/crowded-late divergence, never sizes
+    alone. Consumes the scored Signal Intelligence Desk emit when present; legacy convergence
+    counts otherwise. None when the name isn't flagged."""
+    rec = _alt_record(t)
     if not rec:
         return None
+    # ---- scored Signal Intelligence Desk read (signal_score 0-100 + action) ----
+    if rec.get("signal_score") is not None:
+        score = int(rec.get("signal_score") or 0)
+        action = (rec.get("action") or "WATCH").upper()
+        conviction = rec.get("conviction") or "low"
+        extended = bool(rec.get("extended"))
+        affs = rec.get("affiliations") or []
+        # bull on a strong buy-side signal; bear on an AVOID/weak read. Extension is NOT
+        # gated here — the matrix's extension lens + the political_crowd_trap divergence
+        # cross-check it, so a strong-flow-into-extended name stays 'bull' for the trap to catch.
+        direction = "bull" if (score >= 65 and action != "AVOID") else \
+                    "bear" if (action == "AVOID" or score < 35) else "neutral"
+        note = f"signal {score}/100 · {conviction} · {action}"
+        if affs:
+            note += f" · {len(affs)} affiliated"
+        if extended:
+            note += " · extended"
+        return _row("altdata_flow", {
+            "signal_score": score, "conviction": conviction, "action": action,
+            "scored_direction": rec.get("direction"), "channels": rec.get("channels") or [],
+            "weighted_score": rec.get("weighted_score"), "convergence_score": rec.get("convergence_score"),
+            "trump_linked": bool(rec.get("trump_linked")), "rs_vs_spy_60d": rec.get("rs_vs_spy_60d"),
+            "extended": extended, "affiliations": affs, "thesis": rec.get("thesis"),
+            "falsifier": rec.get("falsifier"), "scored": True}, "context", direction, note)
+    # ---- legacy unscored convergence-count read (by_ticker v1/v2) ----
     score = int(rec.get("convergence_score") or 0)
     chans = rec.get("channels") or []
     trump = bool(rec.get("trump_linked"))
     insider = rec.get("insider_net_usd") or 0
     congress = rec.get("congress_net") or 0
-    # buy-side political / smart-money flow: bull on multi-channel convergence or net buying;
-    # bear only when the dominant tell is selling.
     bull = score >= 2 or insider > 0 or congress >= 2 or (trump and rec.get("trump_side") == "buy")
     bear = score == 0 and (rec.get("trump_side") == "sell" or insider < 0)
     direction = "bull" if bull else "bear" if bear else "neutral"
@@ -69,9 +121,10 @@ def _altdata_row(t: str):
         note += " · Trump-linked"
     return _row("altdata_flow", {
         "convergence_score": score, "channels": chans, "trump_linked": trump,
+        "weighted_score": rec.get("weighted_score"),
         "congress_net": rec.get("congress_net"), "gov_contract_usd_30d": rec.get("gov_contract_usd_30d"),
         "insider_net_usd": rec.get("insider_net_usd"), "dpi_lean": rec.get("dpi_lean"),
-        "trump_side": rec.get("trump_side")}, "context", direction, note)
+        "trump_side": rec.get("trump_side"), "scored": False}, "context", direction, note)
 
 
 # ---------------- news-flow lens (public-record financial news) ----------------
@@ -88,7 +141,8 @@ def _news_row(t: str):
     sentiment lean, basket/sector membership from the news surface.
     CONTEXT-ONLY (display-only in the macro engine) — informs narrative/conviction,
     never drives size alone. None when the name has no news record."""
-    rec = _news_by_ticker().get(t.upper())
+    # unified bundle's news sub-object first, else the standalone news feed
+    rec = (_intelligence().get(t.upper(), {}) or {}).get("news") or _news_by_ticker().get(t.upper())
     if not rec:
         return None
     n_recent = rec.get("n_recent") or 0
