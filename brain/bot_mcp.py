@@ -147,6 +147,23 @@ async def get_altdata(args):
                   "note": "Public-record alt-data (Quiver + SEC EDGAR). Context-only — informs narrative, never sizes alone."})
 
 
+@tool("get_news",
+      "Recent financial-news flow for a NAME — count of recent reputable headlines, a context-only "
+      "sentiment lean aggregated from per-article tags, the baskets/sectors it touches, and the top "
+      "headlines (title/source/url/summary). A QUALITATIVE research signal: what the tape is SAYING "
+      "about this name. CONTEXT-ONLY (never a scored axis) — informs narrative/conviction, never sizes alone.",
+      {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]})
+async def get_news(args):
+    t = (args.get("ticker") or "").upper()
+    bt = (_read_json(_V / "site" / "news" / "by_ticker.json")
+          or _read_json(_V / "data" / "news" / "by_ticker.json") or {})
+    rec = (bt.get("tickers") or {}).get(t)
+    if rec is None:
+        return _ok(f"no news-flow signal for {t} — not covered by the macro news surface.")
+    return _json({"ticker": t, "news": rec,
+                  "note": "Public-record financial news flow. Context-only — informs narrative, never sizes alone."})
+
+
 @tool("read_signal", "Read a published signal/data JSON by path (allowlisted to the dashboard + bot data roots).",
       {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]})
 async def read_signal(args):
@@ -200,7 +217,7 @@ async def recommend_action(args):
 
 
 _READ = [get_regime, get_themes, get_standouts, get_portfolio, get_decision_matrix, get_divergences,
-         get_altdata, get_quiver_strategy, get_quiver_compare, read_signal]
+         get_altdata, get_news, get_quiver_strategy, get_quiver_compare, read_signal]
 _ACTION = [save_research_note, propose_thesis, flag_emerging_theme, recommend_action]
 _ALL = _READ + _ACTION
 SERVER_NAME = "bot"

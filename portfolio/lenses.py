@@ -74,16 +74,52 @@ def _altdata_row(t: str):
         "trump_side": rec.get("trump_side")}, "context", direction, note)
 
 
+# ---------------- news-flow lens (public-record financial news) ----------------
+def _news_by_ticker() -> dict:
+    """Per-ticker news-flow substrate published by the macro engine
+    (engine/news_signals). Tries the site contract, then the data store."""
+    return ((_load("site/news/by_ticker.json") or {}).get("tickers")
+            or (_load("data/news/by_ticker.json") or {}).get("tickers")
+            or {})
+
+
+def _news_row(t: str):
+    """Public-record financial-news flow for a name — recent headline count, aggregated
+    sentiment lean, basket/sector membership from the news surface.
+    CONTEXT-ONLY (display-only in the macro engine) — informs narrative/conviction,
+    never drives size alone. None when the name has no news record."""
+    rec = _news_by_ticker().get(t.upper())
+    if not rec:
+        return None
+    n_recent = rec.get("n_recent") or 0
+    lean = rec.get("sentiment_lean") or "neutral"
+    n_pos = rec.get("n_pos") or 0
+    n_neg = rec.get("n_neg") or 0
+    baskets = rec.get("baskets") or []
+    sectors = rec.get("sectors") or []
+    is_mag7 = bool(rec.get("is_mag7"))
+    direction = "bull" if lean == "pos" else "bear" if lean == "neg" else "neutral"
+    note = f"{n_recent} recent headlines · lean {lean}"
+    if baskets:
+        note += f" · {baskets[0]}"
+    return _row("news_flow", {
+        "n_recent": n_recent, "sentiment_lean": lean, "n_pos": n_pos, "n_neg": n_neg,
+        "baskets": baskets, "sectors": sectors, "is_mag7": is_mag7},
+        "context", direction, note)
+
+
 # ---------------- per-NAME lenses ----------------
 def _name_rows(t: str) -> list[dict]:
     d = _load(f"site/stockdata/{t}.json")
     flows = (_load("site/stockdata/fund_flows.json") or {}).get(t)
     gx = _load(f"site/gex/{t}.json")
     ad = _altdata_row(t)                 # political/insider/contract flow — independent of stockdata
+    nw = _news_row(t)                    # public-record financial news flow — context only
     rows = []
     if not d:
         # a Trump-linked entity (ABTC/DJT/...) may carry alt-data flow but no S&P stockdata
-        return ([ad] if ad else []) + [_row("conviction", None, "missing", None, "no stockdata")]
+        base = ([ad] if ad else []) + ([nw] if nw else [])
+        return base + [_row("conviction", None, "missing", None, "no stockdata")]
 
     # valuation
     vz = _g(d, "valuation.value_z")
@@ -175,6 +211,9 @@ def _name_rows(t: str) -> list[dict]:
     # alt-data political/insider/contract flow (context)
     if ad:
         rows.append(ad)
+    # news-flow: public-record financial news (context)
+    if nw:
+        rows.append(nw)
     # name -> theme via basket membership: narrative + policy
     rows += _theme_context_for_name(d)
     rows += _macro_rows()
