@@ -41,7 +41,11 @@ if FastAPI is not None:
         append_system: str | None = None
         max_turns: int | None = None
 
+    from app import web
+
     app = FastAPI(title="Mastermind", version="0.0.1")
+
+    app.include_router(web.router)
 
     @app.get("/health")
     def health() -> dict:

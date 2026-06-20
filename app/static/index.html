@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MASTERMIND — Dashboard</title>
+<style>
+:root{
+  --bg:#0b0e11;--panel:#121821;--panel2:#1a2230;--line:#222b37;--line2:#313c4b;
+  --text:#e6edf3;--muted:#8b97a6;--dim:#5b6675;
+  --up:#3fb950;--upbg:#11341d;--down:#c4322b;--downbg:#3a1715;
+  --warn:#d6a02a;--warnbg:#3a2c0c;--link:#58a6ff;--linkbg:#0d2340;
+  --gold:#d9a93f;--goldbg:#3a2e10;
+  --num:"SF Mono",ui-monospace,Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13.5px;line-height:1.5}
+.num{font-family:var(--num);font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
+
+/* layout */
+header{position:sticky;top:0;z-index:10;background:var(--bg);border-bottom:1px solid var(--line)}
+.topbar{max-width:1100px;margin:0 auto;padding:10px 18px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.wrap{max-width:1100px;margin:0 auto;padding:18px 18px 60px}
+.grid{display:grid;gap:14px}
+.cols2{grid-template-columns:1fr 1fr}
+.cols3{grid-template-columns:repeat(3,1fr)}
+
+/* panels */
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px}
+.panel-h{font-size:10.5px;letter-spacing:.06em;color:var(--dim);text-transform:uppercase;font-weight:500;margin-bottom:10px}
+.panel2{background:var(--panel2);border-radius:7px;padding:9px 12px}
+
+/* pills / chips */
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;padding:2px 8px;border-radius:6px;font-weight:500}
+.p-paper{background:var(--warnbg);color:var(--warn)}
+.p-up{background:var(--upbg);color:var(--up)}
+.p-down{background:var(--downbg);color:var(--down)}
+.p-link{background:var(--linkbg);color:var(--link)}
+.p-muted{border:1px solid var(--line);color:var(--muted)}
+.p-warn{background:var(--warnbg);color:var(--warn)}
+.ticker-chip{display:inline-block;font-family:var(--num);font-size:11px;padding:1px 6px;border-radius:4px;border:1px solid var(--line2);color:var(--link);margin:1px}
+
+/* brand */
+.brand{font-size:15px;font-weight:700;letter-spacing:.06em;font-family:var(--num)}
+.hb{width:8px;height:8px;border-radius:50%;background:var(--up);display:inline-block;animation:hb 2.4s ease-in-out infinite;flex-shrink:0}
+@keyframes hb{50%{opacity:.3}}
+
+/* regime bar */
+#regime{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-left:4px}
+.quad-badge{font-family:var(--num);font-size:12px;padding:2px 9px;border-radius:6px;background:var(--goldbg);color:var(--gold);font-weight:600}
+
+/* updated stamp */
+#updated{font-size:11px;color:var(--dim);margin-left:auto}
+
+/* sleeves bar */
+#sleeves{overflow:hidden}
+.sleeve-bar{display:flex;height:18px;border-radius:6px;overflow:hidden;margin:10px 0 6px}
+.sleeve-seg{display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;transition:width .4s ease;overflow:hidden;white-space:nowrap}
+.seg-lead{background:var(--link);color:#fff}
+.seg-conv{background:var(--up);color:#fff}
+.seg-cash{background:var(--dim);color:#fff}
+.sleeve-labels{display:flex;gap:14px;font-size:11.5px}
+.sleeve-lbl{display:flex;align-items:center;gap:5px}
+.dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.dot-lead{background:var(--link)}
+.dot-conv{background:var(--up)}
+.dot-cash{background:var(--dim)}
+
+/* positions table */
+#positions table{width:100%;border-collapse:collapse;font-size:12.5px}
+#positions th{font-size:10px;letter-spacing:.05em;color:var(--dim);font-weight:400;padding:7px 6px;border-bottom:1px solid var(--line2);text-align:left;white-space:nowrap}
+#positions td{padding:8px 6px;border-bottom:1px solid var(--line);vertical-align:top}
+.pos-row.conv td:first-child{border-left:3px solid var(--up)}
+.pos-row{cursor:pointer}
+.pos-row:hover{background:var(--panel2)}
+.expand-row td{padding:0}
+.expand-body{padding:12px 14px;background:var(--panel2);font-size:12px}
+.expand-body .label{color:var(--dim);font-size:10.5px;margin-bottom:2px}
+.fals-box{background:var(--downbg);border:1px solid var(--down);border-radius:6px;padding:8px 10px;margin:6px 0;font-family:var(--num);font-size:11.5px;color:var(--down)}
+.evid-chip{display:inline-block;font-size:11px;padding:2px 7px;border-radius:5px;background:var(--panel);border:1px solid var(--line);margin:2px;color:var(--muted)}
+.hidden{display:none}
+
+/* verdict colors */
+.v-add{color:var(--up);font-weight:600}
+.v-hold{color:var(--muted)}
+.v-reduce{color:var(--warn)}
+
+/* accountability */
+.decision-card{border:1px solid var(--line);border-left:3px solid var(--link);border-radius:8px;padding:13px 15px;margin-bottom:10px;background:var(--panel)}
+.decision-card .subject{font-family:var(--num);font-size:15px;font-weight:600;color:var(--link)}
+.decision-card .lean{font-size:12px;color:var(--muted);margin-left:8px}
+.decision-card .meta{display:flex;gap:10px;flex-wrap:wrap;margin:6px 0;font-size:11.5px}
+.prob-bar-wrap{height:4px;background:var(--line2);border-radius:2px;margin:4px 0 8px}
+.prob-bar{height:100%;border-radius:2px;background:var(--link);transition:width .4s}
+
+/* research feed */
+.research-card{border:1px solid var(--line);border-radius:8px;padding:13px 15px;margin-bottom:10px;background:var(--panel)}
+.research-card .r-title{font-size:14px;font-weight:600;margin-bottom:5px}
+.research-card .r-meta{font-size:11.5px;color:var(--dim);margin-bottom:7px}
+.research-card .r-body{font-size:12.5px;color:var(--muted);line-height:1.6}
+.research-card .r-body p{margin-bottom:5px}
+.research-card .r-body strong{color:var(--text)}
+.research-card .r-body ul{padding-left:16px}
+
+/* competitor cards */
+.comp-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;margin-top:10px}
+.comp-card{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:12px 14px}
+.comp-card .c-name{font-size:12px;font-weight:600;color:var(--text);margin-bottom:4px}
+.comp-card .c-model{font-size:10.5px;padding:1px 6px;border-radius:4px;display:inline-block;margin-bottom:8px}
+.m-haiku{background:var(--linkbg);color:var(--link)}
+.m-gpt{background:var(--warnbg);color:var(--warn)}
+.comp-metrics{display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:8px}
+.comp-metric{background:var(--panel);border-radius:5px;padding:4px 7px}
+.comp-metric .mk{font-size:9.5px;color:var(--dim)}
+.comp-metric .mv{font-family:var(--num);font-size:12px;color:var(--text)}
+.comp-note{font-size:11.5px;color:var(--muted);border:1px solid var(--line);border-radius:6px;padding:8px 10px;margin-bottom:10px}
+
+/* footer */
+footer{text-align:center;font-size:11px;color:var(--dim);padding:18px;border-top:1px solid var(--line);margin-top:30px}
+
+/* track record */
+.tr-chip{font-family:var(--num);font-size:11px;padding:2px 9px;border-radius:6px;border:1px solid var(--line);color:var(--dim)}
+
+/* empty states */
+.empty{font-size:12px;color:var(--dim);text-align:center;padding:24px 0}
+
+/* section divider */
+.section{margin-top:22px}
+.section-h{font-size:11px;letter-spacing:.07em;color:var(--dim);text-transform:uppercase;font-weight:500;margin-bottom:12px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+
+@media(max-width:760px){
+  .cols2,.cols3{grid-template-columns:1fr!important}
+  .comp-grid{grid-template-columns:1fr!important}
+  .topbar{gap:7px}
+  .brand{font-size:14px}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="topbar">
+    <span class="brand">MASTERMIND</span>
+    <span class="hb" aria-hidden="true"></span>
+    <span class="pill p-paper">PAPER</span>
+    <span id="as-of" style="font-size:11.5px;color:var(--muted)"></span>
+    <span id="regime" style="display:flex;align-items:center;gap:7px;flex-wrap:wrap"></span>
+    <span id="tr-chip" class="tr-chip" style="margin-left:4px"></span>
+    <span id="updated" class="num"></span>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- ── 1. SLEEVES ── -->
+  <div class="section">
+    <div class="section-h">Allocation</div>
+    <div id="sleeves" class="panel">
+      <div class="sleeve-bar" id="sleeve-bar"></div>
+      <div class="sleeve-labels" id="sleeve-labels"></div>
+    </div>
+  </div>
+
+  <!-- ── 2. POSITIONS ── -->
+  <div class="section">
+    <div class="section-h">Positions</div>
+    <div id="positions" class="panel">
+      <div class="empty">Loading…</div>
+    </div>
+  </div>
+
+  <!-- ── 3. ACCOUNTABILITY ── -->
+  <div class="section">
+    <div class="section-h">Accountability — Active Decisions</div>
+    <div id="accountability">
+      <div class="empty">Loading…</div>
+    </div>
+  </div>
+
+  <!-- ── 4. RESEARCH FEED ── -->
+  <div class="section">
+    <div class="section-h">Research Feed</div>
+    <div id="research">
+      <div class="empty">Loading…</div>
+    </div>
+  </div>
+
+  <!-- ── 5. COMPETITORS ── -->
+  <div class="section">
+    <div class="section-h">Competitor Compare — Quiver</div>
+    <div id="competitors">
+      <div class="empty">Loading…</div>
+    </div>
+  </div>
+
+</div>
+
+<footer id="footer">Paper-only / display-only. Accountability, not alpha. Not investment advice.</footer>
+
+<script>
+'use strict';
+
+// ── tiny markdown renderer ──────────────────────────────────────────────────
+function renderMd(src) {
+  if (!src) return '';
+  const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const lines = src.split('\n');
+  let out = '', inUl = false;
+  for (let raw of lines) {
+    const line = raw;
+    if (/^[-*]\s+/.test(line)) {
+      if (!inUl) { out += '<ul>'; inUl = true; }
+      out += '<li>' + inlineRender(esc(line.replace(/^[-*]\s+/,''))) + '</li>';
+    } else {
+      if (inUl) { out += '</ul>'; inUl = false; }
+      if (line.trim() === '') continue;
+      out += '<p>' + inlineRender(esc(line)) + '</p>';
+    }
+  }
+  if (inUl) out += '</ul>';
+  return out;
+}
+function inlineRender(s) {
+  return s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+          .replace(/`(.+?)`/g, '<code>$1</code>');
+}
+
+// ── fmt helpers ─────────────────────────────────────────────────────────────
+const pct  = v => v == null ? '—' : (v * 100).toFixed(1) + '%';
+const pct1 = v => v == null ? '—' : (+v).toFixed(1) + '%';
+const fmt  = v => v == null ? '—' : v;
+const fmtDate = s => s ? s.slice(0,10) : '—';
+
+function verdictClass(v) {
+  if (!v) return '';
+  if (v === 'add') return 'v-add';
+  if (v === 'hold') return 'v-hold';
+  return 'v-reduce';
+}
+
+// ── state ───────────────────────────────────────────────────────────────────
+let _book = null, _research = [], _competitors = null, _regime_data = null;
+
+// ── top bar ─────────────────────────────────────────────────────────────────
+function renderTopBar() {
+  const b = _book || {};
+  const r = b.regime || _regime_data || {};
+
+  document.getElementById('as-of').textContent = b.as_of ? 'as of ' + b.as_of : '';
+
+  const regEl = document.getElementById('regime');
+  if (r.quad) {
+    regEl.innerHTML = `<span class="quad-badge">${r.quad}</span>
+      <span style="font-size:12px;color:var(--muted)">${r.quad_name || ''}</span>
+      ${r.liquidity_overlay ? '<span class="pill p-muted" style="font-size:10.5px">liq: ' + r.liquidity_overlay + '</span>' : ''}`;
+  } else {
+    regEl.innerHTML = '<span style="color:var(--dim);font-size:11.5px">regime —</span>';
+  }
+
+  const tr = b.track_record || {};
+  const trEl = document.getElementById('tr-chip');
+  if (tr.status) {
+    const n = tr.n || 0;
+    const hr = tr.hit_rate != null ? pct(tr.hit_rate) : 'building';
+    trEl.textContent = 'track record: ' + (n > 0 ? hr + ' · n=' + n : 'building · n=' + n);
+  }
+}
+
+// ── sleeves ──────────────────────────────────────────────────────────────────
+function renderSleeves() {
+  const b = _book || {};
+  const sl = b.sleeves || {};
+  const lead = (sl.leadership || 0) * 100;
+  const conv = (sl.conviction || 0) * 100;
+  const cash = (sl.cash || 0) * 100;
+
+  const bar = document.getElementById('sleeve-bar');
+  bar.innerHTML = `
+    <div class="sleeve-seg seg-lead" style="width:${lead}%" title="Leadership ${lead.toFixed(0)}%">${lead.toFixed(0)}%</div>
+    <div class="sleeve-seg seg-conv" style="width:${conv}%" title="Conviction ${conv.toFixed(0)}%">${conv >= 4 ? conv.toFixed(0)+'%' : ''}</div>
+    <div class="sleeve-seg seg-cash" style="width:${cash}%" title="Cash ${cash.toFixed(0)}%">${cash.toFixed(0)}%</div>`;
+
+  const gross = b.gross != null ? (b.gross * 100).toFixed(0) + '% gross' : '';
+  const labels = document.getElementById('sleeve-labels');
+  labels.innerHTML = `
+    <span class="sleeve-lbl"><span class="dot dot-lead"></span>Leadership ${lead.toFixed(0)}%</span>
+    <span class="sleeve-lbl"><span class="dot dot-conv"></span>Conviction ${conv.toFixed(0)}%</span>
+    <span class="sleeve-lbl"><span class="dot dot-cash"></span>Cash ${cash.toFixed(0)}%</span>
+    ${gross ? '<span style="margin-left:auto;font-size:11.5px;color:var(--dim)">' + gross + '</span>' : ''}`;
+}
+
+// ── positions ────────────────────────────────────────────────────────────────
+function renderPositions() {
+  const b = _book || {};
+  const positions = b.positions || [];
+  const decisions = b.decisions || [];
+  const el = document.getElementById('positions');
+
+  if (!positions.length) {
+    el.innerHTML = '<div class="empty">No positions yet</div>';
+    return;
+  }
+
+  // map decisions by id
+  const decMap = {};
+  for (const d of decisions) decMap[d.id] = d;
+
+  let rows = '';
+  for (let i = 0; i < positions.length; i++) {
+    const p = positions[i];
+    const isConv = p.sleeve === 'conviction';
+    const dec = p.thesis_id ? decMap[p.thesis_id] : null;
+
+    rows += `<tr class="pos-row${isConv ? ' conv' : ''}" data-idx="${i}" onclick="toggleExpand(${i})">
+      <td class="num">${p.ticker}</td>
+      <td><span class="pill ${isConv ? 'p-up' : 'p-link'}" style="font-size:10.5px">${p.sleeve}</span></td>
+      <td class="num">${p.stage ?? '—'}</td>
+      <td class="num">${pct(p.weight)}</td>
+      <td class="${verdictClass(p.verdict)}">${p.verdict || '—'}</td>
+      <td class="num">${p.rs_pctile != null ? p.rs_pctile.toFixed(1) : '—'}</td>
+      <td style="color:var(--dim);font-size:11px">${p.confluence != null ? 'confluence ' + (p.confluence > 0 ? '+' : '') + p.confluence.toFixed(2) : ''}</td>
+    </tr>`;
+
+    // expandable detail
+    if (dec) {
+      const evid = (dec.evidence || []).map(e => `<span class="evid-chip">${e}</span>`).join(' ');
+      rows += `<tr class="expand-row hidden" id="expand-${i}">
+        <td colspan="7">
+          <div class="expand-body">
+            <div class="label">THESIS</div>
+            <div style="margin-bottom:8px;color:var(--text)">${dec.thesis || '—'}</div>
+            <div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:8px;font-size:11.5px">
+              <span><span style="color:var(--dim)">prob correct</span> <span class="num" style="color:var(--up)">${dec.prob_correct != null ? (dec.prob_correct*100).toFixed(0)+'%' : '—'}</span></span>
+              <span><span style="color:var(--dim)">check by</span> <span class="num">${dec.check_by || p.time_stop_by || '—'}</span></span>
+              <span><span style="color:var(--dim)">conviction</span> ${dec.conviction || '—'}</span>
+            </div>
+            ${dec.falsifier ? `<div class="fals-box">✗ FALSE if — ${dec.falsifier.text || ''}</div>` : ''}
+            ${evid ? `<div style="margin-top:8px"><span style="color:var(--dim);font-size:10.5px">EVIDENCE</span><br>${evid}</div>` : ''}
+            ${dec.dissent ? `<div style="margin-top:8px;font-size:11.5px;color:var(--warn)">⚠ dissent: ${dec.dissent}</div>` : ''}
+          </div>
+        </td>
+      </tr>`;
+    }
+  }
+
+  el.innerHTML = `<table>
+    <thead><tr>
+      <th>Ticker</th><th>Sleeve</th><th>Stage</th><th>Weight</th><th>Verdict</th><th>RS %ile</th><th>Signal</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+window.toggleExpand = function(idx) {
+  const row = document.getElementById('expand-' + idx);
+  if (!row) return;
+  row.classList.toggle('hidden');
+};
+
+// ── accountability ───────────────────────────────────────────────────────────
+function renderAccountability() {
+  const b = _book || {};
+  const decisions = b.decisions || [];
+  const el = document.getElementById('accountability');
+
+  if (!decisions.length) {
+    el.innerHTML = '<div class="empty">No active decisions yet — the ledger accrues on check-by dates.</div>';
+    return;
+  }
+
+  let cards = '';
+  for (const d of decisions) {
+    const prob = d.prob_correct != null ? (d.prob_correct * 100).toFixed(0) : null;
+    cards += `<div class="decision-card">
+      <div style="display:flex;align-items:baseline;gap:6px;margin-bottom:6px">
+        <span class="subject">${d.subject}</span>
+        <span class="lean">lean: ${d.lean || '—'}</span>
+        ${d.conviction ? `<span class="pill p-muted" style="font-size:10px">${d.conviction}</span>` : ''}
+      </div>
+      <div class="meta">
+        ${prob ? `<span><span style="color:var(--dim)">prob correct:</span> <span class="num" style="color:var(--up)">${prob}%</span></span>` : ''}
+        <span><span style="color:var(--dim)">check by:</span> <span class="num">${d.check_by || '—'}</span></span>
+        <span><span style="color:var(--dim)">horizon:</span> <span class="num">${d.horizon_d != null ? d.horizon_d + 'd' : '—'}</span></span>
+      </div>
+      ${prob ? `<div class="prob-bar-wrap"><div class="prob-bar" style="width:${prob}%"></div></div>` : ''}
+      <div style="margin-bottom:6px;font-size:12.5px;color:var(--muted)">${d.thesis || '—'}</div>
+      ${d.falsifier ? `<div class="fals-box">✗ FALSE if — ${d.falsifier.text || ''}</div>` : ''}
+      ${d.dissent ? `<div style="margin-top:7px;font-size:11.5px;color:var(--warn)">⚠ dissent: ${d.dissent}</div>` : ''}
+    </div>`;
+  }
+  el.innerHTML = cards;
+}
+
+// ── research feed ────────────────────────────────────────────────────────────
+function renderResearch() {
+  const el = document.getElementById('research');
+  if (!_research.length) {
+    el.innerHTML = '<div class="empty">No research notes yet</div>';
+    return;
+  }
+  let cards = '';
+  for (const n of _research) {
+    const chips = (n.tickers || []).map(t => `<span class="ticker-chip">${t}</span>`).join('');
+    cards += `<div class="research-card">
+      <div class="r-title">${esc(n.title || '—')}</div>
+      <div class="r-meta">${n.date ? n.date.slice(0,10) : '—'}${chips ? '&nbsp;&nbsp;' + chips : ''}</div>
+      <div class="r-body">${renderMd(n.body_md || '')}</div>
+    </div>`;
+  }
+  el.innerHTML = cards;
+}
+
+// ── competitors ──────────────────────────────────────────────────────────────
+function renderCompetitors() {
+  const el = document.getElementById('competitors');
+  if (!_competitors || !_competitors.strategies || !_competitors.strategies.length) {
+    el.innerHTML = '<div class="empty">No competitor data yet</div>';
+    return;
+  }
+  const note = _competitors.note || '';
+  const strats = _competitors.strategies;
+
+  const modelBadge = (model) => {
+    if (!model) return '';
+    const isHaiku = model.includes('haiku') || model.includes('claude');
+    return `<span class="c-model ${isHaiku ? 'm-haiku' : 'm-gpt'}">${model}</span>`;
+  };
+
+  let cards = '';
+  for (const s of strats) {
+    const metrics = s.metrics || {};
+    const metricRows = Object.entries(metrics).slice(0,6).map(([k,v]) =>
+      `<div class="comp-metric"><div class="mk">${k}</div><div class="mv num">${v}</div></div>`
+    ).join('');
+    const topH = (s.top_holdings || []).map(t => `<span class="ticker-chip">${t}</span>`).join('');
+
+    cards += `<div class="comp-card">
+      <div class="c-name">${s.slug || s.strategy}</div>
+      ${modelBadge(s.model)}
+      <div style="font-size:10.5px;color:var(--dim);margin-bottom:7px">scraped ${s.scraped || '—'} · ${s.n_holdings} positions · ${s.n_top_picks} picks</div>
+      <div class="comp-metrics">${metricRows}</div>
+      <div style="font-size:10.5px;color:var(--dim);margin-bottom:4px">TOP HOLDINGS</div>
+      <div style="line-height:2">${topH || '—'}</div>
+    </div>`;
+  }
+
+  el.innerHTML = `<div class="comp-note">${esc(note)}</div><div class="comp-grid">${cards}</div>`;
+}
+
+// ── footer ───────────────────────────────────────────────────────────────────
+function renderFooter() {
+  const b = _book || {};
+  const disc = b.disclaimer || 'Paper-only / display-only. Accountability, not alpha. Not investment advice.';
+  document.getElementById('footer').textContent = disc;
+}
+
+// ── esc helper ───────────────────────────────────────────────────────────────
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── fetch + render ───────────────────────────────────────────────────────────
+async function fetchAll() {
+  const [bookRes, researchRes, compRes, regimeRes] = await Promise.allSettled([
+    fetch('/api/portfolio').then(r => r.ok ? r.json() : null).catch(() => null),
+    fetch('/api/research').then(r => r.ok ? r.json() : []).catch(() => []),
+    fetch('/api/competitors').then(r => r.ok ? r.json() : null).catch(() => null),
+    fetch('/regime').then(r => r.ok ? r.json() : null).catch(() => null),
+  ]);
+
+  _book = bookRes.status === 'fulfilled' ? bookRes.value : null;
+  _research = (researchRes.status === 'fulfilled' ? researchRes.value : null) || [];
+  _competitors = compRes.status === 'fulfilled' ? compRes.value : null;
+  _regime_data = regimeRes.status === 'fulfilled' ? regimeRes.value : null;
+
+  // merge regime into book if book has no quad but /regime does
+  if (_book && !(_book.regime || {}).quad && _regime_data) {
+    _book.regime = { quad: _regime_data.quad, quad_name: _regime_data.quad_name, liquidity_overlay: _regime_data.liquidity_overlay };
+  }
+
+  renderTopBar();
+  renderSleeves();
+  renderPositions();
+  renderAccountability();
+  renderResearch();
+  renderCompetitors();
+  renderFooter();
+
+  const now = new Date();
+  document.getElementById('updated').textContent = 'updated ' + now.toLocaleTimeString();
+}
+
+fetchAll();
+setInterval(fetchAll, 60000);
+</script>
+</body>
+</html>
