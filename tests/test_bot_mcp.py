@@ -62,3 +62,29 @@ def test_subscription_env_strips_api_key(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     env = cli_bridge._subscription_env()
     assert "ANTHROPIC_API_KEY" not in env                   # subscription, not metered API
+
+
+def test_intake_tools_registered_and_callable():
+    # the Phase-6 intake / transmission tools must be armed
+    allowed = bot_mcp.armed_allowed_tools()
+    for name in ("get_daily_briefing", "get_intake_candidates", "get_ticker_package"):
+        assert f"mcp__bot__{name}" in allowed
+
+    # get_daily_briefing — macro frame + ranked queue (composes live from the intake funnel
+    # when briefing.json isn't vendored yet; must never error)
+    brief = json.loads(_text(asyncio.run(bot_mcp.get_daily_briefing.handler({"top": 5}))))
+    assert "macro_context" in brief
+    assert "priority_queue" in brief and isinstance(brief["priority_queue"], list)
+
+    # get_intake_candidates — unified queue with provenance; tiers split on request
+    cand = json.loads(_text(asyncio.run(bot_mcp.get_intake_candidates.handler({"limit": 8, "tiers": True}))))
+    assert "candidates" in cand and isinstance(cand["candidates"], list)
+    assert "salience" in cand and {"act", "watch", "divergent"} <= set(cand["salience"])
+    for c in cand["candidates"]:
+        assert "ticker" in c and "score" in c and "sources" in c    # provenance present
+
+
+def test_ticker_package_degrades_cleanly():
+    # a name with no dashboard coverage degrades to a plain message, never raises
+    out = _text(asyncio.run(bot_mcp.get_ticker_package.handler({"ticker": "ZZZZ"})))
+    assert "ZZZZ" in out

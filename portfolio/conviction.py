@@ -8,6 +8,9 @@ else is shown but held at 0 — discipline over enthusiasm.
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import bot  # noqa: F401
 
 from portfolio import lenses
@@ -16,15 +19,74 @@ from portfolio import lenses
 _SHORTLIST = ["AVGO", "NVDA", "AMD", "MU", "GEV", "PLTR", "DELL", "TSM", "AMAT", "MRVL",
               "ORCL", "VST", "BWXT", "ANET", "LRCX", "KLAC", "MSFT", "GOOGL", "META", "AAPL"]
 
+# the fed-in candidate universe: top names from the us_stocks standout board + the top
+# stock picks across the thematic baskets. The engine gate (build) filters this down — a
+# broad feed in, discipline at the gate.
+TOP_US = 100        # top-N from us_stocks.html's standout BUY board (ranked by alpha)
+TOP_BASKET = 100    # top-N single-name picks across all thematic baskets (by 20d return)
+
+_V = Path(__file__).resolve().parent.parent / "vendor" / "macro"
+
+
+def _load(rel: str):
+    p = _V / rel
+    try:
+        return json.loads(p.read_text()) if p.exists() else None
+    except Exception:
+        return None
+
+
+def _us_standouts(n: int = TOP_US) -> list[str]:
+    """Top-N tickers from the us_stocks standout BUY board (already rank-ordered by alpha)."""
+    d = _load("site/factordata/us_standouts.json") or {}
+    buy = d.get("buy") or d.get("standouts") or []
+    return [r.get("ticker") for r in buy[:n] if isinstance(r, dict) and r.get("ticker")]
+
+
+def _basket_top_picks(n: int = TOP_BASKET) -> list[str]:
+    """Top-N single-name picks across all thematic baskets, ranked by 20-day return.
+
+    Union every basket's members, keep each name's best 20d return, take the top N. The
+    extension veto at the gate handles parabolic momentum names, so a momentum-ranked feed
+    is safe here."""
+    d = _load("site/basketdata/baskets.json") or {}
+    best: dict[str, float] = {}
+    for b in (d.get("baskets") or []):
+        for m in (b.get("members") or []):
+            sym = (m.get("symbol") or m.get("ticker") or "").upper()
+            if not sym:
+                continue
+            r = m.get("ret_20d")
+            rr = float(r) if isinstance(r, (int, float)) else -1e9
+            if sym not in best or rr > best[sym]:
+                best[sym] = rr
+    ranked = sorted(best.items(), key=lambda kv: kv[1], reverse=True)
+    return [sym for sym, _ in ranked[:n]]
+
+
+def universe() -> list[str]:
+    """The fed-in candidate universe: top us_stocks standouts ∪ top thematic-basket picks."""
+    return sorted(set(_us_standouts()) | set(_basket_top_picks()))
+
 
 def candidates() -> list[str]:
-    """Conviction candidate pool: open ledger theses (Claude's proposals) + the leadership shortlist."""
+    """Conviction candidate pool: the fed-in universe (top us_stocks + top basket picks)
+    ∪ open ledger theses (Claude's proposals) ∪ the liquid leadership shortlist ∪ the unified
+    intake queue (radar / alt-data / briefing-corroborated + divergent names the buy board
+    alone misses). The engine gate (build) filters this down — broad feed in, discipline at
+    the gate."""
     try:
         from brain import ledger
         proposed = {t["subject"].upper() for t in ledger.all_theses() if t.get("status") == "open"}
     except Exception:
         proposed = set()
-    return sorted(set(_SHORTLIST) | proposed)
+    try:
+        from brain import intake
+        # only reasonably-corroborated names (score floor) so the gate isn't drowned in noise
+        fed_in = set(intake.tickers(limit=60, min_score=0.4))
+    except Exception:
+        fed_in = set()
+    return sorted(set(_SHORTLIST) | set(universe()) | proposed | fed_in)
 
 
 def build(budget: float, name_cap: float = 0.08) -> tuple[list[dict], list[dict]]:

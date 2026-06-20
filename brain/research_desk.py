@@ -27,9 +27,20 @@ _BULLISH = {"add", "overweight", "accumulate", "constructive", "buy"}
 RESEARCH_PROMPT = """You are the Brain — the decision-making reasoning layer for the Mastermind, an
 autonomous, paper-only narrative-investing bot. Today is {asof}; the macro regime is {quad} ({quad_name}).
 
-Use your tools: get_regime / get_themes / get_standouts / get_portfolio / read_signal to read the
-LIVE dashboard, get_quote for live (delayed) Polygon prices (mark positions / sanity-check entries),
-and WebSearch / WebFetch to scan recent news, events, filings, and narratives.
+WORK IN TWO STAGES.
+
+STAGE 1 — SALIENCE (triage, don't research yet). Call get_daily_briefing FIRST: it gives you the macro
+frame (regime, cycle, liquidity, Fed stance, posture, catalysts) AND a ranked priority_queue plus the
+divergences list (names where the tape and smart-money DISAGREE). Then call get_intake_candidates to see
+the full deduped candidate queue with provenance — which independent engines flagged each name (briefing /
+radar / alt-data / buy-board / news-surge / open-thesis) and why. Corroboration across independent engines
+is the strongest signal. Pick a SHORT list (≈3-6) to research in depth: prioritise the DIVERGENCES and the
+high-confidence, multi-engine names. Skip names where everything already agrees and the move is spent.
+
+STAGE 2 — DEPTH (research the shortlist). For each chosen name call get_ticker_package (one call: the
+intelligence facets + lens divergences + intake provenance), plus get_quote for a live price check and
+WebSearch / WebFetch for recent news, events, filings, and narratives. The remaining tools — get_themes /
+get_standouts / get_portfolio / get_altdata / get_news / read_signal — are there when you need to go deeper.
 
 Reason through SECOND and THIRD-order effects — supply-chain flow, shortages/overages, earnings and
 guidance, accounting events, institutional news and flow. Hunt for: emerging themes, themes rolling
@@ -88,6 +99,34 @@ A compact table of the key lenses you checked (at minimum the validated + contex
 Nothing you do executes a trade — the engine gates sizing and the falsifier. Propose, don't size."""
 
 
+def _intake_brief(limit: int = 12) -> str:
+    """Pre-context: the ranked intake worklist injected into the prompt so the brain starts
+    FROM the dashboard's salience ranking instead of a cold hunt. Degrade-safe (returns '')."""
+    try:
+        from brain import intake
+        q = intake.build(limit=limit)
+    except Exception:  # noqa: BLE001
+        return ""
+    cands = q.get("candidates") or []
+    if not cands:
+        return ""
+    lines = []
+    for c in cands:
+        lean = {1: "↑", -1: "↓", 0: "·"}.get(c.get("lean"), "?")
+        flag = " ⚡DIVERGENT" if c.get("divergent") else ""
+        why = c["reasons"][0] if c.get("reasons") else ""
+        lines.append(f"  {c['ticker']:6} score={c['score']:.2f} {lean} "
+                     f"[{','.join(c.get('sources') or [])}]{flag} — {why}")
+    mc = q.get("macro_context") or {}
+    frame = ", ".join(f"{k}={mc[k]}" for k in ("regime", "cycle", "liquidity", "fed_stance")
+                      if mc.get(k))
+    return ("\n\n--- TODAY'S INTAKE WORKLIST (pre-loaded from the dashboard signal engines; "
+            "verify with get_daily_briefing / get_intake_candidates) ---\n"
+            + (f"Macro frame: {frame}\n" if frame else "")
+            + "\n".join(lines)
+            + "\n(⚡DIVERGENT = tape vs smart-money disagree — highest-information; research these first.)")
+
+
 def run_daily_research(asof: str | None = None, *, max_turns: int | None = None) -> dict:
     """Run the armed research session. Needs a subscription credential to reach Claude;
     degrades gracefully (ok=False) when unauthenticated."""
@@ -99,6 +138,7 @@ def run_daily_research(asof: str | None = None, *, max_turns: int | None = None)
               .replace("{asof}", asof)
               .replace("{quad}", regime["quad"])
               .replace("{quad_name}", regime.get("quad_name", "")))
+    prompt += _intake_brief()             # stage-1 salience pre-context (degrade-safe)
     if not cli_bridge.available():
         return {"ok": False, "error": "claude CLI/SDK not available", "asof": asof}
     return cli_bridge.research_sync(prompt, role="deep", max_turns=max_turns)

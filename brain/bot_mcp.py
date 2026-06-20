@@ -207,6 +207,83 @@ async def get_quote(args):
                   "note": "Live 15-min delayed prices (Polygon). For marks/entry checks — not a signal."})
 
 
+@tool("get_daily_briefing",
+      "START HERE each session. The dashboard's RANKED daily briefing for the brain — the triaged "
+      "worklist so you don't scan every name cold. Returns: macro_context (regime/quad, cycle, "
+      "liquidity, Fed stance, plain-English posture, next catalysts) to frame the day; priority_queue "
+      "(top names by transmission priority = facet-agreement × signal-strength, each with the "
+      "FACTS-derived situation, lean, evidence, source mix, and falsifier); and divergences (the subset "
+      "where the tape and smart-money DISAGREE — spend your depth budget here). Context-only — a triage, "
+      "never a position size.",
+      {"type": "object", "properties": {"top": {"type": "integer"}}})
+async def get_daily_briefing(args):
+    top = int(args.get("top") or 20)
+    b = (_read_json(_V / "site" / "intelligence" / "briefing.json")
+         or _read_json(_V / "data" / "intelligence" / "briefing.json"))
+    if b:
+        return _json({"as_of": b.get("as_of"), "macro_context": b.get("macro_context"),
+                      "n_actionable": b.get("n_actionable"), "n_divergences": b.get("n_divergences"),
+                      "priority_queue": (b.get("priority_queue") or [])[:top],
+                      "divergences": b.get("divergences"), "how_to_use": b.get("how_to_use")})
+    # not published yet — compose a live briefing from the per-engine intake funnel
+    from brain import intake
+    q = intake.build(limit=top)
+    return _json({"as_of": q.get("as_of"), "macro_context": q.get("macro_context"),
+                  "priority_queue": q.get("candidates"),
+                  "note": "Composed live from the dashboard signal engines (briefing.json not built yet)."})
+
+
+@tool("get_intake_candidates",
+      "The unified CANDIDATE QUEUE — every name the dashboard's signal engines flagged today, deduped "
+      "and ranked with full PROVENANCE: for each ticker, which engines fired (briefing / divergence / "
+      "buy-board / radar / alt-data / news-surge / open-thesis), why, the net lean, confidence, and "
+      "falsifier. Corroboration across INDEPENDENT engines lifts a name. This is the intake funnel that "
+      "replaces the old static shortlist — use it to choose what to research. Optional salience tiers "
+      "split it into ACT (high-score, corroborated) / WATCH / DIVERGENT. Context-only — never sizes.",
+      {"type": "object", "properties": {"limit": {"type": "integer"}, "tiers": {"type": "boolean"}}})
+async def get_intake_candidates(args):
+    from brain import intake
+    limit = int(args.get("limit") or 30)
+    out = intake.build(limit=limit)
+    if args.get("tiers"):
+        out["salience"] = intake.salience_tiers(limit)
+    return _json(out)
+
+
+@tool("get_ticker_package",
+      "ONE-CALL DEEP DIVE for a name — bundles every per-ticker read so you don't chain five tools: the "
+      "unified intelligence (news flow + alt-data signal + radar divergence + factor buy-board, side by "
+      "side, with the brain summary), the decision-matrix divergences/confluence/vetoes (where the lenses "
+      "agree or disagree), and the intake provenance (which engines flagged it). Call this once you've "
+      "picked a name off the briefing/intake queue and want the full picture before a verdict. "
+      "Context-only — informs conviction, never sizes alone.",
+      {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]})
+async def get_ticker_package(args):
+    t = (args.get("ticker") or "").upper()
+    uni = (_read_json(_V / "site" / "intelligence" / "by_ticker.json")
+           or _read_json(_V / "data" / "intelligence" / "by_ticker.json") or {})
+    intel = (uni.get("tickers") or {}).get(t)
+    pkg = {"ticker": t, "intelligence": intel}
+    try:
+        from portfolio import lenses
+        s = lenses.synthesize(lenses.decision_matrix(t, "name"))
+        pkg["lenses"] = {"divergences": s.get("divergences"), "confluence": s.get("confluence"),
+                         "vetoes": s.get("vetoes")}
+    except Exception as e:  # noqa: BLE001
+        pkg["lenses"] = {"error": f"decision matrix unavailable ({e})"}
+    try:
+        from brain import intake
+        prov = next((c for c in intake.queue(60) if c["ticker"] == t), None)
+        pkg["intake"] = prov
+    except Exception:  # noqa: BLE001
+        pkg["intake"] = None
+    if intel is None and pkg.get("intake") is None:
+        return _ok(f"no per-ticker intelligence for {t} — not flagged by any dashboard engine.")
+    pkg["note"] = ("Full per-name picture: intelligence facets + lens divergences + intake provenance. "
+                   "The divergence between demand-tape and supply-smart-money is the read; never sizes alone.")
+    return _json(pkg)
+
+
 @tool("read_signal", "Read a published signal/data JSON by path (allowlisted to the dashboard + bot data roots).",
       {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]})
 async def read_signal(args):
@@ -260,7 +337,8 @@ async def recommend_action(args):
 
 
 _READ = [get_regime, get_themes, get_standouts, get_portfolio, get_decision_matrix, get_divergences,
-         get_altdata, get_news, get_intelligence, get_quote, get_quiver_strategy, get_quiver_compare, read_signal]
+         get_altdata, get_news, get_intelligence, get_daily_briefing, get_intake_candidates,
+         get_ticker_package, get_quote, get_quiver_strategy, get_quiver_compare, read_signal]
 _ACTION = [save_research_note, propose_thesis, flag_emerging_theme, recommend_action]
 _ALL = _READ + _ACTION
 SERVER_NAME = "bot"
