@@ -123,6 +123,12 @@ def dashboard() -> FileResponse:
     return FileResponse(_STATIC / "index.html", media_type="text/html")
 
 
+@router.get("/research", include_in_schema=False)
+def research_page() -> FileResponse:
+    """The Research page — same SPA; the client opens the Research view from this path."""
+    return FileResponse(_STATIC / "index.html", media_type="text/html")
+
+
 @router.get("/theme.css", include_in_schema=False)
 def theme_css() -> FileResponse:
     """Serve the macro design-system stylesheet the dashboard links."""
@@ -199,6 +205,14 @@ def api_portfolio() -> JSONResponse:
             if zh_d:
                 payload["disclaimer_zh"] = zh_d
 
+        # positions[].research.summary_zh (the Research Desk gate block)
+        for pos in payload.get("positions", []):
+            rb = pos.get("research")
+            if rb and rb.get("summary"):
+                zh_s = _cached_zh(rb["summary"])
+                if zh_s:
+                    rb["summary_zh"] = zh_s
+
         # positions[].thesis_full._zh
         for pos in payload.get("positions", []):
             tf = pos.get("thesis_full")
@@ -273,6 +287,72 @@ def api_research() -> JSONResponse:
         return JSONResponse(out)
     except Exception:
         return JSONResponse([])
+
+
+@router.get("/api/research_papers")
+def api_research_papers() -> JSONResponse:
+    """The Research page contract — one row per gated buy decision, newest first.
+
+    Each row is a holistic research paper joined with the live book's gate result: the
+    engine buy-score, the research score, the combined Conviction Index, the viability, the
+    action (buy_confirmed / research_held / evaluated), the decision time, and the full
+    report (markdown + sections) for the 'view thesis' panel.
+    """
+    try:
+        from brain import research_paper
+        papers = research_paper.load_papers()
+    except Exception as exc:
+        return JSONResponse({"papers": [], "error": str(exc)})
+
+    # join with the latest book: ticker -> (research_block, action, trade_time, weight)
+    gate: dict[str, dict] = {}
+    try:
+        book = json.loads((_data() / "portfolio" / "latest.json").read_text())
+        for pos in book.get("positions", []):
+            rb = pos.get("research")
+            if rb and pos.get("sleeve") == "conviction":
+                gate[(pos.get("ticker") or "").upper()] = {
+                    "block": rb, "action": "buy_confirmed",
+                    "trade_time": pos.get("opened_at"), "weight": pos.get("weight"),
+                }
+        for held in book.get("research_held", []):
+            t = (held.get("ticker") or "").upper()
+            gate.setdefault(t, {"block": held, "action": "research_held",
+                                "trade_time": None, "weight": 0.0})
+    except Exception:
+        pass
+
+    out: list[dict[str, Any]] = []
+    for p in papers:
+        t = (p.get("ticker") or "").upper()
+        g = gate.get(t, {})
+        rb = g.get("block") or {}
+        summary = p.get("summary") or ""
+        out.append({
+            "id": p.get("id"),
+            "ticker": t,
+            "asof": p.get("asof"),
+            "reviewed_at": p.get("generated_at"),
+            "trade_time": g.get("trade_time"),
+            "action": g.get("action", "evaluated"),
+            "mode": p.get("mode"),
+            "engine_score": rb.get("engine_score"),
+            "research_score": p.get("research_score"),
+            "combined": rb.get("combined"),
+            "confirmed": rb.get("confirmed"),
+            "viability": p.get("viability"),
+            "recommend": p.get("recommend"),
+            "confidence": p.get("confidence"),
+            "fair_value": p.get("fair_value"),
+            "price_at_review": p.get("price_at_review"),
+            "price_assessment": p.get("price_assessment"),
+            "weight": g.get("weight"),
+            "summary": summary,
+            "summary_zh": _cached_zh(summary) if summary else None,
+            "report_md": p.get("report_md"),
+            "key_risks": p.get("key_risks") or [],
+        })
+    return JSONResponse({"papers": out})
 
 
 @router.get("/api/trades")

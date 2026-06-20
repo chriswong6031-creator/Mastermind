@@ -1253,9 +1253,113 @@ body.page-mm .mm-macro-tag.warn { background: color-mix(in srgb, var(--warn) 16%
 body.page-mm .mm-macro-tag.calm { background: color-mix(in srgb, var(--up) 16%, var(--panel2)); color: var(--up); }
 body.page-mm .mm-macro-tag.hot  { background: color-mix(in srgb, var(--down) 16%, var(--panel2)); color: var(--down); }
 body.page-mm .mm-macro-tag.neu  { background: color-mix(in srgb, var(--muted) 16%, var(--panel2)); color: var(--muted); }
+
+/* ── top nav (Dashboard / Research view switch) ──────────────────────────── */
+body.page-mm #mm-nav { position: sticky; top: 0; z-index: 60; display: flex; align-items: center; gap: 14px;
+  flex-wrap: wrap; padding: 9px 4px; margin-bottom: 4px; background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+body.page-mm .mm-nav-brand { font-size: 12px; font-weight: 800; letter-spacing: .08em; color: var(--text); display: flex; align-items: center; gap: 7px; }
+body.page-mm .mm-nav-brand .mm-hb { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--up); box-shadow: 0 0 0 3px color-mix(in srgb, var(--up) 25%, transparent); }
+body.page-mm .mm-nav-tabs { display: flex; gap: 6px; }
+body.page-mm .mm-nav-tab { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 5px 14px;
+  font-size: 12px; font-weight: 700; cursor: pointer; color: var(--muted); letter-spacing: .02em; transition: all .12s ease; }
+body.page-mm .mm-nav-tab:hover { color: var(--text); border-color: var(--muted); }
+body.page-mm .mm-nav-tab.active { color: var(--bg); background: var(--text); border-color: var(--text); }
+body.page-mm .mm-nav-spacer { margin-left: auto; }
+body.page-mm .mm-nav-ctrls { display: flex; gap: 8px; align-items: center; }
+body.page-mm .mm-nav-ctrls button { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 4px 11px; font-size: 11px; cursor: pointer; color: var(--text); font-weight: 600; }
+
+/* view switching: in research view, hide the dashboard sections; show the research page */
+body.page-mm #view-research { display: none; }
+body.page-mm.view-research .mm-section,
+body.page-mm.view-research #footer { display: none !important; }
+body.page-mm.view-research #view-research { display: block; }
+/* …but the research page's OWN section must stay visible (it lives inside #view-research) */
+body.page-mm.view-research #view-research .mm-section { display: block !important; }
+
+/* ── Research page ───────────────────────────────────────────────────────── */
+body.page-mm .mm-rp-intro { font-size: 12.5px; color: var(--muted); line-height: 1.55; margin: 2px 0 14px; }
+body.page-mm .mm-rp-wrap { overflow-x: auto; }
+body.page-mm table.mm-rp-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+body.page-mm .mm-rp-table thead th { text-align: right; font-size: 10px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--muted); font-weight: 700; padding: 0 12px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+body.page-mm .mm-rp-table thead th.l, body.page-mm .mm-rp-table td.l { text-align: left; }
+body.page-mm .mm-rp-table tbody td { padding: 11px 12px; border-bottom: 1px solid var(--line); text-align: right;
+  font-variant-numeric: tabular-nums; vertical-align: middle; }
+body.page-mm .mm-rp-table tbody tr:hover { background: color-mix(in srgb, var(--panel2) 55%, transparent); }
+body.page-mm .mm-rp-ticker { font-weight: 800; font-size: 14px; letter-spacing: .02em; }
+body.page-mm .mm-rp-time { font-size: 11px; color: var(--muted); }
+body.page-mm .mm-rp-score { font-weight: 700; font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; }
+body.page-mm .mm-rp-ci { font-weight: 800; font-size: 15px; font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; }
+body.page-mm .mm-rp-ci.hi { color: var(--up); } body.page-mm .mm-rp-ci.mid { color: var(--warn); } body.page-mm .mm-rp-ci.lo { color: var(--down); }
+body.page-mm .mm-chip { display: inline-block; padding: 2px 9px; border-radius: 6px; font-size: 10.5px; font-weight: 700; letter-spacing: .02em; white-space: nowrap; }
+body.page-mm .mm-chip.confirmed { background: color-mix(in srgb, var(--up) 16%, var(--panel2)); color: var(--up); }
+body.page-mm .mm-chip.held { background: color-mix(in srgb, var(--warn) 16%, var(--panel2)); color: var(--warn); }
+body.page-mm .mm-chip.evaluated { background: color-mix(in srgb, var(--muted) 16%, var(--panel2)); color: var(--muted); }
+body.page-mm .mm-viab { display: inline-block; padding: 2px 9px; border-radius: 6px; font-size: 10.5px; font-weight: 700; }
+body.page-mm .mm-viab.compelling { background: color-mix(in srgb, var(--up) 18%, var(--panel2)); color: var(--up); }
+body.page-mm .mm-viab.fair { background: color-mix(in srgb, var(--info) 16%, var(--panel2)); color: var(--info); }
+body.page-mm .mm-viab.rich { background: color-mix(in srgb, var(--warn) 18%, var(--panel2)); color: var(--warn); }
+body.page-mm .mm-viab.avoid { background: color-mix(in srgb, var(--down) 18%, var(--panel2)); color: var(--down); }
+body.page-mm .mm-rp-view { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 5px 12px;
+  font-size: 11.5px; font-weight: 700; color: var(--text); cursor: pointer; white-space: nowrap; }
+body.page-mm .mm-rp-view:hover { border-color: var(--info); color: var(--info); }
+body.page-mm .mm-mode-tag { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted);
+  border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; margin-left: 6px; vertical-align: middle; }
+
+/* ── Research thesis modal ───────────────────────────────────────────────── */
+body.page-mm #mm-thesis-modal { position: fixed; inset: 0; z-index: 200; display: none; align-items: flex-start; justify-content: center;
+  background: rgba(0,0,0,.55); padding: 40px 16px; overflow-y: auto; }
+body.page-mm #mm-thesis-modal.open { display: flex; }
+body.page-mm .mm-modal-card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; max-width: 860px; width: 100%;
+  box-shadow: 0 24px 70px rgba(0,0,0,.45); }
+body.page-mm .mm-modal-head { position: sticky; top: 0; background: var(--panel); border-bottom: 1px solid var(--line); border-radius: 14px 14px 0 0;
+  padding: 16px 22px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+body.page-mm .mm-modal-head .t { font-size: 18px; font-weight: 800; letter-spacing: .02em; }
+body.page-mm .mm-modal-close { margin-left: auto; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;
+  width: 30px; height: 30px; font-size: 16px; cursor: pointer; color: var(--muted); line-height: 1; }
+body.page-mm .mm-modal-close:hover { color: var(--text); border-color: var(--muted); }
+body.page-mm .mm-modal-scores { display: flex; gap: 18px; flex-wrap: wrap; padding: 14px 22px; border-bottom: 1px solid var(--line); background: var(--panel2); }
+body.page-mm .mm-modal-score { text-align: center; }
+body.page-mm .mm-modal-score .lbl { font-size: 9.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 3px; }
+body.page-mm .mm-modal-score .val { font-size: 22px; font-weight: 800; font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; }
+body.page-mm .mm-modal-body { padding: 12px 24px 28px; font-size: 13.5px; line-height: 1.6; }
+body.page-mm .mm-modal-body h1 { font-size: 18px; margin: 18px 0 8px; }
+body.page-mm .mm-modal-body h2 { font-size: 14px; margin: 20px 0 7px; color: var(--info); letter-spacing: .02em; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+body.page-mm .mm-modal-body ul { margin: 6px 0 6px 2px; padding-left: 18px; }
+body.page-mm .mm-modal-body li { margin: 3px 0; }
+body.page-mm .mm-modal-body p { margin: 7px 0; }
+
+/* ── Positions — Research Desk block in the expand panel ─────────────────── */
+body.page-mm .mm-rd-block { margin: 12px 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel2); }
+body.page-mm .mm-rd-head { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .07em; color: var(--info); margin-bottom: 9px; }
+body.page-mm .mm-rd-scores { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
+body.page-mm .mm-rd-s { text-align: center; }
+body.page-mm .mm-rd-s .lbl { font-size: 9px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+body.page-mm .mm-rd-s .val { font-size: 17px; font-weight: 800; font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; }
+body.page-mm .mm-rd-summary { font-size: 12.5px; color: var(--text); line-height: 1.5; margin: 9px 0 0; }
+body.page-mm .mm-rd-link { display: inline-block; margin-top: 9px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  padding: 5px 12px; font-size: 11.5px; font-weight: 700; color: var(--text); cursor: pointer; }
+body.page-mm .mm-rd-link:hover { border-color: var(--info); color: var(--info); }
 </style>
 </head>
 <body class="page-mm">
+
+<!-- ── TOP NAV (Dashboard / Research view switch) ────────────────────────────── -->
+<div id="mm-nav">
+  <span class="mm-nav-brand"><span class="mm-hb"></span> MASTERMIND</span>
+  <span class="mm-nav-tabs">
+    <button class="mm-nav-tab active" id="nav-dashboard" type="button" onclick="showView('dashboard')"><span class="l-en">Dashboard</span><span class="l-zh">仪表盘</span></button>
+    <button class="mm-nav-tab" id="nav-research" type="button" onclick="showView('research')"><span class="l-en">Research</span><span class="l-zh">研究</span></button>
+  </span>
+  <span class="mm-nav-spacer"></span>
+  <!-- theme + lang toggles live here so they stay visible in BOTH views; theme.js wires
+       every .theme-btn / .lang-btn via querySelectorAll, so these stay in sync. -->
+  <span class="mm-nav-ctrls">
+    <button class="theme-btn" type="button"></button>
+    <button class="lang-btn" type="button"></button>
+  </span>
+</div>
 
 <!-- ── COMMAND HERO ─────────────────────────────────────────────────────────── -->
 <div class="grid mm-section" style="margin-top:0">
@@ -1277,13 +1381,8 @@ body.page-mm .mm-macro-tag.neu  { background: color-mix(in srgb, var(--muted) 16
       <div class="mm-hero-main" id="hero-main">
         <div class="mm-hero-eyebrow" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px">
           <span><span class="mm-hb"></span>&nbsp; MASTERMIND &mdash; PAPER PORTFOLIO</span>
-          <!-- header control row: theme + lang toggles. theme.js wires the click
-               (addEventListener) and sets the labels on DOMContentLoaded — do NOT add
-               an inline onclick here or it double-fires and the toggle cancels itself. -->
-          <span class="mm-hero-ctrls" style="display:flex;gap:8px;align-items:center;flex-shrink:0">
-            <button class="theme-btn" type="button" style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:3px 11px;font-size:11px;cursor:pointer;color:var(--text);font-weight:600"></button>
-            <button class="lang-btn" type="button" style="background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:3px 11px;font-size:11px;cursor:pointer;color:var(--text);font-weight:600"></button>
-          </span>
+          <!-- theme + lang toggles now live in the top nav (#mm-nav) so they stay visible in
+               both the Dashboard and Research views. -->
         </div>
         <div class="mm-hero-name" id="hero-quad-name">Loading…</div>
         <div id="hero-says" class="mm-hero-says"></div>
@@ -1467,6 +1566,35 @@ body.page-mm .mm-macro-tag.neu  { background: color-mix(in srgb, var(--muted) 16
   <p id="footer-disc">Paper-only / display-only. Accountability, not alpha. Not investment advice.</p>
 </div>
 
+<!-- ── RESEARCH VIEW (toggled by #mm-nav) ───────────────────────────────────── -->
+<div id="view-research">
+  <div class="mm-section">
+    <div class="panel span12" style="grid-column:span 12">
+      <h2><span class="l-en">Research &mdash; Investment Theses</span><span class="l-zh">研究 &mdash; 投资论文</span></h2>
+      <div class="mm-rp-intro">
+        <span class="l-en">Every buy must clear the Research Desk. Before a position is opened the bot writes a full holistic report &mdash; thesis, valuation, fundamentals, revenue streams, confirmed &amp; pending catalysts, and a recalculated forward-earnings view &mdash; then re-digests it into a research score. That score is combined with the engine buy-score into a <strong>Conviction Index</strong>; only a high-enough Index confirms the trade, and it also sizes it. Click <em>View thesis</em> for the full report behind each decision.</span>
+        <span class="l-zh">每一笔买入都必须通过研究台。在建仓之前，机器人会撰写完整的整体研究报告&mdash;&mdash;论点、估值、基本面、收入结构、已确认与待定催化剂，以及重新测算的前瞻盈利&mdash;&mdash;再将其消化为研究评分。该评分与引擎买入分合成<strong>信念指数</strong>；只有指数足够高才确认交易，并据此决定仓位大小。点击<em>查看论文</em>查看每个决策背后的完整报告。</span>
+      </div>
+      <div id="rp-host">
+        <div class="mm-empty"><span class="mm-empty-icon">⊙</span><span class="l-en">Loading research…</span><span class="l-zh">加载研究中…</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── RESEARCH THESIS MODAL ────────────────────────────────────────────────── -->
+<div id="mm-thesis-modal" onclick="if(event.target===this)closeThesis()">
+  <div class="mm-modal-card">
+    <div class="mm-modal-head">
+      <span class="t" id="mm-modal-title">&mdash;</span>
+      <span id="mm-modal-viab"></span>
+      <button class="mm-modal-close" type="button" onclick="closeThesis()" aria-label="Close">&times;</button>
+    </div>
+    <div class="mm-modal-scores" id="mm-modal-scores"></div>
+    <div class="mm-modal-body" id="mm-modal-body"></div>
+  </div>
+</div>
+
 <!-- 4. Interactivity -->
 <script src="/theme.js" defer></script>
 <script>
@@ -1552,6 +1680,27 @@ var I18N = {
   'research.empty':       { en: 'No research notes yet — notes appear here after runs.', zh: '暂无研究笔记 — 运行后将显示。' },
   'research.show_more':   { en: 'Show more ↓', zh: '展开 ↓' },
   'research.show_less':   { en: 'Show less ↑', zh: '收起 ↑' },
+  // Research page (gated-decisions table + thesis modal)
+  'rp.empty':             { en: 'No research papers yet — each appears here when the bot evaluates a buy.', zh: '暂无研究论文 — 机器人评估买入后将显示。' },
+  'rp.col_ticker':        { en: 'Ticker', zh: '标的' },
+  'rp.col_time':          { en: 'Decision time', zh: '决策时间' },
+  'rp.col_action':        { en: 'Action', zh: '决定' },
+  'rp.col_engine':        { en: 'Engine', zh: '引擎分' },
+  'rp.col_research':      { en: 'Research', zh: '研究分' },
+  'rp.col_ci':            { en: 'Conviction', zh: '信念指数' },
+  'rp.col_viability':     { en: 'Viability', zh: '投资性' },
+  'rp.view':              { en: 'View thesis', zh: '查看论文' },
+  'rp.report_title':      { en: 'Research Report', zh: '研究报告' },
+  'rp.fair_value':        { en: 'Fair value', zh: '合理价值' },
+  'rp.act_confirmed':     { en: 'BUY CONFIRMED', zh: '已确认买入' },
+  'rp.act_held':          { en: 'RESEARCH-HELD', zh: '研究否决' },
+  'rp.act_evaluated':     { en: 'EVALUATED', zh: '已评估' },
+  'rp.viab_compelling':   { en: 'compelling', zh: '极具吸引力' },
+  'rp.viab_fair':         { en: 'fair', zh: '合理' },
+  'rp.viab_rich':         { en: 'rich', zh: '偏贵' },
+  'rp.viab_avoid':        { en: 'avoid', zh: '回避' },
+  'rd.head':              { en: 'Research Desk', zh: '研究台' },
+  'rd.view_full':         { en: 'View full thesis →', zh: '查看完整论文 →' },
   // Runs / brain activity
   'runs.title':           { en: 'Brain Activity — Full Trace', zh: '脑波活动 — 完整追踪' },
   'runs.subtitle':        { en: 'expand a run for complete step-by-step reasoning', zh: '展开运行记录查看完整推理过程' },
@@ -1762,6 +1911,8 @@ var fmtTsShort = function(s) {
 var _book = null, _trades = null, _activity = [], _research = [], _competitors = null, _regime = null;
 var _expandedIdx = null;
 var _perf = null, _runs = [], _rejected = [], _macro = null;
+var _papers = [];                 // research papers (the Research page rows)
+var _currentView = 'dashboard';   // 'dashboard' | 'research'
 // run drilldown cache
 var _runLogCache = {};
 
@@ -2528,6 +2679,26 @@ function renderPositions() {
     rows += '<tr class="mm-expand-row" id="expand-' + i + '" style="display:none"><td colspan="11">';
     rows += '<div class="mm-thesis-panel">';
 
+    // ── Research Desk block — the holistic-paper gate that confirmed/sized this buy ──
+    var rb = p.research;
+    if (rb) {
+      var rIsZh = document.documentElement.getAttribute('data-lang') === 'zh';
+      var rSum = (rIsZh && rb.summary_zh) ? rb.summary_zh : (rb.summary || '');
+      var ciCls = rb.combined == null ? '' : (rb.combined >= 72 ? 'hi' : rb.combined >= 60 ? 'mid' : 'lo');
+      var ciColor = ciCls === 'hi' ? 'var(--up)' : ciCls === 'mid' ? 'var(--warn)' : ciCls === 'lo' ? 'var(--down)' : 'var(--text)';
+      rows += '<div class="mm-rd-block">' +
+        '<div class="mm-rd-head">' + t('rd.head') + (rb.mode === 'llm' ? ' · AI' : ' · ENG') + '</div>' +
+        '<div class="mm-rd-scores">' +
+          '<div class="mm-rd-s"><div class="lbl">' + t('rp.col_engine') + '</div><div class="val">' + (rb.engine_score == null ? '—' : rb.engine_score) + '</div></div>' +
+          '<div class="mm-rd-s"><div class="lbl">' + t('rp.col_research') + '</div><div class="val">' + (rb.research_score == null ? '—' : rb.research_score) + '</div></div>' +
+          '<div class="mm-rd-s"><div class="lbl">' + t('rp.col_ci') + '</div><div class="val" style="color:' + ciColor + '">' + (rb.combined == null ? '—' : rb.combined) + '</div></div>' +
+          '<div class="mm-rd-s"><div class="lbl">' + t('rp.col_viability') + '</div><div><span class="mm-viab ' + _viabClass(rb.viability) + '">' + _viabLabel(rb.viability) + '</span></div></div>' +
+        '</div>' +
+        (rSum ? '<div class="mm-rd-summary">' + esc(rSum) + '</div>' : '') +
+        (rb.paper_id ? '<button class="mm-rd-link" type="button" onclick="openThesisFromPositions(\'' + esc(rb.paper_id) + '\')">' + t('rd.view_full') + '</button>' : '') +
+      '</div>';
+    }
+
     // zh fallback helper for this position's thesis
     var zhTf = tf._zh || {};
 
@@ -2764,6 +2935,110 @@ window.toggleResearch = function(id, btn) {
   }
 };
 
+// ── RESEARCH PAGE (the gated-decisions table + thesis modal) ───────────────────
+function _viabClass(v) { return ['compelling','fair','rich','avoid'].indexOf(v) >= 0 ? v : 'fair'; }
+function _viabLabel(v) {
+  var k = { compelling: 'rp.viab_compelling', fair: 'rp.viab_fair', rich: 'rp.viab_rich', avoid: 'rp.viab_avoid' }[v];
+  return k ? t(k) : (v || '—');
+}
+function _actionMeta(a) {
+  if (a === 'buy_confirmed') return { cls: 'confirmed', label: t('rp.act_confirmed') };
+  if (a === 'research_held') return { cls: 'held', label: t('rp.act_held') };
+  return { cls: 'evaluated', label: t('rp.act_evaluated') };
+}
+function _ciClass(n) { return n == null ? '' : (n >= 72 ? 'hi' : n >= 60 ? 'mid' : 'lo'); }
+function _scoreCell(n) { return n == null ? '—' : n; }
+
+function renderResearchPapers() {
+  var host = E('rp-host');
+  if (!host) return;
+  if (!_papers.length) {
+    host.innerHTML = '<div class="mm-empty"><span class="mm-empty-icon">○</span>' + t('rp.empty') + '</div>';
+    return;
+  }
+  var html = '<div class="mm-rp-wrap"><table class="mm-rp-table"><thead><tr>' +
+    '<th class="l">' + t('rp.col_ticker') + '</th>' +
+    '<th class="l">' + t('rp.col_time') + '</th>' +
+    '<th class="l">' + t('rp.col_action') + '</th>' +
+    '<th>' + t('rp.col_engine') + '</th>' +
+    '<th>' + t('rp.col_research') + '</th>' +
+    '<th>' + t('rp.col_ci') + '</th>' +
+    '<th class="l">' + t('rp.col_viability') + '</th>' +
+    '<th></th>' +
+    '</tr></thead><tbody>';
+  _papers.forEach(function(p) {
+    var am = _actionMeta(p.action);
+    var modeTag = p.mode === 'llm' ? '<span class="mm-mode-tag" title="full Claude report">AI</span>'
+                                   : '<span class="mm-mode-tag" title="engine-only report">ENG</span>';
+    var when = fmtTs(p.trade_time || p.reviewed_at);
+    var ci = p.combined;
+    html += '<tr>' +
+      '<td class="l"><span class="mm-rp-ticker">' + esc(p.ticker) + '</span>' + modeTag + '</td>' +
+      '<td class="l"><span class="mm-rp-time">' + esc(when) + '</span></td>' +
+      '<td class="l"><span class="mm-chip ' + am.cls + '">' + am.label + '</span></td>' +
+      '<td><span class="mm-rp-score">' + _scoreCell(p.engine_score) + '</span></td>' +
+      '<td><span class="mm-rp-score">' + _scoreCell(p.research_score) + '</span></td>' +
+      '<td><span class="mm-rp-ci ' + _ciClass(ci) + '">' + _scoreCell(ci) + '</span></td>' +
+      '<td class="l"><span class="mm-viab ' + _viabClass(p.viability) + '">' + _viabLabel(p.viability) + '</span></td>' +
+      '<td><button class="mm-rp-view" type="button" onclick="openThesis(\'' + esc(p.id) + '\')">' + t('rp.view') + ' →</button></td>' +
+    '</tr>';
+  });
+  html += '</tbody></table></div>';
+  host.innerHTML = html;
+}
+
+window.openThesis = function(id) {
+  var p = null;
+  for (var i = 0; i < _papers.length; i++) { if (_papers[i].id === id) { p = _papers[i]; break; } }
+  if (!p) return;
+  var isZh = document.documentElement.getAttribute('data-lang') === 'zh';
+  E('mm-modal-title').textContent = p.ticker + ' — ' + t('rp.report_title');
+  E('mm-modal-viab').innerHTML = '<span class="mm-viab ' + _viabClass(p.viability) + '">' + _viabLabel(p.viability) + '</span>';
+
+  var fv = (p.fair_value != null) ? ('$' + p.fair_value) : '—';
+  var scores = [
+    { lbl: t('rp.col_engine'),   val: _scoreCell(p.engine_score),   cls: '' },
+    { lbl: t('rp.col_research'), val: _scoreCell(p.research_score), cls: '' },
+    { lbl: t('rp.col_ci'),       val: _scoreCell(p.combined),       cls: _ciClass(p.combined) },
+    { lbl: t('rp.fair_value'),   val: fv,                           cls: '' },
+  ];
+  E('mm-modal-scores').innerHTML = scores.map(function(s) {
+    var color = s.cls === 'hi' ? 'var(--up)' : s.cls === 'mid' ? 'var(--warn)' : s.cls === 'lo' ? 'var(--down)' : 'var(--text)';
+    return '<div class="mm-modal-score"><div class="lbl">' + s.lbl + '</div>' +
+           '<div class="val" style="color:' + color + '">' + s.val + '</div></div>';
+  }).join('');
+
+  // the report body is the canonical markdown; show the (translated) summary as a lead-in
+  var summary = (isZh && p.summary_zh) ? p.summary_zh : (p.summary || '');
+  var lead = summary ? '<p style="color:var(--muted);font-style:italic;margin-bottom:14px">' + esc(summary) + '</p>' : '';
+  E('mm-modal-body').innerHTML = lead + renderMd(p.report_md || '');
+
+  var modal = E('mm-thesis-modal');
+  modal.classList.add('open');
+  document.body.style.overflow = 'hidden';
+};
+
+window.closeThesis = function() {
+  var modal = E('mm-thesis-modal');
+  if (modal) modal.classList.remove('open');
+  document.body.style.overflow = '';
+};
+document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeThesis(); });
+
+// open a thesis from the Positions panel: switch to Research, then open the modal
+window.openThesisFromPositions = function(id) { showView('research'); openThesis(id); };
+
+window.showView = function(view) {
+  _currentView = (view === 'research') ? 'research' : 'dashboard';
+  document.body.classList.toggle('view-research', _currentView === 'research');
+  var nd = E('nav-dashboard'), nr = E('nav-research');
+  if (nd) nd.classList.toggle('active', _currentView === 'dashboard');
+  if (nr) nr.classList.toggle('active', _currentView === 'research');
+  try { history.replaceState(null, '', _currentView === 'research' ? '/research' : '/'); } catch (e) {}
+  if (_currentView === 'research') renderResearchPapers();
+  window.scrollTo(0, 0);
+};
+
 // ── COMPETITORS ───────────────────────────────────────────────────────────────
 function renderCompetitors() {
   var el = E('competitors');
@@ -2817,7 +3092,7 @@ function renderFooter() {
 
 // ── FETCH + RENDER ────────────────────────────────────────────────────────────
 async function fetchAll() {
-  var [bookRes, tradesRes, actRes, researchRes, compRes, regimeRes, perfRes, runsRes, macroRes] = await Promise.allSettled([
+  var [bookRes, tradesRes, actRes, researchRes, compRes, regimeRes, perfRes, runsRes, macroRes, papersRes] = await Promise.allSettled([
     fetch('/api/portfolio').then(function(r) { return r.ok ? r.json() : null; }).catch(function() { return null; }),
     fetch('/api/trades').then(function(r)    { return r.ok ? r.json() : null; }).catch(function() { return null; }),
     fetch('/api/activity').then(function(r)  { return r.ok ? r.json() : [];   }).catch(function() { return []; }),
@@ -2827,6 +3102,7 @@ async function fetchAll() {
     fetch('/api/performance').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
     fetch('/api/runs').then(function(r)       { return r.ok ? r.json() : [];   }).catch(function() { return []; }),
     fetch('/api/macro').then(function(r)      { return r.ok ? r.json() : null; }).catch(function() { return null; }),
+    fetch('/api/research_papers').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
   ]);
 
   _book        = bookRes.status    === 'fulfilled' ? bookRes.value    : null;
@@ -2838,6 +3114,7 @@ async function fetchAll() {
   _perf        = perfRes.status    === 'fulfilled' ? perfRes.value    : null;
   _runs        = (runsRes.status   === 'fulfilled' ? runsRes.value    : null) || [];
   _macro       = macroRes.status   === 'fulfilled' ? macroRes.value   : null;
+  _papers      = ((papersRes.status === 'fulfilled' ? papersRes.value : null) || {}).papers || [];
 
   // extract rejected from portfolio
   _rejected = (_book && _book.rejected) ? _book.rejected : [];
@@ -2859,6 +3136,7 @@ async function fetchAll() {
   renderRuns();
   renderRejected();
   renderCompetitors();
+  renderResearchPapers();
   renderFooter();
   applyColl('runs');
   applyColl('rejected');
@@ -2883,6 +3161,7 @@ document.addEventListener('langchange', function() {
   renderRuns();
   renderRejected();
   renderCompetitors();
+  renderResearchPapers();
   renderFooter();
   // Update equity curve legend
   var p = _perf;
@@ -2898,6 +3177,9 @@ document.addEventListener('langchange', function() {
     updEl.textContent = t('hero.updated') + ' ' + ts;
   }
 });
+
+// open the Research view directly when the page is loaded at /research
+if (location.pathname.replace(/\/+$/, '') === '/research') showView('research');
 
 fetchAll();
 setInterval(fetchAll, 60000);

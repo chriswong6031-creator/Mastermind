@@ -137,17 +137,86 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
                 ticker=_rej["ticker"], vetoes=_rej["vetoes"],
                 bear=_rej["bear"], confluence=_rej["confluence"])
 
+    # ———— RESEARCH GATE — a full holistic paper must CONFIRM each buy ————
+    # Before a name the engine wants can be bought, the Research Desk writes a complete
+    # holistic report (thesis / valuation / fundamentals / revenue / catalysts / forward
+    # earnings), re-digests it into a research_score, and combines that with the engine
+    # buy-score. Only a combined "Conviction Index" over the bar lets the buy through — and
+    # that combined score also scales the size (within the per-name cap). A NEW name gets a
+    # full armed-Claude report; a carried name reuses its stored paper; the deterministic
+    # engine-only report is the offline/CI fallback. Hard vetoes were already dropped by
+    # conviction.build — the research gate can confirm / size / hold, but never rescue.
+    from brain import research_paper as rpaper
+    name_cap = cfg["caps"]["name_cap"]
+    _open_conv = {p["ticker"] for p in position_log.open_positions()
+                  if p.get("sleeve") == "conviction"}
+    _armed_ok = rpaper.llm_enabled()
+    gate_info: dict[str, dict] = {}          # ticker -> {full, paper, breakdown, research_block}
+    confirmed_sized: list[dict] = []
+    research_held: list[dict] = []
+    for c in sized:
+        t = c["ticker"]
+        try:
+            _full = lenses_mod.full(t, "name")
+            _syn = _full["synthesis"]
+            _rows = _full["rows"]
+        except Exception:
+            _full, _syn, _rows = {}, {}, []
+        px = ((_j(f"site/stockdata/{t}.json") or {}).get("tech", {}) or {}).get("price") \
+            if (_V / f"site/stockdata/{t}.json").exists() else None
+        is_new = t not in _open_conv
+        paper = None if is_new else rpaper.latest_for(t)      # carried names reuse their paper
+        if paper is None:
+            paper = rpaper.generate(t, asof=asof, confluence=c["confluence"], rows=_rows,
+                                    vetoes=_syn.get("vetoes", []), price=px, regime=regime,
+                                    armed=(_armed_ok and is_new))
+            rpaper.save_paper(paper)
+            rpaper.write_feed_note(paper)
+        breakdown = rpaper.score_breakdown(c["confluence"], paper)
+        research_block = {
+            "paper_id": paper["id"], "mode": paper["mode"],
+            "engine_score": breakdown["engine_score"], "research_score": breakdown["research_score"],
+            "combined": breakdown["combined"], "viability": breakdown["viability"],
+            "confirmed": breakdown["confirmed"], "summary": paper.get("summary"),
+            "price_at_review": paper.get("price_at_review"),
+        }
+        gate_info[t] = {"full": _full, "paper": paper, "breakdown": breakdown,
+                        "research_block": research_block}
+        if breakdown["confirmed"]:
+            scaled = round(min(name_cap, c["weight"] * breakdown["size_mult"]), 4)
+            confirmed_sized.append({**c, "weight": scaled, "research": research_block})
+            _rl_log(_run_id, "decision", f"RESEARCH CONFIRM {t}",
+                    f"combined={breakdown['combined']} (engine {breakdown['engine_score']} + "
+                    f"research {breakdown['research_score']}) viab={breakdown['viability']} "
+                    f"size_mult={breakdown['size_mult']} weight={scaled}",
+                    ticker=t, **research_block)
+        else:
+            research_held.append({"ticker": t, "reason": breakdown["reason"], **research_block})
+            _rl_log(_run_id, "decision", f"RESEARCH HOLD {t}",
+                    f"reason={breakdown['reason']} combined={breakdown['combined']} "
+                    f"viab={breakdown['viability']}",
+                    ticker=t, **research_block)
+    sized = confirmed_sized
+    _rl_log(_run_id, "book_step", "research gate evaluated",
+            f"confirmed={len(sized)} research_held={len(research_held)} "
+            f"rejected={len(_rejected)} armed={_armed_ok}")
+
     for c in sized:
         t = c["ticker"]
         px = ((_j(f"site/stockdata/{t}.json") or {}).get("tech", {}) or {}).get("price") \
             if (_V / f"site/stockdata/{t}.json").exists() else None
-        try:
-            _matrix = lenses_mod.decision_matrix(t, "name")
-            _synth = lenses_mod.synthesize(_matrix)
-            _matrix_rows = _matrix["rows"]
-        except Exception:
-            _synth = {}
-            _matrix_rows = []
+        _gi = gate_info.get(t, {})
+        _full_t = _gi.get("full") or {}
+        _synth = _full_t.get("synthesis") or {}
+        _matrix_rows = _full_t.get("rows") or []
+        if not _synth:
+            try:
+                _matrix = lenses_mod.decision_matrix(t, "name")
+                _synth = lenses_mod.synthesize(_matrix)
+                _matrix_rows = _matrix["rows"]
+            except Exception:
+                _synth = {}
+                _matrix_rows = []
         doc = DecisionDoc(
             id=f"{asof}-{t}-conv", subject=t, lean="add", conviction="medium",
             prob_correct=round(0.55 + min(0.15, c["confluence"] * 0.4), 2),
@@ -166,7 +235,7 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
         book.append({"ticker": t, "theme_id": "conviction", "sleeve": "conviction", "stage": 2,
                      "weight": c["weight"], "verdict": "add", "thesis_id": doc.id,
                      "time_stop_by": doc.time_stop_by, "confluence": c["confluence"],
-                     "entry_price": px})
+                     "entry_price": px, "research": c.get("research")})
         _rl_log(_run_id, "trade", f"sized {t} conviction",
                 f"ticker={t} weight={c['weight']} confluence={c['confluence']:+.2f} "
                 f"bull={c['bull']} bear={c['bear']} price={px}",
@@ -231,7 +300,8 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
                     "cash": cash},
         "positions": book, "decisions": decisions, "detectors": fired, "track_record": tr,
         "rejected": _rejected,
-        "llm_used": False,
+        "research_held": research_held,
+        "llm_used": bool(_armed_ok),
     }
     paths = write(payload)
 
@@ -251,7 +321,7 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
 
     return {"ran": True, "triggers": decision["triggers"], "book": book, "sleeves": payload["sleeves"],
             "detectors": fired, "track_record": tr, "paths": paths, "llm_used": payload["llm_used"],
-            "research": research_out, "run_id": _run_id}
+            "research": research_out, "research_held": research_held, "run_id": _run_id}
 
 
 if __name__ == "__main__":
