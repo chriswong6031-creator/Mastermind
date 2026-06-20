@@ -65,42 +65,34 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
              "stage": 2, "weight": lw, "verdict": "hold", "rs_pctile": s["pctile_252d"]}
             for s in leaders]
 
-    # ---- CONVICTION sleeve: single names through the confluence scorecard ----
-    conv_candidates = []
-    for etf, (name, theme) in _LEADER_NAME.items():
-        s = next((x for x in secrs if x["ticker"] == etf), None)
-        if not s:
-            continue
-        dims = {"rs": "confirmed" if s["pctile_252d"] >= 80 else "absent", "regime": "confirmed",
-                "breadth": "unverified", "flow": "unverified", "volume": "unverified", "catalyst": "unverified"}
-        conv_candidates.append({"ticker": name, "theme_id": theme, "gate": confluence_gate(dims),
-                                "dims": dims, "stage": 1})
-    adjud = {a["ticker"]: a for a in panel.adjudicate({"quad": regime["quad"]}, conv_candidates)}
-    _SIZE = {"none": 0.0, "initial": 0.03, "full": 0.08}
-
+    # ---- CONVICTION sleeve: only names the multi-sided decision matrix CONFIRMS ----
+    # A name takes size only if every side agrees (size_authority='up') and it trips no hard
+    # veto (parabolic / Altman distress / cycle-blocked). Candidates = Claude's open proposals
+    # + the leadership universe. Each sized holding gets an accountable, falsifiable thesis.
+    from portfolio import conviction
+    conv_budget = sum(cfg["sleeves"]["conviction_target"]) / 2     # midpoint 0.30
     decisions = []
-    for c in conv_candidates:
-        a = adjud[c["ticker"]]
-        size = _SIZE[c["gate"]["size"]]
-        nm = _j(f"site/stockdata/{c['ticker']}.json") if (_V / f"site/stockdata/{c['ticker']}.json").exists() else None
-        px = (nm or {}).get("tech", {}).get("price")
+    for c in conviction.build(conv_budget, name_cap=cfg["caps"]["name_cap"]):
+        t = c["ticker"]
+        px = ((_j(f"site/stockdata/{t}.json") or {}).get("tech", {}) or {}).get("price") \
+            if (_V / f"site/stockdata/{t}.json").exists() else None
         doc = DecisionDoc(
-            id=f"{asof}-{c['ticker']}", subject=c["ticker"], lean=("add" if a["lean"] == "add" else "watch"),
-            conviction=a["conviction"], prob_correct={"none": 0.55, "initial": 0.58, "full": 0.66}[c["gate"]["size"]],
-            horizon_d=21, state_asof=asof, sleeve="conviction", stage=c["stage"], order_layer=1,
-            scorecard_dims=c["dims"], thesis=f"{c['ticker']} is the order-1 name in {c['theme_id']}; "
-            f"adjudicated '{a['lean']}' — {a['rationale']}.",
-            evidence=[f"sector RS pctile {next(x['pctile_252d'] for x in secrs if x['ticker'] in _LEADER_NAME)}"],
-            dissent="RS-alone is forbidden as a full-size trigger (rule 4.3).",
-            entry_levels={"ticker": c["ticker"], "price": px} if px else {"ticker": c["ticker"]},
+            id=f"{asof}-{t}-conv", subject=t, lean="add", conviction="medium",
+            prob_correct=round(0.55 + min(0.15, c["confluence"] * 0.4), 2),
+            horizon_d=21, state_asof=asof, sleeve="conviction", order_layer=1,
+            thesis=f"Multi-sided confluence {c['confluence']:+.2f} (bull {c['bull']}/bear {c['bear']}); "
+                   f"all sides confirm and no hard veto — sized {round(c['weight']*100)}%.",
+            evidence=[f"size_authority=up", f"confluence={c['confluence']:+.2f}"]
+                     + ([f"divergence:{d}" for d in c["divergences"]] if c["divergences"] else []),
+            dissent="Held at 0 if any side vetoes (parabolic/distress/cycle-blocked).",
+            entry_levels={"ticker": t, "price": px} if px else {"ticker": t},
         ).finalize()
         decisions.append(doc.to_json())
         ledger.append(doc.to_json())
         store.insert_thesis(con, doc.to_json())
-        book.append({"ticker": c["ticker"], "theme_id": c["theme_id"], "sleeve": "conviction",
-                     "stage": c["stage"], "weight": size, "verdict": doc.lean,
-                     "thesis_id": doc.id, "time_stop_by": doc.time_stop_by,
-                     "scorecard": c["gate"]["size"]})
+        book.append({"ticker": t, "theme_id": "conviction", "sleeve": "conviction", "stage": 2,
+                     "weight": c["weight"], "verdict": "add", "thesis_id": doc.id,
+                     "time_stop_by": doc.time_stop_by, "confluence": c["confluence"]})
 
     # ---- cross-sleeve firebreaks + cash ----
     capped = enforce_book_caps(book)
@@ -130,7 +122,7 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
                     "conviction": round(sum(p["weight"] for p in book if p["sleeve"] == "conviction"), 4),
                     "cash": cash},
         "positions": book, "decisions": decisions, "detectors": fired, "track_record": tr,
-        "llm_used": any(a.get("llm_used") for a in adjud.values()),
+        "llm_used": False,   # conviction sizing is deterministic (decision matrix); the armed LLM layer runs in the daily loop
     }
     paths = write(payload)
     return {"ran": True, "triggers": decision["triggers"], "book": book, "sleeves": payload["sleeves"],
@@ -149,7 +141,7 @@ if __name__ == "__main__":
         print("book:")
         for p in sorted(out["book"], key=lambda x: -x["weight"]):
             print(f"  {p['ticker']:6} {p['sleeve']:11} w={p['weight']:.3f}  {p['verdict']}"
-                  + (f"  gate={p.get('scorecard')}" if p["sleeve"] == "conviction" else ""))
+                  + (f"  confluence={p.get('confluence'):+.2f} (all sides confirm)" if p["sleeve"] == "conviction" else ""))
         print("detectors  :", [f"{d['code']}/{d['mode']}/{d['severity']}" for d in out["detectors"]] or "none")
         print("track rec  :", out["track_record"])
         print("bridge     :", out["paths"]["hub"])
