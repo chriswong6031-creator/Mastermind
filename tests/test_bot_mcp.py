@@ -31,16 +31,22 @@ def test_read_signal_is_allowlisted():
 
 
 def test_action_tools_write_to_review_queue(tmp_path, monkeypatch):
+    # isolate writes to a temp dir — the action handlers persist real files, and
+    # without this the suite would spam stub notes/proposals into the live data feed.
+    monkeypatch.setattr(bot_mcp, "_ROOT", tmp_path)
+    monkeypatch.setattr(bot_mcp, "_RESEARCH", tmp_path / "data" / "research")
+    monkeypatch.setattr(bot_mcp, "_PROPOSALS", tmp_path / "data" / "brain" / "proposals.jsonl")
+
     note = _text(asyncio.run(bot_mcp.save_research_note.handler(
         {"title": "AI power bottleneck", "body": "Compute is migrating to electricity.",
          "tickers": ["NVDA", "VST"]})))
-    assert "research note" in note and (_ROOT / "data" / "research" / "notes").exists()
+    assert "research note" in note and (tmp_path / "data" / "research" / "notes").exists()
 
     prop = _text(asyncio.run(bot_mcp.propose_thesis.handler(
         {"subject": "VST", "lean": "add", "conviction": "medium",
          "thesis": "Power demand from AI data centers", "horizon_d": 60})))
     assert "review queue" in prop and "NOT executed" in prop
-    rows = (_ROOT / "data" / "brain" / "proposals.jsonl").read_text().strip().splitlines()
+    rows = (tmp_path / "data" / "brain" / "proposals.jsonl").read_text().strip().splitlines()
     assert json.loads(rows[-1])["subject"] == "VST"
 
 
