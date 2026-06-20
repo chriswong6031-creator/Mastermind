@@ -40,14 +40,50 @@ def _row(lens, value, status, direction, note=""):
     return {"lens": lens, "value": value, "status": status, "direction": direction, "note": note}
 
 
+# ---------------- alt-data flow lens (Quiver / TrumpFlow) ----------------
+def _altdata_by_ticker() -> dict:
+    """Per-ticker alternative-data substrate published by the macro engine
+    (engine/altdata_signals). Tries the site contract, then the data store."""
+    return _load("site/altdata/by_ticker.json") or _load("data/altdata/by_ticker.json") or {}
+
+
+def _altdata_row(t: str):
+    """Politician/insider/government-contract/Trump-trade convergence on a name.
+    CONTEXT-ONLY (unproven, display-only in the macro engine) — it informs conviction and
+    surfaces divergences, but never drives size alone. None when the name isn't flagged."""
+    rec = (_altdata_by_ticker().get("tickers") or {}).get(t.upper())
+    if not rec:
+        return None
+    score = int(rec.get("convergence_score") or 0)
+    chans = rec.get("channels") or []
+    trump = bool(rec.get("trump_linked"))
+    insider = rec.get("insider_net_usd") or 0
+    congress = rec.get("congress_net") or 0
+    # buy-side political / smart-money flow: bull on multi-channel convergence or net buying;
+    # bear only when the dominant tell is selling.
+    bull = score >= 2 or insider > 0 or congress >= 2 or (trump and rec.get("trump_side") == "buy")
+    bear = score == 0 and (rec.get("trump_side") == "sell" or insider < 0)
+    direction = "bull" if bull else "bear" if bear else "neutral"
+    note = (f"{score}-channel convergence: " + ", ".join(chans)) if score >= 2 else (", ".join(chans) or "alt-data flow")
+    if trump:
+        note += " · Trump-linked"
+    return _row("altdata_flow", {
+        "convergence_score": score, "channels": chans, "trump_linked": trump,
+        "congress_net": rec.get("congress_net"), "gov_contract_usd_30d": rec.get("gov_contract_usd_30d"),
+        "insider_net_usd": rec.get("insider_net_usd"), "dpi_lean": rec.get("dpi_lean"),
+        "trump_side": rec.get("trump_side")}, "context", direction, note)
+
+
 # ---------------- per-NAME lenses ----------------
 def _name_rows(t: str) -> list[dict]:
     d = _load(f"site/stockdata/{t}.json")
     flows = (_load("site/stockdata/fund_flows.json") or {}).get(t)
     gx = _load(f"site/gex/{t}.json")
+    ad = _altdata_row(t)                 # political/insider/contract flow — independent of stockdata
     rows = []
     if not d:
-        return [_row("conviction", None, "missing", None, "no stockdata")]
+        # a Trump-linked entity (ABTC/DJT/...) may carry alt-data flow but no S&P stockdata
+        return ([ad] if ad else []) + [_row("conviction", None, "missing", None, "no stockdata")]
 
     # valuation
     vz = _g(d, "valuation.value_z")
@@ -136,6 +172,9 @@ def _name_rows(t: str) -> list[dict]:
                                     "cycle_blocked": bool(_g(d, "conviction.cycle_blocked"))},
                      "partial", "bull" if band in ("strong", "high") else "bear" if band == "avoid" else "neutral"))
 
+    # alt-data political/insider/contract flow (context)
+    if ad:
+        rows.append(ad)
     # name -> theme via basket membership: narrative + policy
     rows += _theme_context_for_name(d)
     rows += _macro_rows()
@@ -238,6 +277,14 @@ def _divergences(rows: list[dict]) -> list[dict]:
     if d("policy_tilt") == "bull" and d("valuation") == "bull" and lead != "bull":
         out.append({"pattern": "policy_early",
                     "read": "policy tailwind + cheap before the crowd notices — early thematic edge"})
+    # alt-data flow (political/insider/contract convergence) — the edge or the trap
+    ad = d("altdata_flow")
+    if ad == "bull" and d("extension") == "bear":
+        out.append({"pattern": "political_crowd_trap",
+                    "read": "political/insider/contract money piling into an already-EXTENDED name — late; the political crowd may be the exit liquidity, not the edge"})
+    elif ad == "bull" and lead != "bull" and d("valuation") != "bear":
+        out.append({"pattern": "political_flow_early",
+                    "read": "political/insider/contract flow converging on a name the tape hasn't recognized yet — early alt-data edge (context, not a size driver)"})
     return out
 
 
