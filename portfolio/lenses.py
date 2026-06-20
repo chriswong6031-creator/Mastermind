@@ -188,6 +188,108 @@ def _news_row(t: str):
         "context", direction, note)
 
 
+# ---------------- price / trend-confirmation lens (VALIDATED) ----------------
+def _trend_row(d) -> dict:
+    """Doctrine A1 enforcement: detect whether PRICE has CONFIRMED, not just whether the
+    fundamentals/macro look good. A cheap macro/value story with no price confirmation — or one
+    that is rolling over — is a value trap, not a buy. Uses the engine's own daily tech block
+    (above 50/200dma, %vs 50dma, MACD, RSI, distance off the 52w high). Direction:
+      bull  = confirmed uptrend (above both MAs, MACD+, RSI healthy, near highs)
+      bear  = rolling over / unconfirmed (below the 50dma, MACD-, RSI weak/over, well off highs)
+    'bear' is the no-chase / value-trap guard; the gate refuses to BUY into it."""
+    t = d.get("tech") or {}
+    a50, a200 = t.get("above50"), t.get("above200")
+    p50, p200 = t.get("pct_vs_50dma"), t.get("pct_vs_200dma")
+    macd, rsi, offhi = t.get("macd_pos"), t.get("rsi14"), t.get("off_52w_high_pct")
+    if a50 is None and p50 is None:
+        return _row("trend", None, "missing", None, "no price/tech data")
+
+    # DOWNTREND (bear). Several ways to be in one; the thresholds are tuned so a healthy pullback
+    # in a leader (e.g. AVGO: below 50dma, ~ -14% off high, above a rising 200dma) stays NEUTRAL —
+    # the "just in time to buy" case — while a genuine decline is caught:
+    #   • below the 200dma (long-term trend broken), OR
+    #   • below 50dma AND DEEPLY off the high (<= -18%) — a real slide even if MACD still lags
+    #     (the NEM gold-miner case: -21% off high, below 50dma, but MACD hadn't crossed yet), OR
+    #   • below 50dma AND MACD- AND well off the high (<= -16%) — a confirmed breakdown (LPG), OR
+    #   • below 50dma AND MACD- AND RSI < 40 — momentum breaking down.
+    off = offhi if offhi is not None else 0
+    below200_broken = a200 is False and (p200 is None or p200 <= -2)   # a MEANINGFUL break, not a shallow cross
+    downtrend = below200_broken \
+        or (a50 is False and off <= -18) \
+        or (a50 is False and macd is False and off <= -16) \
+        or (a50 is False and macd is False and (rsi is not None and rsi < 40))
+    # CONFIRMED UPTREND (bull): above both MAs, MACD+, healthy (not overbought) RSI, near the high.
+    uptrend = (a50 is True and a200 is True and macd is True
+               and (rsi is None or 45 <= rsi <= 75) and (offhi is None or offhi > -12))
+    notes = []
+    if a200 is False:
+        notes.append("below 200dma (trend broken)")
+    if a50 is False:
+        notes.append("below 50dma")
+    if macd is False:
+        notes.append("MACD negative")
+    if offhi is not None and offhi <= -16:
+        notes.append(f"{offhi:.0f}% off 52w high")
+    if rsi is not None and rsi < 40:
+        notes.append(f"RSI {rsi:.0f}")
+    direction = "bear" if downtrend else "bull" if uptrend else "neutral"
+    note = ("downtrend — " + ", ".join(notes)) if direction == "bear" else \
+           "price confirmed (uptrend intact)" if direction == "bull" else \
+           "in a pullback / unconfirmed — not a downtrend"
+    return _row("trend", {"above50": a50, "above200": a200, "pct_vs_50dma": p50,
+                          "pct_vs_200dma": p200, "macd_pos": macd, "rsi14": rsi,
+                          "off_52w_high_pct": offhi, "downtrend": downtrend,
+                          "confirmed_uptrend": uptrend}, "validated", direction, note)
+
+
+# sector -> the sector-ETF the regime's RS table ranks
+_SECTOR_ETF = {
+    "Financials": "XLF", "Financial Services": "XLF", "Technology": "XLK",
+    "Information Technology": "XLK", "Industrials": "XLI", "Health Care": "XLV",
+    "Healthcare": "XLV", "Consumer Discretionary": "XLY", "Consumer Cyclical": "XLY",
+    "Consumer Staples": "XLP", "Consumer Defensive": "XLP", "Energy": "XLE",
+    "Materials": "XLB", "Basic Materials": "XLB", "Real Estate": "XLRE",
+    "Utilities": "XLU", "Communication Services": "XLC", "Communications": "XLC",
+}
+
+# commodity-driven names whose real benchmark is the COMMODITY, not the broad sector ETF. A gold
+# miner in a gold bear market is the textbook trap the sector ETF (XLB) hides — Newmont trades on
+# gold, not on chemicals. (The engine carries no industry field, so this is a curated set of the
+# major precious-metal miners; extend as needed.)
+_COMMODITY_PROXY = {
+    "NEM": "GC=F", "GOLD": "GC=F", "AEM": "GC=F", "KGC": "GC=F", "AU": "GC=F", "GFI": "GC=F",
+    "HMY": "GC=F", "FNV": "GC=F", "WPM": "GC=F", "RGLD": "GC=F", "PAAS": "GC=F", "AGI": "GC=F",
+    "BTG": "GC=F", "EGO": "GC=F", "OR": "GC=F", "SSRM": "GC=F", "CDE": "GC=F", "HL": "GC=F",
+}
+
+
+def _sector_rs_row(d) -> dict:
+    """Leadership lens (VALIDATED) — is the name's SECTOR (or driving COMMODITY) actually leading,
+    or a laggard? Doctrine: 'be present in the leader' + 'correlation-structure breaking is the
+    earliest honest signal'. Catches a whole crowded-but-lagging cohort (cheap regional banks: XLF
+    bottom-decile + below 200d; a gold miner while GOLD is in a bear market) WITHOUT touching
+    leaders in a top sector. bear = lagging benchmark below its 200d trend AND (bottom-third RS OR
+    a steep recent 60-day decline); bull = top-RS benchmark above its trend."""
+    sec = (d or {}).get("sector")
+    ticker = (d or {}).get("ticker")
+    etf = _COMMODITY_PROXY.get((ticker or "").upper()) or _SECTOR_ETF.get(sec)
+    r = _load("data/regime/latest.json") or {}
+    rec = next((x for x in (r.get("sector_rs") or []) if x.get("ticker") == etf), None) if etf else None
+    if not rec:
+        return _row("sector_rs", {"sector": sec, "etf": etf}, "missing", None, "no sector RS map")
+    pct = rec.get("pctile_252d")
+    a200 = rec.get("above_200d_trend")
+    rank = rec.get("rank")
+    mom60 = rec.get("mom_60d_pct")
+    # a benchmark below its 200d trend that is EITHER bottom-third RS OR in a steep 60-day decline
+    lagging = a200 is False and ((pct if pct is not None else 100) < 35 or (mom60 or 0) <= -12)
+    direction = "bull" if (a200 and (pct or 0) >= 70) else "bear" if lagging else "neutral"
+    note = (f"{sec} ({etf}) RS rank {rank}, {pct:.0f}th pctile, "
+            f"{'above' if a200 else 'below'} 200d trend")
+    return _row("sector_rs", {"sector": sec, "etf": etf, "rank": rank, "pctile": pct,
+                              "above_200d_trend": a200}, "validated", direction, note)
+
+
 # ---------------- per-NAME lenses ----------------
 def _name_rows(t: str) -> list[dict]:
     d = _load(f"site/stockdata/{t}.json")
@@ -255,6 +357,13 @@ def _name_rows(t: str) -> list[dict]:
     rows.append(_row("extension", {"grade": grade, "parabolic": para, "pct_vs_200dma": pv2}, "validated",
                      "bear" if (para or grade in ("stretched", "parabolic") or (pv2 or 0) >= 30) else "neutral"))
 
+    # price/trend CONFIRMATION (VALIDATED) — extension catches a name that's run too far;
+    # this catches the opposite failure the gate was blind to: a name TOPPING / rolling over.
+    rows.append(_trend_row(d))
+
+    # sector leadership (VALIDATED) — is the name's sector actually leading, or a laggard cohort?
+    rows.append(_sector_rs_row(d))
+
     # flows — 13F smart money. MIN-SAMPLE + MARGIN gate (the NVDA false-reject fix): a 1-name
     # margin across a handful of curated VIP funds is noise for a mega-cap with thousands of
     # institutional holders — NVDA fired 'bear' (distribution) on 1 buying vs 2 selling while
@@ -312,13 +421,58 @@ def _name_rows(t: str) -> list[dict]:
     return rows
 
 
+def _theme_signal(theme_id: str | None) -> dict | None:
+    """The basket engine's read on a theme: its allocation RANK/score/eligibility (the
+    conservative, validated ranking — NOT the momentum-only 'dominant' theme_intel label) plus
+    its recent 5d/20d RELATIVE performance. This is how the bot finally LISTENS to what the
+    Narrative-Basket engine already knows (e.g. regional_banks ranks #17, 5d rel negative)."""
+    if not theme_id:
+        return None
+    alloc = _load("site/allocationdata/allocation.json") or {}
+    ranks = alloc.get("ranks") or []
+    rec = next((r for r in ranks if r.get("id") == theme_id or r.get("theme") == theme_id), None)
+    n = len(ranks) or 1
+    perf = None
+    for b in ((_load("site/basketdata/baskets.json") or {}).get("baskets") or []):
+        if b.get("id") == theme_id:
+            perf = b.get("perf") or {}
+            break
+    rel5 = ((perf or {}).get("5d") or {}).get("rel")
+    rel20 = ((perf or {}).get("20d") or {}).get("rel")
+    return {"id": theme_id, "rank": (rec or {}).get("rank"), "n_themes": n,
+            "score": (rec or {}).get("score"), "eligible": (rec or {}).get("eligible"),
+            "rel_5d": rel5, "rel_20d": rel20}
+
+
 def _theme_context_for_name(d) -> list[dict]:
+    """Per-name narrative/theme lens — now a REAL vote (was direction=None = silent). A name
+    whose theme is a low-ranked laggard or is rolling over (5d rel negative) votes BEAR; a name
+    in a genuine top-third leadership theme that is NOT rolling over votes BULL."""
     mem = _g(d, "baskets_membership") or _g(d, "baskets_membership.themes")
     theme_id = None
     if isinstance(mem, list) and mem:
-        theme_id = mem[0] if isinstance(mem[0], str) else _g(mem[0], "id")
-    return [_row("narrative", {"basket": theme_id}, "partial" if theme_id else "missing", None,
-                 "see get_decision_matrix(theme) for the theme read")]
+        # membership entries key the theme on 'slug' (real data); 'id' is a legacy fallback. The
+        # slug matches allocation.json ranks[].id, so _theme_signal resolves. (Without this the
+        # whole theme lens was silently dead — caught by the adversarial review.)
+        theme_id = mem[0] if isinstance(mem[0], str) else (_g(mem[0], "slug") or _g(mem[0], "id"))
+    sig = _theme_signal(theme_id)
+    if not sig:
+        return [_row("narrative", {"basket": theme_id}, "missing", None,
+                     "no mapped theme — theme confirmation unavailable")]
+    rank, n, score, rel5 = sig["rank"], sig["n_themes"], sig["score"], sig["rel_5d"]
+    # RANK-percentile bands (not the absolute score<0 crossing, which flipped ~2/3 of themes bear).
+    # leader = top third; laggard = bottom third or ineligible; a rolling-over theme (5d rel < -1%)
+    # is bearish wherever it ranks.
+    rolling = rel5 is not None and rel5 < -0.01
+    leader = (rank is not None and n and rank <= max(1, n / 3.0)) and not rolling
+    laggard = (rank is not None and n and rank > 2.0 * n / 3.0) or sig.get("eligible") is False
+    direction = "bear" if (laggard or rolling) else "bull" if leader else "neutral"
+    note = f"theme '{theme_id}' rank {rank}/{n}" + (f", score {score:+.2f}" if score is not None else "") \
+        + (f", 5d rel {rel5 * 100:+.1f}%" if rel5 is not None else "")
+    return [_row("narrative", {"basket": theme_id, "rank": rank, "n_themes": n, "score": score,
+                               "rel_5d": rel5, "rel_20d": sig["rel_20d"], "laggard": laggard,
+                               "rolling_over": rolling, "leader": leader},
+                 "validated", direction, note)]
 
 
 # ---------------- per-THEME lenses ----------------
@@ -419,16 +573,80 @@ def _divergences(rows: list[dict]) -> list[dict]:
     return out
 
 
+# correlated lens blocs — each collapses to ONE net vote so a cheap-value-in-a-benign-macro
+# cohort can't manufacture confluence by tripping five correlated lenses at once. The leadership,
+# price, flow and positioning lenses stay INDEPENDENT (they are genuinely different evidence).
+_FUND_BLOC = {"valuation", "quality", "growth", "solvency", "asymmetry"}   # the value/quality story
+_MACRO_BLOC = {"macro_risk", "fed_path", "cross_asset", "rate_inflation"}  # the shared regime story
+
+
 def synthesize(matrix: dict) -> dict:
+    """Confluence + the size-authority gate.
+
+    DE-CORRELATION: the fundamental/value bloc and the shared macro bloc each collapse to one NET
+    vote (was: ~9 correlated lenses, which let a homogeneous cheap cohort clear together). The
+    leadership (sector_rs), price (trend), theme (narrative), flow and options lenses vote
+    independently — that is genuinely diverse evidence. This makes a cheap laggard-sector name fail
+    the gate (its one fundamental bull is outweighed by sector_rs/trend/theme bears) while a leader
+    in a top sector with independent flow/price confirmation still passes. Hard vetoes
+    (parabolic / Altman / cycle-blocked) still cap size at 0."""
     rows = matrix["rows"]
-    scored = [r for r in rows if r["direction"] in ("bull", "bear")]
-    bull = sum(1 for r in scored if r["direction"] == "bull")
-    bear = sum(1 for r in scored if r["direction"] == "bear")
+    by_lens = {r["lens"]: r for r in rows}
+
+    def _bloc_net(names: set) -> str | None:
+        votes = [r["direction"] for r in rows if r["lens"] in names and r["direction"] in ("bull", "bear")]
+        if not votes:
+            return None
+        net = sum(1 if v == "bull" else -1 for v in votes)
+        return "bull" if net > 0 else "bear" if net < 0 else "neutral"
+
+    fund, macro = _bloc_net(_FUND_BLOC), _bloc_net(_MACRO_BLOC)
+    effective: list[str] = []
+    for b in (fund, macro):
+        if b in ("bull", "bear"):
+            effective.append(b)
+    for r in rows:
+        if r["lens"] in _FUND_BLOC or r["lens"] in _MACRO_BLOC:
+            continue
+        if r["direction"] in ("bull", "bear"):
+            effective.append(r["direction"])
+
+    bull = effective.count("bull")
+    bear = effective.count("bear")
+    n = len(effective)
     vetoes = _hard_vetoes(rows)
-    confluence = round((bull - bear) / max(len(scored), 1), 3)
-    return {"bull": bull, "bear": bear, "n_scored": len(scored), "confluence": confluence,
+    confluence = round((bull - bear) / max(n, 1), 3)
+    trend_dir = (by_lens.get("trend") or {}).get("direction")
+    theme_dir = (by_lens.get("narrative") or {}).get("direction")
+    sector_dir = (by_lens.get("sector_rs") or {}).get("direction")
+    sector_lagging = sector_dir == "bear"            # name's sector is below its 200d trend + bottom-third RS
+    # LEADERSHIP GATE (doctrine: be present in the leader; correlation-structure breaking is the
+    # earliest signal). A cheap name in a hard-lagging sector is fighting the tape — it does not
+    # get a BUY no matter how cheap, UNLESS it sits in a genuine LEADING theme (a cross-sectional
+    # signal that, unlike stale per-name price, a laggard cohort can't fake). This drops the crowded
+    # regional-bank cohort while leaving real leaders (Tech/AI) and a hot-theme name in a soft
+    # sector untouched.
+    leadership_ok = (not sector_lagging) or (theme_dir == "bull")
+    # FALLING-KNIFE GATE (doctrine A1: confirmation over prediction). A name in a confirmed
+    # DOWNTREND (trend lens = bear) does not get a BUY no matter how cheap or how good the story —
+    # you do not catch a falling knife. This is what blocks LPG (4-day -10% freefall, below 50dma)
+    # and NEM (gold miner -21% off its high while gold is in a bear market). A healthy pullback in
+    # an uptrend reads trend=neutral, not bear, so genuine dip-buys (AVGO) are NOT blocked.
+    price_downtrend = trend_dir == "bear"
+    if vetoes:
+        size_authority = "blocked"
+    elif confluence > 0.3 and leadership_ok and not price_downtrend:
+        size_authority = "up"
+    elif confluence < -0.3:
+        size_authority = "down"
+    else:
+        size_authority = "hold"
+    return {"bull": bull, "bear": bear, "n_scored": n, "confluence": confluence,
             "vetoes": vetoes, "divergences": _divergences(rows),
-            "size_authority": "blocked" if vetoes else ("up" if confluence > 0.3 else "down" if confluence < -0.3 else "hold")}
+            "bloc_fund": fund, "bloc_macro": macro,
+            "price_unconfirmed": trend_dir == "bear", "theme_unconfirmed": theme_dir == "bear",
+            "sector_lagging": sector_lagging, "leadership_ok": leadership_ok,
+            "price_downtrend": price_downtrend, "size_authority": size_authority}
 
 
 def full(subject: str, kind: str = "name") -> dict:

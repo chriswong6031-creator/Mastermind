@@ -336,10 +336,12 @@ def api_research_papers() -> JSONResponse:
             "trade_time": g.get("trade_time"),
             "action": g.get("action", "evaluated"),
             "mode": p.get("mode"),
-            "engine_score": rb.get("engine_score"),
+            # prefer the live book's gate result; fall back to the gate the paper stamped on
+            # itself at review time (so a reviewed-but-not-traded name still shows its scores)
+            "engine_score": rb.get("engine_score", p.get("engine_score")),
             "research_score": p.get("research_score"),
-            "combined": rb.get("combined"),
-            "confirmed": rb.get("confirmed"),
+            "combined": rb.get("combined", p.get("combined")),
+            "confirmed": rb.get("confirmed", p.get("confirmed")),
             "viability": p.get("viability"),
             "recommend": p.get("recommend"),
             "confidence": p.get("confidence"),
@@ -350,6 +352,7 @@ def api_research_papers() -> JSONResponse:
             "summary": summary,
             "summary_zh": _cached_zh(summary) if summary else None,
             "report_md": p.get("report_md"),
+            "report_md_zh": _cached_zh(p.get("report_md") or "") if p.get("report_md") else None,
             "key_risks": p.get("key_risks") or [],
         })
     return JSONResponse({"papers": out})
@@ -439,6 +442,36 @@ def api_macro() -> JSONResponse:
     return JSONResponse(out)
 
 
+# ---------------------------------------------------------------------------
+# Brain Log (activity) localisation
+# ---------------------------------------------------------------------------
+# The activity feed assembles its English strings by interpolating tickers,
+# weights and free-text theses, so a pure translation cache can't cover them.
+# Instead each event carries a parallel zh title/detail: the STRUCTURED parts
+# (verbs, sleeves, quadrant names, scaffolding) are mapped deterministically here
+# while tickers/numbers stay verbatim; the FREE-TEXT parts (decision thesis,
+# research note title/body) fall back to cached_zh(). The client picks the _zh
+# variant only when zh is toggled, so English never regresses.
+_TRADE_VERB_ZH = {
+    "buy": "买入", "sell": "卖出", "add": "加仓", "trim": "减仓",
+    "open": "开仓", "close": "平仓", "reduce": "减仓", "increase": "加仓",
+    "exit": "退出", "hold": "持有", "rebalance": "再平衡", "cover": "回补",
+}
+_SLEEVE_ZH = {
+    "conviction": "信念", "mechanical": "机械", "tactical": "战术",
+    "hedge": "对冲", "core": "核心", "satellite": "卫星", "liquidity": "流动性",
+}
+_DECISION_LEAN_ZH = {
+    "buy": "买入", "sell": "卖出", "add": "加仓", "trim": "减仓",
+    "watch": "观察", "hold": "持有", "avoid": "回避", "exit": "退出",
+    "reduce": "减仓", "increase": "加仓",
+}
+_QUAD_ZH = {
+    "Goldilocks": "黄金区间", "Reflation": "再通胀", "Stagflation": "滞胀",
+    "Growth-Scare": "增长恐慌", "Growth Scare": "增长恐慌", "Deflation": "通缩",
+}
+
+
 @router.get("/api/activity")
 def api_activity() -> JSONResponse:
     """Reverse-chronological activity timeline (cap 60).
@@ -448,6 +481,9 @@ def api_activity() -> JSONResponse:
       - decisions[] in latest.json        (kind "decision")
       - research note files               (kind "research")
       - runs table via latest.json as_of  (kind "run")
+
+    Each event also carries title_zh / detail_zh so the Brain Log renders in
+    Chinese when zh is toggled (see the localisation maps above).
     """
     events: list[dict] = []
 
@@ -463,13 +499,22 @@ def api_activity() -> JSONResponse:
                     ticker = entry.get("ticker", key.split(":")[-1])
                     weight = h.get("weight")
                     w_str = f" ({round((weight or 0)*100, 1)}%)" if weight is not None else ""
+                    sleeve = entry.get("sleeve", "")
+                    still_open = entry.get("still_open")
+                    verb_zh = _TRADE_VERB_ZH.get(ev.lower(), ev.upper())
+                    sleeve_zh = _SLEEVE_ZH.get(sleeve.lower(), sleeve)
                     events.append({
                         "ts": ts,
                         "kind": "trade",
                         "title": f"{ev.upper()} {ticker}{w_str}",
+                        "title_zh": f"{verb_zh} {ticker}{w_str}",
                         "detail": (
-                            f"{entry.get('sleeve', '')} sleeve | "
-                            f"{'open' if entry.get('still_open') else 'closed'}"
+                            f"{sleeve} sleeve | "
+                            f"{'open' if still_open else 'closed'}"
+                        ),
+                        "detail_zh": (
+                            f"{sleeve_zh}组合 | "
+                            f"{'持有中' if still_open else '已平仓'}"
                         ),
                     })
     except Exception:
@@ -482,23 +527,38 @@ def api_activity() -> JSONResponse:
             portfolio = json.loads(portfolio_path.read_text())
             asof = portfolio.get("as_of", "")
             for d in portfolio.get("decisions", []):
+                lean = d.get("lean", "watch")
+                subject = d.get("subject", "?")
+                thesis = d.get("thesis") or ""
+                lean_zh = _DECISION_LEAN_ZH.get(lean.lower(), lean.upper())
+                thesis_zh = _cached_zh(thesis) or thesis
                 events.append({
                     "ts": d.get("logged_at") or asof or "",
                     "kind": "decision",
-                    "title": f"Decision: {d.get('lean', 'watch').upper()} {d.get('subject', '?')}",
-                    "detail": (d.get("thesis") or "")[:200],
+                    "title": f"Decision: {lean.upper()} {subject}",
+                    "title_zh": f"决策：{lean_zh} {subject}",
+                    "detail": thesis[:200],
+                    "detail_zh": thesis_zh[:200],
                 })
             # top-level run event
             if asof:
                 regime = (portfolio.get("regime") or {})
+                quad = regime.get("quad_name") or regime.get("quad")
+                quad_zh = _QUAD_ZH.get(quad, quad)
+                gross_pct = portfolio.get("gross", 0) * 100
+                cash_pct = portfolio.get("cash", 0) * 100
                 events.append({
                     "ts": asof,
                     "kind": "run",
                     "title": f"Book rebuilt — {asof}",
+                    "title_zh": f"组合重建 — {asof}",
                     "detail": (
-                        f"Quad: {regime.get('quad_name') or regime.get('quad')} | "
-                        f"gross={portfolio.get('gross', 0)*100:.1f}% "
-                        f"cash={portfolio.get('cash', 0)*100:.1f}%"
+                        f"Quad: {quad} | "
+                        f"gross={gross_pct:.1f}% cash={cash_pct:.1f}%"
+                    ),
+                    "detail_zh": (
+                        f"象限：{quad_zh} | "
+                        f"总敞口={gross_pct:.1f}% 现金={cash_pct:.1f}%"
                     ),
                 })
     except Exception:
@@ -518,13 +578,22 @@ def api_activity() -> JSONResponse:
                     continue
                 seen.add(key)
                 tickers_str = (", ".join(note["tickers"]) if note.get("tickers") else "")
+                title = note["title"]
+                body_md = note.get("body_md") or ""
+                title_zh = _cached_zh(title) or title
+                body_zh = _cached_zh(body_md) or body_md
                 events.append({
                     "ts": note["date"],
                     "kind": "research",
-                    "title": note["title"],
+                    "title": title,
+                    "title_zh": title_zh,
                     "detail": (
                         (f"Tickers: {tickers_str} | " if tickers_str else "")
-                        + (note.get("body_md") or "")[:160]
+                        + body_md[:160]
+                    ),
+                    "detail_zh": (
+                        (f"标的：{tickers_str} | " if tickers_str else "")
+                        + body_zh[:160]
                     ),
                 })
     except Exception:

@@ -141,6 +141,32 @@ def test_split_sections_parses_real_markdown():
 
 
 # ---------------------------------------------------------------------------
+# leaked-narration stripper (agent chatter before the first heading)
+# ---------------------------------------------------------------------------
+
+def test_strip_leading_narration_removes_preamble():
+    leaked = "I have what I need. Writing the report.\n\n" + _SAMPLE_REPORT
+    cleaned = rp._strip_leading_narration(leaked)
+    assert cleaned.startswith("## Thesis")
+    assert "I have what I need" not in cleaned
+    # real content is preserved intact
+    assert "picks-and-shovels" in cleaned
+    assert "## Other factors" in cleaned
+
+
+def test_strip_leading_narration_leaves_clean_report_unchanged():
+    cleaned = rp._strip_leading_narration(_SAMPLE_REPORT)
+    assert cleaned.strip() == _SAMPLE_REPORT.strip()
+
+
+def test_strip_leading_narration_no_heading_is_untouched():
+    # conservative: with no markdown heading at all, never drop content
+    prose = "Just some prose with no heading and a #1 mention but no real header."
+    assert rp._strip_leading_narration(prose) == prose
+    assert rp._strip_leading_narration("") == ""
+
+
+# ---------------------------------------------------------------------------
 # combined gate (engine buy-score + research score)
 # ---------------------------------------------------------------------------
 

@@ -43,6 +43,18 @@ def _us_standouts(n: int = TOP_US) -> list[str]:
     return [r.get("ticker") for r in buy[:n] if isinstance(r, dict) and r.get("ticker")]
 
 
+SECTOR_MAX_NAMES = 3   # concentration firebreak: at most N names from any one sector in the book
+
+
+def _sector_of(t: str) -> str:
+    """Normalised sector key for the concentration cap — collapses synonym labels
+    ('Technology' / 'Information Technology' -> XLK) via the sector→ETF map so a cohort can't
+    dodge the cap by sitting under two spellings of the same sector."""
+    d = _load(f"site/stockdata/{t}.json")
+    sec = (d or {}).get("sector") or "Unknown"
+    return lenses._SECTOR_ETF.get(sec, sec)
+
+
 def _basket_top_picks(n: int = TOP_BASKET) -> list[str]:
     """Top-N single-name picks across all thematic baskets, ranked by 20-day return.
 
@@ -89,12 +101,16 @@ def candidates() -> list[str]:
     return sorted(set(_SHORTLIST) | set(universe()) | proposed | fed_in)
 
 
-def build(budget: float, name_cap: float = 0.08) -> tuple[list[dict], list[dict]]:
+def build(budget: float, name_cap: float = 0.08,
+          held: set | None = None) -> tuple[list[dict], list[dict]]:
     """Return (sized_positions, rejected) where rejected contains every evaluated name
     that did NOT make the size gate, with the veto/bear detail that kept it out.
 
-    Sizing behaviour is unchanged — this only adds visibility into the gate's decisions.
+    `held` = tickers already open in the conviction book; they get priority in the sector cap
+    (hysteresis) so a name isn't churned in/out across builds when a marginally-higher new name
+    appears. Sizing behaviour is otherwise unchanged.
     """
+    held = {h.upper() for h in (held or set())}
     passed = []
     rejected: list[dict] = []
 
@@ -186,6 +202,36 @@ def build(budget: float, name_cap: float = 0.08) -> tuple[list[dict], list[dict]
                 "bear": bear_pts,
                 "confluence": round(confluence, 3),
             })
+
+    # ── sector-concentration firebreak (position-sizing discipline) ──
+    # A book that nominates a whole homogeneous cohort is broken by construction even when each
+    # name scores well in isolation. Within any one sector keep only the top SECTOR_MAX_NAMES by
+    # confluence; demote the rest with a clear reason. (The leadership gate has already removed
+    # hard-lagging sectors entirely; this stops the SURVIVING leading sectors from crowding out.)
+    from collections import defaultdict
+    _by_sector: dict[str, list] = defaultdict(list)
+    for p in passed:
+        _by_sector[_sector_of(p["ticker"])].append(p)
+    kept: list[dict] = []
+    for sec, names in _by_sector.items():
+        # never cap the catch-all 'Unknown' bucket (unrelated names with no sector tag are not a
+        # cohort) — only cap real, same-sector concentration.
+        if sec == "Unknown":
+            kept.extend(names)
+            continue
+        # hysteresis: currently-held names rank ahead of new ones, then by confluence — so a held
+        # position isn't churned out by a marginally-stronger newcomer.
+        names.sort(key=lambda x: (x["ticker"].upper() in held, x["confluence"]), reverse=True)
+        kept.extend(names[:SECTOR_MAX_NAMES])
+        for extra in names[SECTOR_MAX_NAMES:]:
+            rejected.append({
+                "ticker": extra["ticker"],
+                "reason": (f"Sector cap: '{sec}' already holds {SECTOR_MAX_NAMES} higher-priority "
+                           f"names (concentration firebreak)"),
+                "vetoes": [], "confluence": round(extra["confluence"], 3),
+                "bear": [f"Crowded cohort — {sec} capped at top {SECTOR_MAX_NAMES}"],
+            })
+    passed = kept
 
     # confidence-weighted sizing (unchanged)
     tot = sum(p["confluence"] for p in passed) or 1.0

@@ -118,7 +118,11 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
     conv_budget = sum(cfg["sleeves"]["conviction_target"]) / 2
     decisions = []
     _synth_map: dict[str, tuple[dict, list]] = {}
-    _build_result = conviction.build(conv_budget, name_cap=cfg["caps"]["name_cap"])
+    # currently-held conviction names get sector-cap priority (hysteresis) so the book doesn't
+    # churn a name in and out across builds (the NVDA in/out problem).
+    _held_conv = {p["ticker"] for p in position_log.open_positions()
+                  if p.get("sleeve") == "conviction"}
+    _build_result = conviction.build(conv_budget, name_cap=cfg["caps"]["name_cap"], held=_held_conv)
     # conviction.build returns (sized_list, rejected_list) as a tuple
     if isinstance(_build_result, tuple) and len(_build_result) == 2:
         sized, _rejected = _build_result

@@ -135,6 +135,19 @@ def score_breakdown(confluence: float, paper: dict) -> dict:
             "recommend": recommend, "reason": reason or "confirmed"}
 
 
+def _attach_gate(paper: dict, confluence: float) -> dict:
+    """Stamp the combined-gate result onto the paper so a standalone (reviewed-but-not-traded)
+    paper is self-describing — the Research page can show the Conviction Index even when the
+    name isn't in the live book. `confluence` is the engine read at review time."""
+    g = score_breakdown(confluence, paper)
+    paper["confluence"] = round(confluence, 3)
+    paper["engine_score"] = g["engine_score"]
+    paper["combined"] = g["combined"]
+    paper["confirmed"] = g["confirmed"]
+    paper["gate_reason"] = g["reason"]
+    return paper
+
+
 # ---------------------------------------------------------------------------
 # deterministic (engine-only) report + score
 # ---------------------------------------------------------------------------
@@ -175,6 +188,11 @@ def _deterministic_score(rows: list[dict], confluence: float) -> int:
         ("extension", "bear"): -4,
         ("flows_13f", "bull"): 3, ("flows_13f", "bear"): -3,
         ("solvency", "bear"): -15,
+        # leadership / price / theme — the Brain mirrors the engine's confirmation discipline so a
+        # cheap name in a lagging sector or a downtrend can't read 'compelling' (the bank-cohort fix)
+        ("sector_rs", "bull"): 6, ("sector_rs", "bear"): -16,
+        ("trend", "bull"): 4, ("trend", "bear"): -12,
+        ("narrative", "bull"): 4, ("narrative", "bear"): -8,
     }
     for (lens, want), d in deltas.items():
         if _dir_of(rows, lens) == want:
@@ -185,11 +203,14 @@ def _deterministic_score(rows: list[dict], confluence: float) -> int:
 def _viability(score: int, rows: list[dict]) -> str:
     val_dir = _dir_of(rows, "valuation")
     ext_dir = _dir_of(rows, "extension")
-    if score < 45:
-        return "avoid"
-    if (val_dir == "bear" or ext_dir == "bear") and score < 66:
+    sector_lag = _dir_of(rows, "sector_rs") == "bear"
+    downtrend = _dir_of(rows, "trend") == "bear"
+    # a fundamentally-fine name fighting a lagging sector or in a downtrend is never 'compelling'
+    if score < 45 or downtrend:
+        return "avoid" if (score < 45) else "rich"
+    if (val_dir == "bear" or ext_dir == "bear" or sector_lag) and score < 70:
         return "rich"
-    if score >= 72:
+    if score >= 72 and not sector_lag:
         return "compelling"
     return "fair"
 
@@ -410,7 +431,7 @@ def _deterministic(ticker: str, *, asof: str, rows: list[dict], confluence: floa
         "sections": sections, "key_risks": cons[:4],
     }
     paper["report_md"] = render_markdown(paper)
-    return paper
+    return _attach_gate(paper, confluence)
 
 
 # ---------------------------------------------------------------------------
@@ -546,6 +567,24 @@ def _parse_verdict(text: str) -> dict | None:
     return None
 
 
+def _strip_leading_narration(md: str) -> str:
+    """Drop any leading agent narration that leaked in before the report's first markdown
+    heading (e.g. "I have what I need. Writing the report.").
+
+    The armed report is prompted to begin at "## Thesis", but the agent's chatter sometimes
+    bleeds into the saved text and then renders verbatim in the dashboard's thesis modal (in
+    both English and the Chinese translation). Conservative: only removes whole lines BEFORE
+    the first ATX heading (#/##/###...), and only when such a heading exists — if the text has
+    no heading at all, it is returned untouched so real content is never dropped."""
+    if not md:
+        return md
+    lines = md.splitlines()
+    for i, line in enumerate(lines):
+        if re.match(r"^\s{0,3}#{1,6}\s+\S", line):
+            return "\n".join(lines[i:]).strip()
+    return md
+
+
 def _split_sections(md: str) -> dict[str, Any]:
     """Parse a markdown report (## headings) into the section dict, matching SECTION_ORDER
     headings case-insensitively. List sections become lists of bullet strings."""
@@ -640,6 +679,10 @@ def generate(ticker: str, *, asof: str, confluence: float, rows: list[dict],
         fb["fallback_error"] = (res or {}).get("error") or "armed report empty"
         return fb
 
+    # strip any leaked agent narration before the first heading so report_md (and the parsed
+    # sections / summary below) begin at the real report content, not the agent's chatter.
+    report = _strip_leading_narration(report)
+
     # ---- re-digest pass (un-armed, no tools): the report -> the verdict JSON ----
     redigest_prompt = (REDIGEST_PROMPT
                        .replace("{ticker}", ticker)
@@ -681,7 +724,7 @@ def generate(ticker: str, *, asof: str, confluence: float, rows: list[dict],
     }
     # keep the model's own markdown as the canonical report body; append the verdict footer
     paper["report_md"] = report.strip() + "\n\n" + _verdict_footer(paper)
-    return paper
+    return _attach_gate(paper, confluence)
 
 
 def _verdict_footer(paper: dict) -> str:

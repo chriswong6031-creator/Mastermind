@@ -146,6 +146,47 @@ def _live_price(ticker: str) -> float | None:
     return None
 
 
+def _current_price(ticker: str) -> float | None:
+    """Best available current/last-close price for a ticker: the stockdata live mark first,
+    else the last point of the engine price series (covers the leadership-sleeve ETFs)."""
+    px = _live_price(ticker)
+    if px and px > 0:
+        return px
+    s = _fetch_price_series(ticker)
+    try:
+        if s is not None and len(s) > 0:
+            return float(s.iloc[-1])
+    except Exception:
+        pass
+    return None
+
+
+def reset_cost_basis_to_market(prices: dict[str, float] | None = None) -> dict[str, float]:
+    """Reset every holding's avg_cost to its CURRENT market price → wipes unrealized P&L.
+
+    Used when the book is marked flat with no trading (e.g. the market has been closed all day):
+    nothing actually traded, so carrying a stale unrealized gain/loss is wrong. Only the cost
+    basis — and therefore unrealized P&L — is reset to zero as of now.
+
+    NAV-safe: a holding is reset ONLY to a real current mark. `prices` (the same marks nav()/
+    positions_pnl() use) is preferred; the stockdata live price is the per-name fallback. A name
+    with NO available mark is SKIPPED (never reset to a stale series value) so the avg_cost — which
+    nav() falls back to when a live quote is missing — can't silently shift the portfolio total.
+    Returns {ticker: new_cost_basis}. Paper-only."""
+    state = _load_account()
+    prices = prices or {}
+    updated: dict[str, float] = {}
+    for ticker, pos in state.get("positions", {}).items():
+        px = prices.get(ticker)
+        if px is None:
+            px = _live_price(ticker)          # the stockdata mark (consistent with the marks elsewhere)
+        if px and px > 0 and pos.get("shares"):
+            pos["avg_cost"] = round(float(px), 4)
+            updated[ticker] = pos["avg_cost"]
+    _save_account(state)
+    return updated
+
+
 # ---------------------------------------------------------------------------
 # core account operations
 # ---------------------------------------------------------------------------

@@ -5,13 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>MASTERMIND — Portfolio Dashboard</title>
 
-<!-- 1. No-flash theme init — MUST be first script, before stylesheets -->
+<!-- 1. No-flash theme init — MUST be first script, before stylesheets.
+     Always set BOTH attributes (defaulting dark/en) so the animated theme-switch
+     and lang-toggle reflect the live state from first paint — their CSS keys off
+     html[data-theme="dark"] / html[data-lang="zh"], which need the attribute present. -->
 <script>
 try {
-  var t = localStorage.getItem('theme');
-  if (t) document.documentElement.setAttribute('data-theme', t);
-  var l = localStorage.getItem('lang');
-  if (l) document.documentElement.setAttribute('data-lang', l);
+  document.documentElement.setAttribute('data-theme', localStorage.getItem('theme') || 'dark');
+  document.documentElement.setAttribute('data-lang', localStorage.getItem('lang') || 'en');
 } catch(e) {}
 </script>
 
@@ -1266,8 +1267,23 @@ body.page-mm .mm-nav-tab { background: var(--panel2); border: 1px solid var(--li
 body.page-mm .mm-nav-tab:hover { color: var(--text); border-color: var(--muted); }
 body.page-mm .mm-nav-tab.active { color: var(--bg); background: var(--text); border-color: var(--text); }
 body.page-mm .mm-nav-spacer { margin-left: auto; }
-body.page-mm .mm-nav-ctrls { display: flex; gap: 8px; align-items: center; }
-body.page-mm .mm-nav-ctrls button { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 4px 11px; font-size: 11px; cursor: pointer; color: var(--text); font-weight: 600; }
+body.page-mm .mm-nav-ctrls { display: flex; gap: 10px; align-items: center; }
+/* ── Macro Dashboard animated theme + language toggles (ported) ──────────────
+   --panel2 already flips per theme, so it replaces the macro version's hardcoded
+   #eef1f6 / #222732; --info = the macro --blue accent, --line = its --grid. */
+body.page-mm .lang-toggle { display: inline-flex; position: relative; background: var(--panel2); border: 1px solid var(--line); border-radius: 999px; padding: 3px; cursor: pointer; flex: none; }
+body.page-mm .lang-toggle .pill { position: absolute; top: 3px; left: 3px; width: calc(50% - 3px); height: calc(100% - 6px); border-radius: 999px; background: var(--info); transition: transform .34s cubic-bezier(.34,1.4,.5,1); }
+html[data-lang="zh"] body.page-mm .lang-toggle .pill { transform: translateX(100%); }
+body.page-mm .lang-toggle .opt { position: relative; z-index: 1; min-width: 28px; text-align: center; padding: 3px 9px; font-size: 11.5px; font-weight: 600; color: var(--muted); transition: color .25s; user-select: none; }
+html:not([data-lang="zh"]) body.page-mm .lang-toggle .en-opt { color: #fff; }
+html[data-lang="zh"] body.page-mm .lang-toggle .zh-opt { color: #fff; }
+body.page-mm .theme-switch { width: 56px; height: 27px; border-radius: 999px; background: var(--panel2); border: 1px solid var(--line); position: relative; cursor: pointer; padding: 0; flex: none; }
+body.page-mm .theme-switch .ic { position: absolute; top: 50%; transform: translateY(-50%); font-size: 10.5px; opacity: .5; line-height: 1; }
+body.page-mm .theme-switch .ic.sun { right: 8px; } body.page-mm .theme-switch .ic.moon { left: 8px; }
+body.page-mm .theme-switch .knob { position: absolute; top: 2px; left: 2px; width: 22px; height: 22px; border-radius: 50%; background: var(--info); display: flex; align-items: center; justify-content: center; font-size: 11px; box-shadow: 0 2px 5px rgba(0,0,0,.3); transform: translateX(29px); transition: transform .34s cubic-bezier(.34,1.45,.5,1), background .3s; }
+body.page-mm .theme-switch .knob::before { content: "☀️"; }
+html[data-theme="dark"] body.page-mm .theme-switch .knob { transform: translateX(0); background: #e8c15a; }
+html[data-theme="dark"] body.page-mm .theme-switch .knob::before { content: "🌙"; }
 
 /* view switching: in research view, hide the dashboard sections; show the research page */
 body.page-mm #view-research { display: none; }
@@ -1353,11 +1369,16 @@ body.page-mm .mm-rd-link:hover { border-color: var(--info); color: var(--info); 
     <button class="mm-nav-tab" id="nav-research" type="button" onclick="showView('research')"><span class="l-en">Research</span><span class="l-zh">研究</span></button>
   </span>
   <span class="mm-nav-spacer"></span>
-  <!-- theme + lang toggles live here so they stay visible in BOTH views; theme.js wires
-       every .theme-btn / .lang-btn via querySelectorAll, so these stay in sync. -->
+  <!-- theme + lang toggles live here so they stay visible in BOTH views. These are
+       the Macro Dashboard's animated controls; theme.js wires every .theme-switch
+       (toggleTheme) and .lang-toggle .opt (setLang), pure-CSS visuals off data-theme/lang. -->
   <span class="mm-nav-ctrls">
-    <button class="theme-btn" type="button"></button>
-    <button class="lang-btn" type="button"></button>
+    <button class="theme-switch" type="button" aria-label="Toggle dark / light mode"><span class="ic sun">☀️</span><span class="ic moon">🌙</span><span class="knob"></span></button>
+    <div class="lang-toggle" role="group" aria-label="Language">
+      <span class="pill"></span>
+      <span class="opt en-opt" data-l="en">EN</span>
+      <span class="opt zh-opt" data-l="zh">中文</span>
+    </div>
   </span>
 </div>
 
@@ -2866,10 +2887,17 @@ function renderBrainLog() {
   }
 
   var ICONS = { trade: '↕', decision: '◉', research: '◎', run: '▷' };
+  var KIND_ZH = { trade: '交易', decision: '决策', research: '研究', run: '运行' };
+  var isZh = document.documentElement.getAttribute('data-lang') === 'zh';
   var html = '<h2><span class="l-en">Brain Log</span><span class="l-zh">脑波日志</span></h2><div class="mm-timeline">';
   _activity.forEach(function(e, i) {
     var kind = e.kind || 'run';
     var isLast = i === _activity.length - 1;
+    // zh title/detail come from /api/activity (deterministic labels + cached free-text);
+    // fall back to English when a _zh field is absent so nothing ever renders blank
+    var title = (isZh && e.title_zh) ? e.title_zh : (e.title || '—');
+    var detail = (isZh && e.detail_zh) ? e.detail_zh : (e.detail || '');
+    var kindLabel = (isZh && KIND_ZH[kind]) ? KIND_ZH[kind] : kind;
     html += '<div class="mm-tl-item">' +
       '<div class="mm-tl-ts">' + fmtTsShort(e.ts) + '</div>' +
       '<div class="mm-tl-node">' +
@@ -2877,9 +2905,9 @@ function renderBrainLog() {
         (isLast ? '' : '<div class="mm-tl-line"></div>') +
       '</div>' +
       '<div class="mm-tl-content">' +
-        '<div><span class="mm-kind-chip mm-kind-' + kind + '">' + (ICONS[kind]||'·') + ' ' + kind + '</span></div>' +
-        '<div class="mm-tl-title">' + esc(e.title||'—') + '</div>' +
-        (e.detail ? '<div class="mm-tl-detail">' + esc(e.detail.slice(0,200)) + (e.detail.length > 200 ? '…' : '') + '</div>' : '') +
+        '<div><span class="mm-kind-chip mm-kind-' + kind + '">' + (ICONS[kind]||'·') + ' ' + kindLabel + '</span></div>' +
+        '<div class="mm-tl-title">' + esc(title) + '</div>' +
+        (detail ? '<div class="mm-tl-detail">' + esc(detail.slice(0,200)) + (detail.length > 200 ? '…' : '') + '</div>' : '') +
       '</div>' +
     '</div>';
   });
@@ -3008,10 +3036,12 @@ window.openThesis = function(id) {
            '<div class="val" style="color:' + color + '">' + s.val + '</div></div>';
   }).join('');
 
-  // the report body is the canonical markdown; show the (translated) summary as a lead-in
+  // the report body is the canonical markdown; show the (translated) summary as a lead-in.
+  // Both prefer the zh variant when present and fall back to English when uncached.
   var summary = (isZh && p.summary_zh) ? p.summary_zh : (p.summary || '');
+  var reportMd = (isZh && p.report_md_zh) ? p.report_md_zh : (p.report_md || '');
   var lead = summary ? '<p style="color:var(--muted);font-style:italic;margin-bottom:14px">' + esc(summary) + '</p>' : '';
-  E('mm-modal-body').innerHTML = lead + renderMd(p.report_md || '');
+  E('mm-modal-body').innerHTML = lead + renderMd(reportMd);
 
   var modal = E('mm-thesis-modal');
   modal.classList.add('open');
