@@ -1,5 +1,5 @@
 [project]
-name = "narrator-bot"
+name = "mastermind"
 version = "0.0.1"
 description = "Autonomous narrative-investing agent over the macro dashboard engine"
 requires-python = ">=3.11"

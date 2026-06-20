@@ -1,4 +1,4 @@
-# narrator-bot — Claude brain config (Phase 0 stub)
+# Mastermind — Claude brain config (Phase 0 stub)
 # The brain runs on a 3-tier gated cadence, NEVER a continuous loop.
 
 llm:

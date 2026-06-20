@@ -1,4 +1,4 @@
--- narrator-bot — doctrine integration schema delta (applies after 0001)
+-- Mastermind — doctrine integration schema delta (applies after 0001)
 -- Adds the thematic-rotation doctrine's per-lot fields + the detector feed.
 -- All additive; nothing here is a scored alpha column.
 

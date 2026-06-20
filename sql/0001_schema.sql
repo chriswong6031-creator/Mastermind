@@ -1,4 +1,4 @@
--- narrator-bot — consolidated system-of-record schema (Phase 0/2)
+-- Mastermind — consolidated system-of-record schema (Phase 0/2)
 -- Postgres owns mutable, accountable state. The vendored macro parquet store
 -- stays append-only and read-only (queried via DuckDB), never written here.
 --

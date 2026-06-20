@@ -1,4 +1,4 @@
-# narrator-bot
+# Mastermind
 
 Autonomous, narrative-based, medium/long-term **US-equity** investment agent. A
 live "breathing" web app that reuses the macro dashboard's engine as a library,
@@ -16,7 +16,7 @@ strategies in from the side. Three invariants: the macro repo is a **pinned,
 read-only submodule**; **nothing executes**; **sizing is subtract-only**.
 
 ```
-narrator-bot/
+Mastermind/
   vendor/macro/      pinned submodule (symlink in local Phase 0) — engine.* lib
   app/               FastAPI service (deps bootstrap, /health, /regime)
   bot/               package root — bootstraps vendor/macro onto sys.path; smoke test

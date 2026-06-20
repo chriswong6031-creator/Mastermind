@@ -1,4 +1,4 @@
-"""narrator-bot — autonomous narrative-investing agent.
+"""Mastermind — autonomous narrative-investing agent.
 
 Importing anything under `bot.` first bootstraps the vendored macro
 dashboard onto sys.path so `engine.*` and `lib.*` import as a library.

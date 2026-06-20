@@ -41,7 +41,7 @@ if FastAPI is not None:
         append_system: str | None = None
         max_turns: int | None = None
 
-    app = FastAPI(title="narrator-bot", version="0.0.1")
+    app = FastAPI(title="Mastermind", version="0.0.1")
 
     @app.get("/health")
     def health() -> dict:

@@ -1,4 +1,4 @@
-# narrator-bot — context for the reasoning layer
+# Mastermind — context for the reasoning layer
 
 You are the LLM reasoning layer for an autonomous, **paper-only**, narrative-based,
 medium/long-term **US-equity** investment bot. The FastAPI server invokes you headlessly
@@ -11,7 +11,7 @@ never auto-executes.
   intelligence stack: `engine/` (~199 modules), `lib/store.py`, `data/` (parquet store),
   and `site/*.json` published signal contracts. Import-as-a-library; `data/regime/latest.json`
   is the canonical regime read.
-- This repo (`narrator-bot/`) — the bot: `brain/` (decision/ledger/scorer/gate/panel),
+- This repo (`Mastermind/`) — the bot: `brain/` (decision/ledger/scorer/gate/panel),
   `loop/` (self-improving backtest loop), `portfolio/` (sleeves/scorecard/stages),
   `data_layer/`, `bridge/`. `DOCTRINE.md` is the operating doctrine; `config/*.yml` the params.
 

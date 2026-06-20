@@ -1,6 +1,6 @@
 # Operating doctrine — thematic rotation & leadership participation
 
-Adapted from an externally-authored framework into the narrator-bot's autonomous,
+Adapted from an externally-authored framework into the Mastermind's autonomous,
 paper-only context. The original was written for a **human operator with discretion**
 whose documented failure it critiques (≈100% in a high-conviction, inversely-correlated
 crypto/COIN/BTC position during an AI/memory/semis leadership regime, with no dry powder
