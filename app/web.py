@@ -103,6 +103,31 @@ def theme_js() -> FileResponse:
     return FileResponse(_STATIC / "theme.js", media_type="application/javascript")
 
 
+@router.get("/api/performance")
+def api_performance() -> JSONResponse:
+    """Equity curve and performance summary for the $1M paper account."""
+    try:
+        from portfolio import paper_account
+        payload = paper_account.performance()
+        return JSONResponse(payload)
+    except Exception as exc:
+        # never 500 — return a safe minimal payload
+        return JSONResponse({
+            "inception_date": None,
+            "starting_nav": 1_000_000,
+            "current_nav": 1_000_000,
+            "cash": 1_000_000,
+            "invested": 0.0,
+            "total_return_pct": 0.0,
+            "vs_spy_pct": 0.0,
+            "day_change_pct": 0.0,
+            "max_drawdown_pct": 0.0,
+            "realized_since": None,
+            "series": [],
+            "note": f"Performance unavailable: {exc}",
+        })
+
+
 @router.get("/api/portfolio")
 def api_portfolio() -> JSONResponse:
     path = _data() / "portfolio" / "latest.json"
@@ -251,6 +276,31 @@ def api_activity() -> JSONResponse:
     # sort newest first, cap at 60
     events.sort(key=lambda e: e.get("ts") or "", reverse=True)
     return JSONResponse(events[:60])
+
+
+
+
+@router.get("/api/runs")
+def api_runs() -> JSONResponse:
+    """List all run-log entries, newest first.
+    Each entry: {run_id, ts, kind, title, n_steps, cost_usd, summary}."""
+    try:
+        from brain import runlog
+        return JSONResponse(runlog.list_runs())
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+@router.get("/api/runlog")
+def api_runlog(run_id: str | None = None) -> JSONResponse:
+    """Return the complete granular step-trace for a run.
+    Pass ?run_id=ID or omit for the most recent run.
+    Returns {run_id, ts, kind, title, steps: [{ts, type, title, detail, ...}]}."""
+    try:
+        from brain import runlog
+        return JSONResponse(runlog.read_run(run_id or None))
+    except Exception as exc:
+        return JSONResponse({"run_id": run_id, "steps": [], "error": str(exc)}, status_code=500)
 
 
 @router.get("/api/competitors")

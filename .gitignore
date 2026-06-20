@@ -8,8 +8,10 @@ __pycache__/
 vendor/macro
 # local data the bot writes (the published copy lives in the macro repo's site/)
 data/portfolio/*.json
+data/portfolio/*.jsonl
 data/brain/*.jsonl
 data/brain/*.json
+data/brain/runs/
 data/signal_archive/*.parquet
 data/*.db
 data/research/

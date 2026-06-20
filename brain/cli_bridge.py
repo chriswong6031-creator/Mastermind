@@ -103,21 +103,72 @@ async def reason(prompt: str, *, role: str = "pm", model: str | None = None,
         return {**base, "ok": False, "backend": "none", "text": None,
                 "error": "claude CLI not installed (npm i -g @anthropic-ai/claude-code)"}
 
+    # --- run-log: open a new run for this session ---
+    _run_id: str | None = None
+    try:
+        from brain import runlog as _rl
+        _kind = "research" if arm else "daily"
+        _run_id = _rl.start_run(_kind, title=prompt[:120])
+        _rl.log_step(_run_id, "reasoning", "session start",
+                     f"prompt={prompt[:300]} role={role} model={mdl} armed={arm} turns={turns}")
+    except Exception:
+        pass
+
     if _SDK:
         try:
-            return await _via_sdk(prompt, mdl, role, system, append_system, tools, dirs, turns, workdir,
-                                  rc.get("permission_mode", "default"), mcp_servers, resume, arm)
+            result = await _via_sdk(prompt, mdl, role, system, append_system, tools, dirs, turns, workdir,
+                                    rc.get("permission_mode", "default"), mcp_servers, resume, arm,
+                                    run_id=_run_id)
+            # close the run
+            try:
+                from brain import runlog as _rl
+                if _run_id:
+                    _rl.end_run(_run_id,
+                                summary=str(result.get("text") or "")[:200],
+                                cost_usd=result.get("cost_usd"))
+            except Exception:
+                pass
+            if _run_id:
+                result["run_id"] = _run_id
+            return result
         except Exception as e:           # fall through to the CLI subprocess (non-armed only)
             base["sdk_error"] = repr(e)[:200]
+            try:
+                from brain import runlog as _rl
+                if _run_id:
+                    _rl.log_step(_run_id, "reasoning", "sdk error", repr(e)[:500])
+            except Exception:
+                pass
+
     if arm:
+        try:
+            from brain import runlog as _rl
+            if _run_id:
+                _rl.end_run(_run_id, summary="armed research failed — SDK not available")
+        except Exception:
+            pass
         return {**base, "ok": False, "backend": "none", "text": None,
-                "error": base.get("sdk_error") or "armed research needs the Agent SDK + a subscription credential"}
-    return await _via_subprocess(prompt, mdl, role, system, append_system, tools, dirs, turns, workdir,
-                                 rc.get("permission_mode", "default"), base)
+                "error": base.get("sdk_error") or "armed research needs the Agent SDK + a subscription credential",
+                "run_id": _run_id}
+
+    result = await _via_subprocess(prompt, mdl, role, system, append_system, tools, dirs, turns, workdir,
+                                   rc.get("permission_mode", "default"), base)
+    try:
+        from brain import runlog as _rl
+        if _run_id:
+            _rl.log_step(_run_id, "reasoning", "subprocess result",
+                         str(result.get("text") or "")[:1000])
+            _rl.end_run(_run_id,
+                        summary=str(result.get("text") or "")[:200],
+                        cost_usd=result.get("cost_usd"))
+            result["run_id"] = _run_id
+    except Exception:
+        pass
+    return result
 
 
 async def _via_sdk(prompt, mdl, role, system, append_system, tools, dirs, turns, workdir, perm,
-                   mcp_servers, resume, arm) -> dict:
+                   mcp_servers, resume, arm, run_id: str | None = None) -> dict:
     opts = _Options(model=mdl, allowed_tools=tools, add_dirs=dirs, cwd=workdir,
                     max_turns=turns, permission_mode=perm, env=_subscription_env())
     if mcp_servers:
@@ -129,6 +180,15 @@ async def _via_sdk(prompt, mdl, role, system, append_system, tools, dirs, turns,
     if append_system:
         opts.append_system_prompt = append_system
     text, cost, sid, usage, used = None, None, None, None, []
+
+    # run-log integration — import lazily so the module is optional
+    try:
+        from brain import runlog as _rl
+        _log = _rl.log_step
+    except Exception:
+        _rl = None
+        _log = None
+
     async for msg in _sdk_query(prompt=prompt, options=opts):
         if hasattr(msg, "result"):                         # ResultMessage
             text = getattr(msg, "result", None) or text
@@ -139,9 +199,40 @@ async def _via_sdk(prompt, mdl, role, system, append_system, tools, dirs, turns,
             for b in (getattr(msg, "content", []) or []):
                 bt = getattr(b, "type", "")
                 if bt == "text" and getattr(b, "text", ""):
-                    text = (text or "") + b.text if text is None else b.text
+                    chunk = b.text
+                    text = (text or "") + chunk if text is None else chunk
+                    # log reasoning chunk
+                    if run_id and _log:
+                        try:
+                            _log(run_id, "reasoning", "assistant text",
+                                 chunk[:2000])
+                        except Exception:
+                            pass
                 elif bt == "tool_use":
-                    used.append(getattr(b, "name", "?"))
+                    name = getattr(b, "name", "?")
+                    used.append(name)
+                    # log tool call
+                    if run_id and _log:
+                        try:
+                            inp = getattr(b, "input", {}) or {}
+                            _log(run_id, "tool_call", f"call {name}",
+                                 json.dumps(inp, default=str)[:2000],
+                                 tool=name, args=inp)
+                        except Exception:
+                            pass
+        # ToolResult messages (some SDK versions)
+        elif hasattr(msg, "tool_use_id") or (getattr(msg, "type", "") == "tool_result"):
+            if run_id and _log:
+                try:
+                    content = getattr(msg, "content", "") or ""
+                    if isinstance(content, list):
+                        content = " ".join(
+                            getattr(c, "text", str(c)) for c in content)
+                    _log(run_id, "tool_result", "tool result",
+                         str(content)[:2000], result=str(content)[:2000])
+                except Exception:
+                    pass
+
     return {"ok": bool(text), "text": text, "model": mdl, "role": role, "armed": arm,
             "tools_used": used, "cost_usd": cost, "session_id": sid,
             "usage": _as_dict(usage), "backend": "sdk"}

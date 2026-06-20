@@ -95,11 +95,49 @@ def _leadership_thesis(position: dict, facts: dict | None) -> dict:
         f"Weight = {weight_pct}% (sleeve budget ÷ number of qualifying leaders). "
         f"No confluence gate required; the trend filter is the only gate."
     )
+
+    # ---- bear case for a mechanical leadership ETF ----
+    # Pull real numbers from tech facts where available (passed via facts dict by phase2).
+    pv2: float | None = (facts or {}).get("pct_vs_200dma")
+    bear_bullets: list[str] = [
+        (
+            f"Leadership rotation: held ONLY while RS stays top-decile (currently {rs_str}) "
+            f"— exits mechanically if RS drops below the 70th percentile; no discretion."
+        ),
+        (
+            "Breadth / narrowing risk: sector ETF performance can be driven by a handful "
+            "of mega-cap names; if underlying breadth narrows the ETF masks single-name "
+            "concentration risk."
+        ),
+    ]
+    if pv2 is not None:
+        if pv2 >= 20:
+            bear_bullets.append(
+                f"Extended +{pv2:.1f}% above 200-day MA — mean-reversion risk is elevated; "
+                f"a sharp macro reversal could produce a quick −10–20% draw before the "
+                f"trend filter exits the position."
+            )
+        else:
+            bear_bullets.append(
+                f"Currently +{pv2:.1f}% above 200-day MA — within normal range, but any "
+                f"broad risk-off flush can close this gap rapidly."
+            )
+    else:
+        bear_bullets.append(
+            "Extension vs 200-day MA unknown (no stockdata for this ETF) — assume normal "
+            "mean-reversion risk applies; monitor pct_vs_200dma."
+        )
+    bear_bullets.append(
+        "Mechanical sleeve: no single-name conviction here; macro de-risk (regime quad "
+        "flip or liquidity-overlay) trims the leadership budget first — exits are "
+        "systematic, not qualitative."
+    )
+
     return {
         "summary": summary,
         "why_now": why_now,
         "bull": [f"RS rank: {rs_str}", "Above 200-day trend (trend filter passed)"],
-        "bear": [],
+        "bear": bear_bullets,
         "vetoes": [],
         "divergences": [],
         "what_would_prove_wrong": (

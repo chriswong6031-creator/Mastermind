@@ -36,12 +36,39 @@ def _j(rel):
     return json.loads((_V / rel).read_text())
 
 
+def _rl_log(run_id, step_type, title, detail, **kw):
+    """Safe log_step wrapper — never raises."""
+    try:
+        if run_id is None:
+            return
+        from brain import runlog
+        runlog.log_step(run_id, step_type, title, detail, **kw)
+    except Exception:
+        pass
+
+
 def run(asof: str | None = None, force: bool = False, research: bool = False) -> dict:
+    # —— open run log ——
+    _run_id: str | None = None
+    try:
+        from brain import runlog
+        _run_id = runlog.start_run("book", title="phase2 book build")
+        _rl_log(_run_id, "book_step", "phase2 start",
+                f"asof={asof} force={force} research={research}")
+    except Exception:
+        pass
+
     cfg = load_doctrine()
     regime = _j("data/regime/latest.json")
     asof = asof or regime["date"]
     secrs = sorted(regime["sector_rs"], key=lambda r: r["rank"])
     top_sector = secrs[0]["ticker"]
+
+    _rl_log(_run_id, "book_step", "regime read",
+            f"quad={regime.get('quad')} quad_name={regime.get('quad_name')} "
+            f"top_sector={top_sector} liquidity={regime.get('liquidity_overlay')}",
+            quad=regime.get("quad"), quad_name=regime.get("quad_name"),
+            top_sector=top_sector)
 
     con = store.connect()
     sig = gate.state_signature(regime, top_sector)
@@ -50,41 +77,70 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
                                force=force)
     if not decision["run"]:
         store.record_run(con, asof, False, decision["triggers"], sig, datetime.now(timezone.utc).isoformat())
-        return {"ran": False, "reason": "carried forward (no material change)", "positions": store.positions(con, asof)}
+        _rl_log(_run_id, "decision", "gate: carried forward",
+                f"triggers={decision['triggers']}")
+        try:
+            from brain import runlog
+            if _run_id:
+                runlog.end_run(_run_id, summary="carried forward — no material change")
+        except Exception:
+            pass
+        return {"ran": False, "reason": "carried forward (no material change)",
+                "positions": store.positions(con, asof), "run_id": _run_id}
 
-    # ---- ARMED Claude research (optional): reason over the web/news, propose theses,
-    #      gate them into the falsifiable ledger before sizing ----
+    # ———— ARMED Claude research (optional) ————
     research_out = None
     if research:
         from brain import research_desk
         research_out = research_desk.daily_research_and_ingest(asof)
 
-    # ---- LEADERSHIP sleeve: top-RS sectors, trend-gated, equal-weight (mechanical) ----
-    lead_budget = sum(cfg["sleeves"]["leadership_target"]) / 2     # midpoint 0.50
-    leaders = [s for s in secrs[:6] if s.get("above_200d_trend")][:4]   # the 200d trend gate
+    # ———— LEADERSHIP sleeve ————
+    lead_budget = sum(cfg["sleeves"]["leadership_target"]) / 2
+    leaders = [s for s in secrs[:6] if s.get("above_200d_trend")][:4]
     lw = round(lead_budget / max(1, len(leaders)), 4)
     book = []
+
+    _rl_log(_run_id, "book_step", "leadership sleeve selected",
+            f"n_leaders={len(leaders)} weight_each={lw} tickers={[s['ticker'] for s in leaders]}")
+
     for s in leaders:
         ldr_px = ((_j(f"site/stockdata/{s['ticker']}.json") or {}).get("tech", {}) or {}).get("price") \
             if (_V / f"site/stockdata/{s['ticker']}.json").exists() else None
         book.append({"ticker": s["ticker"], "theme_id": s["ticker"], "sleeve": "leadership",
                      "stage": 2, "weight": lw, "verdict": "hold", "rs_pctile": s["pctile_252d"],
                      "entry_price": ldr_px})
+        _rl_log(_run_id, "trade", f"sized {s['ticker']} leadership",
+                f"ticker={s['ticker']} weight={lw} rs_pctile={s['pctile_252d']} price={ldr_px}",
+                ticker=s["ticker"], sleeve="leadership", weight=lw, verdict="hold")
 
-    # ---- CONVICTION sleeve: only names the multi-sided decision matrix CONFIRMS ----
-    # A name takes size only if every side agrees (size_authority='up') and it trips no hard
-    # veto (parabolic / Altman distress / cycle-blocked). Candidates = Claude's open proposals
-    # + the leadership universe. Each sized holding gets an accountable, falsifiable thesis.
+    # ———— CONVICTION sleeve ————
     from portfolio import conviction
-    conv_budget = sum(cfg["sleeves"]["conviction_target"]) / 2     # midpoint 0.30
+    conv_budget = sum(cfg["sleeves"]["conviction_target"]) / 2
     decisions = []
-    # maps thesis_id -> (synth, matrix_rows) for thesis_full composition
     _synth_map: dict[str, tuple[dict, list]] = {}
-    for c in conviction.build(conv_budget, name_cap=cfg["caps"]["name_cap"]):
+    _build_result = conviction.build(conv_budget, name_cap=cfg["caps"]["name_cap"])
+    # conviction.build returns (sized_list, rejected_list) as a tuple
+    if isinstance(_build_result, tuple) and len(_build_result) == 2:
+        sized, _rejected = _build_result
+    else:
+        # legacy: single list returned
+        sized = list(_build_result)
+        _rejected = []
+
+
+    _rl_log(_run_id, "book_step", "conviction gate evaluated",
+            f"candidates_sized={len(sized)} rejected={len(_rejected)} budget={conv_budget}")
+
+    for _rej in _rejected:
+        _rl_log(_run_id, "decision", f"VETOED {_rej['ticker']}",
+                f"vetoes={_rej['vetoes']} bear={_rej['bear']} confluence={_rej['confluence']}",
+                ticker=_rej["ticker"], vetoes=_rej["vetoes"],
+                bear=_rej["bear"], confluence=_rej["confluence"])
+
+    for c in sized:
         t = c["ticker"]
         px = ((_j(f"site/stockdata/{t}.json") or {}).get("tech", {}) or {}).get("price") \
             if (_V / f"site/stockdata/{t}.json").exists() else None
-        # re-run the full matrix to capture rows for thesis_full prose
         try:
             _matrix = lenses_mod.decision_matrix(t, "name")
             _synth = lenses_mod.synthesize(_matrix)
@@ -96,8 +152,8 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
             id=f"{asof}-{t}-conv", subject=t, lean="add", conviction="medium",
             prob_correct=round(0.55 + min(0.15, c["confluence"] * 0.4), 2),
             horizon_d=21, state_asof=asof, sleeve="conviction", order_layer=1,
-            thesis=f"Multi-sided confluence {c['confluence']:+.2f} (bull {c['bull']}/bear {c['bear']}); "
-                   f"all sides confirm and no hard veto — sized {round(c['weight']*100)}%.",
+            thesis=(f"Multi-sided confluence {c['confluence']:+.2f} (bull {c['bull']}/bear {c['bear']}); "
+                    f"all sides confirm and no hard veto — sized {round(c['weight']*100)}%."),
             evidence=[f"size_authority=up", f"confluence={c['confluence']:+.2f}"]
                      + ([f"divergence:{d}" for d in c["divergences"]] if c["divergences"] else []),
             dissent="Held at 0 if any side vetoes (parabolic/distress/cycle-blocked).",
@@ -111,8 +167,13 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
                      "weight": c["weight"], "verdict": "add", "thesis_id": doc.id,
                      "time_stop_by": doc.time_stop_by, "confluence": c["confluence"],
                      "entry_price": px})
+        _rl_log(_run_id, "trade", f"sized {t} conviction",
+                f"ticker={t} weight={c['weight']} confluence={c['confluence']:+.2f} "
+                f"bull={c['bull']} bear={c['bear']} price={px}",
+                ticker=t, sleeve="conviction", weight=c["weight"],
+                confluence=c["confluence"], verdict="add")
 
-    # ---- cross-sleeve firebreaks + cash ----
+    # ———— cross-sleeve firebreaks + cash ————
     capped = enforce_book_caps(book)
     book = capped["positions"]
     gross = round(sum(p["weight"] for p in book), 4)
@@ -120,14 +181,21 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
     cash = round(binding_cash(macro_implied_cash), 4)
     top_theme_conc = max((p["weight"] for p in book), default=0.0)
 
-    # ---- detectors (self mode) ----
+    _rl_log(_run_id, "book_step", "caps applied",
+            f"gross={gross} cash={cash} breaches={capped['breaches']}")
+
+    # ———— detectors ————
     fired = detectors.d3_no_rotation_capacity(cash, top_theme_conc, "self") + \
         detectors.d6_cap_breach(capped["breaches"], "self")
 
-    # ---- update positions ledger (timestamps, history) ----
+    if fired:
+        _rl_log(_run_id, "decision", "detectors fired",
+                f"codes={[d['code'] for d in fired]}")
+
+    # ———— update positions ledger ————
     position_log.update(book, asof)
 
-    # ---- enrich each position with opened_at / held_days / entry_price / thesis_full ----
+    # ———— enrich positions with opened_at / held_days / thesis_full ————
     decisions_by_id = {d["id"]: d for d in decisions}
     for p in book:
         ledger_info = position_log.get_entry_info(p.get("sleeve", ""), p["ticker"])
@@ -136,7 +204,6 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
         if p.get("entry_price") is None:
             p["entry_price"] = ledger_info.get("entry_price")
 
-        # compose thesis_full
         sleeve = p.get("sleeve", "leadership")
         if sleeve == "conviction":
             thesis_id = p.get("thesis_id", "")
@@ -147,7 +214,7 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
         else:
             p["thesis_full"] = thesis_mod.compose(p, None, None, None)
 
-    # ---- persist + score + bridge ----
+    # ———— persist + score + bridge ————
     for p in book:
         store.upsert_position(con, asof, {**p, "size_pct": int(round(p["weight"] * 100)),
                                           "cycle_blocked": 0, "reason": {"sleeve": p["sleeve"]}})
@@ -163,12 +230,28 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
                     "conviction": round(sum(p["weight"] for p in book if p["sleeve"] == "conviction"), 4),
                     "cash": cash},
         "positions": book, "decisions": decisions, "detectors": fired, "track_record": tr,
-        "llm_used": False,   # conviction sizing is deterministic (decision matrix); the armed LLM layer runs in the daily loop
+        "rejected": _rejected,
+        "llm_used": False,
     }
     paths = write(payload)
+
+    # —— close run log ——
+    n_lead = len([p for p in book if p["sleeve"] == "leadership"])
+    n_conv = len([p for p in book if p["sleeve"] == "conviction"])
+    _rl_log(_run_id, "book_step", "book written",
+            f"leadership={n_lead} conviction={n_conv} gross={gross} cash={cash}")
+    try:
+        from brain import runlog
+        if _run_id:
+            runlog.end_run(_run_id,
+                           summary=(f"quad={regime.get('quad_name')} gross={gross:.0%} cash={cash:.0%} "
+                                    f"leaders={n_lead} conviction={n_conv} rejected={len(_rejected)}"))
+    except Exception:
+        pass
+
     return {"ran": True, "triggers": decision["triggers"], "book": book, "sleeves": payload["sleeves"],
             "detectors": fired, "track_record": tr, "paths": paths, "llm_used": payload["llm_used"],
-            "research": research_out}
+            "research": research_out, "run_id": _run_id}
 
 
 if __name__ == "__main__":
@@ -186,3 +269,4 @@ if __name__ == "__main__":
         print("detectors  :", [f"{d['code']}/{d['mode']}/{d['severity']}" for d in out["detectors"]] or "none")
         print("track rec  :", out["track_record"])
         print("bridge     :", out["paths"]["hub"])
+        print("run_id     :", out.get("run_id"))

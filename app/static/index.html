@@ -789,6 +789,430 @@ body.page-mm td.l { text-align: left; }
   margin-top: 28px;
   line-height: 1.6;
 }
+
+/* ────────────────────────────────────────────────────────────────────────────
+   PERFORMANCE HEADER
+   ──────────────────────────────────────────────────────────────────────────── */
+#performance {
+  --num: "SF Mono", ui-monospace, "Cascadia Mono", "JetBrains Mono", "Roboto Mono", Menlo, Consolas, monospace;
+}
+.mm-perf-grid {
+  display: grid;
+  grid-template-columns: auto 1fr repeat(4, auto);
+  align-items: center;
+  gap: 0 32px;
+  flex-wrap: wrap;
+}
+@media (max-width: 1000px) {
+  .mm-perf-grid { grid-template-columns: 1fr 1fr; gap: 14px; }
+}
+@media (max-width: 560px) {
+  .mm-perf-grid { grid-template-columns: 1fr; gap: 12px; }
+}
+.mm-perf-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.mm-perf-nav-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.mm-perf-nav-value {
+  font-family: var(--num);
+  font-size: 36px;
+  font-weight: 800;
+  letter-spacing: -.025em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.mm-perf-divider {
+  width: 1px;
+  height: 52px;
+  background: var(--line);
+  flex-shrink: 0;
+}
+@media (max-width: 1000px) { .mm-perf-divider { display: none; } }
+.mm-perf-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 110px;
+}
+.mm-perf-stat-label {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: .10em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.mm-perf-stat-value {
+  font-family: var(--num);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -.02em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.mm-perf-stat-value.pos { color: var(--up); }
+.mm-perf-stat-value.neg { color: var(--down); }
+.mm-perf-stat-value.neu { color: var(--muted); }
+.mm-perf-stat-sub {
+  font-size: 10.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+   EQUITY CURVE
+   ──────────────────────────────────────────────────────────────────────────── */
+#equity-curve {
+  position: relative;
+}
+.mm-ec-wrap {
+  position: relative;
+  width: 100%;
+  /* height set by JS to keep 3:1 ratio */
+  min-height: 220px;
+}
+.mm-ec-wrap svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.mm-ec-tooltip {
+  position: absolute;
+  pointer-events: none;
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text);
+  white-space: nowrap;
+  box-shadow: 0 4px 20px rgba(0,0,0,.22);
+  display: none;
+  z-index: 10;
+  font-variant-numeric: tabular-nums;
+}
+.mm-ec-note {
+  font-size: 11px;
+  color: var(--muted);
+  text-align: center;
+  margin-top: 8px;
+  font-style: italic;
+  line-height: 1.5;
+}
+.mm-ec-legend {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 10px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.mm-ec-leg-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.mm-ec-leg-line {
+  width: 22px;
+  height: 3px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+.mm-ec-inception-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--info) 12%, var(--panel2));
+  color: var(--info);
+  border: 1px solid color-mix(in srgb, var(--info) 28%, transparent);
+  vertical-align: middle;
+  margin-left: 6px;
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+   DEEP ACTIVITY LOG (run drilldown)
+   ──────────────────────────────────────────────────────────────────────────── */
+#runs {}
+.mm-run-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mm-run-row {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--panel2);
+}
+.mm-run-header {
+  display: grid;
+  grid-template-columns: auto 1fr auto auto;
+  align-items: center;
+  gap: 10px 14px;
+  padding: 10px 14px;
+  cursor: pointer;
+  transition: background .12s;
+  user-select: none;
+}
+.mm-run-header:hover { background: color-mix(in srgb, var(--link) 7%, var(--panel2)); }
+.mm-run-kind-chip {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  padding: 2px 8px;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+.mm-run-kind-book   { background: color-mix(in srgb, var(--q1) 14%, var(--panel)); color: var(--q1); border: 1px solid color-mix(in srgb, var(--q1) 28%, transparent); }
+.mm-run-kind-daily  { background: color-mix(in srgb, var(--up) 13%, var(--panel)); color: var(--up); border: 1px solid color-mix(in srgb, var(--up) 25%, transparent); }
+.mm-run-kind-research { background: color-mix(in srgb, var(--warn) 13%, var(--panel)); color: var(--warn); border: 1px solid color-mix(in srgb, var(--warn) 25%, transparent); }
+.mm-run-kind-generic  { background: color-mix(in srgb, var(--muted) 13%, var(--panel)); color: var(--muted); border: 1px solid var(--line); }
+.mm-run-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mm-run-meta {
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.mm-run-chevron {
+  font-size: 11px;
+  color: var(--muted);
+  transition: transform .2s;
+  flex-shrink: 0;
+}
+.mm-run-chevron.open { transform: rotate(180deg); }
+.mm-run-summary {
+  font-size: 11.5px;
+  color: var(--muted);
+  padding: 0 14px 10px;
+  line-height: 1.5;
+  font-variant-numeric: tabular-nums;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+  display: none;
+}
+.mm-run-summary.open { display: block; }
+.mm-run-steps {
+  padding: 0 14px 14px;
+  display: none;
+}
+.mm-run-steps.open { display: block; }
+.mm-run-steps-loading {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 10px 0;
+  text-align: center;
+}
+
+/* step trace inside a run */
+.mm-step-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  border-left: 2px solid var(--line);
+  margin-left: 6px;
+  padding-left: 0;
+}
+.mm-step-item {
+  display: grid;
+  grid-template-columns: 58px 12px 1fr;
+  gap: 0 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 50%, transparent);
+  align-items: start;
+}
+.mm-step-item:last-child { border-bottom: none; }
+.mm-step-ts {
+  font-size: 9.5px;
+  color: var(--muted);
+  font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  padding-top: 2px;
+  line-height: 1.3;
+}
+.mm-step-dot {
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 3px;
+  margin-left: -5px;
+  border: 2px solid var(--panel2);
+}
+.mm-step-dot.t-tool_call   { background: var(--warn); }
+.mm-step-dot.t-tool_result { background: var(--info); }
+.mm-step-dot.t-reasoning   { background: var(--muted); }
+.mm-step-dot.t-book_step   { background: var(--q1); }
+.mm-step-dot.t-decision    { background: var(--down); }
+.mm-step-dot.t-trade       { background: var(--up); }
+.mm-step-body { padding-left: 4px; }
+.mm-step-type-chip {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-bottom: 2px;
+  vertical-align: middle;
+}
+.mm-step-tc  { background: color-mix(in srgb, var(--warn) 14%, var(--panel2)); color: var(--warn); }
+.mm-step-tr  { background: color-mix(in srgb, var(--info) 12%, var(--panel2)); color: var(--info); }
+.mm-step-rea { background: color-mix(in srgb, var(--muted) 18%, var(--panel2)); color: var(--muted); }
+.mm-step-bs  { background: color-mix(in srgb, var(--q1) 14%, var(--panel2)); color: var(--q1); }
+.mm-step-dec { background: color-mix(in srgb, var(--down) 12%, var(--panel2)); color: var(--down); }
+.mm-step-trd { background: color-mix(in srgb, var(--up) 12%, var(--panel2)); color: var(--up); }
+.mm-step-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.3;
+}
+.mm-step-detail {
+  font-size: 11px;
+  color: var(--muted);
+  font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  line-height: 1.45;
+  margin-top: 2px;
+  word-break: break-all;
+}
+.mm-step-detail-toggle {
+  background: none;
+  border: none;
+  color: var(--link);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+  display: block;
+  margin-top: 3px;
+}
+.mm-step-detail-toggle:hover { text-decoration: underline; }
+.mm-step-detail-full {
+  display: none;
+  font-size: 11px;
+  color: var(--muted);
+  font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  line-height: 1.45;
+  margin-top: 3px;
+  white-space: pre-wrap;
+  background: color-mix(in srgb, var(--panel) 90%, var(--panel2));
+  border-radius: 6px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  word-break: break-word;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+/* ────────────────────────────────────────────────────────────────────────────
+   REJECTED NAMES PANEL
+   ──────────────────────────────────────────────────────────────────────────── */
+#rejected {}
+.mm-rej-note {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--down) 6%, var(--panel2));
+  border: 1px solid color-mix(in srgb, var(--down) 18%, transparent);
+  border-left: 3px solid color-mix(in srgb, var(--down) 55%, transparent);
+  line-height: 1.5;
+  margin-bottom: 14px;
+}
+.mm-rej-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+}
+.mm-rej-card {
+  background: var(--panel2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  border-top: 2px solid color-mix(in srgb, var(--down) 45%, transparent);
+}
+.mm-rej-ticker {
+  font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: .04em;
+  color: var(--text);
+  margin-bottom: 3px;
+}
+.mm-rej-reason {
+  font-size: 11.5px;
+  color: var(--muted);
+  margin-bottom: 7px;
+  font-style: italic;
+}
+.mm-rej-vetoes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.mm-rej-veto-chip {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--down) 13%, var(--panel));
+  color: var(--down);
+  border: 1px solid color-mix(in srgb, var(--down) 30%, transparent);
+}
+.mm-rej-bears {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 7px;
+}
+.mm-rej-bears li {
+  font-size: 11.5px;
+  color: color-mix(in srgb, var(--text) 72%, var(--muted));
+  padding: 2px 0 2px 13px;
+  position: relative;
+  line-height: 1.4;
+}
+.mm-rej-bears li::before {
+  content: "▼";
+  position: absolute;
+  left: 0;
+  font-size: 7px;
+  color: var(--down);
+  top: 5px;
+}
+.mm-rej-confluence {
+  font-size: 10.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+.mm-rej-confluence.neg { color: var(--down); }
+.mm-rej-confluence.neu { color: var(--muted); }
 </style>
 </head>
 <body class="page-mm">
@@ -848,6 +1272,75 @@ body.page-mm td.l { text-align: left; }
   </div>
 </div>
 
+<!-- ── PERFORMANCE HEADER ─────────────────────────────────────────────────── -->
+<div class="mm-section">
+  <div class="panel span12" id="performance" style="grid-column:span 12">
+    <h2>Performance — $1M Paper Account</h2>
+    <div class="mm-perf-grid" id="perf-grid">
+      <!-- NAV big number -->
+      <div class="mm-perf-nav">
+        <div class="mm-perf-nav-label">Current NAV</div>
+        <div class="mm-perf-nav-value" id="perf-nav">$1,000,000</div>
+      </div>
+      <div class="mm-perf-divider"></div>
+      <!-- Total return -->
+      <div class="mm-perf-stat">
+        <div class="mm-perf-stat-label">Total Return</div>
+        <div class="mm-perf-stat-value neu" id="perf-ret">+0.00%</div>
+        <div class="mm-perf-stat-sub" id="perf-since">since inception</div>
+      </div>
+      <!-- vs SPY -->
+      <div class="mm-perf-stat">
+        <div class="mm-perf-stat-label">vs SPY</div>
+        <div class="mm-perf-stat-value neu" id="perf-spy">+0.00%</div>
+        <div class="mm-perf-stat-sub">alpha vs benchmark</div>
+      </div>
+      <!-- Day change -->
+      <div class="mm-perf-stat">
+        <div class="mm-perf-stat-label">Today</div>
+        <div class="mm-perf-stat-value neu" id="perf-day">+0.00%</div>
+        <div class="mm-perf-stat-sub">day change</div>
+      </div>
+      <!-- Max drawdown -->
+      <div class="mm-perf-stat">
+        <div class="mm-perf-stat-label">Max Drawdown</div>
+        <div class="mm-perf-stat-value neu" id="perf-dd">—</div>
+        <div class="mm-perf-stat-sub" id="perf-cash-lbl">cash: —</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── EQUITY CURVE ───────────────────────────────────────────────────────── -->
+<div class="mm-section">
+  <div class="panel span12" id="equity-curve" style="grid-column:span 12">
+    <h2>Equity Curve</h2>
+    <!-- legend -->
+    <div class="mm-ec-legend" id="ec-legend">
+      <span class="mm-ec-leg-item">
+        <span class="mm-ec-leg-line" style="background:var(--up)"></span>
+        <span>Portfolio NAV (realized)</span>
+      </span>
+      <span class="mm-ec-leg-item">
+        <span class="mm-ec-leg-line" style="background:var(--up);opacity:.38;border-top:2px dashed var(--up);height:0;margin-top:1px"></span>
+        <span>Hypothetical back-fill</span>
+      </span>
+      <span class="mm-ec-leg-item">
+        <span class="mm-ec-leg-line" style="background:var(--muted);opacity:.55;border-top:2px dashed var(--muted);height:0;margin-top:1px"></span>
+        <span>SPY $1M reference</span>
+      </span>
+      <span style="margin-left:auto;font-size:11px;color:var(--muted)" id="ec-range-label"></span>
+    </div>
+    <!-- SVG container -->
+    <div class="mm-ec-wrap" id="ec-wrap">
+      <div class="mm-empty" style="padding:40px 0"><span class="mm-empty-icon">⊙</span>Loading equity curve…</div>
+      <div class="mm-ec-tooltip" id="ec-tooltip"></div>
+    </div>
+    <!-- honest note -->
+    <div class="mm-ec-note" id="ec-note"></div>
+  </div>
+</div>
+
 <!-- ── ALLOCATION ─────────────────────────────────────────────────────────── -->
 <div class="mm-section">
   <div class="panel span12" id="alloc" style="grid-column:span 12">
@@ -891,6 +1384,22 @@ body.page-mm td.l { text-align: left; }
   <div class="panel span6" id="research">
     <h2>Research Feed</h2>
     <div class="mm-empty"><span class="mm-empty-icon">⊙</span>Loading research…</div>
+  </div>
+</div>
+
+<!-- ── DEEP ACTIVITY LOG ──────────────────────────────────────────────────── -->
+<div class="mm-section">
+  <div class="panel span12" id="runs" style="grid-column:span 12">
+    <h2>Brain Activity &mdash; Full Trace <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px">expand a run for complete step-by-step reasoning</span></h2>
+    <div class="mm-empty"><span class="mm-empty-icon">⊙</span>Loading run history…</div>
+  </div>
+</div>
+
+<!-- ── REJECTED NAMES ─────────────────────────────────────────────────────── -->
+<div class="mm-section">
+  <div class="panel span12" id="rejected" style="grid-column:span 12">
+    <h2>Evaluated &mdash; Not Held, and Why <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px">the discipline made visible</span></h2>
+    <div class="mm-empty"><span class="mm-empty-icon">⊙</span>Loading rejected names…</div>
   </div>
 </div>
 
@@ -1003,6 +1512,9 @@ var fmtTsShort = function(s) {
 // ── state ────────────────────────────────────────────────────────────────────
 var _book = null, _trades = null, _activity = [], _research = [], _competitors = null, _regime = null;
 var _expandedIdx = null;
+var _perf = null, _runs = [], _rejected = [];
+// run drilldown cache
+var _runLogCache = {};
 
 // quad meta
 var QUAD_META = {
@@ -1011,6 +1523,510 @@ var QUAD_META = {
   Q3: { name: 'Stagflation',color: 'var(--q3)', says: 'Growth falling, inflation sticky — defensive tilt, commodities, cash heavy.' },
   Q4: { name: 'Growth-Scare',color:'var(--q4)', says: 'Growth slowing, inflation falling — duration, quality, and defensive growth favored.' },
 };
+
+// ── FORMAT HELPERS ────────────────────────────────────────────────────────────
+var fmtNav = function(n) {
+  if (n == null) return '—';
+  return '$' + Math.round(n).toLocaleString('en-US');
+};
+var fmtPct1 = function(v) {
+  if (v == null) return '—';
+  return (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+};
+var fmtPctSign = function(v) {
+  if (v == null) return { text: '—', cls: 'neu' };
+  return { text: (v >= 0 ? '+' : '') + v.toFixed(2) + '%', cls: v > 0.01 ? 'pos' : v < -0.01 ? 'neg' : 'neu' };
+};
+
+// ── PERFORMANCE HEADER ────────────────────────────────────────────────────────
+function renderPerformance() {
+  var p = _perf;
+  if (!p) return;
+
+  // NAV
+  var navEl = E('perf-nav');
+  if (navEl) navEl.textContent = fmtNav(p.current_nav);
+
+  // Total return
+  var retEl = E('perf-ret');
+  if (retEl) {
+    var r = fmtPctSign(p.total_return_pct);
+    retEl.textContent = r.text;
+    retEl.className = 'mm-perf-stat-value ' + r.cls;
+  }
+
+  // Since label
+  var sinceEl = E('perf-since');
+  if (sinceEl) sinceEl.textContent = p.inception_date ? 'since ' + fmtDate(p.inception_date) : 'since inception';
+
+  // vs SPY
+  var spyEl = E('perf-spy');
+  if (spyEl) {
+    var s = fmtPctSign(p.vs_spy_pct);
+    spyEl.textContent = s.text;
+    spyEl.className = 'mm-perf-stat-value ' + s.cls;
+  }
+
+  // Day change
+  var dayEl = E('perf-day');
+  if (dayEl) {
+    var d = fmtPctSign(p.day_change_pct);
+    dayEl.textContent = d.text;
+    dayEl.className = 'mm-perf-stat-value ' + d.cls;
+  }
+
+  // Max drawdown
+  var ddEl = E('perf-dd');
+  if (ddEl) {
+    var dd = p.max_drawdown_pct;
+    ddEl.textContent = dd != null ? (dd <= 0 ? dd.toFixed(2) : '-' + dd.toFixed(2)) + '%' : '—';
+    ddEl.className = 'mm-perf-stat-value ' + (dd != null && Math.abs(dd) > 0.5 ? 'neg' : 'neu');
+  }
+
+  // cash sub-label
+  var cashLbl = E('perf-cash-lbl');
+  if (cashLbl && p.cash != null) {
+    cashLbl.textContent = 'cash: ' + fmtNav(p.cash);
+  }
+}
+
+// ── EQUITY CURVE ──────────────────────────────────────────────────────────────
+function renderEquityCurve() {
+  var wrap = E('ec-wrap');
+  if (!wrap) return;
+  var p = _perf;
+  var series = (p && p.series) || [];
+
+  // Note
+  var noteEl = E('ec-note');
+  if (noteEl) noteEl.textContent = (p && p.note) || '';
+
+  // Range label
+  var rangeEl = E('ec-range-label');
+  if (rangeEl && series.length) {
+    rangeEl.textContent = series[0].date + ' → ' + series[series.length-1].date;
+  }
+
+  if (!series.length) {
+    wrap.innerHTML = '<div class="mm-empty" style="padding:40px 0"><span class="mm-empty-icon">◌</span>Live track accruing — no series data yet</div><div class="mm-ec-tooltip" id="ec-tooltip"></div>';
+    return;
+  }
+
+  // dimensions
+  var W = wrap.clientWidth || 900;
+  var H = Math.max(220, Math.round(W * 0.32));
+  var PAD = { t: 22, r: 18, b: 44, l: 76 };
+  var IW = W - PAD.l - PAD.r;
+  var IH = H - PAD.t - PAD.b;
+
+  // data extents
+  var navVals = series.map(function(s) { return s.nav; });
+  var spyVals = series.map(function(s) { return s.spy_nav; });
+  var allVals = navVals.concat(spyVals);
+  var minV = Math.min.apply(null, allVals);
+  var maxV = Math.max.apply(null, allVals);
+  var pad = (maxV - minV) * 0.06 || 5000;
+  minV -= pad; maxV += pad;
+  var n = series.length;
+
+  // find realized_since index
+  var realizedSince = p && p.realized_since ? p.realized_since.slice(0,10) : null;
+  var realIdx = -1;
+  if (realizedSince) {
+    for (var i = 0; i < n; i++) {
+      if (series[i].date >= realizedSince) { realIdx = i; break; }
+    }
+  }
+
+  // coordinate mappers
+  function xOf(i) { return PAD.l + (n <= 1 ? IW/2 : (i / (n-1)) * IW); }
+  function yOf(v) { return PAD.t + IH - ((v - minV) / (maxV - minV)) * IH; }
+
+  // build polyline point strings — split NAV into hypothetical and realized segments
+  function pointStr(vals, fromIdx, toIdx) {
+    var pts = '';
+    for (var k = fromIdx; k <= toIdx; k++) pts += xOf(k).toFixed(1) + ',' + yOf(vals[k]).toFixed(1) + ' ';
+    return pts.trim();
+  }
+  function pathStr(vals, fromIdx, toIdx) {
+    var d = '';
+    for (var k = fromIdx; k <= toIdx; k++) {
+      d += (k === fromIdx ? 'M' : 'L') + xOf(k).toFixed(1) + ' ' + yOf(vals[k]).toFixed(1) + ' ';
+    }
+    return d.trim();
+  }
+
+  // Y-axis nice ticks
+  var range = maxV - minV;
+  var rawStep = range / 5;
+  var mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+  var niceStep = Math.ceil(rawStep / mag) * mag;
+  var yStart = Math.ceil(minV / niceStep) * niceStep;
+  var yTicks = [];
+  for (var y = yStart; y <= maxV + niceStep * 0.01; y += niceStep) yTicks.push(y);
+
+  // X-axis date ticks — roughly 5, avoid overlap
+  var xTickIdxs = [];
+  var targetN = Math.max(2, Math.min(6, Math.round(IW / 120)));
+  var step = Math.max(1, Math.floor((n - 1) / (targetN - 1)));
+  for (var xi = 0; xi < n; xi += step) xTickIdxs.push(xi);
+  if (xTickIdxs[xTickIdxs.length-1] !== n-1) xTickIdxs.push(n-1);
+
+  function fmtNavShort(v) {
+    if (v >= 1e6) return '$' + (v/1e6).toFixed(3) + 'M';
+    return '$' + Math.round(v/1000) + 'K';
+  }
+  function fmtDateAxis(s) {
+    if (!s) return '';
+    var parts = s.slice(0,10).split('-');
+    return ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][parseInt(parts[1],10)-1] + ' ' + parseInt(parts[2],10);
+  }
+
+  // area fill for realized portion (or whole if no split)
+  var areaStart = realIdx >= 0 ? realIdx : 0;
+  var areaPath = 'M' + xOf(areaStart).toFixed(1) + ' ' + (PAD.t + IH).toFixed(1) + ' ';
+  for (var k = areaStart; k < n; k++) areaPath += 'L' + xOf(k).toFixed(1) + ' ' + yOf(navVals[k]).toFixed(1) + ' ';
+  areaPath += 'L' + xOf(n-1).toFixed(1) + ' ' + (PAD.t + IH).toFixed(1) + ' Z';
+
+  // hypothetical area (lighter)
+  var hypoEnd = realIdx >= 0 ? realIdx : n-1;
+  var hypoArea = 'M' + xOf(0).toFixed(1) + ' ' + (PAD.t + IH).toFixed(1) + ' ';
+  for (var k = 0; k <= hypoEnd; k++) hypoArea += 'L' + xOf(k).toFixed(1) + ' ' + yOf(navVals[k]).toFixed(1) + ' ';
+  hypoArea += 'L' + xOf(hypoEnd).toFixed(1) + ' ' + (PAD.t + IH).toFixed(1) + ' Z';
+
+  // zero-line (starting nav)
+  var startNav = (p && p.starting_nav) || 1000000;
+  var zeroY = yOf(startNav);
+
+  // unique defs id
+  var uid = 'ec' + Date.now();
+
+  var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" xmlns="http://www.w3.org/2000/svg" style="overflow:visible">';
+
+  // defs: gradients
+  svg += '<defs>';
+  svg += '<linearGradient id="grad-up-' + uid + '" x1="0" y1="0" x2="0" y2="1">';
+  svg += '<stop offset="0%" stop-color="var(--up)" stop-opacity="0.28"/>';
+  svg += '<stop offset="100%" stop-color="var(--up)" stop-opacity="0.02"/>';
+  svg += '</linearGradient>';
+  svg += '<linearGradient id="grad-hypo-' + uid + '" x1="0" y1="0" x2="0" y2="1">';
+  svg += '<stop offset="0%" stop-color="var(--up)" stop-opacity="0.10"/>';
+  svg += '<stop offset="100%" stop-color="var(--up)" stop-opacity="0.01"/>';
+  svg += '</linearGradient>';
+  svg += '<clipPath id="clip-inner-' + uid + '"><rect x="' + PAD.l + '" y="' + PAD.t + '" width="' + IW + '" height="' + IH + '"/></clipPath>';
+  svg += '</defs>';
+
+  // gridlines
+  yTicks.forEach(function(y) {
+    var gy = yOf(y).toFixed(1);
+    if (gy < PAD.t - 1 || gy > PAD.t + IH + 1) return;
+    svg += '<line x1="' + PAD.l + '" y1="' + gy + '" x2="' + (PAD.l + IW) + '" y2="' + gy + '" stroke="var(--line)" stroke-width="1" opacity="0.55"/>';
+    svg += '<text x="' + (PAD.l - 7) + '" y="' + (parseFloat(gy) + 4) + '" text-anchor="end" font-size="10" fill="var(--muted)" font-family="SF Mono,ui-monospace,Menlo,monospace" font-variant-numeric="tabular-nums">' + fmtNavShort(y) + '</text>';
+  });
+
+  // zero / inception line
+  if (zeroY >= PAD.t && zeroY <= PAD.t + IH) {
+    svg += '<line x1="' + PAD.l + '" y1="' + zeroY.toFixed(1) + '" x2="' + (PAD.l + IW) + '" y2="' + zeroY.toFixed(1) + '" stroke="var(--muted)" stroke-width="1" stroke-dasharray="4 3" opacity="0.35"/>';
+  }
+
+  // SPY dashed reference line
+  var spyPath = pathStr(spyVals, 0, n-1);
+  svg += '<g clip-path="url(#clip-inner-' + uid + ')">';
+  svg += '<path d="' + spyPath + '" fill="none" stroke="var(--muted)" stroke-width="1.5" stroke-dasharray="5 3" opacity="0.5"/>';
+
+  // hypothetical area + line
+  if (hypoEnd > 0) {
+    svg += '<path d="' + hypoArea + '" fill="url(#grad-hypo-' + uid + ')"/>';
+    svg += '<path d="' + pathStr(navVals, 0, hypoEnd) + '" fill="none" stroke="var(--up)" stroke-width="1.8" stroke-dasharray="6 3" opacity="0.45"/>';
+  }
+
+  // realized area + solid line
+  if (areaStart < n - 1 || realIdx < 0) {
+    svg += '<path d="' + areaPath + '" fill="url(#grad-up-' + uid + ')"/>';
+    svg += '<path d="' + pathStr(navVals, areaStart, n-1) + '" fill="none" stroke="var(--up)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>';
+  }
+
+  svg += '</g>';
+
+  // realized_since vertical marker
+  if (realIdx >= 0 && realIdx < n) {
+    var rx = xOf(realIdx).toFixed(1);
+    svg += '<line x1="' + rx + '" y1="' + PAD.t + '" x2="' + rx + '" y2="' + (PAD.t + IH) + '" stroke="var(--info)" stroke-width="1.5" stroke-dasharray="3 2" opacity="0.7"/>';
+    svg += '<text x="' + (parseFloat(rx) + 4) + '" y="' + (PAD.t + 12) + '" font-size="9.5" fill="var(--info)" opacity="0.85" font-family="SF Mono,ui-monospace,Menlo,monospace">LIVE</text>';
+  }
+
+  // x-axis ticks + labels
+  xTickIdxs.forEach(function(xi) {
+    var gx = xOf(xi).toFixed(1);
+    var botY = (PAD.t + IH);
+    svg += '<line x1="' + gx + '" y1="' + botY + '" x2="' + gx + '" y2="' + (botY + 4) + '" stroke="var(--muted)" stroke-width="1" opacity="0.5"/>';
+    svg += '<text x="' + gx + '" y="' + (botY + 16) + '" text-anchor="middle" font-size="10" fill="var(--muted)" font-family="SF Mono,ui-monospace,Menlo,monospace">' + fmtDateAxis(series[xi].date) + '</text>';
+  });
+
+  // axes border
+  svg += '<rect x="' + PAD.l + '" y="' + PAD.t + '" width="' + IW + '" height="' + IH + '" fill="none" stroke="var(--line)" stroke-width="1" rx="4"/>';
+
+  // crosshair overlay (invisible rect for mouse)
+  svg += '<rect id="ec-overlay-' + uid + '" x="' + PAD.l + '" y="' + PAD.t + '" width="' + IW + '" height="' + IH + '" fill="transparent" cursor="crosshair"/>';
+
+  svg += '</svg>';
+
+  wrap.innerHTML = svg + '<div class="mm-ec-tooltip" id="ec-tooltip"></div>';
+
+  // hover crosshair
+  var overlayEl = document.getElementById('ec-overlay-' + uid);
+  var tooltipEl = E('ec-tooltip');
+  var svgEl = wrap.querySelector('svg');
+
+  if (overlayEl && tooltipEl && svgEl) {
+    overlayEl.addEventListener('mousemove', function(evt) {
+      var rect = svgEl.getBoundingClientRect();
+      var scaleX = W / rect.width;
+      var mx = (evt.clientX - rect.left) * scaleX;
+      var relX = mx - PAD.l;
+      if (relX < 0 || relX > IW) { tooltipEl.style.display = 'none'; return; }
+      var fi = Math.round((relX / IW) * (n - 1));
+      fi = Math.max(0, Math.min(n - 1, fi));
+      var pt = series[fi];
+      var navDiff = pt.nav - pt.spy_nav;
+      var kindTxt = pt.kind === 'hypothetical' ? ' (hypothetical)' : ' (realized)';
+      tooltipEl.innerHTML =
+        '<strong>' + pt.date + '</strong>' + kindTxt + '<br>' +
+        'NAV: <strong style="color:var(--up)">' + fmtNav(pt.nav) + '</strong><br>' +
+        'SPY ref: ' + fmtNav(pt.spy_nav) + '<br>' +
+        'vs SPY: <strong style="color:' + (navDiff >= 0 ? 'var(--up)' : 'var(--down)') + '">' + (navDiff >= 0 ? '+' : '') + fmtNav(navDiff) + '</strong>';
+
+      // position tooltip
+      var ttW = 190, ttH = 80;
+      var scaleBack = rect.width / W;
+      var pxX = (xOf(fi) - PAD.l) * scaleBack + rect.left - wrap.getBoundingClientRect().left;
+      var pxY = (yOf(pt.nav) - PAD.t) * (rect.height / H);
+      var left = pxX + 12;
+      if (left + ttW > wrap.clientWidth) left = pxX - ttW - 12;
+      tooltipEl.style.left = left + 'px';
+      tooltipEl.style.top = Math.max(0, pxY - 20) + 'px';
+      tooltipEl.style.display = 'block';
+    });
+    overlayEl.addEventListener('mouseleave', function() {
+      tooltipEl.style.display = 'none';
+    });
+  }
+}
+
+// resize observer for equity curve
+(function() {
+  if (typeof ResizeObserver === 'undefined') return;
+  var ro = new ResizeObserver(function() { if (_perf) renderEquityCurve(); });
+  var tryAttach = function() {
+    var wrap = E('ec-wrap');
+    if (wrap) ro.observe(wrap); else setTimeout(tryAttach, 200);
+  };
+  tryAttach();
+})();
+
+// ── RUNS + STEP TRACE ──────────────────────────────────────────────────────────
+function runKindClass(kind) {
+  var k = (kind || '').toLowerCase();
+  if (k === 'book') return 'mm-run-kind-book';
+  if (k === 'daily') return 'mm-run-kind-daily';
+  if (k === 'research') return 'mm-run-kind-research';
+  return 'mm-run-kind-generic';
+}
+
+function stepTypeClass(type) {
+  var t = (type || '');
+  if (t === 'tool_call') return 'mm-step-tc';
+  if (t === 'tool_result') return 'mm-step-tr';
+  if (t === 'reasoning') return 'mm-step-rea';
+  if (t === 'book_step') return 'mm-step-bs';
+  if (t === 'decision') return 'mm-step-dec';
+  if (t === 'trade') return 'mm-step-trd';
+  return 'mm-step-rea';
+}
+function stepDotClass(type) {
+  return 't-' + (type || 'reasoning').replace(/_/g, '_');
+}
+
+function renderRuns() {
+  var el = E('runs');
+  if (!el) return;
+  var runs = _runs || [];
+  if (!runs.length) {
+    el.innerHTML = '<h2>Brain Activity &mdash; Full Trace <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px">expand a run for complete step-by-step reasoning</span></h2><div class="mm-empty"><span class="mm-empty-icon">○</span>No runs logged yet — runs appear here after the bot executes.</div>';
+    return;
+  }
+
+  var html = '<h2>Brain Activity &mdash; Full Trace <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px">expand a run for complete step-by-step reasoning</span></h2>';
+  html += '<div class="mm-run-list">';
+
+  runs.forEach(function(r, ri) {
+    var kindCls = runKindClass(r.kind);
+    var costStr = r.cost_usd != null ? ' · $' + r.cost_usd.toFixed(4) : '';
+    var stepsStr = r.n_steps != null ? r.n_steps + ' steps' : '—';
+    html += '<div class="mm-run-row" id="run-row-' + ri + '">';
+    html += '<div class="mm-run-header" onclick="toggleRun(' + ri + ',\'' + esc(r.run_id) + '\')">';
+    html += '<span class="mm-run-kind-chip ' + kindCls + '">' + esc(r.kind || '—') + '</span>';
+    html += '<span class="mm-run-title">' + esc(r.title || r.run_id || '—') + '</span>';
+    html += '<span class="mm-run-meta">' + fmtTs(r.ts) + ' &middot; ' + stepsStr + costStr + '</span>';
+    html += '<span class="mm-run-chevron" id="run-chev-' + ri + '">&#9660;</span>';
+    html += '</div>';
+    // summary bar (always visible once loaded)
+    if (r.summary) {
+      html += '<div class="mm-run-summary open" id="run-sum-' + ri + '">' + esc(r.summary) + '</div>';
+    }
+    // step trace (hidden, lazy loaded)
+    html += '<div class="mm-run-steps" id="run-steps-' + ri + '"><div class="mm-run-steps-loading">Click header to load full trace…</div></div>';
+    html += '</div>';
+  });
+
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+window.toggleRun = function(ri, runId) {
+  var stepsEl = E('run-steps-' + ri);
+  var chevEl = E('run-chev-' + ri);
+  if (!stepsEl) return;
+  var isOpen = stepsEl.classList.contains('open');
+
+  if (isOpen) {
+    stepsEl.classList.remove('open');
+    if (chevEl) chevEl.classList.remove('open');
+    return;
+  }
+
+  stepsEl.classList.add('open');
+  if (chevEl) chevEl.classList.add('open');
+
+  // already loaded
+  if (_runLogCache[runId]) {
+    renderSteps(ri, _runLogCache[runId]);
+    return;
+  }
+
+  stepsEl.innerHTML = '<div class="mm-run-steps-loading">Loading step trace…</div>';
+  fetch('/api/runlog?run_id=' + encodeURIComponent(runId))
+    .then(function(r) { return r.ok ? r.json() : null; })
+    .then(function(data) {
+      if (!data) { stepsEl.innerHTML = '<div class="mm-run-steps-loading" style="color:var(--down)">Failed to load step trace.</div>'; return; }
+      _runLogCache[runId] = data.steps || [];
+      renderSteps(ri, _runLogCache[runId]);
+    })
+    .catch(function() {
+      stepsEl.innerHTML = '<div class="mm-run-steps-loading" style="color:var(--down)">Error loading trace.</div>';
+    });
+};
+
+function renderSteps(ri, steps) {
+  var stepsEl = E('run-steps-' + ri);
+  if (!stepsEl) return;
+  if (!steps || !steps.length) {
+    stepsEl.innerHTML = '<div class="mm-run-steps-loading">No steps recorded for this run.</div>';
+    return;
+  }
+
+  var html = '<div class="mm-step-list">';
+  steps.forEach(function(s, si) {
+    var typeCls = stepTypeClass(s.type);
+    var dotCls = stepDotClass(s.type);
+    var detail = s.detail || '';
+    // for tool_call: show tool + compact args
+    var extraDetail = '';
+    if (s.type === 'tool_call' && s.tool) {
+      var argsStr = s.args ? JSON.stringify(s.args).slice(0, 200) : '';
+      extraDetail = '[' + esc(s.tool) + '] ' + esc(argsStr);
+    } else if (s.type === 'tool_result' && s.result) {
+      detail = s.result;
+    }
+
+    var TRUNCATE = 160;
+    var fullDetail = (extraDetail || detail);
+    var shortDetail = fullDetail.slice(0, TRUNCATE);
+    var needsToggle = fullDetail.length > TRUNCATE;
+    var detailId = 'sd-' + ri + '-' + si;
+
+    html += '<div class="mm-step-item">';
+    html += '<div class="mm-step-ts">' + (s.ts ? s.ts.slice(11,16) : '—') + '</div>';
+    html += '<div class="mm-step-dot ' + dotCls + '"></div>';
+    html += '<div class="mm-step-body">';
+    html += '<span class="mm-step-type-chip ' + typeCls + '">' + esc(s.type || '—') + '</span> ';
+    html += '<span class="mm-step-title">' + esc(s.title || '—') + '</span>';
+    if (fullDetail) {
+      html += '<div class="mm-step-detail">' + esc(shortDetail) + (needsToggle ? '…' : '') + '</div>';
+      if (needsToggle) {
+        html += '<button class="mm-step-detail-toggle" onclick="toggleStepDetail(\'' + detailId + '\',this)">Show full ↓</button>';
+        html += '<div class="mm-step-detail-full" id="' + detailId + '">' + esc(fullDetail) + '</div>';
+      }
+    }
+    html += '</div>';
+    html += '</div>';
+  });
+  html += '</div>';
+  stepsEl.innerHTML = html;
+}
+
+window.toggleStepDetail = function(id, btn) {
+  var el = E(id);
+  if (!el) return;
+  if (el.style.display === 'block') {
+    el.style.display = 'none';
+    btn.textContent = 'Show full ↓';
+  } else {
+    el.style.display = 'block';
+    btn.textContent = 'Hide ↑';
+  }
+};
+
+// ── REJECTED NAMES ────────────────────────────────────────────────────────────
+function renderRejected() {
+  var el = E('rejected');
+  if (!el) return;
+  var rej = _rejected || [];
+
+  var header = '<h2>Evaluated &mdash; Not Held, and Why <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px">the discipline made visible</span></h2>';
+
+  if (!rej.length) {
+    el.innerHTML = header + '<div class="mm-empty"><span class="mm-empty-icon">○</span>No rejected names — either the book hasn\'t run yet or all evaluated names passed.</div>';
+    return;
+  }
+
+  var html = header;
+  html += '<div class="mm-rej-note">Names evaluated by the conviction gate but not held. Vetoes are hard rules (parabolic extension, distress, cycle-blocked). Bear bullets show the exact risk factors that kept them out. Sorted worst-confluence first.</div>';
+  html += '<div class="mm-rej-grid">';
+
+  rej.forEach(function(r) {
+    var conflV = r.confluence;
+    var conflStr = conflV != null ? ((conflV > 0 ? '+' : '') + conflV.toFixed(2)) : '—';
+    var conflCls = conflV != null && conflV < -0.05 ? 'neg' : 'neu';
+
+    html += '<div class="mm-rej-card">';
+    html += '<div class="mm-rej-ticker">' + esc(r.ticker || '—') + '</div>';
+    html += '<div class="mm-rej-reason">' + esc(r.reason || '—') + '</div>';
+
+    // veto chips
+    if (r.vetoes && r.vetoes.length) {
+      html += '<div class="mm-rej-vetoes">';
+      r.vetoes.forEach(function(v) {
+        html += '<span class="mm-rej-veto-chip">' + esc(v) + '</span>';
+      });
+      html += '</div>';
+    }
+
+    // top 3 bear bullets
+    var bears = (r.bear || []).slice(0, 3);
+    if (bears.length) {
+      html += '<ul class="mm-rej-bears">';
+      bears.forEach(function(b) { html += '<li>' + esc(b) + '</li>'; });
+      html += '</ul>';
+    }
+
+    html += '<div class="mm-rej-confluence ' + conflCls + '">Confluence: ' + conflStr + '</div>';
+    html += '</div>';
+  });
+
+  html += '</div>';
+  el.innerHTML = html;
+}
 
 // ── HERO ─────────────────────────────────────────────────────────────────────
 function renderHero() {
@@ -1402,13 +2418,15 @@ function renderFooter() {
 
 // ── FETCH + RENDER ────────────────────────────────────────────────────────────
 async function fetchAll() {
-  var [bookRes, tradesRes, actRes, researchRes, compRes, regimeRes] = await Promise.allSettled([
+  var [bookRes, tradesRes, actRes, researchRes, compRes, regimeRes, perfRes, runsRes] = await Promise.allSettled([
     fetch('/api/portfolio').then(function(r) { return r.ok ? r.json() : null; }).catch(function() { return null; }),
     fetch('/api/trades').then(function(r)    { return r.ok ? r.json() : null; }).catch(function() { return null; }),
     fetch('/api/activity').then(function(r)  { return r.ok ? r.json() : [];   }).catch(function() { return []; }),
     fetch('/api/research').then(function(r)  { return r.ok ? r.json() : [];   }).catch(function() { return []; }),
     fetch('/api/competitors').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
     fetch('/regime').then(function(r)         { return r.ok ? r.json() : null; }).catch(function() { return null; }),
+    fetch('/api/performance').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
+    fetch('/api/runs').then(function(r)       { return r.ok ? r.json() : [];   }).catch(function() { return []; }),
   ]);
 
   _book        = bookRes.status    === 'fulfilled' ? bookRes.value    : null;
@@ -1417,18 +2435,27 @@ async function fetchAll() {
   _research    = (researchRes.status === 'fulfilled' ? researchRes.value : null) || [];
   _competitors = compRes.status    === 'fulfilled' ? compRes.value    : null;
   _regime      = regimeRes.status  === 'fulfilled' ? regimeRes.value  : null;
+  _perf        = perfRes.status    === 'fulfilled' ? perfRes.value    : null;
+  _runs        = (runsRes.status   === 'fulfilled' ? runsRes.value    : null) || [];
+
+  // extract rejected from portfolio
+  _rejected = (_book && _book.rejected) ? _book.rejected : [];
 
   // merge regime into book when needed
   if (_book && !(_book.regime||{}).quad && _regime) {
     _book.regime = { quad: _regime.quad, quad_name: _regime.quad_name, liquidity_overlay: _regime.liquidity_overlay };
   }
 
+  renderPerformance();
+  renderEquityCurve();
   renderHero();
   renderAllocation();
   renderPositions();
   renderTrades();
   renderBrainLog();
   renderResearch();
+  renderRuns();
+  renderRejected();
   renderCompetitors();
   renderFooter();
 
