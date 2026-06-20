@@ -12,4 +12,7 @@ data/brain/*.jsonl
 data/brain/*.json
 data/signal_archive/*.parquet
 data/*.db
+data/research/
+data/brain/proposals.jsonl
+jobs/
 !data/**/.gitkeep

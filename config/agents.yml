@@ -19,10 +19,12 @@ default_role: pm
 # Per-call reasoning defaults (read-only over the bot + vendored dashboard).
 reasoning:
   max_turns: 1
-  allowed_tools: [Read, Grep, Glob]   # NO Write/Edit/Bash — a read-only reasoning layer
+  allowed_tools: [Read, Grep, Glob]   # plain reason() = read-only; research() arms more
   permission_mode: default
   add_dirs: [vendor/macro]            # expose the dashboard engine + data to Claude
   effort: high                        # opus/sonnet effort for deep reasoning
+  research_max_turns: 16              # armed multi-turn research loop (MCP tools + web)
+  prefer_subscription: true           # strip ANTHROPIC_API_KEY -> use the subscription, not the metered API
 
 # Backend: 'cli' = Claude Code (subscription tokens, sees dashboard context, tiered subagents);
 #          'api' = the metered Messages API (brain/client.py). 'cli' is the default reasoning layer.

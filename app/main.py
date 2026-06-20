@@ -52,8 +52,23 @@ if FastAPI is not None:
     def regime() -> dict:
         return _regime_payload()
 
+    class ResearchReq(BaseModel):
+        prompt: str
+        role: str = "deep"
+        max_turns: int | None = None
+        resume: str | None = None     # continue a prior research session by id
+
     @app.post("/reason")
     async def reason(req: ReasonReq) -> dict:
         """Drive Claude Code headlessly for a reasoning pass over the dashboard context."""
         return await cli_bridge.reason(
             req.prompt, role=req.role, append_system=req.append_system, max_turns=req.max_turns)
+
+    @app.post("/research")
+    async def research(req: ResearchReq) -> dict:
+        """An ARMED, multi-turn research session: Claude reads the dashboard (MCP tools),
+        searches the web/news, reasons through 2nd/3rd-order effects, and writes conclusions
+        back to the app (research notes, proposed theses, emerging-theme flags). Paper-only —
+        nothing auto-executes."""
+        return await cli_bridge.research(
+            req.prompt, role=req.role, max_turns=req.max_turns, resume=req.resume)

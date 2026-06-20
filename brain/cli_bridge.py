@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -59,20 +60,44 @@ def _abs_dirs(dirs: list[str]) -> list[str]:
     return [str((_ROOT / d).resolve()) for d in dirs]
 
 
+def _subscription_env() -> dict:
+    """Env for the spawned claude. To use the SUBSCRIPTION (not the metered API) we must
+    NOT expose ANTHROPIC_API_KEY — it wins over the subscription login in the credential
+    resolution order. Strip it (and ANTHROPIC_AUTH_TOKEN) when prefer_subscription."""
+    e = dict(os.environ)
+    if _cfg().get("reasoning", {}).get("prefer_subscription", True):
+        e.pop("ANTHROPIC_API_KEY", None)
+        e.pop("ANTHROPIC_AUTH_TOKEN", None)
+    return e
+
+
 async def reason(prompt: str, *, role: str = "pm", model: str | None = None,
                  system: str | None = None, append_system: str | None = None,
                  allowed_tools: list[str] | None = None, add_dirs: list[str] | None = None,
-                 max_turns: int | None = None, cwd: str | None = None) -> dict:
-    """Run one headless Claude Code reasoning pass. Returns a structured result dict:
-    {ok, text, model, role, cost_usd, session_id, usage, backend, error}."""
+                 max_turns: int | None = None, cwd: str | None = None,
+                 arm: bool = False, resume: str | None = None) -> dict:
+    """Run a headless Claude Code reasoning pass. With arm=True, attaches the bot's MCP
+    tools (read the dashboard + write conclusions back) + WebSearch/WebFetch and runs a
+    multi-turn research loop. Returns {ok, text, model, role, armed, tools_used, cost_usd,
+    session_id, usage, backend, error}."""
     c = _cfg()
     rc = c.get("reasoning", {})
+    mcp_servers = None
+    if arm:
+        from brain import bot_mcp
+        mcp_servers = {bot_mcp.SERVER_NAME: bot_mcp.build_server()}
+        if allowed_tools is None:
+            allowed_tools = bot_mcp.armed_allowed_tools()
+        if role == "pm":
+            role = "deep"
+        max_turns = max_turns or rc.get("research_max_turns", 16)
+
     mdl = resolve_model(role, model)
     tools = allowed_tools if allowed_tools is not None else rc.get("allowed_tools", ["Read", "Grep", "Glob"])
     dirs = _abs_dirs(add_dirs if add_dirs is not None else rc.get("add_dirs", []))
     turns = max_turns or rc.get("max_turns", 1)
     workdir = cwd or str(_ROOT)
-    base = {"model": mdl, "role": role}
+    base = {"model": mdl, "role": role, "armed": arm}
 
     if not cli_path():
         return {**base, "ok": False, "backend": "none", "text": None,
@@ -81,34 +106,45 @@ async def reason(prompt: str, *, role: str = "pm", model: str | None = None,
     if _SDK:
         try:
             return await _via_sdk(prompt, mdl, role, system, append_system, tools, dirs, turns, workdir,
-                                  rc.get("permission_mode", "default"))
-        except Exception as e:           # fall through to the CLI subprocess
+                                  rc.get("permission_mode", "default"), mcp_servers, resume, arm)
+        except Exception as e:           # fall through to the CLI subprocess (non-armed only)
             base["sdk_error"] = repr(e)[:200]
+    if arm:
+        return {**base, "ok": False, "backend": "none", "text": None,
+                "error": "armed research requires the Agent SDK"}
     return await _via_subprocess(prompt, mdl, role, system, append_system, tools, dirs, turns, workdir,
                                  rc.get("permission_mode", "default"), base)
 
 
-async def _via_sdk(prompt, mdl, role, system, append_system, tools, dirs, turns, workdir, perm) -> dict:
+async def _via_sdk(prompt, mdl, role, system, append_system, tools, dirs, turns, workdir, perm,
+                   mcp_servers, resume, arm) -> dict:
     opts = _Options(model=mdl, allowed_tools=tools, add_dirs=dirs, cwd=workdir,
-                    max_turns=turns, permission_mode=perm)
+                    max_turns=turns, permission_mode=perm, env=_subscription_env())
+    if mcp_servers:
+        opts.mcp_servers = mcp_servers
+    if resume:
+        opts.resume = resume
     if system:
         opts.system_prompt = system
     if append_system:
         opts.append_system_prompt = append_system
-    text, cost, sid, usage = None, None, None, None
+    text, cost, sid, usage, used = None, None, None, None, []
     async for msg in _sdk_query(prompt=prompt, options=opts):
         if hasattr(msg, "result"):                         # ResultMessage
-            text = getattr(msg, "result", None)
+            text = getattr(msg, "result", None) or text
             cost = getattr(msg, "total_cost_usd", None)
             sid = getattr(msg, "session_id", None)
             usage = getattr(msg, "usage", None)
-        elif text is None and hasattr(msg, "content"):     # last-resort: AssistantMessage text
-            blocks = getattr(msg, "content", []) or []
-            joined = "".join(getattr(b, "text", "") for b in blocks if getattr(b, "type", "") == "text")
-            if joined:
-                text = joined
-    return {"ok": bool(text), "text": text, "model": mdl, "role": role,
-            "cost_usd": cost, "session_id": sid, "usage": _as_dict(usage), "backend": "sdk"}
+        elif hasattr(msg, "content"):                      # AssistantMessage: collect text + tool calls
+            for b in (getattr(msg, "content", []) or []):
+                bt = getattr(b, "type", "")
+                if bt == "text" and getattr(b, "text", ""):
+                    text = (text or "") + b.text if text is None else b.text
+                elif bt == "tool_use":
+                    used.append(getattr(b, "name", "?"))
+    return {"ok": bool(text), "text": text, "model": mdl, "role": role, "armed": arm,
+            "tools_used": used, "cost_usd": cost, "session_id": sid,
+            "usage": _as_dict(usage), "backend": "sdk"}
 
 
 async def _via_subprocess(prompt, mdl, role, system, append_system, tools, dirs, turns, workdir, perm, base) -> dict:
@@ -124,7 +160,7 @@ async def _via_subprocess(prompt, mdl, role, system, append_system, tools, dirs,
         argv += ["--append-system-prompt", append_system]
     proc = await asyncio.create_subprocess_exec(
         *argv, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE, cwd=workdir)
+        stderr=asyncio.subprocess.PIPE, cwd=workdir, env=_subscription_env())
     out, err = await proc.communicate(prompt.encode())
     try:
         j = json.loads(out.decode() or "{}")
@@ -144,6 +180,19 @@ def _as_dict(usage):
             "cache_read_input_tokens", "cache_creation_input_tokens") if hasattr(usage, k)}
 
 
+async def research(prompt: str, *, role: str = "deep", max_turns: int | None = None,
+                   resume: str | None = None) -> dict:
+    """An ARMED, multi-turn research session: Claude reads the dashboard via the bot MCP
+    tools, searches the web/news, reasons through 2nd/3rd-order effects, and writes its
+    conclusions back to the app (research notes, proposed theses, emerging-theme flags,
+    recommendations). Returns the result + the tools it called."""
+    return await reason(prompt, role=role, arm=True, max_turns=max_turns, resume=resume)
+
+
 def reason_sync(prompt: str, **kw) -> dict:
     """Blocking wrapper for the (sync) brain. Do NOT call from inside a running loop."""
     return asyncio.run(reason(prompt, **kw))
+
+
+def research_sync(prompt: str, **kw) -> dict:
+    return asyncio.run(research(prompt, **kw))
