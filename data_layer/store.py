@@ -30,6 +30,15 @@ CREATE TABLE IF NOT EXISTS detectors (
   severity TEXT, payload TEXT, resolved INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS runs (
   asof TEXT PRIMARY KEY, ran INTEGER, triggers TEXT, state_sig TEXT, at TEXT);
+CREATE TABLE IF NOT EXISTS trials (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, spec_hash TEXT, scored_at TEXT, dsr REAL,
+  verdict TEXT, sharpe REAL, maxdd REAL, beats_spy INTEGER, beats_6040 INTEGER,
+  crisis_pass INTEGER, fold_robust INTEGER, p_value REAL, n_eff INTEGER);
+CREATE TABLE IF NOT EXISTS holdout_touches (
+  spec_hash TEXT PRIMARY KEY, touched_at TEXT, holdout_start TEXT, holdout_sharpe REAL);
+CREATE TABLE IF NOT EXISTS promotions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, spec_hash TEXT, stage TEXT, promoted_at TEXT,
+  dsr REAL, n_eff INTEGER, reason TEXT);
 """
 
 
@@ -93,3 +102,33 @@ def last_run(con) -> dict | None:
 
 def positions(con, asof: str) -> list[dict]:
     return [dict(r) for r in con.execute("SELECT * FROM positions WHERE asof=? ORDER BY weight DESC", (asof,))]
+
+
+# ---------- self-improving loop state ----------
+def record_trial(con, spec_hash: str, m: dict, n_eff: int, at: str):
+    con.execute("INSERT INTO trials (spec_hash,scored_at,dsr,verdict,sharpe,maxdd,beats_spy,"
+                "beats_6040,crisis_pass,fold_robust,p_value,n_eff) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (spec_hash, at, m["dsr"], m["dsr_verdict"], m["sharpe"], m["maxdd"],
+                 int(m["beats_spy"]), int(m["beats_6040"]), int(m["crisis_pass"]),
+                 int(m["fold_robust"]), m["p_value"], n_eff))
+    con.commit()
+
+
+def cumulative_trial_count(con) -> int:
+    return con.execute("SELECT count(DISTINCT spec_hash) FROM trials").fetchone()[0]
+
+
+def touched_set(con) -> set[str]:
+    return {r[0] for r in con.execute("SELECT spec_hash FROM holdout_touches")}
+
+
+def add_holdout_touch(con, spec_hash: str, holdout_start: str, sharpe: float, at: str):
+    con.execute("INSERT OR IGNORE INTO holdout_touches (spec_hash,touched_at,holdout_start,holdout_sharpe) "
+                "VALUES (?,?,?,?)", (spec_hash, at, holdout_start, sharpe))
+    con.commit()
+
+
+def record_promotion(con, spec_hash: str, stage: str, dsr: float, n_eff: int, reason: str, at: str):
+    con.execute("INSERT INTO promotions (spec_hash,stage,promoted_at,dsr,n_eff,reason) VALUES (?,?,?,?,?,?)",
+                (spec_hash, stage, at, dsr, n_eff, reason))
+    con.commit()
