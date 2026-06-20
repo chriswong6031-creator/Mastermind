@@ -111,7 +111,7 @@ async def reason(prompt: str, *, role: str = "pm", model: str | None = None,
             base["sdk_error"] = repr(e)[:200]
     if arm:
         return {**base, "ok": False, "backend": "none", "text": None,
-                "error": "armed research requires the Agent SDK"}
+                "error": base.get("sdk_error") or "armed research needs the Agent SDK + a subscription credential"}
     return await _via_subprocess(prompt, mdl, role, system, append_system, tools, dirs, turns, workdir,
                                  rc.get("permission_mode", "default"), base)
 

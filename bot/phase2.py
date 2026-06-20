@@ -34,7 +34,7 @@ def _j(rel):
     return json.loads((_V / rel).read_text())
 
 
-def run(asof: str | None = None, force: bool = False) -> dict:
+def run(asof: str | None = None, force: bool = False, research: bool = False) -> dict:
     cfg = load_doctrine()
     regime = _j("data/regime/latest.json")
     asof = asof or regime["date"]
@@ -49,6 +49,13 @@ def run(asof: str | None = None, force: bool = False) -> dict:
     if not decision["run"]:
         store.record_run(con, asof, False, decision["triggers"], sig, datetime.now(timezone.utc).isoformat())
         return {"ran": False, "reason": "carried forward (no material change)", "positions": store.positions(con, asof)}
+
+    # ---- ARMED Claude research (optional): reason over the web/news, propose theses,
+    #      gate them into the falsifiable ledger before sizing ----
+    research_out = None
+    if research:
+        from brain import research_desk
+        research_out = research_desk.daily_research_and_ingest(asof)
 
     # ---- LEADERSHIP sleeve: top-RS sectors, trend-gated, equal-weight (mechanical) ----
     lead_budget = sum(cfg["sleeves"]["leadership_target"]) / 2     # midpoint 0.50
@@ -127,7 +134,8 @@ def run(asof: str | None = None, force: bool = False) -> dict:
     }
     paths = write(payload)
     return {"ran": True, "triggers": decision["triggers"], "book": book, "sleeves": payload["sleeves"],
-            "detectors": fired, "track_record": tr, "paths": paths, "llm_used": payload["llm_used"]}
+            "detectors": fired, "track_record": tr, "paths": paths, "llm_used": payload["llm_used"],
+            "research": research_out}
 
 
 if __name__ == "__main__":
