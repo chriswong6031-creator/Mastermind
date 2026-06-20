@@ -1,0 +1,29 @@
+# In-house model-tier routing policy for the Claude Code reasoning layer.
+# Mirrors our standing Claude Code agent usage policy:
+#   Opus   = planning / orchestration / deep + creative reasoning (top loop on Opus)
+#   Sonnet = code / medium reasoning / structured analysis
+#   Haiku  = search / extraction / labeling / high-volume fan-out
+#   Fable  = gated; the most demanding long-horizon synthesis only when evals justify
+# Bias toward delegating whole non-Opus subtasks to Sonnet/Haiku subagents
+# (quality first, then token efficiency).
+
+roles:
+  pm: opus          # portfolio-manager / final synthesis / accountable decisions
+  deep: opus        # deep narrative reasoning, hardest synthesis
+  analyst: sonnet   # medium reasoning, structured analysis, code
+  scout: haiku      # search, extraction, labeling, high-volume fan-out
+  fable: fable      # gated: most demanding long-horizon synthesis
+
+default_role: pm
+
+# Per-call reasoning defaults (read-only over the bot + vendored dashboard).
+reasoning:
+  max_turns: 1
+  allowed_tools: [Read, Grep, Glob]   # NO Write/Edit/Bash — a read-only reasoning layer
+  permission_mode: default
+  add_dirs: [vendor/macro]            # expose the dashboard engine + data to Claude
+  effort: high                        # opus/sonnet effort for deep reasoning
+
+# Backend: 'cli' = Claude Code (subscription tokens, sees dashboard context, tiered subagents);
+#          'api' = the metered Messages API (brain/client.py). 'cli' is the default reasoning layer.
+backend: cli
