@@ -18,3 +18,4 @@ jobs/
 !data/**/.gitkeep
 data/quiver/
 data/*.sqlite
+.env.local
