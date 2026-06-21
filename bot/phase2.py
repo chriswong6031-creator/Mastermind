@@ -66,6 +66,14 @@ def _conv_theme_id(t: str) -> str:
     return f"name:{t.upper()}"
 
 
+def _is_hard_exit(syn: dict) -> bool:
+    """A held name must be EXITED immediately (no hysteresis) on a hard veto (parabolic / Altman /
+    cycle-blocked), a confirmed STRUCTURAL downtrend, or size_authority 'blocked'. (A fresh
+    falling-knife or a softened sector is NOT a hard exit — a name we own rides through a rough week.)"""
+    return (bool(syn.get("vetoes")) or bool(syn.get("price_downtrend"))
+            or syn.get("size_authority") == "blocked")
+
+
 def run(asof: str | None = None, force: bool = False, research: bool = False) -> dict:
     # —— open run log ——
     _run_id: str | None = None
@@ -95,17 +103,42 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
                                interval_days=cfg["scorecard"].get("rs_down_day_lookback_d", 1) and 1,
                                force=force)
     if not decision["run"]:
-        store.record_run(con, asof, False, decision["triggers"], sig, datetime.now(timezone.utc).isoformat())
+        # HARD-EXIT SWEEP — the run gate is keyed on the REGIME signature (quad/risk-band/liquidity/
+        # top-sector) and is blind to NAME-level breakdowns. So even on a carried-forward day, sweep
+        # the held conviction names and exit any that have gone parabolic / into Altman distress /
+        # into a confirmed structural downtrend — otherwise a broken name sits in the book until the
+        # regime signature happens to move.
+        _swept: list[str] = []
+        for _hp in position_log.open_positions():
+            if _hp.get("sleeve") != "conviction":
+                continue
+            try:
+                _syn = lenses_mod.full(_hp["ticker"], "name").get("synthesis", {})
+            except Exception:
+                continue
+            if _is_hard_exit(_syn) and position_log.close_position("conviction", _hp["ticker"], asof,
+                                                                   reason="hard_exit_sweep"):
+                _swept.append(_hp["ticker"])
+                try:
+                    ledger.close(_hp["ticker"], "exited (hard veto/downtrend, gate-closed sweep)")
+                except Exception:
+                    pass
+        if _swept:
+            _rl_log(_run_id, "decision", "hard-exit sweep (gate closed)", f"exited={_swept}", exited=_swept)
+        store.record_run(con, asof, False,
+                         decision["triggers"] + (["hard_exit_sweep"] if _swept else []),
+                         sig, datetime.now(timezone.utc).isoformat())
         _rl_log(_run_id, "decision", "gate: carried forward",
-                f"triggers={decision['triggers']}")
+                f"triggers={decision['triggers']} swept={_swept}")
         try:
             from brain import runlog
             if _run_id:
-                runlog.end_run(_run_id, summary="carried forward — no material change")
+                runlog.end_run(_run_id, summary=f"carried forward — no material change"
+                               + (f"; hard-exit swept {_swept}" if _swept else ""))
         except Exception:
             pass
         return {"ran": False, "reason": "carried forward (no material change)",
-                "positions": store.positions(con, asof), "run_id": _run_id}
+                "exited": _swept, "positions": store.positions(con, asof), "run_id": _run_id}
 
     # ———— ARMED Claude research (optional) ————
     research_out = None
@@ -302,6 +335,16 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
 
     # ———— update positions ledger ————
     position_log.update(book, asof)
+
+    # close ledger theses for conviction names that LEFT the book this run — the append-only ledger
+    # otherwise keeps the old thesis 'open' forever (blocking any re-proposal and accreting stale
+    # names in the open-thesis candidate pool).
+    _final_conv = {p["ticker"] for p in book if p.get("sleeve") == "conviction"}
+    for _dropped in (_held_conv - _final_conv):
+        try:
+            ledger.close(_dropped, "exited (left book)")
+        except Exception:
+            pass
 
     # ———— enrich positions with opened_at / held_days / thesis_full ————
     decisions_by_id = {d["id"]: d for d in decisions}

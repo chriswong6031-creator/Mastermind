@@ -163,6 +163,27 @@ def closed_positions() -> list[dict]:
     return out
 
 
+def close_position(sleeve: str, ticker: str, asof_iso: str, reason: str = "hard_exit") -> bool:
+    """Close a SINGLE open position without touching any other (unlike update(), which closes every
+    open key absent from the passed book). Used by the gate-closed hard-exit sweep so a parabolic /
+    distress / downtrend name can be exited on a carried-forward day. Returns True if it closed an
+    open position."""
+    ledger = _load()
+    key = f"{sleeve}:{ticker}"
+    entry = ledger.get(key)
+    if not entry or not entry.get("still_open"):
+        return False
+    now = _now_iso()
+    entry["still_open"] = False
+    entry["closed_at"] = now
+    entry["close_as_of"] = asof_iso
+    entry["current_weight"] = 0
+    entry.setdefault("history", []).append(
+        {"event": "close", "ts": now, "weight": 0, "price": None, "reason": reason})
+    _save(ledger)
+    return True
+
+
 def get_entry_info(sleeve: str, ticker: str) -> dict:
     """Return {opened_at, held_days, entry_price} for a given position key, or {} if not found."""
     ledger = _load()

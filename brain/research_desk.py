@@ -151,6 +151,19 @@ def _clamp(lean: str, subject: str, blocked: set[str]) -> tuple[str, str]:
     return lean, ""
 
 
+def _engine_blocked(subject: str) -> bool:
+    """Whether the deterministic engine hard-blocks this name (a hard veto or size_authority
+    'blocked'). Lets the risk officer de-escalate a bullish Claude lean on a vetoed name even when
+    the caller passes no `blocked` set — the daily loop never did, so the clamp was dead there and a
+    bullish thesis on a parabolic / Altman-distress name was ingested un-clamped."""
+    try:
+        from portfolio import lenses
+        syn = lenses.full(subject, "name").get("synthesis", {})
+        return bool(syn.get("vetoes")) or syn.get("size_authority") == "blocked"
+    except Exception:
+        return False
+
+
 def ingest_proposals(asof: str | None = None, *, blocked: set[str] | None = None,
                      con=None) -> dict:
     """Convert Claude's 'proposed' rows into gated, falsifiable ledger theses. Returns a summary."""
@@ -165,7 +178,13 @@ def ingest_proposals(asof: str | None = None, *, blocked: set[str] | None = None
         if r.get("status") != "proposed":
             kept.append(r)
             continue
-        lean, clamp_note = _clamp(r.get("lean", "watch"), r.get("subject", ""), blocked)
+        subj = r.get("subject", "")
+        # de-escalate a bullish lean on an engine-blocked name whether the caller flagged it OR the
+        # engine itself vetoes it (the daily loop passes no `blocked` set, so self-derive it).
+        eff_blocked = set(blocked)
+        if subj.upper() not in {b.upper() for b in eff_blocked} and _engine_blocked(subj):
+            eff_blocked.add(subj)
+        lean, clamp_note = _clamp(r.get("lean", "watch"), subj, eff_blocked)
         doc = DecisionDoc(
             id=f"{asof}-{r['subject']}-claude-{i}", subject=r["subject"], lean=lean,
             conviction=("low" if clamp_note else r.get("conviction", "low")),

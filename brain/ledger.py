@@ -32,5 +32,29 @@ def append(doc: dict) -> bool:
     return True
 
 
+def close(subject: str, resolution: str = "closed", *, outcome: int | None = None,
+          realized: float | None = None) -> int:
+    """Mark every OPEN thesis on `subject` closed (rewriting the JSONL). Returns the count closed.
+
+    Without this the append-only ledger keeps a name's first thesis 'open' forever: append() refuses
+    a new thesis while one is open (the dedup lock), so a name that left and re-entered the book
+    could never get a refreshed thesis, and the open-thesis set (which feeds the conviction candidate
+    pool) accreted stale names indefinitely."""
+    rows = _read()
+    n = 0
+    for t in rows:
+        if t.get("subject") == subject and t.get("status", "open") == "open":
+            t["status"] = resolution
+            if outcome is not None:
+                t["outcome"] = outcome
+            if realized is not None:
+                t["realized"] = realized
+            n += 1
+    if n:
+        _LEDGER.parent.mkdir(parents=True, exist_ok=True)
+        _LEDGER.write_text("".join(json.dumps(t, default=str) + "\n" for t in rows))
+    return n
+
+
 def all_theses() -> list[dict]:
     return _read()
