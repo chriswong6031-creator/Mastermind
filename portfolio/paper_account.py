@@ -348,6 +348,69 @@ def rebalance(
         _append_jsonl(_FILLS_PATH, fill)
 
 
+def execute_fill(ticker: str, side: str, *, weight: float | None = None,
+                 shares: float | None = None, price: float | None = None,
+                 prices: dict[str, float] | None = None,
+                 asof: str | None = None) -> dict:
+    """A SINGLE-NAME paper fill, funded from / credited to cash.
+
+    Unlike rebalance() — which takes a FULL target book and SELLS anything not in it —
+    this adds, trims, or exits EXACTLY one ticker and never touches any other position.
+    It is how the advisor chat conducts an ad-hoc paper trade.
+
+    side  : "buy" | "sell"
+    sizing: buy  -> `weight` (fraction of NAV) or explicit `shares`
+            sell -> explicit `shares`, or omit both to EXIT the whole position
+    Returns {ok, ticker, side, shares, price, value, cash_after}; ok=False on no price /
+    insufficient cash / nothing to sell. Paper-only; reversible.
+    """
+    ticker = ticker.upper()
+    side = (side or "").lower()
+    asof = asof or date.today().isoformat()
+    state = _load_account()
+    px = price if (price and price > 0) else _current_price(ticker)
+    if not px or px <= 0:
+        return {"ok": False, "ticker": ticker, "error": "no price available"}
+    pos = state["positions"].get(ticker)
+
+    if side == "buy":
+        if shares is None:
+            pmap = dict(prices or {})
+            pmap.setdefault(ticker, px)
+            dollars = max(0.0, float(weight or 0.0)) * nav(pmap)
+            shares = dollars / px
+        shares = min(float(shares), state["cash"] / px)          # cash-bounded, no leverage
+        if shares <= 1e-9:
+            return {"ok": False, "ticker": ticker, "error": "insufficient cash / zero size"}
+        value = shares * px
+        state["cash"] = max(0.0, state["cash"] - value)
+        if pos:
+            total = pos["shares"] + shares
+            pos["avg_cost"] = (pos["shares"] * pos["avg_cost"] + value) / total
+            pos["shares"] = total
+        else:
+            state["positions"][ticker] = {"shares": shares, "avg_cost": px}
+        fill = {"date": asof, "ticker": ticker, "side": "buy",
+                "shares": round(shares, 6), "price": round(px, 4), "value": round(value, 2)}
+    else:                                                        # sell / trim / exit
+        if not pos or pos["shares"] <= 1e-9:
+            return {"ok": False, "ticker": ticker, "error": "no position to sell"}
+        sell = pos["shares"] if shares is None else min(float(shares), pos["shares"])
+        if sell <= 1e-9:
+            return {"ok": False, "ticker": ticker, "error": "zero size"}
+        value = sell * px
+        state["cash"] += value
+        pos["shares"] -= sell
+        if pos["shares"] < 1e-9:
+            del state["positions"][ticker]
+        fill = {"date": asof, "ticker": ticker, "side": "sell",
+                "shares": round(sell, 6), "price": round(px, 4), "value": round(value, 2)}
+
+    _save_account(state)
+    _append_jsonl(_FILLS_PATH, fill)
+    return {"ok": True, **fill, "cash_after": round(state["cash"], 2)}
+
+
 def mark(prices: dict[str, float], asof: str) -> None:
     """Snapshot NAV to nav_history.jsonl. Also initialises SPY shares on first call."""
     state = _load_account()

@@ -35,10 +35,10 @@ clear, accountable read: what the macro regime is, what any name/theme is worth 
 and whether to ADD, TRIM, HOLD, or AVOID.
 
 NON-NEGOTIABLE DOCTRINE:
-- You are PAPER-ONLY. You NEVER execute a trade and never claim to have. When the desk \
-owner wants to act, you STAGE it into the human-approved review queue (recommend_action \
-for a buy/add/trim/exit/watch call; propose_thesis for a falsifiable thesis) and tell \
-them plainly that it is staged for their approval, not executed.
+- This is a PAPER book — no real money, ever. You ARE allowed to conduct paper trades \
+(add / trim / exit) on the book via execute_trade; you may NEVER touch real money or claim a \
+real-money trade. Every ADD must earn its way through the evaluation protocol below — you \
+never add a name that hasn't cleared the gate and a CONFIRMED research paper.
 - Subtract-only sizing: conviction must EARN size through multi-side confluence; doubt \
 removes size. A name is sized only when the lenses agree and no hard veto fires.
 - Respect hard vetoes absolutely — parabolic extension, financial distress, cycle-blocked. \
@@ -58,6 +58,27 @@ get_altdata; news flow: get_news; the buy board: get_standouts; themes: get_them
 Options & dealer positioning (GEX / expected move / vol-hole): get_options. Forward directional \
 read: get_anticipation. For anything else published, read_signal on the dashboard JSON.
 - Use WebSearch/WebFetch only for genuinely new external facts the dashboard can't supply.
+
+WHEN THE USER PUSHES A NAME (add / buy / "should we own X"):
+1. PRELIMINARY GATE — call evaluate_gate(ticker). If it does NOT pass, STOP: tell the user it \
+failed preliminary inspection and exactly why (the hard veto, or the bearish lenses); do not \
+write a paper and do not trade.
+2. If it PASSES — tell the user plainly that {TICKER} cleared preliminary inspection (give the \
+confluence; note no hard veto) and to give you a moment while you write the full research paper. \
+Then DO the research: get_fundamentals / get_options / get_news / get_altdata / \
+get_decision_matrix, and WebSearch the latest earnings, guidance, filings and competitive \
+context. Write the holistic report under the headings file_research_paper expects.
+3. RESEARCH GATE — call file_research_paper(...) with your report + scores; read back the \
+combined Conviction Index and `confirmed`.
+   • CONFIRMED → call execute_trade(ticker, "add", weight) to add it to the paper book, then tell \
+the user it PASSED (combined >= 60), that you've ADDED it (state the size band), and that they \
+can open the research paper (a button appears in the chat).
+   • NOT CONFIRMED → tell the user you are REJECTING it and exactly why (combined < 60 / viability \
+'avoid' / the key risks); do NOT add it. The paper is still filed (button + Research dashboard) \
+so they can read the reasoning.
+4. CUTTING a held name (trim / exit) needs no paper — call execute_trade(ticker, "trim"|"exit") \
+when the thesis breaks or risk demands it, and explain why.
+The research paper is ALWAYS stored in the Research dashboard — pass or fail.
 
 OUTPUT STYLE:
 - Lead with the verdict in one line (e.g. "ADD — starter only" / "AVOID — parabolic, wait \
@@ -132,13 +153,16 @@ def load_history(conversation_id: str | None) -> list:
 
 
 def append_turn(conversation_id: str | None, role: str, content: str,
-                tools: list | None = None) -> None:
-    """Append one rendered turn (role 'user' | 'brain') to the transcript on disk."""
-    if not conversation_id or not (content or tools):
+                tools: list | None = None, papers: list | None = None) -> None:
+    """Append one rendered turn (role 'user' | 'brain') to the transcript on disk.
+
+    `papers` carries any research papers filed during the turn so the popup can re-show
+    their 'open paper' buttons on reload."""
+    if not conversation_id or not (content or tools or papers):
         return
     turns = load_history(conversation_id)
     turns.append({"role": role, "content": content or "",
-                  "tools": tools or [],
+                  "tools": tools or [], "papers": papers or [],
                   "ts": datetime.now(timezone.utc).isoformat()})
     try:
         p = _hist_path(conversation_id)

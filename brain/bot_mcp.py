@@ -58,6 +58,21 @@ def _append(p: Path, row: dict):
         fh.write(json.dumps({**row, "logged_at": _now()}, default=str) + "\n")
 
 
+# Marker the streaming layer scans tool results for, to surface a research paper as a
+# clickable button in the chat (followed by a JSON blob with the paper meta).
+PAPER_MARKER = "__PAPER__"
+
+
+def _today() -> str:
+    d = _read_json(_V / "data" / "regime" / "latest.json") or {}
+    return d.get("date") or datetime.now(timezone.utc).date().isoformat()
+
+
+def _stock_price(t: str):
+    d = _read_json(_V / "site" / "stockdata" / f"{t.upper()}.json") or {}
+    return (d.get("tech") or {}).get("price")
+
+
 # ---------------- READ tools ----------------
 @tool("get_regime", "Current US macro regime read (quad, growth/inflation scores, liquidity).", {})
 async def get_regime(args):
@@ -409,11 +424,152 @@ async def recommend_action(args):
     return _ok(f"recommendation logged: {args['action']} {args['ticker']} (paper, for review).")
 
 
+# ---------------- evaluate -> research-paper -> trade (the user-pushed-name flow) ----------------
+@tool("evaluate_gate",
+      "PRELIMINARY GATE for a name the user wants you to consider adding. Runs the multi-sided "
+      "decision matrix and returns whether it passes the engine's size gate (size_authority 'up' "
+      "AND no hard veto), the confluence, the hard vetoes, and the bearish/bullish lenses. Call "
+      "this FIRST when the user pushes a ticker: if it does NOT pass, explain why and stop; if it "
+      "passes, tell the user it cleared preliminary inspection and that you're now writing the "
+      "research paper before deciding.",
+      {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]})
+async def evaluate_gate(args):
+    from portfolio import lenses
+    t = (args.get("ticker") or "").upper()
+    m = lenses.full(t, "name")
+    syn = m.get("synthesis") or {}
+    rows = m.get("rows") or []
+    vetoes = syn.get("vetoes") or []
+    conf = float(syn.get("confluence", 0.0) or 0.0)
+    authority = syn.get("size_authority")
+    passed = authority == "up" and not vetoes
+    if vetoes:
+        reason = "hard veto — " + ", ".join(vetoes)
+    elif authority == "blocked":
+        reason = "blocked (size_authority=blocked)"
+    elif conf <= -0.3:
+        reason = f"negative confluence ({conf:+.2f})"
+    elif authority != "up":
+        reason = f"insufficient confluence ({conf:+.2f}; need > 0.30 with leadership + trend confirmation)"
+    else:
+        reason = f"cleared — confluence {conf:+.2f}, no hard veto"
+    bears = [(r.get("lens", "").replace("_", " ") + (f": {r['note']}" if r.get("note") else ""))
+             for r in rows if r.get("direction") == "bear"][:5]
+    bulls = [r.get("lens", "").replace("_", " ") for r in rows if r.get("direction") == "bull"][:6]
+    return _json({"ticker": t, "passed": passed, "confluence": round(conf, 3),
+                  "size_authority": authority, "vetoes": vetoes, "reason": reason,
+                  "bear_lenses": bears, "bull_lenses": bulls,
+                  "divergences": syn.get("divergences")})
+
+
+@tool("file_research_paper",
+      "File the holistic research paper YOU wrote for a name and get the combined Conviction-Index "
+      "gate result. Call this AFTER evaluate_gate passes and you've done the deep research (tools + "
+      "web) and written the full report in markdown. The tool combines the engine buy-score with "
+      "your research score (combined = round(0.5*engine + 0.5*research); CONFIRMED if combined >= 60 "
+      "and viability != avoid). It STORES the paper in the Research dashboard and returns paper_id + "
+      "confirmed so the chat shows the user a button to open it. Use EXACTLY these report headings: "
+      "## Thesis, ## Pros, ## Cons, ## Valuation, ## Fundamentals, ## Revenue streams, ## Competitive "
+      "landscape & moat, ## Confirmed catalysts, ## Pending catalysts, ## Potential catalysts, "
+      "## Forward earnings (recalculated), ## Bull / base / bear scenarios, ## Second- and third-order "
+      "effects, ## Variant perception — what the market is missing, ## What to watch, ## Other factors.",
+      {"type": "object", "properties": {
+          "ticker": {"type": "string"},
+          "report_md": {"type": "string"},
+          "research_score": {"type": "integer"},
+          "viability": {"type": "string", "enum": ["compelling", "fair", "rich", "avoid"]},
+          "recommend": {"type": "boolean"},
+          "summary": {"type": "string"},
+          "key_risks": {"type": "array", "items": {"type": "string"}},
+          "fair_value": {"type": "number"},
+          "price_assessment": {"type": "string"},
+          "confidence": {"type": "string", "enum": ["low", "medium", "high"]}},
+       "required": ["ticker", "report_md", "research_score", "viability", "recommend", "summary"]})
+async def file_research_paper(args):
+    from portfolio import lenses
+    from brain import research_paper as rp
+    t = (args.get("ticker") or "").upper()
+    syn = (lenses.full(t, "name") or {}).get("synthesis") or {}
+    confluence = float(syn.get("confluence", 0.0) or 0.0)
+    asof = _today()
+    price = None
+    try:
+        from data_layer import polygon
+        price = (polygon.quotes([t]) or {}).get(t)
+    except Exception:
+        price = None
+    price = price if price else _stock_price(t)
+
+    report_md = rp._strip_leading_narration(args["report_md"])
+    paper = {
+        "schema": rp.SCHEMA, "id": f"{asof}-{t}", "ticker": t, "asof": asof,
+        "generated_at": rp._now(), "mode": "advisor", "model": "advisor-chat",
+        "price_at_review": price, "research_score": int(args["research_score"]),
+        "viability": args["viability"], "recommend": bool(args["recommend"]),
+        "confidence": args.get("confidence") or "medium", "fair_value": args.get("fair_value"),
+        "price_assessment": args.get("price_assessment") or "", "summary": args["summary"],
+        "sections": rp._split_sections(report_md), "key_risks": args.get("key_risks") or [],
+        "report_md": report_md,
+    }
+    rp._attach_gate(paper, confluence)          # -> engine_score, combined, confirmed, gate_reason
+    rp.save_paper(paper)
+    try:
+        rp.write_feed_note(paper)
+    except Exception:
+        pass
+    meta = {"paper_id": paper["id"], "ticker": t, "title": f"{t} — Research Report",
+            "combined": paper["combined"], "confirmed": paper["confirmed"],
+            "research_score": paper["research_score"], "engine_score": paper["engine_score"],
+            "viability": paper["viability"]}
+    verdict = ("CONFIRMED (combined >= 60) — you may add it."
+               if paper["confirmed"] else f"NOT confirmed ({paper['gate_reason']}) — do not add it.")
+    return _ok(f"{PAPER_MARKER} {json.dumps(meta)}\n"
+               f"Filed research paper {paper['id']} → Research dashboard. Conviction Index "
+               f"{paper['combined']}/100 (engine {paper['engine_score']} + research "
+               f"{paper['research_score']}). {verdict}")
+
+
+@tool("execute_trade",
+      "Conduct an ad-hoc PAPER trade in the book — add / trim / exit ONE name. For an ADD you MUST "
+      "have already filed a CONFIRMED research paper for the ticker (combined >= 60); the tool "
+      "refuses an add otherwise. Trims and exits are always allowed (risk-down). Funds from cash, "
+      "never disturbs other positions, never executes a real trade — shows in Trades + live P&L. "
+      "After an add, tell the user it's been added and offer the research paper.",
+      {"type": "object", "properties": {
+          "ticker": {"type": "string"},
+          "action": {"type": "string", "enum": ["add", "trim", "exit"]},
+          "weight": {"type": "number"},
+          "thesis": {"type": "string"}},
+       "required": ["ticker", "action"]})
+async def execute_trade(args):
+    from portfolio import advisor_trade
+    from brain import research_paper as rp
+    t = (args.get("ticker") or "").upper()
+    action = (args.get("action") or "").lower()
+    if action in ("add", "buy", "increase"):
+        paper = rp.latest_for(t)
+        if not paper or not paper.get("confirmed"):
+            return _ok(f"REFUSED: no CONFIRMED research paper on file for {t}. Run the flow first — "
+                       f"evaluate_gate -> write + file_research_paper -> if confirmed, then add.")
+    res = advisor_trade.execute(t, action, weight=args.get("weight"), thesis=args.get("thesis"))
+    if not res.get("ok"):
+        return _ok(f"trade NOT executed for {t}: {res.get('error', 'unknown')}")
+    try:
+        _append(_RESEARCH / "recommendations.jsonl",
+                {"source": "advisor_chat", "status": "executed_paper", "ticker": t,
+                 "action": action, "rationale": args.get("thesis") or "",
+                 **{k: res.get(k) for k in ("shares", "price", "value", "weight")}})
+    except Exception:
+        pass
+    return _ok(res["note"] + " (paper trade — shows in Trades + live P&L.)")
+
+
 _READ = [get_regime, get_themes, get_standouts, get_portfolio, get_decision_matrix, get_divergences,
          get_altdata, get_news, get_intelligence, get_daily_briefing, get_intake_candidates,
          get_ticker_package, get_fundamentals, get_options, get_anticipation, get_quote,
-         get_quiver_strategy, get_quiver_compare, read_signal]
-_ACTION = [save_research_note, propose_thesis, flag_emerging_theme, recommend_action]
+         get_quiver_strategy, get_quiver_compare, evaluate_gate, read_signal]
+_ACTION = [save_research_note, propose_thesis, flag_emerging_theme, recommend_action,
+           file_research_paper, execute_trade]
 _ALL = _READ + _ACTION
 SERVER_NAME = "bot"
 

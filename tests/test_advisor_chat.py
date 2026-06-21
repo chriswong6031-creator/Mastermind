@@ -17,9 +17,10 @@ from brain import advisor, cli_bridge
 def test_persona_encodes_doctrine():
     s = advisor.SYSTEM.lower()
     assert "the brain" in s
-    assert "paper-only" in s                 # never executes
+    assert "no real money" in s              # paper-only safety
     assert "decision_matrix" in s            # tool playbook present
-    assert "review queue" in s               # staging, not executing
+    # the evaluate -> research-paper -> trade protocol
+    assert "evaluate_gate" in s and "file_research_paper" in s and "execute_trade" in s
 
 
 def test_session_roundtrip(tmp_path, monkeypatch):
@@ -121,6 +122,79 @@ def test_typed_tools_registered_and_armed():
         full = "mcp__bot__" + nm
         assert full in bot_mcp.TOOL_NAMES
         assert full in bot_mcp.armed_allowed_tools()
+
+
+def test_chat_stream_emits_paper_event(monkeypatch):
+    from brain import bot_mcp
+    import json as _json
+
+    class _Blk:
+        def __init__(self, **k):
+            self.__dict__.update(k)
+
+    class _Msg:
+        def __init__(self, blocks):
+            self.content = blocks
+
+    class _Res:
+        def __init__(self):
+            self.result = "done"
+            self.session_id = "sid"
+            self.total_cost_usd = 0.0
+
+    meta = {"paper_id": "2026-06-21-NVDA", "ticker": "NVDA", "combined": 71, "confirmed": True}
+
+    async def fake_query(*, prompt, options):
+        yield _Msg([_Blk(type="tool_use", name="mcp__bot__file_research_paper", input={"ticker": "NVDA"})])
+        yield _Msg([_Blk(type="tool_result", content=bot_mcp.PAPER_MARKER + " " + _json.dumps(meta))])
+        yield _Res()
+
+    monkeypatch.setattr(cli_bridge, "_SDK", True)
+    monkeypatch.setattr(cli_bridge, "_sdk_query", fake_query)
+    monkeypatch.setattr(cli_bridge, "cli_path", lambda: "/usr/bin/claude")
+    evs = _drain(cli_bridge.chat_stream("add NVDA"))
+    paper = next(e for e in evs if e["type"] == "paper")
+    assert paper["ticker"] == "NVDA" and paper["confirmed"] is True and paper["combined"] == 71
+
+
+def test_execute_fill_never_touches_other_positions(tmp_path, monkeypatch):
+    import json as _json
+    from portfolio import paper_account as pa
+    monkeypatch.setattr(pa, "_DATA", tmp_path)
+    monkeypatch.setattr(pa, "_ACCOUNT_PATH", tmp_path / "account.json")
+    monkeypatch.setattr(pa, "_FILLS_PATH", tmp_path / "fills.jsonl")
+    (tmp_path / "account.json").write_text(_json.dumps({
+        "inception_date": "2026-06-20", "starting_nav": 1_000_000.0, "cash": 500_000.0,
+        "positions": {"XLK": {"shares": 1000, "avg_cost": 200.0}}, "spy_shares": None}))
+    r = pa.execute_fill("NVDA", "buy", weight=0.03, price=100.0, asof="2026-06-21")
+    acct = _json.loads((tmp_path / "account.json").read_text())
+    assert r["ok"] and "NVDA" in acct["positions"]
+    assert acct["positions"]["XLK"]["shares"] == 1000          # untouched
+    assert acct["cash"] < 500_000.0
+    # exit closes the single name only
+    pa.execute_fill("NVDA", "sell", price=110.0, asof="2026-06-21")
+    acct = _json.loads((tmp_path / "account.json").read_text())
+    assert "NVDA" not in acct["positions"] and acct["positions"]["XLK"]["shares"] == 1000
+    fills = [l for l in (tmp_path / "fills.jsonl").read_text().splitlines() if l.strip()]
+    assert len(fills) == 2
+    # selling a name we don't hold is refused, not an exception
+    assert pa.execute_fill("ZZZZ", "sell", price=5.0)["ok"] is False
+
+
+def test_advisor_trade_records_single_ledger_key(tmp_path, monkeypatch):
+    import json as _json
+    from portfolio import paper_account as pa, position_log as pl, advisor_trade
+    monkeypatch.setattr(pa, "_DATA", tmp_path)
+    monkeypatch.setattr(pa, "_ACCOUNT_PATH", tmp_path / "account.json")
+    monkeypatch.setattr(pa, "_FILLS_PATH", tmp_path / "fills.jsonl")
+    monkeypatch.setattr(pl, "_LEDGER_PATH", tmp_path / "ledger.json")
+    res = advisor_trade.execute("AAPL", "add", weight=0.02, price=50.0, asof="2026-06-21")
+    assert res["ok"] and res["side"] == "buy"
+    led = _json.loads((tmp_path / "ledger.json").read_text())
+    assert list(led.keys()) == ["advisor:AAPL"]                # only one key touched
+    assert any(o["ticker"] == "AAPL" for o in pl.open_positions())
+    advisor_trade.execute("AAPL", "exit", price=55.0, asof="2026-06-22")
+    assert not any(o["ticker"] == "AAPL" for o in pl.open_positions())
 
 
 def test_history_roundtrip(tmp_path, monkeypatch):

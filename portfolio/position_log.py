@@ -135,6 +135,51 @@ def update(positions: list[dict], asof_iso: str) -> None:
     _save(ledger)
 
 
+def record_manual(ticker: str, sleeve: str, *, event: str, weight: float | None = None,
+                  price: float | None = None, asof_iso: str | None = None) -> None:
+    """Upsert ONE ledger entry without reconciling the rest of the book.
+
+    update() reconciles against the WHOLE book (anything missing is closed), so it must
+    never be called with a partial list. This touches only this one key — used by the
+    advisor chat's ad-hoc trades. event: "open"/"add"/"trim"/"close".
+    """
+    now = _now_iso()
+    asof_iso = asof_iso or now[:10]
+    ledger = _load()
+    key = f"{sleeve}:{ticker.upper()}"
+    entry = ledger.get(key)
+    closing = event == "close"
+    if entry is None:
+        entry = {
+            "ticker": ticker.upper(), "sleeve": sleeve,
+            "opened_at": now, "open_as_of": asof_iso, "closed_at": None,
+            "close_as_of": None, "still_open": not closing, "last_seen": now,
+            "entry_weight": weight, "entry_price": price, "current_weight": weight,
+            "thesis_id": None, "source": "advisor", "history": [],
+        }
+        ledger[key] = entry
+    if closing:
+        entry["still_open"] = False
+        entry["closed_at"] = now
+        entry["close_as_of"] = asof_iso
+        entry["current_weight"] = 0
+    else:
+        if not entry.get("still_open"):                # re-open
+            entry["opened_at"] = now
+            entry["open_as_of"] = asof_iso
+            entry["closed_at"] = None
+            entry["close_as_of"] = None
+            entry["entry_weight"] = weight
+            entry["entry_price"] = price
+        entry["still_open"] = True
+        entry["last_seen"] = now
+        if weight is not None:
+            entry["current_weight"] = weight
+    entry.setdefault("history", []).append(
+        {"event": event, "ts": now, "as_of": asof_iso, "weight": weight, "price": price})
+    _save(ledger)
+
+
 def open_positions() -> list[dict]:
     """Return open positions shaped for /api/trades 'open' array."""
     ledger = _load()

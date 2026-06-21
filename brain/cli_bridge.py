@@ -324,23 +324,43 @@ async def chat_stream(prompt: str, *, resume: str | None = None,
         opts.append_system_prompt = append_system
 
     sid, cost, used = resume, None, []
+
+    def _result_event(raw):
+        """A tool result -> a 'paper' event if it carries the marker, else 'tool_result'."""
+        if isinstance(raw, (list, tuple)):
+            raw = " ".join(getattr(c, "text", "") or (c.get("text", "") if isinstance(c, dict) else str(c))
+                           for c in raw)
+        raw = str(raw or "")
+        if bot_mcp.PAPER_MARKER in raw:                    # a research paper was filed
+            try:
+                frag = raw.split(bot_mcp.PAPER_MARKER, 1)[1]
+                return {"type": "paper", **json.loads(frag[frag.find("{"):frag.rfind("}") + 1])}
+            except Exception:
+                pass
+        return {"type": "tool_result"}
+
     try:
         async for msg in _sdk_query(prompt=prompt, options=opts):
             if hasattr(msg, "result"):                         # ResultMessage (end of turn)
                 sid = getattr(msg, "session_id", None) or sid
                 cost = getattr(msg, "total_cost_usd", None)
-            elif hasattr(msg, "content"):                      # AssistantMessage
-                for b in (getattr(msg, "content", []) or []):
+                continue
+            blocks = getattr(msg, "content", None)
+            if isinstance(blocks, (list, tuple)):              # Assistant/User message: content blocks
+                for b in blocks:
                     bt = getattr(b, "type", "")
                     if bt == "text" and getattr(b, "text", ""):
                         yield {"type": "text", "text": b.text}
                     elif bt == "tool_use":
                         name = getattr(b, "name", "?")
                         used.append(name)
-                        yield {"type": "tool", "name": name,
-                               "args": getattr(b, "input", {}) or {}}
+                        yield {"type": "tool", "name": name, "args": getattr(b, "input", {}) or {}}
+                    elif bt == "tool_result":                  # tool results arrive as blocks
+                        yield _result_event(getattr(b, "content", "") or "")
             elif hasattr(msg, "tool_use_id") or getattr(msg, "type", "") == "tool_result":
-                yield {"type": "tool_result"}
+                yield _result_event(getattr(msg, "content", "") or "")
+            elif isinstance(blocks, str) and blocks:           # bare-string assistant text
+                yield {"type": "text", "text": blocks}
     except Exception as e:                                      # surface, don't crash the stream
         yield {"type": "error", "error": repr(e)[:300]}
         return

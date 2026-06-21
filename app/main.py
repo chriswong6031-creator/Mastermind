@@ -117,7 +117,7 @@ if FastAPI is not None:
         async def gen():
             yield _sse({"type": "start", "conversation_id": conv_id})
             advisor.append_turn(conv_id, "user", req.message)
-            last_sid, acc, tools = resume, "", []
+            last_sid, acc, tools, papers = resume, "", [], []
             try:
                 async for ev in cli_bridge.chat_stream(
                         req.message, resume=resume, append_system=advisor.SYSTEM):
@@ -126,6 +126,10 @@ if FastAPI is not None:
                         acc += ev.get("text") or ""
                     elif et == "tool":
                         tools.append({"name": ev.get("name"), "args": ev.get("args")})
+                    elif et == "paper":
+                        papers.append({k: ev.get(k) for k in
+                                       ("paper_id", "ticker", "title", "combined", "confirmed",
+                                        "research_score", "engine_score", "viability")})
                     elif et == "done" and ev.get("session_id"):
                         last_sid = ev["session_id"]
                     yield _sse(ev)
@@ -133,7 +137,7 @@ if FastAPI is not None:
                 yield _sse({"type": "error", "error": repr(exc)[:300]})
             finally:
                 advisor.set_session(conv_id, last_sid)
-                advisor.append_turn(conv_id, "brain", acc, tools)
+                advisor.append_turn(conv_id, "brain", acc, tools, papers)
 
         return StreamingResponse(gen(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache",
@@ -145,3 +149,18 @@ if FastAPI is not None:
         from brain import advisor
         return {"conversation_id": conversation_id,
                 "turns": advisor.load_history(conversation_id)}
+
+    @app.get("/chat/paper")
+    def chat_paper(id: str) -> dict:
+        """A filed research paper for the in-chat 'open paper' modal (also on the Research page)."""
+        from brain import research_paper
+        for p in research_paper.load_papers():
+            if p.get("id") == id:
+                return {"id": p["id"], "ticker": p.get("ticker"),
+                        "title": f"{p.get('ticker')} — Research Report",
+                        "report_md": p.get("report_md"), "summary": p.get("summary"),
+                        "combined": p.get("combined"), "confirmed": p.get("confirmed"),
+                        "research_score": p.get("research_score"),
+                        "engine_score": p.get("engine_score"),
+                        "viability": p.get("viability"), "key_risks": p.get("key_risks") or []}
+        return {"error": "not found", "id": id}
