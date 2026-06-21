@@ -786,6 +786,31 @@ def _divergences(rows: list[dict]) -> list[dict]:
 _FUND_BLOC = {"valuation", "quality", "growth", "solvency", "asymmetry"}   # the value/quality story
 _MACRO_BLOC = {"macro_risk", "fed_path", "cross_asset", "rate_inflation"}  # the shared regime story
 
+# ── self-calibrating gate: weight each lens vote by its EMPIRICAL reliability ──────────────────────
+# The confluence below is no longer a flat vote COUNT — each effective vote is scaled by how often
+# that lens actually PREDICTED on resolved theses (brain.outcome_ledger.lens_weights, fed by the
+# realized rel-return of matured cohorts). Until enough cohorts resolve every weight is 1.0, so
+# confluence is IDENTICAL to the old equal-vote count; as the engine earns a track record, the lenses
+# that proved reliable count more and the coin-flip lenses count less — the gate teaches itself.
+_LENS_WEIGHTS_CACHE: dict | None = None
+
+
+def _lens_reliability() -> dict:
+    """{lens: weight} from brain.outcome_ledger.lens_weights — {} (=> equal votes, today's behaviour)
+    until resolved cohorts accrue. Cached per process; guarded so a missing/empty ledger never breaks
+    the gate (returns {} -> all weights default to 1.0)."""
+    global _LENS_WEIGHTS_CACHE
+    if _LENS_WEIGHTS_CACHE is not None:
+        return _LENS_WEIGHTS_CACHE
+    w: dict = {}
+    try:
+        from brain import outcome_ledger
+        w = outcome_ledger.lens_weights() or {}
+    except Exception:
+        w = {}
+    _LENS_WEIGHTS_CACHE = w
+    return w
+
 
 def synthesize(matrix: dict) -> dict:
     """Confluence + the size-authority gate.
@@ -808,21 +833,29 @@ def synthesize(matrix: dict) -> dict:
         return "bull" if net > 0 else "bear" if net < 0 else "neutral"
 
     fund, macro = _bloc_net(_FUND_BLOC), _bloc_net(_MACRO_BLOC)
-    effective: list[str] = []
-    for b in (fund, macro):
-        if b in ("bull", "bear"):
-            effective.append(b)
+    # build the effective votes as (sign, lens_key) so each can be reliability-weighted; the two
+    # de-correlated blocs vote as one each, the independent lenses vote individually (as before).
+    _rel = _lens_reliability()
+    _votes: list[tuple[int, str]] = []
+    if fund in ("bull", "bear"):
+        _votes.append((1 if fund == "bull" else -1, "_fund_bloc"))
+    if macro in ("bull", "bear"):
+        _votes.append((1 if macro == "bull" else -1, "_macro_bloc"))
     for r in rows:
         if r["lens"] in _FUND_BLOC or r["lens"] in _MACRO_BLOC:
             continue
         if r["direction"] in ("bull", "bear"):
-            effective.append(r["direction"])
+            _votes.append((1 if r["direction"] == "bull" else -1, r["lens"]))
 
-    bull = effective.count("bull")
-    bear = effective.count("bear")
-    n = len(effective)
+    bull = sum(1 for s, _ in _votes if s > 0)
+    bear = sum(1 for s, _ in _votes if s < 0)
+    n = len(_votes)
     vetoes = _hard_vetoes(rows)
-    confluence = round((bull - bear) / max(n, 1), 3)
+    # reliability-weighted confluence: sum(sign * lens_weight) / sum(lens_weight). With every weight
+    # at its 1.0 default this is EXACTLY (bull - bear) / n — the prior behaviour — until lens_edge accrues.
+    _num = sum(s * _rel.get(lk, 1.0) for s, lk in _votes)
+    _den = sum(_rel.get(lk, 1.0) for s, lk in _votes) or 1.0
+    confluence = round(_num / _den, 3)
     trend_dir = (by_lens.get("trend") or {}).get("direction")
     theme_dir = (by_lens.get("narrative") or {}).get("direction")
     sector_dir = (by_lens.get("sector_rs") or {}).get("direction")

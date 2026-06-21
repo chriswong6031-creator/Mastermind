@@ -199,3 +199,28 @@ def lens_edge(min_n: int = 1) -> list[dict]:
                     "hit_rate": round(sum(outs) / len(outs), 3)})
     out.sort(key=lambda x: (-x["n"], -x["hit_rate"]))
     return out
+
+
+def lens_weights(min_n: int = 20, k: float = 2.0, floor: float = 0.5, ceil: float = 1.5,
+                 prior_n: float = 20.0) -> dict:
+    """Per-lens RELIABILITY WEIGHT for the self-calibrating gate (portfolio.lenses.synthesize).
+
+    Turns each lens's realized directional hit-rate (lens_edge) into a multiplier on its vote: a lens
+    that beat coin-flip earns weight > 1, one at/below 50% is damped toward `floor`. The hit-rate is
+    SHRUNK toward 0.5 by sample size (prior_n pseudo-observations) so a thin record barely moves a
+    lens — and a lens with fewer than `min_n` total graded reads is omitted entirely (=> it keeps the
+    1.0 default, i.e. equal voting). Returns {} until some lens earns a track record, so the gate's
+    behaviour is unchanged until the engine has, honestly, learned which eyes to trust."""
+    by_lens: dict[str, list[tuple[int, float]]] = {}
+    for e in lens_edge(min_n=1):
+        by_lens.setdefault(e["lens"], []).append((e["n"], e["hit_rate"]))
+    out: dict[str, float] = {}
+    for lens, rows in by_lens.items():
+        n_tot = sum(n for n, _ in rows)
+        if n_tot < min_n:
+            continue
+        hr = sum(n * h for n, h in rows) / n_tot                     # n-weighted pooled hit-rate
+        hr_shrunk = (n_tot * hr + prior_n * 0.5) / (n_tot + prior_n)  # shrink toward coin-flip by sample size
+        w = 1.0 + k * (hr_shrunk - 0.5)
+        out[lens] = round(max(floor, min(ceil, w)), 3)
+    return out
