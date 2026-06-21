@@ -47,6 +47,25 @@ def _rl_log(run_id, step_type, title, detail, **kw):
         pass
 
 
+def _conv_theme_id(t: str) -> str:
+    """A REAL per-name theme key for the cross-sleeve theme cap. Every conviction name used to share
+    the literal 'conviction', so their summed weight tripped the 0.25 book theme-cap every run and
+    silently haircut the whole sleeve. Use the name's basket slug when present, else a name-unique
+    key — so UNRELATED names are never capped as one cohort (the per-name cap already bounds single
+    names), while names that DO share a real basket still cap together correctly."""
+    try:
+        d = lenses_mod._load(f"site/stockdata/{t}.json") or {}
+        mem = d.get("baskets_membership")
+        if isinstance(mem, list) and mem:
+            first = mem[0]
+            slug = first if isinstance(first, str) else (first.get("slug") or first.get("id"))
+            if slug:
+                return f"theme:{slug}"
+    except Exception:
+        pass
+    return f"name:{t.upper()}"
+
+
 def run(asof: str | None = None, force: bool = False, research: bool = False) -> dict:
     # —— open run log ——
     _run_id: str | None = None
@@ -170,13 +189,16 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
             if (_V / f"site/stockdata/{t}.json").exists() else None
         is_new = t not in _open_conv
         paper = None if is_new else rpaper.latest_for(t)      # carried names reuse their paper
+        paper_existed = paper is not None                     # a stored paper we are genuinely carrying
         if paper is None:
             paper = rpaper.generate(t, asof=asof, confluence=c["confluence"], rows=_rows,
                                     vetoes=_syn.get("vetoes", []), price=px, regime=regime,
                                     armed=(_armed_ok and is_new))
             rpaper.save_paper(paper)
             rpaper.write_feed_note(paper)
-        breakdown = rpaper.score_breakdown(c["confluence"], paper, held=not is_new)
+        # held-hysteresis (lower confirm bar) applies ONLY to a name we are CARRYING with its prior
+        # paper — not to a held name whose paper we just regenerated this run (that's effectively new).
+        breakdown = rpaper.score_breakdown(c["confluence"], paper, held=(not is_new and paper_existed))
         research_block = {
             "paper_id": paper["id"], "mode": paper["mode"],
             "engine_score": breakdown["engine_score"], "research_score": breakdown["research_score"],
@@ -221,13 +243,26 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
             except Exception:
                 _synth = {}
                 _matrix_rows = []
+        # a name kept only by exit-hysteresis is a HOLD (entry gate not re-cleared), not a fresh add —
+        # the decision doc must say so rather than claiming "all sides confirm".
+        is_retained = bool(c.get("retained"))
+        if is_retained:
+            _lean, _verdict = "hold", "hold"
+            _thesis = (f"Hysteresis HOLD — confluence {c['confluence']:+.2f} is above the exit floor "
+                       f"({conviction._EXIT_CONFLUENCE_FLOOR:+.2f}) but the entry gate was NOT re-cleared "
+                       f"(bull {c['bull']}/bear {c['bear']}); carried, not freshly confirmed. Monitor for exit.")
+            _evidence = [f"retained=hysteresis_hold", f"confluence={c['confluence']:+.2f}"]
+        else:
+            _lean, _verdict = "add", "add"
+            _thesis = (f"Multi-sided confluence {c['confluence']:+.2f} (bull {c['bull']}/bear {c['bear']}); "
+                       f"all sides confirm and no hard veto — sized {round(c['weight']*100)}%.")
+            _evidence = [f"size_authority=up", f"confluence={c['confluence']:+.2f}"]
         doc = DecisionDoc(
-            id=f"{asof}-{t}-conv", subject=t, lean="add", conviction="medium",
+            id=f"{asof}-{t}-conv", subject=t, lean=_lean, conviction="medium",
             prob_correct=round(0.55 + min(0.15, c["confluence"] * 0.4), 2),
             horizon_d=21, state_asof=asof, sleeve="conviction", order_layer=1,
-            thesis=(f"Multi-sided confluence {c['confluence']:+.2f} (bull {c['bull']}/bear {c['bear']}); "
-                    f"all sides confirm and no hard veto — sized {round(c['weight']*100)}%."),
-            evidence=[f"size_authority=up", f"confluence={c['confluence']:+.2f}"]
+            thesis=_thesis,
+            evidence=_evidence
                      + ([f"divergence:{d}" for d in c["divergences"]] if c["divergences"] else []),
             dissent="Held at 0 if any side vetoes (parabolic/distress/cycle-blocked).",
             entry_levels={"ticker": t, "price": px} if px else {"ticker": t},
@@ -236,15 +271,15 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
         decisions.append(doc.to_json())
         ledger.append(doc.to_json())
         store.insert_thesis(con, doc.to_json())
-        book.append({"ticker": t, "theme_id": "conviction", "sleeve": "conviction", "stage": 2,
-                     "weight": c["weight"], "verdict": "add", "thesis_id": doc.id,
+        book.append({"ticker": t, "theme_id": _conv_theme_id(t), "sleeve": "conviction", "stage": 2,
+                     "weight": c["weight"], "verdict": _verdict, "thesis_id": doc.id,
                      "time_stop_by": doc.time_stop_by, "confluence": c["confluence"],
-                     "entry_price": px, "research": c.get("research")})
+                     "entry_price": px, "research": c.get("research"), "retained": is_retained})
         _rl_log(_run_id, "trade", f"sized {t} conviction",
                 f"ticker={t} weight={c['weight']} confluence={c['confluence']:+.2f} "
-                f"bull={c['bull']} bear={c['bear']} price={px}",
+                f"bull={c['bull']} bear={c['bear']} price={px} verdict={_verdict}",
                 ticker=t, sleeve="conviction", weight=c["weight"],
-                confluence=c["confluence"], verdict="add")
+                confluence=c["confluence"], verdict=_verdict)
 
     # ———— cross-sleeve firebreaks + cash ————
     capped = enforce_book_caps(book)

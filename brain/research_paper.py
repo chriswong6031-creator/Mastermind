@@ -133,7 +133,9 @@ def score_breakdown(confluence: float, paper: dict, held: bool = False) -> dict:
         confirmed, reason = False, f"combined conviction {combined} < {bar}"
     elif viability == "avoid":
         confirmed, reason = False, "research viability = avoid"
-    elif mode == "llm" and not recommend:
+    elif not recommend:
+        # a 'do not recommend' verdict blocks regardless of mode — an engine-mode 'rich' paper
+        # (recommend=False) was previously let through because the check was gated on mode=='llm'.
         confirmed, reason = False, "research desk does not recommend at this price"
 
     size_mult = round(_clamp(0.5 + (combined - CONFIRM_THRESHOLD) / 40.0, 0.5, 1.3), 3) if confirmed else 0.0
@@ -704,8 +706,13 @@ def generate(ticker: str, *, asof: str, confluence: float, rows: list[dict],
     except Exception:
         verdict = None
     if verdict is None:
-        # last resort: re-digest within the report text, else deterministic verdict
-        verdict = _parse_verdict(report) or {}
+        verdict = _parse_verdict(report)          # last resort: parse the report body itself
+    # Whether the re-digest (the "is this viable AT THIS PRICE" grade) actually parsed. If it did
+    # NOT, we never got Claude's verdict — so DON'T confirm a buy on an LLM basis we don't have.
+    # Mark the paper 'engine' mode and let the conservative DETERMINISTIC viability/recommend gate
+    # it (a defaulted recommend=True on an ungraded report was a silent false-positive confirm).
+    verdict_parsed = verdict is not None
+    verdict = verdict or {}
 
     sections = _split_sections(report)
     score = int(round(_clamp(verdict.get("research_score",
@@ -718,7 +725,8 @@ def generate(ticker: str, *, asof: str, confluence: float, rows: list[dict],
 
     paper = {
         "schema": SCHEMA, "id": f"{asof}-{ticker}", "ticker": ticker, "asof": asof,
-        "generated_at": _now(), "mode": "llm", "model": (res or {}).get("model"),
+        "generated_at": _now(), "mode": "llm" if verdict_parsed else "engine",
+        "verdict_parsed": verdict_parsed, "model": (res or {}).get("model"),
         "price_at_review": price, "research_score": score, "viability": viability,
         "recommend": bool(verdict.get("recommend", viability in ("compelling", "fair"))),
         "confidence": verdict.get("confidence") or "medium",

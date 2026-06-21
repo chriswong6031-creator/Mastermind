@@ -266,7 +266,9 @@ def build(budget: float, name_cap: float = 0.08,
     for p in passed:
         p["weight"] = round(min(p["confluence"] / tot * budget, name_cap), 4)
         p["sleeve"] = "conviction"
-        p["verdict"] = "add"
+        # a name kept only by exit-hysteresis (retained, entry gate NOT re-cleared) is a HOLD, not a
+        # fresh add — say so honestly so the book/thesis doesn't claim "all sides confirm".
+        p["verdict"] = "hold" if p.get("retained") else "add"
 
     sized = [p for p in passed if p["weight"] > 0]
     # sort rejected worst-confluence first so the most-bearish names surface at top

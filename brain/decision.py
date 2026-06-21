@@ -21,12 +21,25 @@ def _business_days_out(start: date, n: int) -> date:
     return d
 
 
+_BULLISH_LEANS = ("add", "overweight", "accumulate", "constructive", "buy")
+_BEARISH_LEANS = ("underweight", "avoid", "reduce", "trim", "sell", "short")
+
+
 def derive_check(subject_ticker: str, lean: str, horizon_d: int, *, vs: str = "SPY",
                  threshold: float = 0.05) -> dict:
-    """Engine-derived falsifier predicate. A bullish lean is FALSE if the name
-    underperforms the benchmark by >= threshold over the horizon (and vice-versa)."""
-    bullish = lean in ("add", "overweight", "accumulate", "constructive")
-    op, thr = ("<", -abs(threshold)) if bullish else (">", abs(threshold))
+    """Engine-derived falsifier predicate. A DIRECTIONAL lean is FALSE if the name moves AGAINST it
+    vs the benchmark by >= threshold over the horizon. A NON-directional lean (watch / hold / None)
+    is not a position and has no rel-return falsifier — return kind='none' so the scorer doesn't
+    grade a watch as a bet (the old code gave every non-bullish lean a BEARISH falsifier, which
+    scored a 'watch' as WRONG whenever the name happened to rally)."""
+    if lean in _BULLISH_LEANS:
+        op, thr = "<", -abs(threshold)
+    elif lean in _BEARISH_LEANS:
+        op, thr = ">", abs(threshold)
+    else:
+        return {"kind": "none", "subject_ticker": subject_ticker, "vs": vs,
+                "horizon_d": horizon_d,
+                "note": "non-directional lean (watch/hold) — not falsifiable as a position"}
     return {
         "kind": "rel_return", "subject_ticker": subject_ticker, "vs": vs,
         "op": op, "threshold": thr, "horizon_d": horizon_d,
@@ -64,8 +77,14 @@ class DecisionDoc:
         self.horizon_d = max(5, min(60, self.horizon_d))
         if not self.falsifier:
             sub = self.entry_levels.get("ticker", self.subject)
-            self.falsifier = {"check": derive_check(sub, self.lean, self.horizon_d),
-                              "text": f"FALSE if {sub} underperforms SPY by >=5% over {self.horizon_d} business days"}
+            chk = derive_check(sub, self.lean, self.horizon_d)
+            if chk["kind"] == "none":
+                text = f"{sub}: '{self.lean}' is non-directional — tracked as a watch, not falsifiable as a trade"
+            elif chk["op"] == "<":
+                text = f"FALSE if {sub} underperforms SPY by >=5% over {self.horizon_d} business days"
+            else:
+                text = f"FALSE if {sub} outperforms SPY by >=5% over {self.horizon_d} business days"
+            self.falsifier = {"check": chk, "text": text}
         if not self.check_by:
             self.check_by = _business_days_out(d0, self.horizon_d).isoformat()
         if not self.time_stop_by:

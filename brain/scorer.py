@@ -27,7 +27,12 @@ def track_record(asof: date | None = None, realized: dict[str, float] | None = N
     for t in all_theses():
         due = t.get("check_by") and date.fromisoformat(t["check_by"]) <= asof
         if due and t["id"] in realized:
-            chk = t["falsifier"]["check"]
+            chk = (t.get("falsifier") or {}).get("check") or {}
+            # only DIRECTIONAL theses (rel_return) are gradable; a non-directional 'watch' carries
+            # kind='none' with no op/threshold — skip it (grading it would KeyError, and a watch is
+            # not a bet to be scored right/wrong).
+            if chk.get("kind") != "rel_return":
+                continue
             r = realized[t["id"]]
             # falsified if op(realized, threshold) holds
             miss = (r < chk["threshold"]) if chk["op"] == "<" else (r > chk["threshold"])

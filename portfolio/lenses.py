@@ -159,23 +159,33 @@ def _valuation_dir(value_z, cheap, fwd, rev_cagr, eps_cagr):
     a cheap-for-growth name (low PEG) is not mislabelled. Growth = revenue CAGR first (trailing EPS
     CAGR is noisy/negative on a window), matching the growth lens. Returns (direction, peg)."""
     gr = rev_cagr if (rev_cagr and rev_cagr > 0) else (eps_cagr if (eps_cagr and eps_cagr > 0) else None)
-    peg = round(fwd / gr, 2) if (fwd and gr) else None
-    cheap_factor = (value_z or 0) > 0.3 or (cheap or 50) > 65
-    expensive_factor = (value_z or 0) < -0.3 or (cheap or 50) < 35
-    if cheap_factor or (peg is not None and peg < 0.8):
-        return "bull", peg                        # cheap on factors, or cheap-for-growth (low PEG)
+    # PEG only when forward P/E is POSITIVE. A negative forward P/E means the Street models a LOSS —
+    # that is the opposite of "cheap for growth", yet fwd<0 / gr>0 yields a negative PEG that would
+    # trip the `peg < 0.8` bull path. Guard fwd>0 so a loss-maker never reads valuation-bull.
+    peg = round(fwd / gr, 2) if (fwd and fwd > 0 and gr) else None
+    # `cheap` is a percentile (high == cheap). 0 is a REAL value (expensive), not missing — the old
+    # `(cheap or 50)` idiom silently masked a 0th-pctile (very expensive) name as mid-range neutral.
+    cheap_pct = cheap if cheap is not None else 50
+    cheap_factor = (value_z or 0) > 0.3 or cheap_pct > 65
+    expensive_factor = (value_z or 0) < -0.3 or cheap_pct < 35
+    if cheap_factor or (peg is not None and 0 < peg < 0.8):
+        return "bull", peg                        # cheap on factors, or cheap-for-growth (low POSITIVE PEG)
     if expensive_factor and (peg is None or peg > 2.0):
         return "bear", peg                        # expensive AND not justified by growth
     return "neutral", peg                          # expensive on factors but growth-justified
 
 
 def _flows_13f_dir(nb, ns):
-    """13F direction with a MIN-SAMPLE + MARGIN gate: a 1-name margin across a handful of curated
-    VIP funds is noise for a mega-cap with thousands of holders, so require a >=2 net margin to fire
-    a direction (else neutral). None when no 13F coverage exists."""
+    """13F direction with a MIN-SAMPLE + MARGIN gate: a thin read across a handful of curated VIP
+    funds is noise for a mega-cap with thousands of holders. Require BOTH (a) >=3 total tracked
+    decisions AND (b) a >=2 net margin to fire a direction (else neutral). None when no 13F
+    coverage exists. (The old code enforced only the margin — a 2-0 or 0-2 split fired a direction
+    despite the docstring promising the >=3 floor.)"""
     if nb is None:
         return None
     _nb, _ns = nb or 0, ns or 0
+    if (_nb + _ns) < 3:
+        return "neutral"                          # too few tracked decisions to be a signal
     return "bull" if (_nb - _ns) >= 2 else "bear" if (_ns - _nb) >= 2 else "neutral"
 
 
@@ -429,6 +439,14 @@ def _sector_rs_row(d) -> dict:
             return _row("sector_rs", {"sector": sec, "etf": proxy, "commodity": proxy,
                                       "above_200d_trend": a200, "mom_60d_pct": mom60,
                                       "commodity_driven": True}, "validated", direction, note)
+        # commodity price history unavailable (cold store / offline): fail toward CAUTION using the
+        # miner's OWN long-term trend (a miner tracks its commodity) rather than silently passing the
+        # leadership gate — otherwise the NEM trap regresses whenever the price store is cold.
+        own = (d or {}).get("tech") or {}
+        if own.get("above200") is False:
+            return _row("sector_rs", {"sector": sec, "etf": proxy, "commodity_driven": True,
+                                      "fallback": "own_200dma"}, "validated", "bear",
+                        f"{proxy} regime unavailable; {ticker} below its own 200dma — treat driver as bear")
     if not rec:
         return _row("sector_rs", {"sector": sec, "etf": etf}, "missing", None, "no sector RS map")
     pct = rec.get("pctile_252d")
@@ -438,7 +456,10 @@ def _sector_rs_row(d) -> dict:
     # a benchmark below its 200d trend that is EITHER bottom-third RS OR in a steep 60-day decline
     lagging = a200 is False and ((pct if pct is not None else 100) < 35 or (mom60 or 0) <= -12)
     direction = "bull" if (a200 and (pct or 0) >= 70) else "bear" if lagging else "neutral"
-    note = (f"{sec} ({etf}) RS rank {rank}, {pct:.0f}th pctile, "
+    # pct can be None (an ETF in the table without a 252d window yet) — guard the format so the lens
+    # never raises a TypeError that conviction.build would swallow as a silent name-drop.
+    _pct_str = f"{pct:.0f}th pctile" if pct is not None else "pctile N/A"
+    note = (f"{sec} ({etf}) RS rank {rank}, {_pct_str}, "
             f"{'above' if a200 else 'below'} 200d trend")
     return _row("sector_rs", {"sector": sec, "etf": etf, "rank": rank, "pctile": pct,
                               "above_200d_trend": a200}, "validated", direction, note)
@@ -700,20 +721,25 @@ def _divergences(rows: list[dict]) -> list[dict]:
         return (g.get(lens) or {}).get("direction")
     # name-level: conviction band proxies "is this a hot leader/story"; theme-level uses narrative
     lead = d("narrative") or d("conviction")
+    # a hard-vetoed name is size-0 no matter what — suppress the BULLISH "buy / edge" divergence
+    # labels for it (they otherwise tag a parabolic/Altman/cycle-blocked name as a "full-size
+    # candidate", contradicting the gate). The TRAP labels (distribution/crowded_top/crowd_trap)
+    # stay — they are warnings, correct to show on any name.
+    blocked = bool(_hard_vetoes(rows))
     out = []
     if lead == "bull" and d("valuation") == "bear" and d("flows_13f") == "bear":
         out.append({"pattern": "distribution",
                     "read": "story loudest as smart money leaves — hot/high-conviction but expensive + 13F-selling → late-stage, trim/avoid"})
-    if d("flows_13f") == "bull" and d("valuation") == "bull" and lead != "bull":
+    if not blocked and d("flows_13f") == "bull" and d("valuation") == "bull" and lead != "bull":
         out.append({"pattern": "early_edge",
                     "read": "price hasn't moved but smart money + value are in — highest-asymmetry early-follow"})
-    if lead == "bull" and d("valuation") == "bull" and d("flows_13f") == "bull" and "parabolic" not in _hard_vetoes(rows):
+    if not blocked and lead == "bull" and d("valuation") == "bull" and d("flows_13f") == "bull":
         out.append({"pattern": "high_confluence_buy",
                     "read": "all sides align and risk vetoes pass → full-size candidate"})
     if d("extension") == "bear" and d("flows_etf") == "bear":
         out.append({"pattern": "crowded_top",
                     "read": "extended + flows rolling over → avoid regardless of narrative heat"})
-    if d("policy_tilt") == "bull" and d("valuation") == "bull" and lead != "bull":
+    if not blocked and d("policy_tilt") == "bull" and d("valuation") == "bull" and lead != "bull":
         out.append({"pattern": "policy_early",
                     "read": "policy tailwind + cheap before the crowd notices — early thematic edge"})
     # alt-data flow (political/insider/contract convergence) — the edge or the trap
@@ -721,7 +747,7 @@ def _divergences(rows: list[dict]) -> list[dict]:
     if ad == "bull" and d("extension") == "bear":
         out.append({"pattern": "political_crowd_trap",
                     "read": "political/insider/contract money piling into an already-EXTENDED name — late; the political crowd may be the exit liquidity, not the edge"})
-    elif ad == "bull" and lead != "bull" and d("valuation") != "bear":
+    elif not blocked and ad == "bull" and lead != "bull" and d("valuation") != "bear":
         out.append({"pattern": "political_flow_early",
                     "read": "political/insider/contract flow converging on a name the tape hasn't recognized yet — early alt-data edge (context, not a size driver)"})
     return out
