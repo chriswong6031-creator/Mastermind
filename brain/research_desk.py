@@ -37,10 +37,14 @@ radar / alt-data / buy-board / news-surge / open-thesis) and why. Corroboration 
 is the strongest signal. Pick a SHORT list (≈3-6) to research in depth: prioritise the DIVERGENCES and the
 high-confidence, multi-engine names. Skip names where everything already agrees and the move is spent.
 
-STAGE 2 — DEPTH (research the shortlist). For each chosen name call get_ticker_package (one call: the
-intelligence facets + lens divergences + intake provenance), plus get_quote for a live price check and
-WebSearch / WebFetch for recent news, events, filings, and narratives. The remaining tools — get_themes /
-get_standouts / get_portfolio / get_altdata / get_news / read_signal — are there when you need to go deeper.
+STAGE 2 — DEPTH (research the shortlist). For each chosen name call get_intel_hub(ticker) — the deepest
+single pull: the 5-desk fused dossier with composite conviction, the direction matrix, and the 2nd/3rd-order
+flags (stealth_accumulation / early_edge / crowded_top / theme_wide / isolated / policy_conflict). Then
+get_ticker_package (intelligence facets + lens divergences + intake provenance), get_quote for a live price
+check, and WebSearch / WebFetch for recent news, events, filings, and narratives. A theme_wide flag means the
+whole basket is moving (durable); isolated means name-specific (early or idiosyncratic) — weight accordingly.
+The remaining tools — get_themes / get_standouts / get_portfolio / get_altdata / get_news / read_signal — are
+there when you need to go deeper.
 
 Reason through SECOND and THIRD-order effects — supply-chain flow, shortages/overages, earnings and
 guidance, accounting events, institutional news and flow. Hunt for: emerging themes, themes rolling

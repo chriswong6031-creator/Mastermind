@@ -254,6 +254,43 @@ async def get_daily_briefing(args):
                   "note": "Composed live from the dashboard signal engines (briefing.json not built yet)."})
 
 
+@tool("get_intel_hub",
+      "The INTELLIGENCE HUB central command — the dashboard's deepest read, fusing ALL FIVE desks "
+      "(news flow · alt-data smart-money · divergence radar · factor buy-board · POLICY intent) into "
+      "one reasoned dossier per name. Each carries a composite CONVICTION (0-100, rewards independent "
+      "cross-desk agreement, docked by an unanswered falsifier), the 5-desk direction matrix, and the "
+      "2nd/3rd-order FLAGS that name the setup: stealth_accumulation / early_edge (smart money before "
+      "the crowd) / crowded_top (distribution risk) / confirmed_trend / fading / policy_aligned / "
+      "policy_conflict / THEME_WIDE (the whole basket is moving — durable) / ISOLATED (name-specific). "
+      "Pass a ticker for that name's full dossier; omit it for the ranked command + divergence alerts + "
+      "sector heat. The richest single pull; context-only, never sizes.",
+      {"type": "object", "properties": {"ticker": {"type": "string"}, "top": {"type": "integer"}}})
+async def get_intel_hub(args):
+    h = (_read_json(_V / "site" / "intel_hub" / "hub.json")
+         or _read_json(_V / "data" / "intel_hub" / "hub.json"))
+    if not h:
+        return _ok("intel hub not built yet (site/intel_hub/hub.json absent — ships in the daily build).")
+    t = (args.get("ticker") or "").upper()
+    if t:
+        d = next((x for x in (h.get("command") or []) if (x.get("ticker") or "").upper() == t), None)
+        if not d:
+            return _ok(f"{t} not in the intel-hub command (no cross-desk signal today).")
+        return _json({"ticker": t, **d, "macro_context": h.get("macro_context"),
+                      "note": "Full 5-desk dossier. The flags name the setup; track the falsifier."})
+    top = int(args.get("top") or 15)
+
+    def _slim(d):
+        return {k: d.get(k) for k in ("ticker", "name", "composite_conviction", "lean", "n_confirm",
+                "n_dissent", "flags", "read", "peers", "sectors", "falsifier") if k in d}
+    return _json({"as_of": h.get("as_of"), "macro_context": h.get("macro_context"),
+                  "desks": h.get("desks"), "counts": h.get("counts"),
+                  "n_actionable": h.get("n_actionable"),
+                  "command": [_slim(d) for d in (h.get("command") or [])[:top]],
+                  "divergence_alerts": h.get("divergence_alerts"),
+                  "sector_heat": (h.get("sector_heat") or [])[:8],
+                  "how_to_use": h.get("how_to_use")})
+
+
 @tool("get_intake_candidates",
       "The unified CANDIDATE QUEUE — every name the dashboard's signal engines flagged today, deduped "
       "and ranked with full PROVENANCE: for each ticker, which engines fired (briefing / divergence / "
@@ -565,7 +602,7 @@ async def execute_trade(args):
 
 
 _READ = [get_regime, get_themes, get_standouts, get_portfolio, get_decision_matrix, get_divergences,
-         get_altdata, get_news, get_intelligence, get_daily_briefing, get_intake_candidates,
+         get_altdata, get_news, get_intelligence, get_intel_hub, get_daily_briefing, get_intake_candidates,
          get_ticker_package, get_fundamentals, get_options, get_anticipation, get_quote,
          get_quiver_strategy, get_quiver_compare, evaluate_gate, read_signal]
 _ACTION = [save_research_note, propose_thesis, flag_emerging_theme, recommend_action,

@@ -88,3 +88,32 @@ def test_ticker_package_degrades_cleanly():
     # a name with no dashboard coverage degrades to a plain message, never raises
     out = _text(asyncio.run(bot_mcp.get_ticker_package.handler({"ticker": "ZZZZ"})))
     assert "ZZZZ" in out
+
+
+def test_intel_hub_tool(tmp_path, monkeypatch):
+    # armed + degrades cleanly when hub.json absent
+    assert "mcp__bot__get_intel_hub" in bot_mcp.armed_allowed_tools()
+    monkeypatch.setattr(bot_mcp, "_V", tmp_path / "novendor")
+    assert "not built yet" in _text(asyncio.run(bot_mcp.get_intel_hub.handler({})))
+
+    # with a hub.json present: command pull (no ticker) + single-dossier pull (ticker)
+    hub = {"as_of": "2026-06-21", "macro_context": {"regime": "Goldilocks"},
+           "desks": {"policy": {"live": True}}, "counts": {"theme_wide": 3},
+           "n_actionable": 2, "divergence_alerts": {"early_edge": [], "crowded_top": []},
+           "sector_heat": [{"etf": "XLK", "mean_conviction": 31.6}],
+           "how_to_use": "read macro first",
+           "command": [{"ticker": "NVDA", "name": "Nvidia", "composite_conviction": 100,
+                        "lean": 1, "n_confirm": 5, "flags": ["confirmed_trend", "theme_wide"],
+                        "read": "5 desks agree", "peers": ["DELL", "MSFT"], "falsifier": None}]}
+    site = tmp_path / "novendor" / "site" / "intel_hub"
+    site.mkdir(parents=True)
+    (site / "hub.json").write_text(json.dumps(hub))
+
+    full = json.loads(_text(asyncio.run(bot_mcp.get_intel_hub.handler({"top": 5}))))
+    assert full["macro_context"]["regime"] == "Goldilocks"
+    assert full["command"][0]["ticker"] == "NVDA" and "theme_wide" in full["command"][0]["flags"]
+    assert "sector_heat" in full and "counts" in full
+
+    one = json.loads(_text(asyncio.run(bot_mcp.get_intel_hub.handler({"ticker": "nvda"}))))
+    assert one["ticker"] == "NVDA" and one["composite_conviction"] == 100
+    assert "ZZZZ not in" in _text(asyncio.run(bot_mcp.get_intel_hub.handler({"ticker": "ZZZZ"})))
