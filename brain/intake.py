@@ -212,8 +212,11 @@ def build(limit: int = 40) -> dict:
             if rec.get("reason"):
                 m["reasons"].append(rec["reason"])
             m["_scores"].append(rec.get("score") or 0.0)
-            if rec.get("lean") is not None:
-                m["lean_votes"].append(rec["lean"])
+            _lean = rec.get("lean")
+            # only NUMERIC leans vote — a source JSON can carry a string lean (e.g. an arrow glyph),
+            # which would TypeError in the sum() below; coerce/skip rather than crash the funnel.
+            if isinstance(_lean, (int, float)) and not isinstance(_lean, bool):
+                m["lean_votes"].append(int(_lean))
             if rec.get("confidence") is not None and (m["confidence"] is None or rec["confidence"] > m["confidence"]):
                 m["confidence"] = rec["confidence"]
             if rec.get("falsifier") and not m["falsifier"]:

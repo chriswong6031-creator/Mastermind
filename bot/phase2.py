@@ -19,7 +19,6 @@ import bot  # noqa: F401
 
 from brain import gate, panel, ledger, scorer
 from brain.decision import DecisionDoc
-from portfolio.scorecard import confluence_gate
 from portfolio.sleeves import enforce_book_caps, no_rotation_capacity, binding_cash
 from brain import detectors
 from bridge.build_portfolio import write
@@ -358,29 +357,19 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
                 ticker=t, sleeve="conviction", weight=c["weight"],
                 confluence=c["confluence"], verdict=_verdict)
 
-    # ———— cross-sleeve firebreaks + cash ————
+    # ———— cross-sleeve firebreaks ————
     capped = enforce_book_caps(book)
     book = capped["positions"]
-    gross = round(sum(p["weight"] for p in book), 4)
-    macro_implied_cash = round(max(0.0, 1.0 - gross), 4)
-    cash = round(binding_cash(macro_implied_cash), 4)
-    top_theme_conc = max((p["weight"] for p in book), default=0.0)
 
-    _rl_log(_run_id, "book_step", "caps applied",
-            f"gross={gross} cash={cash} breaches={capped['breaches']}")
-
-    # ———— detectors ————
-    fired = detectors.d3_no_rotation_capacity(cash, top_theme_conc, "self") + \
-        detectors.d6_cap_breach(capped["breaches"], "self")
-
-    # D5 dead-capital time-stop (advisory) — surface conviction lots that are past their time_stop_by
-    # AND flat/negative since entry AND lagging the leading sector. Previously unwired with unpopulated
-    # inputs, so it could never fire. (Advisory like D3/D6 — it flags dead capital for redeploy; it
-    # does not itself force the exit.)
+    # ———— D5 dead-capital time-stop — an ACTUAL exit (doctrine: D5/self is a hard sizing veto) ——
+    # Flag conviction lots that are past their time_stop_by AND flat/negative since entry AND lagging
+    # the leading sector, then REDEPLOY — drop them from the book and close their thesis so the
+    # capital is freed (was unwired with unpopulated inputs, so it could never fire).
+    _d5_fired: list[dict] = []
     try:
         from portfolio import paper_account as _pa_d5
         # use the PRE-update ledger so a carried name carries its ORIGINAL time_stop_by (the book's is
-        # recomputed each run, which would reset the clock and the time-stop could never elapse), and
+        # recomputed each run, which would reset the clock so the time-stop could never elapse), and
         # restrict to names still in today's book.
         _book_conv = {p["ticker"] for p in book if p.get("sleeve") == "conviction"}
         _open_conv = [hp for hp in position_log.open_positions()
@@ -397,9 +386,33 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
                 _d5_prices[_t] = _px
         _d5_lots = _build_d5_lots(_open_conv, _d5_prices, _sector_pctile, _leader_pctile,
                                   date.fromisoformat(asof))
-        fired = fired + detectors.d5_dead_capital(_d5_lots, date.fromisoformat(asof), "self")
+        _d5_fired = detectors.d5_dead_capital(_d5_lots, date.fromisoformat(asof), "self")
+        _d5_exit = {d["subject"] for d in _d5_fired if d.get("mode") == "self"}
+        if _d5_exit:
+            book = [p for p in book
+                    if not (p.get("sleeve") == "conviction" and p["ticker"] in _d5_exit)]
+            for _t in _d5_exit:
+                try:
+                    ledger.close(_t, "exited (D5 dead-capital time-stop)")
+                except Exception:
+                    pass
+            _rl_log(_run_id, "decision", "D5 dead-capital EXIT",
+                    f"redeployed={sorted(_d5_exit)}", exited=sorted(_d5_exit))
     except Exception as _e:
         _rl_log(_run_id, "decision", "d5 wiring error", f"{_e!r}"[:160])
+
+    # ———— cash (sized after all exits) ————
+    gross = round(sum(p["weight"] for p in book), 4)
+    macro_implied_cash = round(max(0.0, 1.0 - gross), 4)
+    cash = round(binding_cash(macro_implied_cash), 4)
+    top_theme_conc = max((p["weight"] for p in book), default=0.0)
+
+    _rl_log(_run_id, "book_step", "caps applied",
+            f"gross={gross} cash={cash} breaches={capped['breaches']} d5_exits={len(_d5_fired)}")
+
+    # ———— detectors (on the post-exit book) ————
+    fired = detectors.d3_no_rotation_capacity(cash, top_theme_conc, "self") + \
+        detectors.d6_cap_breach(capped["breaches"], "self") + _d5_fired
 
     if fired:
         _rl_log(_run_id, "decision", "detectors fired",

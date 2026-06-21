@@ -90,7 +90,11 @@ def save_track_record(con, asof: str, tr: dict):
 
 
 def record_run(con, asof: str, ran: bool, triggers: list, state_sig: str, at: str):
-    con.execute("INSERT OR REPLACE INTO runs (asof,ran,triggers,state_sig,at) VALUES (?,?,?,?,?)",
+    # asof is the PK, so a same-day call would REPLACE the row. A carry-forward (ran=False) must
+    # never clobber a successful (ran=True) run already recorded for that day — that corrupts the
+    # audit trail / any "last actual rebuild" query. Use OR IGNORE for carry rows, OR REPLACE for runs.
+    verb = "INSERT OR REPLACE" if ran else "INSERT OR IGNORE"
+    con.execute(f"{verb} INTO runs (asof,ran,triggers,state_sig,at) VALUES (?,?,?,?,?)",
                 (asof, int(ran), json.dumps(triggers), state_sig, at))
     con.commit()
 
