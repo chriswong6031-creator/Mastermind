@@ -358,6 +358,44 @@ def api_research_papers() -> JSONResponse:
     return JSONResponse({"papers": out})
 
 
+@router.get("/api/outcome_ledger")
+def api_outcome_ledger() -> JSONResponse:
+    """The Calibration page contract — the engine's accountability scorecard (brain.outcome_ledger).
+
+    On every RESOLVED thesis it joins what the engine PREDICTED (prob_correct) with what HAPPENED
+    (realized rel-return + hit/miss) and what it SAW (the point-in-time lens snapshot). Returns:
+      - summary           : n / status / Brier / hit-rate / calibration_error
+      - reliability_curve : per predicted-probability bucket, mean predicted vs realized hit-rate
+                            (is the engine's stated 60% actually 60%?)
+      - lens_edge         : per (lens, direction) realized hit-rate (which lenses actually predicted)
+      - lens_weights      : the reliability multiplier the self-calibrating gate now applies per lens
+      - records           : the resolved theses log (newest first, capped)
+    status='building' (n=0) until the first cohort matures (~2026-07-17). Evergreen — the page polls it.
+    """
+    try:
+        from brain import outcome_ledger
+        summary = outcome_ledger.summary()
+        curve = outcome_ledger.reliability_curve()
+        edge = outcome_ledger.lens_edge(min_n=1)
+        weights = outcome_ledger.lens_weights()
+        records = outcome_ledger.load()
+    except Exception as exc:
+        return JSONResponse({"summary": {"n": 0, "status": "building", "brier": None,
+                                         "hit_rate": None, "calibration_error": None},
+                             "reliability_curve": [], "lens_edge": [], "lens_weights": {},
+                             "records": [], "error": str(exc)})
+    records = sorted(records, key=lambda r: r.get("asof_resolved") or "", reverse=True)[:200]
+    rec_out = [{
+        "thesis_id": r.get("thesis_id"), "subject": r.get("subject"), "sleeve": r.get("sleeve"),
+        "asof_decided": r.get("asof_decided"), "asof_resolved": r.get("asof_resolved"),
+        "prob_correct": r.get("prob_correct"), "realized_rel": r.get("realized_rel"),
+        "outcome": r.get("outcome"), "quad_at_entry": r.get("quad_at_entry"),
+        "confluence_at_entry": r.get("confluence_at_entry"), "lens_dirs": r.get("lens_dirs") or {},
+    } for r in records]
+    return JSONResponse({"summary": summary, "reliability_curve": curve, "lens_edge": edge,
+                         "lens_weights": weights, "records": rec_out})
+
+
 @router.get("/api/trades")
 def api_trades() -> JSONResponse:
     """Open/closed position summaries PLUS a complete per-fill blotter (`history`):
