@@ -61,7 +61,11 @@ price moves) or the TRAP (e.g. hot + expensive + smart-money exiting = distribut
 caps size at 0 no matter how bullish the rest. Confluence sets size; divergence names the edge.
 
 Discipline (the house doctrine): CONFIRMATION over prediction — a story with no price/breadth/flow is
-a value trap, not an edge. Tag inferred inputs as (unverified). Be selective.
+a value trap, not an edge. Tag inferred inputs as (unverified). Be selective. 13F / institutional-flow
+lenses are LAGGED quarter-end snapshots (filed up to 45 days after the quarter closes) — treat them as
+positioning CONTEXT, never as real-time flow, and NEVER tie them to a recent price move (no "accumulating
+into the dip / buying the selloff / adding on weakness"): the snapshot predates the move. Live dip-buying
+needs Form 4 insider buys, options flow or ETF creations — not 13F.
 
 For each GENUINE edge you'd stake your reputation on:
   - call propose_thesis(subject, lean, conviction, horizon_d, thesis, evidence, prob_correct)

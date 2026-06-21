@@ -282,12 +282,13 @@ def _build_bull_bullets(ticker: str, rows: list[dict], synth: dict,
             nb = val.get("n_buying")
             ns = val.get("n_selling")
             vip = val.get("vip")
+            asof = val.get("as_of")
             if nb is not None:
-                buyers_str = f"{nb} funds accumulating vs {ns} selling"
+                when = f" (as of {asof}, lagged)" if asof else " (lagged quarterly snapshot)"
                 bullets.append(
-                    f"Smart money 13F inflows: {buyers_str}"
+                    f"13F institutional positioning{when}: {nb} funds added vs {ns} trimmed last quarter"
                     + (f" (VIP: {vip})" if vip else "")
-                    + "."
+                    + " — positioning context, not a read on recent price."
                 )
 
         elif lens == "flows_etf":
@@ -411,9 +412,12 @@ def _build_bear_bullets(ticker: str, rows: list[dict], synth: dict,
         elif lens == "flows_13f":
             nb = val.get("n_buying")
             ns = val.get("n_selling")
+            asof = val.get("as_of")
+            when = f" (as of {asof}, lagged)" if asof else " (lagged quarterly snapshot)"
             bullets.append(
-                f"Smart money 13F outflows: {ns} funds selling vs {nb} buying — distribution signal."
-                if ns is not None else "Smart money flows net negative."
+                f"13F institutional positioning{when}: {ns} funds trimmed vs {nb} added last quarter "
+                "— distribution tilt, positioning context not recent-flow."
+                if ns is not None else "13F institutional positioning net negative (lagged quarterly snapshot)."
             )
 
         elif lens == "quality":

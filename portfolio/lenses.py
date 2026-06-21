@@ -370,9 +370,16 @@ def _name_rows(t: str) -> list[dict]:
     # TigerGlobal's +9.1% NVDA add was tagged 'hold' (uncounted). Require >=3 tracked decisions
     # AND a >=2 net margin before firing a direction; otherwise the signal is too thin → neutral.
     nb, ns = _g(d, "smart_money.n_buying"), _g(d, "smart_money.n_selling")
+    sm_asof = _g(d, "smart_money.as_of")               # 13F snapshot quarter-end (filed ~45d+ later)
     dirf = _flows_13f_dir(nb, ns)
-    rows.append(_row("flows_13f", {"n_buying": nb, "n_selling": ns, "vip": _g(d, "smart_money.vip")},
-                     "context" if (nb is not None) else "missing", dirf))
+    note13f = ""
+    if nb is not None:
+        note13f = (f"LAGGED 13F snapshot{f' as of {sm_asof}' if sm_asof else ''} (filed up to 45d after "
+                   f"quarter-end): {nb} added vs {ns} trimmed LAST QUARTER. Positioning context only — "
+                   f"NOT real-time flow; says nothing about buying any recent dip/move.")
+    rows.append(_row("flows_13f", {"n_buying": nb, "n_selling": ns, "vip": _g(d, "smart_money.vip"),
+                                   "as_of": sm_asof},
+                     "context" if (nb is not None) else "missing", dirf, note13f))
 
     # flows — active ETF accumulation
     if flows:

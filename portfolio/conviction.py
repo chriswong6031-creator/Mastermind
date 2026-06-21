@@ -164,9 +164,11 @@ def build(budget: float, name_cap: float = 0.08,
                     elif lens_name == "flows_13f":
                         ns = val.get("n_selling")
                         nb = val.get("n_buying")
+                        asof = val.get("as_of")
+                        when = f" as of {asof}" if asof else ""
                         bear_pts.append(
-                            f"13F distribution: {ns} funds selling vs {nb} buying"
-                            if ns is not None else "13F smart-money net negative"
+                            f"13F distribution tilt ({ns} trimmed vs {nb} added last quarter{when}, lagged)"
+                            if ns is not None else "13F smart-money net negative (lagged quarterly snapshot)"
                         )
                     elif lens_name == "quality":
                         acct = val.get("accounting")

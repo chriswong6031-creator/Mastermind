@@ -514,9 +514,13 @@ Anything else material: management & capital allocation, sentiment/positioning, 
 regulatory, options structure.
 
 Discipline: CONFIRMATION over prediction; a story with no price/flow is a value trap. Tag any
-inferred input as (unverified). Be blunt; honesty, not alpha. This is paper-only and nothing
-you write executes a trade — the engine gates the size and the falsifier. Output ONLY the
-markdown report as your final message."""
+inferred input as (unverified). Be blunt; honesty, not alpha. The 13F / smart-money lens is a
+LAGGED quarter-end snapshot (filed up to 45 days after the quarter closes): treat it as positioning
+CONTEXT only and NEVER tie it to a recent price move — do NOT write "smart money is buying the dip /
+accumulating into the selloff / adding on weakness", because the snapshot predates any recent move.
+Real-time dip-buying would need Form 4 insider buys, options flow or ETF creations, not 13F. This is
+paper-only and nothing you write executes a trade — the engine gates the size and the falsifier.
+Output ONLY the markdown report as your final message."""
 
 REDIGEST_PROMPT = """You are the Research Desk re-digesting your OWN research report on {ticker}
 to decide whether to confirm the investment AT THIS PRICE ({price_line}). Engine confluence
