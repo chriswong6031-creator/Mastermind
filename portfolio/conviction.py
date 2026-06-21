@@ -51,6 +51,11 @@ SECTOR_MAX_NAMES = 3   # concentration firebreak: at most N names from any one s
 # around the 0.30 entry line (the NVDA bought-then-immediately-closed problem).
 _EXIT_CONFLUENCE_FLOOR = 0.15
 
+# CATALYST/CONFIRMATION gates FULL size (doctrine §4.3 "catalyst gates full size" + "own leaders
+# without chasing"). A name that clears the gate but lacks price+leadership confirmation (or a
+# leading theme) takes only INITIAL size — this fraction of its confluence-weighted target.
+_INITIAL_SIZE_FRACTION = 0.7
+
 
 def _sector_of(t: str) -> str:
     """Normalised sector key for the concentration cap — collapses synonym labels
@@ -142,9 +147,14 @@ def build(budget: float, name_cap: float = 0.08,
         hold_ok = is_held and not hard_exit and confluence > _EXIT_CONFLUENCE_FLOOR
 
         if entry_ok or hold_ok:
+            # full-size confirmation: a confirmed leader (price + sector leadership) OR a genuine
+            # leading theme. Everything else that clears the gate is sized at INITIAL only.
+            _dirs = {r["lens"]: r.get("direction") for r in rows}
+            confirmed = ((_dirs.get("trend") == "bull" and _dirs.get("sector_rs") == "bull")
+                         or _dirs.get("narrative") == "bull")
             passed.append({"ticker": t, "confluence": max(0.0, confluence),
                            "bull": syn["bull"], "bear": syn["bear"],
-                           "retained": bool(hold_ok and not entry_ok),
+                           "retained": bool(hold_ok and not entry_ok), "confirmed": confirmed,
                            "divergences": [d["pattern"] for d in syn.get("divergences", [])]})
         else:
             # Determine a short human-readable rejection reason (most-specific first).
@@ -261,10 +271,13 @@ def build(budget: float, name_cap: float = 0.08,
             })
     passed = kept
 
-    # confidence-weighted sizing (unchanged)
+    # confidence-weighted sizing, then the catalyst/confirmation FULL-vs-INITIAL size gate
     tot = sum(p["confluence"] for p in passed) or 1.0
     for p in passed:
-        p["weight"] = round(min(p["confluence"] / tot * budget, name_cap), 4)
+        base = min(p["confluence"] / tot * budget, name_cap)
+        mult = 1.0 if p.get("confirmed") else _INITIAL_SIZE_FRACTION
+        p["weight"] = round(base * mult, 4)
+        p["size_stage"] = "full" if p.get("confirmed") else "initial"
         p["sleeve"] = "conviction"
         # a name kept only by exit-hysteresis (retained, entry gate NOT re-cleared) is a HOLD, not a
         # fresh add — say so honestly so the book/thesis doesn't claim "all sides confirm".

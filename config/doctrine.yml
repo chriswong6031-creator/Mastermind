@@ -10,6 +10,8 @@ scorecard:
     full_size_gate: catalyst             # dim 5 is mandatory for full size (Stage 2)
     forbid_single_dim: true              # acting on one dimension alone is forbidden
   rs_down_day_lookback_d: 63             # dim 1b "holds up on down days"
+  rebuild_interval_days: 1               # gate cadence floor: rebuild the book at least every N days
+                                         # even in a stable regime (1 = once per calendar day)
 
 # ---- Stage 0-4 lifecycle classifier thresholds ----
 stages:

@@ -129,8 +129,8 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
     con = store.connect()
     sig = gate.state_signature(regime, top_sector)
     decision = gate.should_run(sig, store.last_run(con),
-                               interval_days=cfg["scorecard"].get("rs_down_day_lookback_d", 1) and 1,
-                               force=force)
+                               interval_days=int(cfg["scorecard"].get("rebuild_interval_days", 1)),
+                               force=force, asof=asof)
     if not decision["run"]:
         # HARD-EXIT SWEEP — the run gate is keyed on the REGIME signature (quad/risk-band/liquidity/
         # top-sector) and is blind to NAME-level breakdowns. So even on a carried-forward day, sweep
@@ -401,6 +401,49 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
     except Exception as _e:
         _rl_log(_run_id, "decision", "d5 wiring error", f"{_e!r}"[:160])
 
+    # ———— D1/D2/D4 — advisory behavioural failure-mode tells (on the post-exit book) ————
+    _d124_fired: list[dict] = []
+    try:
+        from portfolio import paper_account as _pa_det
+        _open_by_tk = {hp["ticker"]: hp for hp in position_log.open_positions()
+                       if hp.get("sleeve") == "conviction"}
+        _lead_pct = secrs[0].get("pctile_252d") if secrs else None
+        _etf_pct = {x.get("ticker"): x.get("pctile_252d") for x in secrs}
+        _lots, _new_buys = [], []
+        for _p in book:
+            if _p.get("sleeve") != "conviction":
+                continue
+            _t = _p["ticker"]
+            _sd = lenses_mod._load(f"site/stockdata/{_t}.json") or {}
+            _prior = _open_by_tk.get(_t)
+            _px = _pa_det._current_price(_t)
+            _entry = (_prior or {}).get("entry_price") or _p.get("entry_price")
+            _rel = (_px / _entry - 1.0) if (_px and _entry and float(_entry) > 0) else None
+            _spct = _etf_pct.get(lenses_mod._SECTOR_ETF.get(_sd.get("sector")))
+            _gap = (max(0.0, (_lead_pct - _spct) / 100.0)
+                    if (_spct is not None and _lead_pct is not None) else 0.0)
+            _para = bool(lenses_mod._g(_sd, "conviction.ext.parabolic")
+                         or lenses_mod._g(_sd, "conviction.extension.parabolic"))
+            _eg = (lenses_mod._g(_sd, "conviction.ext.grade")
+                   or lenses_mod._g(_sd, "conviction.extension.grade"))
+            _pv2 = lenses_mod._g(_sd, "tech.pct_vs_200dma")
+            _prior_w = (_prior or {}).get("current_weight") or 0.0
+            _lot = {"ticker": _t, "id": _p.get("thesis_id"), "is_new": _prior is None,
+                    "is_add": (_p.get("weight") or 0) > (_prior_w + 0.005),
+                    "rel_return_since_entry": _rel, "rs_leader_gap": round(_gap, 4),
+                    "held_days": (_prior or {}).get("held_days") or 0, "time_stop_td": 63,
+                    "extension_bear": _para or _eg in ("stretched", "parabolic") or ((_pv2 or 0) >= 30),
+                    "parabolic": _para}
+            _lots.append(_lot)
+            if _lot["is_new"]:
+                _new_buys.append(_lot)
+        _held_lots = [l for l in _lots if not l["is_new"]]
+        _d124_fired = (detectors.d1_disposition(_held_lots, "self")
+                       + detectors.d2_late_stage_reach(_new_buys, "self")
+                       + detectors.d4_avg_down_into_divergence(_held_lots, "self"))
+    except Exception as _e:
+        _rl_log(_run_id, "decision", "d1/d2/d4 wiring error", f"{_e!r}"[:160])
+
     # ———— cash (sized after all exits) ————
     gross = round(sum(p["weight"] for p in book), 4)
     macro_implied_cash = round(max(0.0, 1.0 - gross), 4)
@@ -412,7 +455,7 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
 
     # ———— detectors (on the post-exit book) ————
     fired = detectors.d3_no_rotation_capacity(cash, top_theme_conc, "self") + \
-        detectors.d6_cap_breach(capped["breaches"], "self") + _d5_fired
+        detectors.d6_cap_breach(capped["breaches"], "self") + _d5_fired + _d124_fired
 
     if fired:
         _rl_log(_run_id, "decision", "detectors fired",
