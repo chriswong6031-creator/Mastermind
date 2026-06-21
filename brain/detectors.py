@@ -56,14 +56,55 @@ def d6_cap_breach(breaches: list[dict], mode: str) -> list[dict]:
                   "advisory": "architecture firebreak breached"}, sev) for b in breaches]
 
 
-# --- typed seams (need brain narrative / price context) ---
-def d1_thesis_defense(*args, **kwargs) -> list[dict]:  # disposition effect
-    raise NotImplementedError("brain-message tone shift: 'where is money going' -> defending narrative")
+# --- D1/D2/D4 — behavioural failure-mode tells (deterministic proxies; ADVISORY like D3/D6) ---
+# These mirror the doctrine's behavioural detectors. The pure tells they target (message-tone shift,
+# order-layer adjacency, intent-to-average-down) aren't directly observable, so each uses a concrete,
+# defensible price/position proxy. Advisory: they flag for the operator, they do not size.
+
+def d1_disposition(lots: list[dict], mode: str) -> list[dict]:
+    """D1 disposition effect (proxy): a HELD loser carried well past patience — still underwater vs
+    entry AND held beyond HALF its time-stop window — is the tell that the thesis is being DEFENDED
+    rather than re-underwritten. (D5 is the harder exit at the full window + RS lag; D1 is the earlier
+    behavioural warning.)"""
+    out = []
+    for lot in lots:
+        rel = lot.get("rel_return_since_entry")
+        held = lot.get("held_days") or 0
+        win = lot.get("time_stop_td") or 63
+        if rel is not None and rel < 0 and held >= win / 2.0:
+            out.append(_det("D1", mode, lot["ticker"],
+                            {"held_days": held, "rel_return": round(rel, 4),
+                             "advisory": "held loser past patience — disposition-effect risk; re-underwrite or cut"},
+                            severity="flag", unverified=(mode == "operator"), lot_id=lot.get("id")))
+    return out
 
 
-def d2_late_stage_reach(*args, **kwargs) -> list[dict]:  # buying order_layer=4 adjacency
-    raise NotImplementedError("flag evaluating a 4th-derivative name as a Stage 3-4 trim tell")
+def d2_late_stage_reach(new_buys: list[dict], mode: str) -> list[dict]:
+    """D2 late-stage reach (proxy): a NEW buy that is already EXTENDED (extension lens bear /
+    parabolic / far above its 200dma) is reaching late in the move — a Stage 3-4 trim tell, not an
+    entry. (The hard parabolic veto already blocks the worst; this flags the merely-extended new adds
+    that still cleared the gate.)"""
+    out = []
+    for b in new_buys:
+        if b.get("extension_bear") or b.get("parabolic"):
+            out.append(_det("D2", mode, b["ticker"],
+                            {"parabolic": bool(b.get("parabolic")),
+                             "advisory": "new buy into an already-extended name — late-stage reach"},
+                            severity="flag", unverified=(mode == "operator"), lot_id=b.get("id")))
+    return out
 
 
-def d4_avg_down_into_divergence(*args, **kwargs) -> list[dict]:  # RULE 6.1
-    raise NotImplementedError("adding to a lot diverging from a rotating leader")
+def d4_avg_down_into_divergence(lots: list[dict], mode: str) -> list[dict]:
+    """D4 avg-down into divergence (proxy, RULE 6.1): ADDING to a lot (weight up vs last run) that is
+    BOTH underwater since entry AND lagging the rotating leader (RS gap) — throwing good money after a
+    name the leadership has left behind."""
+    out = []
+    for lot in lots:
+        rel = lot.get("rel_return_since_entry")
+        if (lot.get("is_add") and rel is not None and rel < 0
+                and (lot.get("rs_leader_gap") or 0) >= 0.10):
+            out.append(_det("D4", mode, lot["ticker"],
+                            {"rel_return": round(rel, 4), "rs_leader_gap": lot.get("rs_leader_gap"),
+                             "advisory": "averaging down into a name diverging from the rotating leader"},
+                            severity="flag", unverified=(mode == "operator"), lot_id=lot.get("id")))
+    return out

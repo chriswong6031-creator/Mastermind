@@ -84,6 +84,7 @@ def update(positions: list[dict], asof_iso: str) -> None:
                 "entry_price": price,
                 "current_weight": weight,
                 "thesis_id": p.get("thesis_id"),
+                "time_stop_by": p.get("time_stop_by"),
                 "history": [{"event": "open", "ts": now, "as_of": asof_iso,
                              "weight": weight, "price": price}],
             }
@@ -105,10 +106,14 @@ def update(positions: list[dict], asof_iso: str) -> None:
                 entry["still_open"] = True
                 entry["entry_weight"] = weight
                 entry["entry_price"] = price
+                entry["time_stop_by"] = p.get("time_stop_by")
                 if not logged_today:
                     entry["history"].append({"event": "open", "ts": now, "as_of": asof_iso,
                                              "weight": weight, "price": price})
                     logged_today = True
+            # backfill the time-stop clock for an already-open entry that predates this field
+            elif entry.get("time_stop_by") is None and p.get("time_stop_by"):
+                entry["time_stop_by"] = p.get("time_stop_by")
 
             # track material weight changes — one rebalance event per build date, not per rebuild
             prior_weight = entry.get("current_weight") or 0.0
@@ -195,6 +200,8 @@ def open_positions() -> list[dict]:
             "entry_weight": e.get("entry_weight"),
             "current_weight": e.get("current_weight"),
             "entry_price": e.get("entry_price"),
+            "time_stop_by": e.get("time_stop_by"),
+            "thesis_id": e.get("thesis_id"),
         })
     # newest first (most recently opened)
     out.sort(key=lambda x: x.get("opened_at") or "", reverse=True)
@@ -220,6 +227,27 @@ def closed_positions() -> list[dict]:
     return out
 
 
+def close_position(sleeve: str, ticker: str, asof_iso: str, reason: str = "hard_exit") -> bool:
+    """Close a SINGLE open position without touching any other (unlike update(), which closes every
+    open key absent from the passed book). Used by the gate-closed hard-exit sweep so a parabolic /
+    distress / downtrend name can be exited on a carried-forward day. Returns True if it closed an
+    open position."""
+    ledger = _load()
+    key = f"{sleeve}:{ticker}"
+    entry = ledger.get(key)
+    if not entry or not entry.get("still_open"):
+        return False
+    now = _now_iso()
+    entry["still_open"] = False
+    entry["closed_at"] = now
+    entry["close_as_of"] = asof_iso
+    entry["current_weight"] = 0
+    entry.setdefault("history", []).append(
+        {"event": "close", "ts": now, "as_of": asof_iso, "weight": 0, "price": None, "reason": reason})
+    _save(ledger)
+    return True
+
+
 def get_entry_info(sleeve: str, ticker: str) -> dict:
     """Return {opened_at, held_days, entry_price} for a given position key, or {} if not found."""
     ledger = _load()
@@ -231,4 +259,5 @@ def get_entry_info(sleeve: str, ticker: str) -> dict:
         "opened_at": e.get("opened_at"),
         "held_days": _held_days(e.get("opened_at")),
         "entry_price": e.get("entry_price"),
+        "time_stop_by": e.get("time_stop_by"),
     }

@@ -48,7 +48,11 @@ _INDEX = _PAPERS / "index.jsonl"
 _NOTES = _ROOT / "data" / "research" / "notes"
 
 SCHEMA = "research_paper.v1"
-CONFIRM_THRESHOLD = 60            # combined "Conviction Index" needed to confirm a buy
+CONFIRM_THRESHOLD = 60            # combined "Conviction Index" needed to confirm a NEW buy
+# hysteresis: a name we ALREADY hold stays confirmed down to a lower bar, so a carried position
+# isn't churned out of the book on a marginal combined-score wobble around the 60 line. A genuine
+# exit (viability='avoid' or, upstream, a hard veto) still drops it immediately.
+_HELD_HYSTERESIS = 8
 VIABILITIES = ("compelling", "fair", "rich", "avoid")
 
 # the holistic report's required sections, in render order: (key, display heading)
@@ -99,7 +103,7 @@ def engine_score(confluence: float) -> int:
 # combined gate — research score + engine buy-score -> confirm / veto / size
 # ---------------------------------------------------------------------------
 
-def score_breakdown(confluence: float, paper: dict) -> dict:
+def score_breakdown(confluence: float, paper: dict, held: bool = False) -> dict:
     """Combine the engine buy-score and the paper's research_score into the decision.
 
     Returns {engine_score, research_score, combined, confirmed, size_mult, viability,
@@ -107,8 +111,10 @@ def score_breakdown(confluence: float, paper: dict) -> dict:
 
     Rules (doctrine-faithful):
       - combined = round(0.5*engine_score + 0.5*research_score)
-      - BLOCK if combined < CONFIRM_THRESHOLD, or viability == 'avoid', or (LLM mode and
+      - BLOCK if combined < the confirm bar, or viability == 'avoid', or (LLM mode and
         the paper does not recommend). A blocked buy is held (size 0) — never executed.
+      - `held` lowers the confirm bar by _HELD_HYSTERESIS so a CARRIED position isn't churned
+        out on a marginal wobble (a new buy still needs the full CONFIRM_THRESHOLD).
       - When confirmed, size_mult scales the engine weight: 60->0.5 (starter), 80->1.0,
         >=92->1.3 (boost). The caller re-caps at the per-name cap, so a boost never breaches
         the cap; a hard-vetoed name never reaches this gate at all.
@@ -119,14 +125,17 @@ def score_breakdown(confluence: float, paper: dict) -> dict:
     viability = paper.get("viability", "fair")
     mode = paper.get("mode", "engine")
     recommend = bool(paper.get("recommend", True))
+    bar = CONFIRM_THRESHOLD - (_HELD_HYSTERESIS if held else 0)
 
     reason = ""
     confirmed = True
-    if combined < CONFIRM_THRESHOLD:
-        confirmed, reason = False, f"combined conviction {combined} < {CONFIRM_THRESHOLD}"
+    if combined < bar:
+        confirmed, reason = False, f"combined conviction {combined} < {bar}"
     elif viability == "avoid":
         confirmed, reason = False, "research viability = avoid"
-    elif mode == "llm" and not recommend:
+    elif not recommend:
+        # a 'do not recommend' verdict blocks regardless of mode — an engine-mode 'rich' paper
+        # (recommend=False) was previously let through because the check was gated on mode=='llm'.
         confirmed, reason = False, "research desk does not recommend at this price"
 
     size_mult = round(_clamp(0.5 + (combined - CONFIRM_THRESHOLD) / 40.0, 0.5, 1.3), 3) if confirmed else 0.0
@@ -701,8 +710,13 @@ def generate(ticker: str, *, asof: str, confluence: float, rows: list[dict],
     except Exception:
         verdict = None
     if verdict is None:
-        # last resort: re-digest within the report text, else deterministic verdict
-        verdict = _parse_verdict(report) or {}
+        verdict = _parse_verdict(report)          # last resort: parse the report body itself
+    # Whether the re-digest (the "is this viable AT THIS PRICE" grade) actually parsed. If it did
+    # NOT, we never got Claude's verdict — so DON'T confirm a buy on an LLM basis we don't have.
+    # Mark the paper 'engine' mode and let the conservative DETERMINISTIC viability/recommend gate
+    # it (a defaulted recommend=True on an ungraded report was a silent false-positive confirm).
+    verdict_parsed = verdict is not None
+    verdict = verdict or {}
 
     sections = _split_sections(report)
     score = int(round(_clamp(verdict.get("research_score",
@@ -715,7 +729,8 @@ def generate(ticker: str, *, asof: str, confluence: float, rows: list[dict],
 
     paper = {
         "schema": SCHEMA, "id": f"{asof}-{ticker}", "ticker": ticker, "asof": asof,
-        "generated_at": _now(), "mode": "llm", "model": (res or {}).get("model"),
+        "generated_at": _now(), "mode": "llm" if verdict_parsed else "engine",
+        "verdict_parsed": verdict_parsed, "model": (res or {}).get("model"),
         "price_at_review": price, "research_score": score, "viability": viability,
         "recommend": bool(verdict.get("recommend", viability in ("compelling", "fair"))),
         "confidence": verdict.get("confidence") or "medium",
