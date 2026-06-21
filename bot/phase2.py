@@ -350,7 +350,8 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
         book.append({"ticker": t, "theme_id": _conv_theme_id(t), "sleeve": "conviction", "stage": 2,
                      "weight": c["weight"], "verdict": _verdict, "thesis_id": doc.id,
                      "time_stop_by": doc.time_stop_by, "confluence": c["confluence"],
-                     "entry_price": px, "research": c.get("research"), "retained": is_retained})
+                     "entry_price": px, "research": c.get("research"), "retained": is_retained,
+                     "size_stage": c.get("size_stage")})
         _rl_log(_run_id, "trade", f"sized {t} conviction",
                 f"ticker={t} weight={c['weight']} confluence={c['confluence']:+.2f} "
                 f"bull={c['bull']} bear={c['bear']} price={px} verdict={_verdict}",
@@ -495,6 +496,38 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
             p["thesis_full"] = thesis_mod.compose(p, dec_doc, _synth, facts_for_thesis)
         else:
             p["thesis_full"] = thesis_mod.compose(p, None, None, None)
+
+    # ———— PIT signal MEMORY: record what the engine SAW + decided, keep-first per (asof, ticker) ——
+    # latest.json overwrites in place, so this append-only snapshot is the ONLY faithful record of the
+    # day's lens reads + decisions — the substrate the calibration/learning loop will join to realized
+    # outcomes once theses resolve (~2026-07-17). Irreversible if skipped; degrade-safe.
+    try:
+        from brain import signal_history
+        _sig: list[dict] = []
+        for p in book:
+            if p.get("sleeve") == "conviction":
+                _syn, _rows = _synth_map.get(p.get("thesis_id"), ({}, []))
+                _sig.append(signal_history.make_record(
+                    asof, p["ticker"], sleeve="conviction",
+                    decision="held" if p.get("retained") else "sized", regime=regime,
+                    synthesis=_syn, rows=_rows, verdict=p.get("verdict"), weight=p.get("weight"),
+                    size_stage=p.get("size_stage"), price=p.get("entry_price"),
+                    time_stop_by=p.get("time_stop_by")))
+            else:
+                _sig.append(signal_history.make_record(
+                    asof, p["ticker"], sleeve=p.get("sleeve", "leadership"), decision="leadership",
+                    regime=regime, verdict=p.get("verdict"), weight=p.get("weight"),
+                    price=p.get("entry_price")))
+        for _r in _rejected:
+            _sig.append(signal_history.make_record(
+                asof, _r["ticker"], sleeve="conviction", decision="rejected", regime=regime,
+                synthesis={"confluence": _r.get("confluence"), "vetoes": _r.get("vetoes") or []},
+                reason=_r.get("reason")))
+        _n_sig = signal_history.archive(asof, _sig)
+        _rl_log(_run_id, "book_step", "signal history archived",
+                f"records={_n_sig} (sized/held + leadership + rejected)")
+    except Exception as _e:
+        _rl_log(_run_id, "decision", "signal history error", f"{_e!r}"[:160])
 
     # ———— persist + score + bridge ————
     for p in book:
