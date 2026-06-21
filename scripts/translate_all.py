@@ -4,8 +4,9 @@ Usage:
     cd /Users/chriswong/Documents/Cluade/Mastermind
     ANTHROPIC_API_KEY=<key> python3 scripts/translate_all.py
 
-Loads latest.json + all research notes, calls translate_book() + translate_notes()
-to warm the translation cache at data/brain/translations.json.
+Loads latest.json + all research notes/papers + the decision log + the run log, calls
+translate_book() + translate_notes() + translate_papers() + translate_decisions() +
+translate_runs() to warm the translation cache at data/brain/translations.json.
 Requires ANTHROPIC_API_KEY in the environment (or already set in .env).
 """
 from __future__ import annotations
@@ -37,7 +38,8 @@ def main() -> None:
         sys.exit(1)
 
     from brain.translate import (
-        translate_book, translate_notes, translate_papers, _CACHE_PATH, _load_cache,
+        translate_book, translate_notes, translate_papers, translate_decisions,
+        translate_runs, _CACHE_PATH, _load_cache,
     )
 
     # -----------------------------------------------------------------------
@@ -88,6 +90,18 @@ def main() -> None:
         translate_papers(papers_dir)
     else:
         print("No research papers found — skipping")
+
+    # -----------------------------------------------------------------------
+    # 4c. Translate the autonomous Daily Decision Log write-ups
+    # -----------------------------------------------------------------------
+    print("Translating Daily Decision Log write-ups (summary / rationale / brain_text)...")
+    translate_decisions()
+
+    # -----------------------------------------------------------------------
+    # 4d. Translate run-log write-ups (Brain Activity / Full Trace)
+    # -----------------------------------------------------------------------
+    print("Translating run-log titles + summaries (Brain Activity log)...")
+    translate_runs()
 
     # -----------------------------------------------------------------------
     # 5. Summary

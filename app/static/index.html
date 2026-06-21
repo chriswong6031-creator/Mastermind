@@ -1473,6 +1473,9 @@ body.page-mm.view-self #view-self .mm-section { display: block !important; }
 .mm-sd-ticket { display: grid; grid-template-columns: minmax(0,1.4fr) minmax(0,1fr); gap: 18px; align-items: start; }
 @media (max-width: 760px) { .mm-sd-ticket { grid-template-columns: 1fr; } }
 .mm-sd-field-lbl { font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-bottom: 5px; }
+.mm-sd-unit { display: inline-flex; gap: 2px; background: var(--panel2); border: 1px solid var(--line); border-radius: 7px; padding: 2px; }
+.mm-sd-unit-btn { border: none; background: transparent; color: var(--muted); font: inherit; font-size: 10.5px; font-weight: 800; letter-spacing: .02em; padding: 2px 10px; border-radius: 5px; cursor: pointer; line-height: 1.6; }
+.mm-sd-unit-btn.active { background: var(--text); color: var(--bg); }
 .mm-sd-search-wrap { position: relative; }
 .mm-sd-input { width: 100%; background: var(--panel2); border: 1px solid var(--line); border-radius: 9px;
   padding: 9px 12px; font: inherit; font-size: 13.5px; color: var(--text); }
@@ -1630,7 +1633,6 @@ body.page-mm.view-self #view-self .mm-section { display: block !important; }
   <span class="mm-nav-tabs">
     <button class="mm-nav-tab active" id="nav-dashboard" type="button" onclick="showView('dashboard')"><span class="l-en">Dashboard</span><span class="l-zh">仪表盘</span></button>
     <button class="mm-nav-tab" id="nav-research" type="button" onclick="showView('research')"><span class="l-en">Research</span><span class="l-zh">研究</span></button>
-    <button class="mm-nav-tab" id="nav-self" type="button" onclick="showView('self')"><span class="l-en">Self-Directed</span><span class="l-zh">自主交易</span></button>
   </span>
   <span class="mm-nav-spacer"></span>
   <!-- theme + lang toggles live here so they stay visible in BOTH views. These are
@@ -1991,7 +1993,13 @@ body.page-mm.view-self #view-self .mm-section { display: block !important; }
           <div class="mm-sd-sel empty" id="sd-selected"><span class="l-en">Search and select a stock to trade.</span><span class="l-zh">搜索并选择一只股票进行交易。</span></div>
         </div>
         <div>
-          <div class="mm-sd-field-lbl"><span class="l-en">Shares</span><span class="l-zh">股数</span></div>
+          <div class="mm-sd-field-lbl" style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+            <span id="sd-amt-lbl"><span class="l-en">Shares</span><span class="l-zh">股数</span></span>
+            <span class="mm-sd-unit" role="group" aria-label="Order unit">
+              <button type="button" class="mm-sd-unit-btn active" id="sd-unit-shares" onclick="setSelfUnit('shares')"><span class="l-en">Shares</span><span class="l-zh">股数</span></button>
+              <button type="button" class="mm-sd-unit-btn" id="sd-unit-dollars" onclick="setSelfUnit('dollars')">$</button>
+            </span>
+          </div>
           <input class="mm-sd-input" id="sd-shares" type="number" min="0" step="any" inputmode="decimal" placeholder="0" oninput="selfUpdateEst()">
           <div class="mm-sd-est" id="sd-est"></div>
           <div class="mm-sd-actions">
@@ -2328,6 +2336,7 @@ var I18N = {
   'sd.buying_power':      { en: 'Buying power', zh: '可用资金' },
   'sd.you_hold':          { en: 'You hold', zh: '当前持有' },
   'sd.shares_unit':       { en: 'sh', zh: '股' },
+  'sd.amount':            { en: 'amount', zh: '金额' },
   'sd.filled':            { en: 'Filled', zh: '已成交' },
   'sd.queued':            { en: 'Queued — fills at the next market open.', zh: '已排队 —— 将于下次开盘成交。' },
   'sd.order_failed':      { en: 'Order rejected', zh: '订单被拒绝' },
@@ -2517,6 +2526,7 @@ var _researchSub = 'theses';      // 'theses' | 'calibration'
 var _currentView = 'dashboard';   // 'dashboard' | 'research' | 'self'
 // ── multi-portfolio switcher state ──────────────────────────────────────────
 var _portfolio = 'flagship';      // active portfolio id (drives every portfolio-scoped fetch)
+var _pendingSelfSelect = false;   // set when loaded at /self — auto-select that tab once portfolios load
 var _portfolios = [];             // [{id,name,tagline,kind,manager,status}] from /api/portfolios
 var _decisions = [];              // autonomous Brain daily decision log (/api/decisions)
 // run drilldown cache
@@ -2914,23 +2924,28 @@ function renderRuns() {
     return;
   }
 
+  var isZh = document.documentElement.getAttribute('data-lang') === 'zh';
   var html = runsH2();
   html += '<div class="mm-run-list">';
 
   runs.forEach(function(r, ri) {
     var kindCls = runKindClass(r.kind);
     var costStr = r.cost_usd != null ? ' · $' + r.cost_usd.toFixed(4) : '';
-    var stepsStr = r.n_steps != null ? r.n_steps + ' steps' : '—';
+    var stepsStr = r.n_steps != null ? (r.n_steps + (isZh ? ' 步' : ' steps')) : '—';
+    // zh title/summary come from /api/runs (cached_zh) — the AI's run write-up; fall back
+    // to English when the _zh variant is absent so nothing renders blank
+    var rTitle = (isZh && r.title_zh) ? r.title_zh : (r.title || r.run_id || '—');
+    var rSummary = (isZh && r.summary_zh) ? r.summary_zh : r.summary;
     html += '<div class="mm-run-row" id="run-row-' + ri + '">';
     html += '<div class="mm-run-header" onclick="toggleRun(' + ri + ',\'' + esc(r.run_id) + '\')">';
     html += '<span class="mm-run-kind-chip ' + kindCls + '">' + esc(r.kind || '—') + '</span>';
-    html += '<span class="mm-run-title">' + esc(r.title || r.run_id || '—') + '</span>';
+    html += '<span class="mm-run-title">' + esc(rTitle) + '</span>';
     html += '<span class="mm-run-meta">' + fmtTs(r.ts) + ' &middot; ' + stepsStr + costStr + '</span>';
     html += '<span class="mm-run-chevron" id="run-chev-' + ri + '">&#9660;</span>';
     html += '</div>';
     // summary bar (always visible once loaded)
-    if (r.summary) {
-      html += '<div class="mm-run-summary open" id="run-sum-' + ri + '">' + esc(r.summary) + '</div>';
+    if (rSummary) {
+      html += '<div class="mm-run-summary open" id="run-sum-' + ri + '">' + esc(rSummary) + '</div>';
     }
     // step trace (hidden, lazy loaded)
     html += '<div class="mm-run-steps" id="run-steps-' + ri + '"><div class="mm-run-steps-loading">' + t('runs.click_to_load') + '</div></div>';
@@ -4111,9 +4126,16 @@ function renderSelfPending() {
   var chips = '';
   pend.forEach(function(o) {
     var side = (o.side === 'buy') ? t('sd.buy') : t('sd.sell');
-    var val = o.est_value != null ? ' · ~' + fmtNav(o.est_value) : '';
+    var amt, est;
+    if (o.shares != null) {                       // share-sized order
+      amt = '× ' + fmtShares(o.shares) + ' ' + t('sd.shares_unit');
+      est = o.est_value != null ? ' · ~' + fmtNav(o.est_value) : '';
+    } else {                                      // dollar-sized order
+      amt = fmtNav(o.notional);
+      est = o.est_shares != null ? ' · ~' + fmtShares(o.est_shares) + ' ' + t('sd.shares_unit') : '';
+    }
     chips += '<span class="mm-sd-pend-chip"><span class="mm-side-chip ' + (o.side === 'buy' ? 'buy' : 'sell') + '">' + side + '</span> ' +
-      esc(o.ticker) + ' × ' + fmtShares(o.shares) + val +
+      esc(o.ticker) + ' ' + amt + est +
       ' <span class="x" title="' + t('sd.cancel') + '" onclick="cancelSelfOrder(\'' + esc(o.order_id) + '\')">✕</span></span>';
   });
   host.innerHTML = '<div class="mm-sd-pending-h">' + t('sd.pending_h') + ' — ' + t('sd.pending_note') + '</div>' + chips;
@@ -4223,18 +4245,36 @@ function renderSelfSelected(loading) {
     '<div class="mm-sd-sel-sub">' + t('sd.buying_power') + ' ' + fmtNav((_self || {}).cash || 0) + '</div>';
 }
 
+var _selfUnit = 'shares';   // 'shares' | 'dollars' — order-ticket sizing unit
+window.setSelfUnit = function(u) {
+  _selfUnit = (u === 'dollars') ? 'dollars' : 'shares';
+  var sh = E('sd-unit-shares'), dl = E('sd-unit-dollars'), inp = E('sd-shares'), lbl = E('sd-amt-lbl');
+  if (sh) sh.classList.toggle('active', _selfUnit === 'shares');
+  if (dl) dl.classList.toggle('active', _selfUnit === 'dollars');
+  if (inp) inp.placeholder = _selfUnit === 'dollars' ? '$0' : '0';
+  if (lbl) lbl.innerHTML = _selfUnit === 'dollars'
+    ? '<span class="l-en">Amount ($)</span><span class="l-zh">金额（$）</span>'
+    : '<span class="l-en">Shares</span><span class="l-zh">股数</span>';
+  selfUpdateEst();
+};
+
 window.selfUpdateEst = function() {
   var est = E('sd-est'), buy = E('sd-buy'), sell = E('sd-sell');
   if (!est) return;
-  var s = _selfSel, shares = parseFloat((E('sd-shares') || {}).value);
+  var s = _selfSel, amt = parseFloat((E('sd-shares') || {}).value);
   if (!s) { est.textContent = ''; if (buy) buy.disabled = true; if (sell) sell.disabled = true; return; }
   var px = s.price, held = _heldShares(s.ticker), cash = (_self || {}).cash || 0;
+  var dollars = _selfUnit === 'dollars';
+  var shares = (px != null && amt > 0) ? (dollars ? amt / px : amt) : 0;
   var parts = [];
-  if (px != null && shares > 0) parts.push('≈ ' + fmtNav(px * shares));
+  if (px != null && amt > 0) {
+    parts.push(dollars ? ('≈ ' + fmtShares(shares) + ' ' + t('sd.shares_unit'))
+                       : ('≈ ' + fmtNav(amt * px)));
+  }
   parts.push(t('sd.buying_power') + ' ' + fmtNav(cash));
   if (held > 0) parts.push(t('sd.you_hold') + ' ' + fmtShares(held) + ' ' + t('sd.shares_unit'));
   est.textContent = parts.join(' · ');
-  var canBuy = px != null && shares > 0, canSell = px != null && shares > 0 && held > 0;
+  var canBuy = px != null && amt > 0, canSell = px != null && amt > 0 && held > 0;
   if (buy) buy.disabled = !canBuy || _selfBusy;
   if (sell) sell.disabled = !canSell || _selfBusy;
 };
@@ -4243,15 +4283,16 @@ function _selfMsg(cls, txt) { var el = E('sd-msg'); if (el) { el.className = 'mm
 
 window.placeSelfOrder = function(side, tickerOverride) {
   if (_selfBusy) return;
-  var ticker, shares;
-  if (tickerOverride) { ticker = tickerOverride.toUpperCase(); shares = parseFloat((E('sd-qty-' + ticker) || {}).value); }
-  else { if (!_selfSel) return; ticker = _selfSel.ticker; shares = parseFloat((E('sd-shares') || {}).value); }
-  if (!ticker || !(shares > 0)) { _selfMsg('err', t('sd.order_failed') + ' — ' + t('sd.col_shares')); return; }
+  var ticker, amt, dollars;
+  if (tickerOverride) { ticker = tickerOverride.toUpperCase(); amt = parseFloat((E('sd-qty-' + ticker) || {}).value); dollars = false; }
+  else { if (!_selfSel) return; ticker = _selfSel.ticker; amt = parseFloat((E('sd-shares') || {}).value); dollars = (_selfUnit === 'dollars'); }
+  if (!ticker || !(amt > 0)) { _selfMsg('err', t('sd.order_failed') + ' — ' + (dollars ? t('sd.amount') : t('sd.col_shares'))); return; }
   _selfBusy = true;
   if (E('sd-buy')) E('sd-buy').disabled = true;
   if (E('sd-sell')) E('sd-sell').disabled = true;
+  var body = dollars ? { ticker: ticker, side: side, notional: amt } : { ticker: ticker, side: side, shares: amt };
   fetch('/api/self_directed/order', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ticker: ticker, side: side, shares: shares }) })
+    body: JSON.stringify(body) })
     .then(function(r){ return r.json(); })
     .then(function(d) {
       if (!d || !d.ok) { _selfMsg('err', t('sd.order_failed') + (d && d.error ? ': ' + esc(d.error) : '')); return; }
@@ -4297,17 +4338,15 @@ document.addEventListener('click', function(e) {
 });
 
 window.showView = function(view) {
-  _currentView = (view === 'research') ? 'research' : (view === 'self') ? 'self' : 'dashboard';
+  // Dashboard / Research are top-nav views. The Self-Directed book is NOT a view — it's a
+  // portfolio in the switcher (see applyPortfolioScope, which drives body.view-self).
+  _currentView = (view === 'research') ? 'research' : 'dashboard';
   document.body.classList.toggle('view-research', _currentView === 'research');
-  document.body.classList.toggle('view-self', _currentView === 'self');
-  var nd = E('nav-dashboard'), nr = E('nav-research'), ns = E('nav-self');
+  var nd = E('nav-dashboard'), nr = E('nav-research');
   if (nd) nd.classList.toggle('active', _currentView === 'dashboard');
   if (nr) nr.classList.toggle('active', _currentView === 'research');
-  if (ns) ns.classList.toggle('active', _currentView === 'self');
-  var path = _currentView === 'research' ? '/research' : _currentView === 'self' ? '/self' : '/';
-  try { history.replaceState(null, '', path); } catch (e) {}
+  try { history.replaceState(null, '', _currentView === 'research' ? '/research' : '/'); } catch (e) {}
   if (_currentView === 'research') { renderResearchPapers(); renderCalibrationPage(); }
-  if (_currentView === 'self') { refreshSelf(); }
   window.scrollTo(0, 0);
 };
 
@@ -4342,17 +4381,23 @@ function renderPortfolioSwitch() {
 
 function applyPortfolioScope() {
   var auto = _portfolio === 'autonomous';
+  var self = _portfolio === 'self_directed';
+  // The self-directed book reuses the dedicated #view-self layout: body.view-self hides every
+  // dashboard .mm-section and shows #view-self (its order ticket / scorecard / blotter). The
+  // portfolio switcher lives in #mm-nav (not a .mm-section), so it stays visible to switch back.
+  document.body.classList.toggle('view-self', self);
   document.documentElement.setAttribute('data-portfolio', _portfolio);
   PF_GATED_ONLY.forEach(function(id) {
     var p = E(id); if (!p) return;
-    var s = p.closest('.mm-section'); if (s) s.style.display = auto ? 'none' : '';
+    var s = p.closest('.mm-section'); if (s) s.style.display = (auto && !self) ? 'none' : '';
   });
   PF_AUTO_ONLY.forEach(function(id) {
     var p = E(id); if (!p) return;
-    var s = p.closest('.mm-section'); if (s) s.style.display = auto ? '' : 'none';
+    var s = p.closest('.mm-section'); if (s) s.style.display = (auto && !self) ? '' : 'none';
   });
-  var nr = E('nav-research'); if (nr) nr.style.display = auto ? 'none' : '';
-  if (auto && _currentView === 'research') showView('dashboard');
+  var nr = E('nav-research'); if (nr) nr.style.display = (auto || self) ? 'none' : '';
+  if ((auto || self) && _currentView === 'research') showView('dashboard');
+  if (self) refreshSelf();
 }
 
 window.setPortfolio = function(id) {
@@ -4367,7 +4412,12 @@ async function loadPortfolios() {
   try {
     var r = await fetch('/api/portfolios');
     var d = r.ok ? await r.json() : null;
-    if (d && d.portfolios) { _portfolios = d.portfolios; renderPortfolioSwitch(); }
+    if (d && d.portfolios) {
+      _portfolios = d.portfolios; renderPortfolioSwitch();
+      if (_pendingSelfSelect && _portfolios.some(function(p){ return p.id === 'self_directed'; })) {
+        _pendingSelfSelect = false; setPortfolio('self_directed');
+      }
+    }
   } catch (e) {}
 }
 
@@ -4408,16 +4458,19 @@ function renderDecisions() {
     var holds = (d.holdings || []).map(function(h) {
       var conv = (h.conviction || '').toLowerCase();
       var chip = conv ? '<span class="mm-dec-conv ' + conv + '">' + esc(conv) + '</span>' : '';
+      var hRat = (isZh && h.rationale_zh) ? h.rationale_zh : (h.rationale || '');
       return '<div class="mm-dec-h"><b>' + esc(h.ticker) + '</b> ' +
-        (h.weight != null ? pct(h.weight) : '') + chip + ' — ' + esc(h.rationale || '') + '</div>';
+        (h.weight != null ? pct(h.weight) : '') + chip + ' — ' + esc(hRat) + '</div>';
     }).join('');
     var skip = (d.skipped_unpriceable && d.skipped_unpriceable.length) ?
       '<div class="mm-dec-skip">' + (isZh ? '无法定价（已跳过）：' : 'Unpriceable (skipped): ') + esc(d.skipped_unpriceable.join(', ')) + '</div>' : '';
-    var sold = d.sold_note ? '<div class="mm-dec-sold">' + esc(d.sold_note) + '</div>' : '';
+    var soldTxt = (isZh && d.sold_note_zh) ? d.sold_note_zh : d.sold_note;
+    var sold = soldTxt ? '<div class="mm-dec-sold">' + esc(soldTxt) + '</div>' : '';
     var cost = d.cost_usd != null ? '$' + Number(d.cost_usd).toFixed(2) : '';
+    var decSum = (isZh && d.summary_zh) ? d.summary_zh : d.summary;
     return '<div class="mm-dec">' +
       '<div class="mm-dec-head"><span class="mm-dec-date">' + esc(d.asof || '') + '</span><span class="mm-dec-cost">' + cost + '</span></div>' +
-      (d.summary ? '<div class="mm-dec-sum">' + esc(d.summary) + '</div>' : '') +
+      (decSum ? '<div class="mm-dec-sum">' + esc(decSum) + '</div>' : '') +
       (trades ? '<div class="mm-dec-trades">' + trades + '</div>' : '') +
       sold +
       (holds ? '<div class="mm-dec-holdings">' + holds + '</div>' : '') +
@@ -4437,11 +4490,18 @@ function _decReasoningBlock(d, i) {
   var label = isZh ? '🧠 推理与数据来源' : '🧠 Reasoning & sources';
   var toolsLine = tools ? '<div class="mm-dec-tools">' + (isZh ? '调用：' : 'Consulted: ') + tools + '</div>' : '';
   var body = '';
-  if (hasText) body += '<div class="mm-dec-think">' + esc(d.brain_text) + '</div>';
+  if (hasText) {
+    // brain_text_zh comes from /api/decisions (cached_zh); fall back to English when absent
+    var brainTxt = (isZh && d.brain_text_zh) ? d.brain_text_zh : d.brain_text;
+    body += '<div class="mm-dec-think">' + esc(brainTxt) + '</div>';
+  }
   body += '<div class="mm-dec-trace" id="dec-trace-' + i + '">' +
     (hasTrace ? '<div class="mm-dec-trace-load">' + (isZh ? '加载推理步骤…' : 'Loading reasoning steps…') + '</div>' : '') + '</div>';
+  // run_id is single-quoted (not JSON.stringify'd): the onclick attribute is itself
+  // double-quoted, so a JSON string's double quotes would terminate it early and break
+  // the handler — the section then never opened. Single quotes match toggleRun().
   return '<div class="mm-dec-reason">' +
-    '<button class="mm-dec-toggle" type="button" onclick="toggleDecReason(' + i + ',' + JSON.stringify(d.run_id || '') + ')">' +
+    '<button class="mm-dec-toggle" type="button" onclick="toggleDecReason(' + i + ',\'' + esc(d.run_id || '') + '\')">' +
       '<span class="mm-dec-caret" id="dec-caret-' + i + '">▸</span> ' + label + '</button>' +
     '<div class="mm-dec-reason-body" id="dec-reason-' + i + '" style="display:none">' + toolsLine + body + '</div>' +
   '</div>';
@@ -5127,10 +5187,11 @@ document.addEventListener('langchange', function() {
   }
 });
 
-// open the matching view directly when the page is loaded at /research or /self
+// open the Research view directly when the page is loaded at /research
 var _path0 = location.pathname.replace(/\/+$/, '');
 if (_path0 === '/research') showView('research');
-else if (_path0 === '/self') showView('self');
+// /self is now the Self-Directed portfolio (tab), selected once /api/portfolios loads
+else if (_path0 === '/self') { _pendingSelfSelect = true; }
 
 applyPortfolioScope();   // default flagship → no-op visually; sets data-portfolio
 loadPortfolios();        // populate the portfolio switcher (async, non-blocking)

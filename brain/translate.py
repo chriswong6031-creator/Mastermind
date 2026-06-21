@@ -14,6 +14,10 @@ Design:
   Warms the cache for every translatable string in a portfolio.v1 dict.
 - translate_notes(notes_dir) -> None
   Warms the cache for every research note body + title.
+- translate_decisions() -> None
+  Warms the cache for the autonomous daily-decision log write-ups (Daily Decision Log).
+- translate_runs() -> None
+  Warms the cache for run-log titles + summaries (the Brain Activity log's AI write-ups).
 """
 from __future__ import annotations
 
@@ -391,3 +395,67 @@ def translate_papers(papers_dir: str | Path) -> None:
             # one paper per call so a parse failure on a huge report can't poison
             # the other papers' translations
             translate_and_cache(batch)
+
+
+def translate_decisions(limit: int = 60) -> None:
+    """Warm the cache for the autonomous daily-decision log write-ups.
+
+    These back the dashboard's Daily Decision Log: /api/decisions injects summary_zh /
+    sold_note_zh / brain_text_zh and per-holding rationale_zh via cached_zh(). Without
+    this warm-up the AI's decision write-up stays English even when zh is toggled.
+    translate_and_cache() skips already-cached strings, so the daily call only translates
+    text from new decisions. Best-effort — never raises.
+    """
+    try:
+        from bot import autonomous
+    except Exception:
+        return
+
+    texts: list[str] = []
+    try:
+        for d in autonomous.load_decisions(limit):
+            for field in ("summary", "sold_note", "brain_text"):
+                v = d.get(field)
+                if v and isinstance(v, str):
+                    texts.append(v)
+            for h in (d.get("holdings") or []):
+                r = h.get("rationale")
+                if r and isinstance(r, str):
+                    texts.append(r)
+    except Exception:
+        return
+
+    if texts:
+        translate_and_cache(texts)
+
+
+def translate_runs() -> None:
+    """Warm the cache for run-log titles + summaries.
+
+    These back the dashboard's Brain Activity ("Full Trace") log: /api/runs injects
+    title_zh / summary_zh via cached_zh(), so without this warm-up the AI's run write-up
+    stays English even when zh is toggled. Reads the run index via brain.runlog;
+    translate_and_cache() skips already-cached strings, so the daily call only translates
+    text from new runs. Best-effort — never raises.
+    """
+    try:
+        from brain import runlog
+    except Exception:
+        return
+
+    texts: list[str] = []
+    try:
+        for r in runlog.list_runs():
+            # title defaults to the run_id (a bare timestamp) when none was given — skip
+            # those; they're not prose. summary is the AI's narrative write-up of the run.
+            title = r.get("title")
+            if title and isinstance(title, str) and title != r.get("run_id"):
+                texts.append(title)
+            summary = r.get("summary")
+            if summary and isinstance(summary, str):
+                texts.append(summary)
+    except Exception:
+        return
+
+    if texts:
+        translate_and_cache(texts)

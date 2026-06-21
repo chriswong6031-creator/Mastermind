@@ -403,6 +403,24 @@ def api_portfolios() -> JSONResponse:
         pid = meta["id"]
         status: dict[str, Any] = {"nav": None, "total_return_pct": None, "vs_spy_pct": None,
                                   "day_change_pct": None, "holdings": 0, "cash_pct": None, "as_of": None}
+        # the self-directed book has its own engine (not paper_account) — read its NAV/return directly
+        if pid == "self_directed":
+            try:
+                from portfolio import self_directed
+                bk = self_directed.book()
+                alloc = bk.get("allocation") or {}
+                status.update({
+                    "nav": bk.get("nav"),
+                    "total_return_pct": alloc.get("total_return_pct"),
+                    "cash_pct": round((alloc.get("cash_pct") or 0) * 100, 1),
+                    "holdings": alloc.get("n_positions") or 0,
+                    "as_of": bk.get("inception_date"),
+                })
+            except Exception:
+                pass
+            out.append({**{k: meta.get(k) for k in ("id", "name", "tagline", "kind", "manager")},
+                        "status": status})
+            continue
         try:
             perf = paper_account.performance(portfolio_id=pid)
             nav = perf.get("current_nav") or 0
@@ -437,7 +455,25 @@ def api_decisions(portfolio: str = "autonomous", limit: int = 60) -> JSONRespons
         if portfolio != "autonomous":
             return JSONResponse({"decisions": [], "note": "decision log is autonomous-only"})
         from bot import autonomous
-        return JSONResponse({"decisions": autonomous.load_decisions(limit)})
+        decisions = autonomous.load_decisions(limit)
+        # Attach cached Chinese for the AI write-ups so the Daily Decision Log renders in
+        # Chinese when zh is toggled. cached_zh() is a pure cache lookup (None -> client
+        # falls back to English) — warmed by brain.translate.translate_decisions() on the
+        # daily run; English never regresses if the cache is cold.
+        for d in decisions:
+            for fld in ("summary", "sold_note", "brain_text"):
+                v = d.get(fld)
+                if v:
+                    zh = _cached_zh(v)
+                    if zh:
+                        d[fld + "_zh"] = zh
+            for h in (d.get("holdings") or []):
+                r = h.get("rationale")
+                if r:
+                    zh = _cached_zh(r)
+                    if zh:
+                        h["rationale_zh"] = zh
+        return JSONResponse({"decisions": decisions})
     except Exception as exc:  # noqa: BLE001
         return JSONResponse({"decisions": [], "error": str(exc)})
 
@@ -614,8 +650,9 @@ def api_trades(portfolio: str = "flagship") -> JSONResponse:
 
 class _OrderReq(BaseModel):
     ticker: str
-    side: str            # "buy" | "sell"
-    shares: float
+    side: str                          # "buy" | "sell"
+    shares: float | None = None        # share-sized order
+    notional: float | None = None      # OR dollar-sized order ($ → shares at the fill price)
 
 
 class _ThesisReq(BaseModel):
@@ -682,7 +719,8 @@ def api_self_directed_order(req: _OrderReq) -> JSONResponse:
     """Place a buy/sell. Fills now at market if open; otherwise queues to the next open."""
     try:
         from portfolio import self_directed
-        return JSONResponse(self_directed.place_order(req.ticker, req.side, req.shares))
+        return JSONResponse(self_directed.place_order(
+            req.ticker, req.side, req.shares, notional=req.notional))
     except Exception as exc:  # noqa: BLE001
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
@@ -1063,10 +1101,24 @@ def api_activity() -> JSONResponse:
 @router.get("/api/runs")
 def api_runs() -> JSONResponse:
     """List all run-log entries, newest first.
-    Each entry: {run_id, ts, kind, title, n_steps, cost_usd, summary}."""
+    Each entry: {run_id, ts, kind, title, n_steps, cost_usd, summary}.
+
+    title_zh / summary_zh carry the cached Chinese translation of the run's AI write-up so
+    the Brain Activity ("Full Trace") log renders in Chinese when zh is toggled. cached_zh()
+    is a pure cache lookup (returns None -> client falls back to English) until
+    brain.translate.translate_runs() warms the cache on the daily run; English never regresses.
+    """
     try:
         from brain import runlog
-        return JSONResponse(runlog.list_runs())
+        runs = runlog.list_runs()
+        for r in runs:
+            tz = _cached_zh(r.get("title") or "")
+            if tz:
+                r["title_zh"] = tz
+            sz = _cached_zh(r.get("summary") or "")
+            if sz:
+                r["summary_zh"] = sz
+        return JSONResponse(runs)
     except Exception as exc:
         return JSONResponse({"error": str(exc)}, status_code=500)
 
