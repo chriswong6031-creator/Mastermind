@@ -10,6 +10,7 @@ from typing import Any
 
 from fastapi import APIRouter
 from fastapi.responses import FileResponse, JSONResponse, Response
+from pydantic import BaseModel
 
 # Lazy import so the module loads even if brain/ isn't fully initialised yet
 def _cached_zh(text: str):
@@ -132,6 +133,12 @@ def dashboard() -> FileResponse:
 @router.get("/research", include_in_schema=False)
 def research_page() -> FileResponse:
     """The Research page — same SPA; the client opens the Research view from this path."""
+    return FileResponse(_STATIC / "index.html", media_type="text/html", headers=_NOCACHE)
+
+
+@router.get("/self", include_in_schema=False)
+def self_directed_page() -> FileResponse:
+    """The Self-Directed book — same SPA; the client opens that view from this path."""
     return FileResponse(_STATIC / "index.html", media_type="text/html", headers=_NOCACHE)
 
 
@@ -534,6 +541,108 @@ def api_trades() -> JSONResponse:
         })
     except Exception as exc:
         return JSONResponse({"open": [], "closed": [], "history": [], "error": str(exc)})
+
+
+# ---------------------------------------------------------------------------
+# Self-Directed book (the third portfolio) — user-driven manual paper trading.
+# Read-only marks come from the same delayed Polygon feed as the rest of the dashboard;
+# orders/theses are written by the user. PAPER ONLY — long-only, no leverage.
+# ---------------------------------------------------------------------------
+
+class _OrderReq(BaseModel):
+    ticker: str
+    side: str            # "buy" | "sell"
+    shares: float
+
+
+class _ThesisReq(BaseModel):
+    ticker: str
+    note: str = ""
+
+
+@router.get("/api/self_directed")
+def api_self_directed() -> JSONResponse:
+    """The Self-Directed book: positions (live marks + weights), allocation scorecard,
+    market state, pending orders. Settles any due pending orders on read."""
+    try:
+        from portfolio import self_directed
+        # one batched live-price fetch for all held + pending names, then build the book
+        held = list((self_directed._load_account().get("positions") or {}).keys())
+        pend = [o.get("ticker") for o in self_directed._load_pending()]
+        prices = _live_prices(sorted({*held, *[t for t in pend if t]}))
+        return JSONResponse(self_directed.book(prices=prices))
+    except Exception as exc:  # noqa: BLE001 — never 500 the dashboard
+        return JSONResponse({"nav": 1_000_000.0, "cash": 1_000_000.0, "invested": 0.0,
+                             "positions": [], "pending": [],
+                             "allocation": {"cash_pct": 1.0, "gross": 0.0, "n_positions": 0,
+                                            "largest_weight": 0.0, "total_unrealized_pnl": 0.0,
+                                            "total_return_pct": 0.0},
+                             "market": {"is_open": False, "session": "closed"},
+                             "error": str(exc)})
+
+
+@router.get("/api/self_directed/history")
+def api_self_directed_history() -> JSONResponse:
+    """Trade History blotter for the Self-Directed book (every fill + the pending queue)."""
+    try:
+        from portfolio import self_directed
+        held = list((self_directed._load_account().get("positions") or {}).keys())
+        prices = _live_prices(held)
+        return JSONResponse(self_directed.history(prices=prices))
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"history": [], "pending": [], "realized_total": 0.0,
+                             "n_closed": 0, "n_buys": 0, "win_rate": None, "error": str(exc)})
+
+
+@router.get("/api/self_directed/search")
+def api_self_directed_search(q: str = "") -> JSONResponse:
+    """Live US-stock search (ticker or company name) for the order ticket."""
+    try:
+        from data_layer import polygon
+        return JSONResponse({"results": polygon.search_tickers(q)})
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"results": [], "error": str(exc)})
+
+
+@router.get("/api/self_directed/quote")
+def api_self_directed_quote(ticker: str = "") -> JSONResponse:
+    """Live price + company name + market state for one ticker (order-ticket display)."""
+    try:
+        from portfolio import self_directed
+        return JSONResponse(self_directed.quote_info(ticker))
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"ticker": (ticker or "").upper(), "price": None, "error": str(exc)})
+
+
+@router.post("/api/self_directed/order")
+def api_self_directed_order(req: _OrderReq) -> JSONResponse:
+    """Place a buy/sell. Fills now at market if open; otherwise queues to the next open."""
+    try:
+        from portfolio import self_directed
+        return JSONResponse(self_directed.place_order(req.ticker, req.side, req.shares))
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+@router.post("/api/self_directed/thesis")
+def api_self_directed_thesis(req: _ThesisReq) -> JSONResponse:
+    """Save (or clear) the user's conviction thesis note for a position."""
+    try:
+        from portfolio import self_directed
+        saved = self_directed.set_thesis(req.ticker, req.note)
+        return JSONResponse({"ok": True, "ticker": (req.ticker or "").upper(), "thesis": saved})
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+@router.post("/api/self_directed/cancel")
+def api_self_directed_cancel(order_id: str = "") -> JSONResponse:
+    """Cancel a still-pending (unfilled) order."""
+    try:
+        from portfolio import self_directed
+        return JSONResponse({"ok": self_directed.cancel_order(order_id)})
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
 
 @router.get("/api/outcomes")

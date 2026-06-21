@@ -1440,6 +1440,104 @@ body.page-mm .mm-rd-summary { font-size: 12.5px; color: var(--text); line-height
 body.page-mm .mm-rd-link { display: inline-block; margin-top: 9px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
   padding: 5px 12px; font-size: 11.5px; font-weight: 700; color: var(--text); cursor: pointer; }
 body.page-mm .mm-rd-link:hover { border-color: var(--info); color: var(--info); }
+
+/* ────────────────────────────────────────────────────────────────────────────
+   SELF-DIRECTED BOOK (third portfolio) — order ticket, live search, weight bar,
+   conviction-thesis editor
+   ──────────────────────────────────────────────────────────────────────────── */
+body.page-mm #view-self { display: none; }
+body.page-mm.view-self .mm-section,
+body.page-mm.view-self #footer { display: none !important; }
+body.page-mm.view-self #view-self { display: block; }
+body.page-mm.view-self #view-self .mm-section { display: block !important; }
+
+/* market-state pill */
+.mm-sd-mkt { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700;
+  padding: 3px 11px; border-radius: 8px; letter-spacing: .03em; }
+.mm-sd-mkt .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.mm-sd-mkt.open   { background: color-mix(in srgb, var(--up) 14%, var(--panel2));   color: var(--up);   border: 1px solid color-mix(in srgb, var(--up) 32%, transparent); }
+.mm-sd-mkt.open .dot   { background: var(--up); animation: mmhb 2.4s ease-in-out infinite; }
+.mm-sd-mkt.closed { background: color-mix(in srgb, var(--muted) 14%, var(--panel2)); color: var(--muted); border: 1px solid var(--line); }
+.mm-sd-mkt.closed .dot { background: var(--muted); }
+
+/* order ticket */
+.mm-sd-ticket { display: grid; grid-template-columns: minmax(0,1.4fr) minmax(0,1fr); gap: 18px; align-items: start; }
+@media (max-width: 760px) { .mm-sd-ticket { grid-template-columns: 1fr; } }
+.mm-sd-field-lbl { font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-bottom: 5px; }
+.mm-sd-search-wrap { position: relative; }
+.mm-sd-input { width: 100%; background: var(--panel2); border: 1px solid var(--line); border-radius: 9px;
+  padding: 9px 12px; font: inherit; font-size: 13.5px; color: var(--text); }
+.mm-sd-input:focus { outline: none; border-color: var(--link); }
+.mm-sd-input::placeholder { color: var(--muted); }
+.mm-sd-results { position: absolute; z-index: 40; left: 0; right: 0; top: calc(100% + 4px);
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden;
+  box-shadow: 0 8px 30px rgba(0,0,0,.28); max-height: 320px; overflow-y: auto; }
+.mm-sd-results:empty { display: none; }
+.mm-sd-result { display: flex; align-items: baseline; gap: 9px; padding: 8px 12px; cursor: pointer; border-bottom: 1px solid var(--line); }
+.mm-sd-result:last-child { border-bottom: none; }
+.mm-sd-result:hover, .mm-sd-result.active { background: color-mix(in srgb, var(--link) 10%, var(--panel)); }
+.mm-sd-result .tk { font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; font-weight: 700; font-size: 12.5px; color: var(--text); min-width: 58px; }
+.mm-sd-result .nm { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mm-sd-result .ex { font-size: 9.5px; color: var(--muted); margin-left: auto; opacity: .7; text-transform: uppercase; }
+.mm-sd-results-note { padding: 9px 12px; font-size: 11.5px; color: var(--muted); }
+
+/* selected name + live quote */
+.mm-sd-sel { background: var(--panel2); border: 1px solid var(--line); border-radius: 11px; padding: 13px 15px; margin-top: 12px; }
+.mm-sd-sel.empty { color: var(--muted); font-size: 12.5px; text-align: center; padding: 22px 15px; }
+.mm-sd-sel-top { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.mm-sd-sel-tk { font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 18px; font-weight: 800; color: var(--text); }
+.mm-sd-sel-nm { font-size: 12px; color: var(--muted); }
+.mm-sd-sel-px { margin-left: auto; font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; font-size: 20px; font-weight: 800; color: var(--text); font-variant-numeric: tabular-nums; }
+.mm-sd-sel-sub { font-size: 11px; color: var(--muted); margin-top: 3px; }
+
+/* shares + action row */
+.mm-sd-order-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+.mm-sd-est { font-size: 11.5px; color: var(--muted); margin-top: 9px; font-variant-numeric: tabular-nums; min-height: 16px; }
+.mm-sd-est strong { color: var(--text); }
+.mm-sd-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+.mm-sd-btn { border: none; border-radius: 10px; padding: 11px 0; font: inherit; font-size: 13.5px; font-weight: 800;
+  letter-spacing: .03em; cursor: pointer; transition: filter .12s, opacity .12s; color: #fff; }
+.mm-sd-btn:disabled { opacity: .4; cursor: not-allowed; }
+.mm-sd-btn:not(:disabled):hover { filter: brightness(1.08); }
+.mm-sd-btn-buy  { background: var(--up); }
+.mm-sd-btn-sell { background: var(--down); }
+.mm-sd-msg { margin-top: 11px; font-size: 12px; line-height: 1.5; min-height: 18px; }
+.mm-sd-msg.ok   { color: var(--up); }
+.mm-sd-msg.pend { color: var(--warn); }
+.mm-sd-msg.err  { color: var(--down); }
+.mm-sd-hint { font-size: 11px; color: var(--muted); margin-top: 8px; line-height: 1.5; }
+
+/* allocation scorecard weight bar (auto-coloured segments + cash) */
+.mm-sd-wbar { display: flex; height: 22px; border-radius: 8px; overflow: hidden; margin: 12px 0 10px; gap: 2px; background: var(--panel2); }
+.mm-sd-wseg { display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 800; color: #fff;
+  overflow: hidden; white-space: nowrap; border-radius: 5px; transition: width .5s cubic-bezier(.2,.7,.3,1); min-width: 0; }
+.mm-sd-wseg.cash { background: var(--muted); }
+.mm-sd-wlegend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; color: var(--muted); }
+.mm-sd-wleg { display: flex; align-items: center; gap: 6px; }
+.mm-sd-wleg .sw { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+
+/* conviction-thesis editor inside the expanded position row */
+.mm-sd-thesis-h { font-size: 10px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; color: var(--info); margin-bottom: 6px; }
+.mm-sd-thesis-ta { width: 100%; min-height: 92px; resize: vertical; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 9px; padding: 10px 12px; font: inherit; font-size: 12.5px; line-height: 1.55; color: var(--text); }
+.mm-sd-thesis-ta:focus { outline: none; border-color: var(--info); }
+.mm-sd-thesis-foot { display: flex; align-items: center; gap: 10px; margin-top: 8px; flex-wrap: wrap; }
+.mm-sd-save { background: var(--info); color: #fff; border: none; border-radius: 8px; padding: 7px 16px; font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; }
+.mm-sd-save:disabled { opacity: .5; cursor: default; }
+.mm-sd-save-note { font-size: 11px; color: var(--muted); }
+.mm-sd-quicktrade { display: flex; align-items: flex-end; gap: 8px; flex-wrap: wrap; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.mm-sd-quicktrade .mm-sd-input { width: 120px; }
+.mm-sd-qbtn { border: none; border-radius: 8px; padding: 9px 16px; font: inherit; font-size: 12px; font-weight: 800; color: #fff; cursor: pointer; }
+.mm-sd-qbtn.buy { background: var(--up); } .mm-sd-qbtn.sell { background: var(--down); }
+.mm-sd-thesis-flag { font-size: 11px; color: var(--info); }
+
+/* pending-orders strip */
+.mm-sd-pending-h { font-size: 10px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: var(--warn); margin: 14px 0 8px; }
+.mm-sd-pend-chip { display: inline-flex; align-items: center; gap: 7px; background: color-mix(in srgb, var(--warn) 10%, var(--panel2));
+  border: 1px solid color-mix(in srgb, var(--warn) 28%, transparent); border-radius: 9px; padding: 6px 11px; margin: 3px 5px 3px 0; font-size: 12px; }
+.mm-sd-pend-chip .x { cursor: pointer; color: var(--muted); font-weight: 800; padding: 0 2px; }
+.mm-sd-pend-chip .x:hover { color: var(--down); }
+.mm-sd-row-thesis td { padding: 0 !important; border-bottom: none; }
 </style>
 </head>
 <body class="page-mm">
@@ -1458,6 +1556,7 @@ body.page-mm .mm-rd-link:hover { border-color: var(--info); color: var(--info); 
   <span class="mm-nav-tabs">
     <button class="mm-nav-tab active" id="nav-dashboard" type="button" onclick="showView('dashboard')"><span class="l-en">Dashboard</span><span class="l-zh">仪表盘</span></button>
     <button class="mm-nav-tab" id="nav-research" type="button" onclick="showView('research')"><span class="l-en">Research</span><span class="l-zh">研究</span></button>
+    <button class="mm-nav-tab" id="nav-self" type="button" onclick="showView('self')"><span class="l-en">Self-Directed</span><span class="l-zh">自主交易</span></button>
   </span>
   <span class="mm-nav-spacer"></span>
   <!-- theme + lang toggles live here so they stay visible in BOTH views. These are
@@ -1709,6 +1808,87 @@ body.page-mm .mm-rd-link:hover { border-color: var(--info); color: var(--info); 
       </div>
     </div>
   </div>
+</div>
+
+<!-- ── SELF-DIRECTED VIEW (third book; toggled by #mm-nav) ──────────────────────── -->
+<div id="view-self">
+
+  <!-- header: NAV + market state + scorecard tiles -->
+  <div class="grid mm-section" style="margin-top:0">
+    <div class="panel span12" id="sd-header">
+      <div style="display:flex;align-items:flex-start;gap:18px;flex-wrap:wrap">
+        <div>
+          <div class="mm-hero-eyebrow"><span class="mm-hb"></span>&nbsp;<span class="l-en">SELF-DIRECTED &mdash; YOUR PAPER BOOK</span><span class="l-zh">自主交易 &mdash; 你的模拟组合</span></div>
+          <div class="mm-perf-nav-value" id="sd-nav" style="font-size:32px;margin-top:4px">$1,000,000</div>
+          <div style="margin-top:7px;display:flex;gap:9px;align-items:center;flex-wrap:wrap">
+            <span class="mm-paper">PAPER</span>
+            <span class="mm-sd-mkt closed" id="sd-mkt"><span class="dot"></span><span id="sd-mkt-txt">—</span></span>
+          </div>
+        </div>
+        <div id="sd-scorecard" style="margin-left:auto;display:flex;gap:30px;flex-wrap:wrap">
+          <div class="mm-perf-stat"><div class="mm-perf-stat-label"><span class="l-en">Cash</span><span class="l-zh">现金</span></div><div class="mm-perf-stat-value neu" id="sd-cash">—</div><div class="mm-perf-stat-sub" id="sd-cash-pct">—</div></div>
+          <div class="mm-perf-stat"><div class="mm-perf-stat-label"><span class="l-en">Invested</span><span class="l-zh">已投资</span></div><div class="mm-perf-stat-value neu" id="sd-invested">—</div><div class="mm-perf-stat-sub" id="sd-gross">—</div></div>
+          <div class="mm-perf-stat"><div class="mm-perf-stat-label"><span class="l-en">Unrealized P&amp;L</span><span class="l-zh">未实现盈亏</span></div><div class="mm-perf-stat-value neu" id="sd-unreal">—</div><div class="mm-perf-stat-sub"><span class="l-en">open positions</span><span class="l-zh">未平仓</span></div></div>
+          <div class="mm-perf-stat"><div class="mm-perf-stat-label"><span class="l-en">Total Return</span><span class="l-zh">总回报</span></div><div class="mm-perf-stat-value neu" id="sd-return">—</div><div class="mm-perf-stat-sub"><span class="l-en">since funding</span><span class="l-zh">自注资以来</span></div></div>
+        </div>
+      </div>
+      <div class="mm-sd-hint"><span class="l-en">Your own book &mdash; you choose the names and the sizing; the engine just executes and keeps score. Long-only paper, no leverage. Orders fill at the live price while the market is open, or queue and fill at the next session&rsquo;s open when it&rsquo;s closed.</span><span class="l-zh">这是你自己的组合 &mdash; 标的与仓位由你决定，系统只负责执行与记账。仅做多模拟、无杠杆。开市时按实时价成交，休市时排队并于下个交易日开盘价成交。</span></div>
+    </div>
+  </div>
+
+  <!-- order ticket -->
+  <div class="mm-section">
+    <div class="panel span12" id="sd-ticket-panel">
+      <h2><span class="l-en">Place an Order</span><span class="l-zh">下单</span></h2>
+      <div class="mm-sd-ticket">
+        <div>
+          <div class="mm-sd-field-lbl"><span class="l-en">Search US stocks</span><span class="l-zh">搜索美股</span></div>
+          <div class="mm-sd-search-wrap">
+            <input class="mm-sd-input" id="sd-search" type="text" autocomplete="off" spellcheck="false"
+                   placeholder="AAPL, NVDA, Microsoft…" oninput="selfSearch()" onkeydown="selfSearchKey(event)" onfocus="selfSearch()">
+            <div class="mm-sd-results" id="sd-results"></div>
+          </div>
+          <div class="mm-sd-sel empty" id="sd-selected"><span class="l-en">Search and select a stock to trade.</span><span class="l-zh">搜索并选择一只股票进行交易。</span></div>
+        </div>
+        <div>
+          <div class="mm-sd-field-lbl"><span class="l-en">Shares</span><span class="l-zh">股数</span></div>
+          <input class="mm-sd-input" id="sd-shares" type="number" min="0" step="any" inputmode="decimal" placeholder="0" oninput="selfUpdateEst()">
+          <div class="mm-sd-est" id="sd-est"></div>
+          <div class="mm-sd-actions">
+            <button class="mm-sd-btn mm-sd-btn-buy"  id="sd-buy"  type="button" onclick="placeSelfOrder('buy')"  disabled>Buy</button>
+            <button class="mm-sd-btn mm-sd-btn-sell" id="sd-sell" type="button" onclick="placeSelfOrder('sell')" disabled>Sell</button>
+          </div>
+          <div class="mm-sd-msg" id="sd-msg"></div>
+        </div>
+      </div>
+      <div id="sd-pending-host"></div>
+    </div>
+  </div>
+
+  <!-- allocation scorecard -->
+  <div class="mm-section">
+    <div class="panel span12" id="sd-alloc">
+      <h2><span class="l-en">Allocation</span><span class="l-zh">仓位分配</span> <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px"><span class="l-en">live weight of every holding</span><span class="l-zh">各持仓的实时权重</span></span></h2>
+      <div id="sd-alloc-host"><div class="mm-empty"><span class="mm-empty-icon">○</span><span class="l-en">No holdings yet.</span><span class="l-zh">暂无持仓。</span></div></div>
+    </div>
+  </div>
+
+  <!-- positions -->
+  <div class="mm-section">
+    <div class="panel span12" id="sd-positions">
+      <h2><span class="l-en">Positions</span><span class="l-zh">持仓</span> <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px"><span class="l-en">click a ticker to write your conviction thesis or trade it</span><span class="l-zh">点击代码可撰写信念论点或交易</span></span></h2>
+      <div id="sd-positions-host"><div class="mm-empty"><span class="mm-empty-icon">○</span><span class="l-en">No positions yet &mdash; place your first order above.</span><span class="l-zh">暂无持仓 &mdash; 请在上方下单。</span></div></div>
+    </div>
+  </div>
+
+  <!-- trade history -->
+  <div class="mm-section">
+    <div class="panel span12" id="sd-history">
+      <h2><span class="l-en">Trade History</span><span class="l-zh">交易历史</span> <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px"><span class="l-en">your buy/sell order log for this book</span><span class="l-zh">本组合的买卖订单记录</span></span></h2>
+      <div id="sd-history-host"><div class="mm-empty"><span class="mm-empty-icon">○</span><span class="l-en">No trades yet.</span><span class="l-zh">暂无交易。</span></div></div>
+    </div>
+  </div>
+
 </div>
 
 <!-- ── RESEARCH THESIS MODAL ────────────────────────────────────────────────── -->
@@ -1975,6 +2155,55 @@ var I18N = {
   'trades.sum_buys':      { en: 'Buys', zh: '买入笔数' },
   'trades.sum_win':       { en: 'Win Rate', zh: '胜率' },
   'trades.realized_note': { en: 'Realized P&L only — it accrues when a position is sold. Open positions and their live mark-to-market are shown in the Positions panel above.', zh: '仅显示已实现盈亏 —— 在持仓卖出后才会累计。未平仓持仓及其实时市值见上方“持仓”面板。' },
+
+  // ── Self-Directed book (third portfolio) ──────────────────────────────────
+  'sd.mkt.open':          { en: 'Market open', zh: '开市中' },
+  'sd.mkt.pre':           { en: 'Pre-market — opens', zh: '盘前 — 开盘' },
+  'sd.mkt.post':          { en: 'Closed — next open', zh: '已收盘 — 下次开盘' },
+  'sd.mkt.closed':        { en: 'Closed — next open', zh: '休市 — 下次开盘' },
+  'sd.buy':               { en: 'Buy', zh: '买入' },
+  'sd.sell':              { en: 'Sell', zh: '卖出' },
+  'sd.buy_open':          { en: 'Buy at next open', zh: '开盘买入' },
+  'sd.sell_open':         { en: 'Sell at next open', zh: '开盘卖出' },
+  'sd.search_none':       { en: 'No matching US stocks.', zh: '未找到匹配的美股。' },
+  'sd.search_hint':       { en: 'Type a ticker or company name…', zh: '输入代码或公司名称…' },
+  'sd.search_unavail':    { en: 'Live search needs a Polygon API key.', zh: '实时搜索需要 Polygon API 密钥。' },
+  'sd.select_prompt':     { en: 'Search and select a stock to trade.', zh: '搜索并选择一只股票进行交易。' },
+  'sd.no_price':          { en: 'price unavailable', zh: '价格不可用' },
+  'sd.est_cost':          { en: 'Est. cost', zh: '预计成本' },
+  'sd.est_proceeds':      { en: 'Est. proceeds', zh: '预计所得' },
+  'sd.buying_power':      { en: 'Buying power', zh: '可用资金' },
+  'sd.you_hold':          { en: 'You hold', zh: '当前持有' },
+  'sd.shares_unit':       { en: 'sh', zh: '股' },
+  'sd.filled':            { en: 'Filled', zh: '已成交' },
+  'sd.queued':            { en: 'Queued — fills at the next market open.', zh: '已排队 —— 将于下次开盘成交。' },
+  'sd.order_failed':      { en: 'Order rejected', zh: '订单被拒绝' },
+  'sd.at':                { en: 'at', zh: '价格' },
+  'sd.alloc_cash':        { en: 'Cash', zh: '现金' },
+  'sd.alloc_npos':        { en: 'Holdings', zh: '持仓数' },
+  'sd.alloc_largest':     { en: 'Largest', zh: '最大仓位' },
+  'sd.alloc_gross':       { en: 'invested', zh: '已投资' },
+  'sd.alloc_empty':       { en: 'No holdings — your book is 100% cash.', zh: '暂无持仓 —— 组合 100% 现金。' },
+  'sd.col_ticker':        { en: 'Ticker', zh: '代码' },
+  'sd.col_shares':        { en: 'Shares', zh: '股数' },
+  'sd.col_avg':           { en: 'Avg Cost', zh: '成本价' },
+  'sd.col_price':         { en: 'Price', zh: '现价' },
+  'sd.col_mktval':        { en: 'Mkt Value', zh: '市值' },
+  'sd.col_weight':        { en: 'Weight', zh: '权重' },
+  'sd.col_unreal':        { en: 'Unrealized', zh: '未实现盈亏' },
+  'sd.thesis_label':      { en: 'Your conviction thesis', zh: '你的信念论点' },
+  'sd.thesis_ph':         { en: 'Why do you own this? What confirms it, what would prove you wrong, when do you reassess?', zh: '你为何持有？什么能确认它？什么会证明你错了？何时重新评估？' },
+  'sd.thesis_save':       { en: 'Save thesis', zh: '保存论点' },
+  'sd.thesis_saved':      { en: 'Saved', zh: '已保存' },
+  'sd.thesis_none':       { en: 'No thesis yet.', zh: '尚无论点。' },
+  'sd.has_thesis':        { en: 'thesis', zh: '有论点' },
+  'sd.quick_buy':         { en: 'Buy', zh: '买入' },
+  'sd.quick_sell':        { en: 'Sell', zh: '卖出' },
+  'sd.quick_lbl':         { en: 'Quick trade', zh: '快速交易' },
+  'sd.pending_h':         { en: 'Pending orders', zh: '待成交订单' },
+  'sd.cancel':            { en: 'cancel', zh: '取消' },
+  'sd.hist_empty':        { en: 'No trades yet — your buys and sells appear here.', zh: '暂无交易 —— 你的买卖记录将显示在此。' },
+  'sd.pending_note':      { en: 'queued — fills at next open', zh: '排队中 —— 下次开盘成交' },
 };
 
 function t(key) {
@@ -2119,7 +2348,7 @@ var _papersErr = null;            // server-side error from /api/research_papers
 var _openPaperId = null;          // id of the paper currently shown in the thesis modal (for PDF export)
 var _calib = null;                // outcome ledger (the Calibration sub-page)
 var _researchSub = 'theses';      // 'theses' | 'calibration'
-var _currentView = 'dashboard';   // 'dashboard' | 'research'
+var _currentView = 'dashboard';   // 'dashboard' | 'research' | 'self'
 // run drilldown cache
 var _runLogCache = {};
 
@@ -3479,14 +3708,389 @@ window.downloadPaperPdf = function() {
 // open a thesis from the Positions panel: switch to Research, then open the modal
 window.openThesisFromPositions = function(id) { showView('research'); openThesis(id); };
 
+// ══ SELF-DIRECTED BOOK (third portfolio) ══════════════════════════════════════
+var _self = null;          // /api/self_directed   (book: positions, allocation, market, pending)
+var _selfHist = null;      // /api/self_directed/history (blotter + pending + summary)
+var _selfSel = null;       // selected order-ticket name {ticker, price, name}
+var _selfSearchTimer = null, _selfActiveIdx = -1, _selfResults = [];
+var _selfExpanded = null;  // ticker whose thesis / quick-trade row is open
+var _selfBusy = false;     // guard against double-submit
+var _SD_PALETTE = ['var(--q1)','var(--up)','var(--q4)','var(--info)','var(--warn)','var(--q3)','var(--act)','var(--q2)'];
+
+var fmtShares = function(n) {
+  if (n == null) return '—';
+  n = Number(n);
+  return n.toLocaleString(undefined, { maximumFractionDigits: (n % 1 === 0 ? 0 : 2) });
+};
+
+function refreshSelf() {
+  return Promise.allSettled([
+    fetch('/api/self_directed').then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; }),
+    fetch('/api/self_directed/history').then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; }),
+  ]).then(function(res) {
+    if (res[0].status === 'fulfilled' && res[0].value) _self = res[0].value;
+    if (res[1].status === 'fulfilled' && res[1].value) _selfHist = res[1].value;
+    renderSelf();
+  });
+}
+
+function _heldShares(ticker) {
+  var p = (((_self || {}).positions) || []).filter(function(x){ return x.ticker === ticker; })[0];
+  return p ? Number(p.shares || 0) : 0;
+}
+
+function renderSelf() {
+  renderSelfHeader();
+  renderSelfMarket();
+  renderSelfAlloc();
+  renderSelfPositions();
+  renderSelfPending();
+  renderSelfHistory();
+  renderSelfSelected(false);
+  selfUpdateEst();
+}
+
+function renderSelfHeader() {
+  var b = _self || {}, a = b.allocation || {};
+  if (E('sd-nav'))   E('sd-nav').textContent = fmtNav(b.nav != null ? b.nav : 1000000);
+  if (E('sd-cash'))  E('sd-cash').textContent = b.cash != null ? fmtNav(b.cash) : '—';
+  if (E('sd-cash-pct')) E('sd-cash-pct').textContent = a.cash_pct != null ? pctInt(a.cash_pct) : '';
+  if (E('sd-invested')) E('sd-invested').textContent = b.invested != null ? fmtNav(b.invested) : '—';
+  if (E('sd-gross')) E('sd-gross').textContent = a.gross != null ? pctInt(a.gross) : '';
+  var ur = a.total_unrealized_pnl, urEl = E('sd-unreal');
+  if (urEl) {
+    if (ur == null) { urEl.textContent = '—'; urEl.className = 'mm-perf-stat-value neu'; }
+    else { urEl.textContent = (ur >= 0 ? '+$' : '-$') + Math.abs(Math.round(ur)).toLocaleString();
+           urEl.className = 'mm-perf-stat-value ' + (ur > 0 ? 'pos' : ur < 0 ? 'neg' : 'neu'); }
+  }
+  var tr = a.total_return_pct, trEl = E('sd-return');
+  if (trEl) {
+    if (tr == null) { trEl.textContent = '—'; trEl.className = 'mm-perf-stat-value neu'; }
+    else { trEl.textContent = (tr >= 0 ? '+' : '') + tr.toFixed(2) + '%';
+           trEl.className = 'mm-perf-stat-value ' + (tr > 0 ? 'pos' : tr < 0 ? 'neg' : 'neu'); }
+  }
+}
+
+function _mktLabel(m) {
+  if (!m) return { cls: 'closed', txt: t('sd.mkt.closed') };
+  if (m.session === 'open') return { cls: 'open', txt: t('sd.mkt.open') };
+  var no = m.next_open ? (' ' + String(m.next_open).replace('T', ' ') + ' ET') : '';
+  var key = m.session === 'pre' ? 'sd.mkt.pre' : m.session === 'post' ? 'sd.mkt.post' : 'sd.mkt.closed';
+  return { cls: 'closed', txt: t(key) + no };
+}
+
+function renderSelfMarket() {
+  var m = (_self || {}).market || {};
+  var lab = _mktLabel(m), open = m.session === 'open';
+  var pill = E('sd-mkt'), txt = E('sd-mkt-txt');
+  if (pill) pill.className = 'mm-sd-mkt ' + lab.cls;
+  if (txt) txt.textContent = lab.txt;
+  if (E('sd-buy'))  E('sd-buy').textContent  = open ? t('sd.buy')  : t('sd.buy_open');
+  if (E('sd-sell')) E('sd-sell').textContent = open ? t('sd.sell') : t('sd.sell_open');
+}
+
+function renderSelfAlloc() {
+  var host = E('sd-alloc-host'); if (!host) return;
+  var b = _self || {}, a = b.allocation || {};
+  var pos = ((b.positions) || []).filter(function(p){ return p.weight != null && p.weight > 0; });
+  if (!pos.length) {
+    host.innerHTML = '<div class="mm-empty"><span class="mm-empty-icon">○</span>' + t('sd.alloc_empty') + '</div>';
+    return;
+  }
+  var segs = '', legend = '';
+  pos.forEach(function(p, i) {
+    var col = _SD_PALETTE[i % _SD_PALETTE.length], w = p.weight * 100;
+    segs += '<div class="mm-sd-wseg" style="width:' + w.toFixed(2) + '%;background:' + col + '" title="' + esc(p.ticker) + ' ' + w.toFixed(1) + '%">' + (w >= 7 ? esc(p.ticker) : '') + '</div>';
+    legend += '<span class="mm-sd-wleg"><span class="sw" style="background:' + col + '"></span>' + esc(p.ticker) + ' ' + w.toFixed(1) + '%</span>';
+  });
+  var cashPct = (a.cash_pct != null ? a.cash_pct : 0) * 100;
+  if (cashPct > 0.05) {
+    segs += '<div class="mm-sd-wseg cash" style="width:' + cashPct.toFixed(2) + '%" title="' + t('sd.alloc_cash') + ' ' + cashPct.toFixed(1) + '%">' + (cashPct >= 7 ? t('sd.alloc_cash') : '') + '</div>';
+    legend += '<span class="mm-sd-wleg"><span class="sw" style="background:var(--muted)"></span>' + t('sd.alloc_cash') + ' ' + cashPct.toFixed(1) + '%</span>';
+  }
+  var tiles = '<div class="mm-th-summary">' +
+    '<div class="mm-th-stat"><div class="mm-th-stat-val">' + (a.n_positions || 0) + '</div><div class="mm-th-stat-lbl">' + t('sd.alloc_npos') + '</div></div>' +
+    '<div class="mm-th-stat"><div class="mm-th-stat-val">' + pctInt(a.gross || 0) + '</div><div class="mm-th-stat-lbl">' + t('sd.alloc_gross') + '</div></div>' +
+    '<div class="mm-th-stat"><div class="mm-th-stat-val">' + pctInt(a.largest_weight || 0) + '</div><div class="mm-th-stat-lbl">' + t('sd.alloc_largest') + '</div></div>' +
+    '<div class="mm-th-stat"><div class="mm-th-stat-val">' + pctInt(a.cash_pct || 0) + '</div><div class="mm-th-stat-lbl">' + t('sd.alloc_cash') + '</div></div>' +
+  '</div>';
+  host.innerHTML = '<div class="mm-sd-wbar">' + segs + '</div><div class="mm-sd-wlegend">' + legend + '</div>' + tiles;
+}
+
+function renderSelfPositions() {
+  var host = E('sd-positions-host'); if (!host) return;
+  var pos = ((_self || {}).positions) || [];
+  if (!pos.length) {
+    host.innerHTML = '<div class="mm-empty"><span class="mm-empty-icon">○</span><span class="l-en">No positions yet — place your first order above.</span><span class="l-zh">暂无持仓 — 请在上方下单。</span></div>';
+    return;
+  }
+  // preserve any in-progress edit in the open row so a background refresh can't wipe it
+  var draftNote = null, draftQty = null;
+  if (_selfExpanded) {
+    var ta0 = E('sd-ta-' + _selfExpanded); if (ta0) draftNote = ta0.value;
+    var q0 = E('sd-qty-' + _selfExpanded); if (q0) draftQty = q0.value;
+  }
+  var rows = '';
+  pos.forEach(function(p) {
+    var u = pnlCell(p.unrealized_pnl, p.unrealized_pct);
+    var hasTh = !!(p.thesis && p.thesis.trim());
+    rows += '<tr class="pos-row" onclick="toggleSelfExpand(\'' + esc(p.ticker) + '\')">' +
+      '<td><span class="pos-ticker">' + esc(p.ticker) + '</span>' + (hasTh ? ' <span class="mm-sd-thesis-flag" title="' + t('sd.has_thesis') + '">◆</span>' : '') + '</td>' +
+      '<td style="font-variant-numeric:tabular-nums">' + fmtShares(p.shares) + '</td>' +
+      '<td class="mm-hide-sm" style="font-variant-numeric:tabular-nums">' + (p.avg_cost != null ? '$' + Number(p.avg_cost).toFixed(2) : '—') + '</td>' +
+      '<td style="font-variant-numeric:tabular-nums">' + (p.current_price != null ? '$' + Number(p.current_price).toFixed(2) : '—') + '</td>' +
+      '<td class="mm-hide-sm" style="font-variant-numeric:tabular-nums">' + (p.market_value != null ? fmtNav(p.market_value) : '—') + '</td>' +
+      '<td style="font-variant-numeric:tabular-nums;font-weight:700">' + (p.weight != null ? (p.weight * 100).toFixed(1) + '%' : '—') + '</td>' +
+      '<td class="' + u.cls + '">' + u.txt + '</td>' +
+    '</tr>';
+    var open = _selfExpanded === p.ticker;
+    rows += '<tr class="mm-sd-row-thesis" id="sd-exp-' + esc(p.ticker) + '" style="display:' + (open ? '' : 'none') + '"><td colspan="7">' + (open ? _selfThesisPanel(p) : '') + '</td></tr>';
+  });
+  host.innerHTML = '<div class="mm-table-wrap"><table><thead><tr>' +
+    '<th>' + t('sd.col_ticker') + '</th>' +
+    '<th>' + t('sd.col_shares') + '</th>' +
+    '<th class="mm-hide-sm">' + t('sd.col_avg') + '</th>' +
+    '<th>' + t('sd.col_price') + '</th>' +
+    '<th class="mm-hide-sm">' + t('sd.col_mktval') + '</th>' +
+    '<th>' + t('sd.col_weight') + '</th>' +
+    '<th>' + t('sd.col_unreal') + '</th>' +
+    '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+  // restore the preserved draft into the freshly-rebuilt open row
+  if (_selfExpanded) {
+    var ta1 = E('sd-ta-' + _selfExpanded); if (ta1 && draftNote != null) ta1.value = draftNote;
+    var q1 = E('sd-qty-' + _selfExpanded); if (q1 && draftQty != null) q1.value = draftQty;
+  }
+}
+
+function _selfThesisPanel(p) {
+  var note = p.thesis || '', tkr = esc(p.ticker);
+  var savedAt = p.thesis_updated_at ? (' · ' + t('sd.thesis_saved') + ' ' + fmtTs(p.thesis_updated_at)) : '';
+  return '<div class="mm-thesis-panel">' +
+    '<div class="mm-sd-thesis-h">' + t('sd.thesis_label') + '</div>' +
+    '<textarea class="mm-sd-thesis-ta" id="sd-ta-' + tkr + '" placeholder="' + esc(t('sd.thesis_ph')) + '">' + esc(note) + '</textarea>' +
+    '<div class="mm-sd-thesis-foot">' +
+      '<button class="mm-sd-save" type="button" onclick="saveSelfThesis(\'' + tkr + '\')">' + t('sd.thesis_save') + '</button>' +
+      '<span class="mm-sd-save-note" id="sd-ta-note-' + tkr + '">' + (note ? '' : t('sd.thesis_none')) + savedAt + '</span>' +
+    '</div>' +
+    '<div class="mm-sd-quicktrade">' +
+      '<div><div class="mm-sd-field-lbl">' + t('sd.quick_lbl') + '</div>' +
+        '<input class="mm-sd-input" id="sd-qty-' + tkr + '" type="number" min="0" step="any" placeholder="' + t('sd.col_shares') + '"></div>' +
+      '<button class="mm-sd-qbtn buy"  type="button" onclick="placeSelfOrder(\'buy\',\'' + tkr + '\')">' + t('sd.quick_buy') + '</button>' +
+      '<button class="mm-sd-qbtn sell" type="button" onclick="placeSelfOrder(\'sell\',\'' + tkr + '\')">' + t('sd.quick_sell') + '</button>' +
+      '<span class="mm-sd-save-note">' + t('sd.you_hold') + ' ' + fmtShares(p.shares) + ' ' + t('sd.shares_unit') + '</span>' +
+    '</div>' +
+  '</div>';
+}
+
+window.toggleSelfExpand = function(ticker) {
+  _selfExpanded = (_selfExpanded === ticker) ? null : ticker;
+  renderSelfPositions();
+};
+
+function renderSelfPending() {
+  var host = E('sd-pending-host'); if (!host) return;
+  var pend = ((_self || {}).pending) || [];
+  if (!pend.length) { host.innerHTML = ''; return; }
+  var chips = '';
+  pend.forEach(function(o) {
+    var side = (o.side === 'buy') ? t('sd.buy') : t('sd.sell');
+    var val = o.est_value != null ? ' · ~' + fmtNav(o.est_value) : '';
+    chips += '<span class="mm-sd-pend-chip"><span class="mm-side-chip ' + (o.side === 'buy' ? 'buy' : 'sell') + '">' + side + '</span> ' +
+      esc(o.ticker) + ' × ' + fmtShares(o.shares) + val +
+      ' <span class="x" title="' + t('sd.cancel') + '" onclick="cancelSelfOrder(\'' + esc(o.order_id) + '\')">✕</span></span>';
+  });
+  host.innerHTML = '<div class="mm-sd-pending-h">' + t('sd.pending_h') + ' — ' + t('sd.pending_note') + '</div>' + chips;
+}
+
+function renderSelfHistory() {
+  var host = E('sd-history-host'); if (!host) return;
+  var d = _selfHist || {}, hist = d.history || [];
+  if (!hist.length) { host.innerHTML = '<div class="mm-empty"><span class="mm-empty-icon">○</span>' + t('sd.hist_empty') + '</div>'; return; }
+  var realCls = d.n_closed ? (d.realized_total > 0 ? 'mm-pnl-pos' : d.realized_total < 0 ? 'mm-pnl-neg' : '') : '';
+  var realTxt = d.n_closed ? ((d.realized_total >= 0 ? '+$' : '-$') + Math.abs(Math.round(d.realized_total)).toLocaleString()) : '—';
+  var winTxt = (d.win_rate != null) ? Math.round(d.win_rate * 100) + '%' : '—';
+  var summary = '<div class="mm-th-summary">' +
+    '<div class="mm-th-stat"><div class="mm-th-stat-val ' + realCls + '">' + realTxt + '</div><div class="mm-th-stat-lbl">' + t('trades.sum_realized') + '</div></div>' +
+    '<div class="mm-th-stat"><div class="mm-th-stat-val">' + (d.n_closed || 0) + '</div><div class="mm-th-stat-lbl">' + t('trades.sum_closed') + '</div></div>' +
+    '<div class="mm-th-stat"><div class="mm-th-stat-val">' + (d.n_buys || 0) + '</div><div class="mm-th-stat-lbl">' + t('trades.sum_buys') + '</div></div>' +
+    '<div class="mm-th-stat"><div class="mm-th-stat-val">' + winTxt + '</div><div class="mm-th-stat-lbl">' + t('trades.sum_win') + '</div></div>' +
+  '</div>';
+  var rows = '';
+  hist.forEach(function(r) {
+    var isBuy = r.action === 'buy', rr = pnlCell(r.realized_pnl, r.realized_pct);
+    var queuedTag = r.queued ? ' <span class="mm-sd-thesis-flag" title="filled from a queued order">⧖</span>' : '';
+    rows += '<tr>' +
+      '<td class="l" style="font-variant-numeric:tabular-nums;color:var(--muted)">' + fmtDate(r.date) + '</td>' +
+      '<td><span class="pos-ticker">' + esc(r.ticker || '—') + '</span>' + queuedTag + '</td>' +
+      '<td><span class="mm-side-chip ' + (isBuy ? 'buy' : 'sell') + '">' + (isBuy ? t('trades.buy') : t('trades.sell')) + '</span></td>' +
+      '<td class="mm-hide-sm" style="font-variant-numeric:tabular-nums">' + fmtShares(r.shares) + '</td>' +
+      '<td style="font-variant-numeric:tabular-nums">' + (r.price != null ? '$' + Number(r.price).toFixed(2) : '—') + '</td>' +
+      '<td style="font-variant-numeric:tabular-nums">' + (r.exit_price != null ? '$' + Number(r.exit_price).toFixed(2) : '—') + '</td>' +
+      '<td class="' + rr.cls + '">' + rr.txt + '</td>' +
+    '</tr>';
+  });
+  host.innerHTML = summary + '<div class="mm-table-wrap"><table><thead><tr>' +
+    '<th class="l">' + t('trades.date') + '</th><th>' + t('trades.ticker') + '</th><th>' + t('trades.action') + '</th>' +
+    '<th class="mm-hide-sm">' + t('trades.shares') + '</th><th>' + t('trades.entry_px') + '</th><th>' + t('trades.exit_px') + '</th><th>' + t('trades.realized') + '</th>' +
+    '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
+    '<div class="mm-th-note">' + t('trades.realized_note') + '</div>';
+}
+
+// ── order ticket: live search ──────────────────────────────────────────────
+window.selfSearch = function() {
+  var q = ((E('sd-search') || {}).value || '').trim();
+  if (_selfSearchTimer) clearTimeout(_selfSearchTimer);
+  if (!q) { _selfResults = []; renderSelfResults([], ''); return; }
+  _selfSearchTimer = setTimeout(function() {
+    fetch('/api/self_directed/search?q=' + encodeURIComponent(q))
+      .then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(d){ _selfResults = (d && d.results) || []; _selfActiveIdx = -1; renderSelfResults(_selfResults, (d && d.error) ? 'err' : ''); })
+      .catch(function(){ renderSelfResults([], ''); });
+  }, 220);
+};
+
+function renderSelfResults(results, flag) {
+  var host = E('sd-results'); if (!host) return;
+  if (flag === 'err') { host.innerHTML = '<div class="mm-sd-results-note">' + t('sd.search_unavail') + '</div>'; return; }
+  if (!results.length) {
+    var q = ((E('sd-search') || {}).value || '').trim();
+    host.innerHTML = q ? '<div class="mm-sd-results-note">' + t('sd.search_none') + '</div>' : '';
+    return;
+  }
+  var html = '';
+  results.forEach(function(r, i) {
+    html += '<div class="mm-sd-result' + (i === _selfActiveIdx ? ' active' : '') + '" onclick="selectSelfTicker(\'' + esc(r.ticker) + '\')">' +
+      '<span class="tk">' + esc(r.ticker) + '</span><span class="nm">' + esc(r.name || '') + '</span>' +
+      (r.exchange ? '<span class="ex">' + esc(r.exchange) + '</span>' : '') + '</div>';
+  });
+  host.innerHTML = html;
+}
+
+window.selfSearchKey = function(e) {
+  var n = _selfResults.length;
+  if (e.key === 'ArrowDown') { e.preventDefault(); if (n) { _selfActiveIdx = (_selfActiveIdx + 1) % n; renderSelfResults(_selfResults, ''); } }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); if (n) { _selfActiveIdx = (_selfActiveIdx - 1 + n) % n; renderSelfResults(_selfResults, ''); } }
+  else if (e.key === 'Enter') {
+    e.preventDefault();
+    if (_selfActiveIdx >= 0 && _selfResults[_selfActiveIdx]) selectSelfTicker(_selfResults[_selfActiveIdx].ticker);
+    else { var q = ((E('sd-search') || {}).value || '').trim().toUpperCase(); if (q) selectSelfTicker(q); }
+  } else if (e.key === 'Escape') { renderSelfResults([], ''); }
+};
+
+window.selectSelfTicker = function(ticker) {
+  ticker = (ticker || '').toUpperCase();
+  if (!ticker) return;
+  _selfResults = []; renderSelfResults([], '');
+  var inp = E('sd-search'); if (inp) inp.value = ticker;
+  _selfSel = { ticker: ticker, price: null, name: '' };
+  renderSelfSelected(true);
+  fetch('/api/self_directed/quote?ticker=' + encodeURIComponent(ticker))
+    .then(function(r){ return r.ok ? r.json() : null; })
+    .then(function(d){ if (d) _selfSel = { ticker: d.ticker || ticker, price: d.price, name: d.name || '' }; renderSelfSelected(false); selfUpdateEst(); })
+    .catch(function(){ renderSelfSelected(false); });
+};
+
+function renderSelfSelected(loading) {
+  var el = E('sd-selected'); if (!el) return;
+  if (!_selfSel) {
+    el.className = 'mm-sd-sel empty';
+    el.innerHTML = '<span class="l-en">Search and select a stock to trade.</span><span class="l-zh">搜索并选择一只股票进行交易。</span>';
+    return;
+  }
+  var s = _selfSel;
+  var px = s.price != null ? ('$' + Number(s.price).toFixed(2)) : (loading ? '…' : t('sd.no_price'));
+  el.className = 'mm-sd-sel';
+  el.innerHTML = '<div class="mm-sd-sel-top"><span class="mm-sd-sel-tk">' + esc(s.ticker) + '</span>' +
+    (s.name ? '<span class="mm-sd-sel-nm">' + esc(s.name) + '</span>' : '') +
+    '<span class="mm-sd-sel-px">' + px + '</span></div>' +
+    '<div class="mm-sd-sel-sub">' + t('sd.buying_power') + ' ' + fmtNav((_self || {}).cash || 0) + '</div>';
+}
+
+window.selfUpdateEst = function() {
+  var est = E('sd-est'), buy = E('sd-buy'), sell = E('sd-sell');
+  if (!est) return;
+  var s = _selfSel, shares = parseFloat((E('sd-shares') || {}).value);
+  if (!s) { est.textContent = ''; if (buy) buy.disabled = true; if (sell) sell.disabled = true; return; }
+  var px = s.price, held = _heldShares(s.ticker), cash = (_self || {}).cash || 0;
+  var parts = [];
+  if (px != null && shares > 0) parts.push('≈ ' + fmtNav(px * shares));
+  parts.push(t('sd.buying_power') + ' ' + fmtNav(cash));
+  if (held > 0) parts.push(t('sd.you_hold') + ' ' + fmtShares(held) + ' ' + t('sd.shares_unit'));
+  est.textContent = parts.join(' · ');
+  var canBuy = px != null && shares > 0, canSell = px != null && shares > 0 && held > 0;
+  if (buy) buy.disabled = !canBuy || _selfBusy;
+  if (sell) sell.disabled = !canSell || _selfBusy;
+};
+
+function _selfMsg(cls, txt) { var el = E('sd-msg'); if (el) { el.className = 'mm-sd-msg ' + cls; el.innerHTML = txt; } }
+
+window.placeSelfOrder = function(side, tickerOverride) {
+  if (_selfBusy) return;
+  var ticker, shares;
+  if (tickerOverride) { ticker = tickerOverride.toUpperCase(); shares = parseFloat((E('sd-qty-' + ticker) || {}).value); }
+  else { if (!_selfSel) return; ticker = _selfSel.ticker; shares = parseFloat((E('sd-shares') || {}).value); }
+  if (!ticker || !(shares > 0)) { _selfMsg('err', t('sd.order_failed') + ' — ' + t('sd.col_shares')); return; }
+  _selfBusy = true;
+  if (E('sd-buy')) E('sd-buy').disabled = true;
+  if (E('sd-sell')) E('sd-sell').disabled = true;
+  fetch('/api/self_directed/order', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ticker: ticker, side: side, shares: shares }) })
+    .then(function(r){ return r.json(); })
+    .then(function(d) {
+      if (!d || !d.ok) { _selfMsg('err', t('sd.order_failed') + (d && d.error ? ': ' + esc(d.error) : '')); return; }
+      if (d.status === 'filled') {
+        var f = d.fill || {};
+        _selfMsg('ok', t('sd.filled') + ': ' + (side === 'buy' ? t('sd.buy') : t('sd.sell')) + ' ' + fmtShares(f.shares) + ' ' + esc(ticker) + ' ' + t('sd.at') + ' $' + Number(f.price).toFixed(2));
+      } else if (d.status === 'pending') { _selfMsg('pend', t('sd.queued')); }
+      if (!tickerOverride) { var sh = E('sd-shares'); if (sh) sh.value = ''; }
+      else { var q = E('sd-qty-' + ticker); if (q) q.value = ''; }   // clear the quick-trade qty
+      return refreshSelf();
+    })
+    .catch(function(){ _selfMsg('err', t('sd.order_failed')); })
+    .finally(function(){ _selfBusy = false; selfUpdateEst(); });
+};
+
+window.saveSelfThesis = function(ticker) {
+  ticker = (ticker || '').toUpperCase();
+  var ta = E('sd-ta-' + ticker); if (!ta) return;
+  var noteEl = E('sd-ta-note-' + ticker);
+  fetch('/api/self_directed/thesis', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ticker: ticker, note: ta.value || '' }) })
+    .then(function(r){ return r.json(); })
+    .then(function(d) {
+      if (d && d.ok) {
+        if (noteEl) noteEl.textContent = t('sd.thesis_saved') + (d.thesis && d.thesis.updated_at ? ' ' + fmtTs(d.thesis.updated_at) : '');
+        refreshSelf();   // refresh the ◆ flag; the row stays open (_selfExpanded preserved)
+      } else if (noteEl) { noteEl.textContent = t('sd.order_failed'); }
+    })
+    .catch(function(){});
+};
+
+window.cancelSelfOrder = function(orderId) {
+  fetch('/api/self_directed/cancel?order_id=' + encodeURIComponent(orderId), { method: 'POST' })
+    .then(function(r){ return r.json(); })
+    .then(function(){ refreshSelf(); })
+    .catch(function(){});
+};
+
+// close the search dropdown on an outside click
+document.addEventListener('click', function(e) {
+  var inp = E('sd-search'), wrap = inp && inp.closest('.mm-sd-search-wrap');
+  if (wrap && !wrap.contains(e.target)) { var host = E('sd-results'); if (host) host.innerHTML = ''; }
+});
+
 window.showView = function(view) {
-  _currentView = (view === 'research') ? 'research' : 'dashboard';
+  _currentView = (view === 'research') ? 'research' : (view === 'self') ? 'self' : 'dashboard';
   document.body.classList.toggle('view-research', _currentView === 'research');
-  var nd = E('nav-dashboard'), nr = E('nav-research');
+  document.body.classList.toggle('view-self', _currentView === 'self');
+  var nd = E('nav-dashboard'), nr = E('nav-research'), ns = E('nav-self');
   if (nd) nd.classList.toggle('active', _currentView === 'dashboard');
   if (nr) nr.classList.toggle('active', _currentView === 'research');
-  try { history.replaceState(null, '', _currentView === 'research' ? '/research' : '/'); } catch (e) {}
+  if (ns) ns.classList.toggle('active', _currentView === 'self');
+  var path = _currentView === 'research' ? '/research' : _currentView === 'self' ? '/self' : '/';
+  try { history.replaceState(null, '', path); } catch (e) {}
   if (_currentView === 'research') { renderResearchPapers(); renderCalibration(); }
+  if (_currentView === 'self') { refreshSelf(); }
   window.scrollTo(0, 0);
 };
 
@@ -3571,6 +4175,7 @@ function _renderAll() {
     ['trades', renderTrades], ['brainLog', renderBrainLog], ['research', renderResearch],
     ['runs', renderRuns], ['rejected', renderRejected], ['competitors', renderCompetitors],
     ['researchPapers', renderResearchPapers], ['calibration', renderCalibration], ['footer', renderFooter],
+    ['self', renderSelf],
   ];
   for (var i = 0; i < steps.length; i++) {
     try { steps[i][1](); }
@@ -3619,6 +4224,7 @@ async function fetchAll() {
   applyColl('runs');
   applyColl('rejected');
   loadOutcomes();   // live thesis-outcome track record (decoupled, non-blocking)
+  refreshSelf();    // self-directed book (decoupled): settles due pending orders + refreshes marks
 
   var now = new Date();
   E('updated').textContent = t('hero.updated') + ' ' + now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -3644,8 +4250,10 @@ document.addEventListener('langchange', function() {
   }
 });
 
-// open the Research view directly when the page is loaded at /research
-if (location.pathname.replace(/\/+$/, '') === '/research') showView('research');
+// open the matching view directly when the page is loaded at /research or /self
+var _path0 = location.pathname.replace(/\/+$/, '');
+if (_path0 === '/research') showView('research');
+else if (_path0 === '/self') showView('self');
 
 fetchAll();
 setInterval(fetchAll, 60000);
