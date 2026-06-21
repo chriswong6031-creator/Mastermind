@@ -529,6 +529,18 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
     except Exception as _e:
         _rl_log(_run_id, "decision", "signal history error", f"{_e!r}"[:160])
 
+    # ———— CALIBRATION capture: grade resolved theses (prediction vs outcome vs what-it-saw) ————
+    # The conscience: when a thesis matures (first cohort ~2026-07-17), record prob_correct vs realized
+    # hit + the decision-time lens snapshot, so the engine can finally measure whether its confidence is
+    # CALIBRATED and which lenses actually predicted. No-op until resolutions exist; degrade-safe.
+    try:
+        from brain import calibration
+        _n_cal = calibration.resolve(asof)
+        if _n_cal:
+            _rl_log(_run_id, "book_step", "calibration recorded", f"resolutions={_n_cal}")
+    except Exception as _e:
+        _rl_log(_run_id, "decision", "calibration error", f"{_e!r}"[:160])
+
     # ———— persist + score + bridge ————
     for p in book:
         store.upsert_position(con, asof, {**p, "size_pct": int(round(p["weight"] * 100)),
