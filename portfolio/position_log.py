@@ -15,6 +15,15 @@ _LEDGER_PATH = _ROOT / "data" / "portfolio" / "positions_ledger.json"
 _WEIGHT_CHANGE_THRESHOLD = 0.01   # 1 percentage point = material weight change
 
 
+def _ledger_path(portfolio_id: str | None = None) -> Path:
+    """Resolve the ledger file. None/default → the legacy module-global (kept patchable
+    for the test fixtures); any other id → data/portfolios/<id>/positions_ledger.json."""
+    from portfolio import registry
+    if not portfolio_id or portfolio_id == registry.DEFAULT_ID:
+        return _LEDGER_PATH
+    return registry.data_dir(portfolio_id) / "positions_ledger.json"
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -31,22 +40,24 @@ def _held_days(opened_at: str, closed_at: str | None = None) -> int | None:
         return None
 
 
-def _load() -> dict[str, Any]:
+def _load(portfolio_id: str | None = None) -> dict[str, Any]:
     """Load the ledger; return {} on corrupt/missing file."""
+    path = _ledger_path(portfolio_id)
     try:
-        if _LEDGER_PATH.exists():
-            return json.loads(_LEDGER_PATH.read_text())
+        if path.exists():
+            return json.loads(path.read_text())
     except Exception:
         pass
     return {}
 
 
-def _save(ledger: dict[str, Any]) -> None:
-    _LEDGER_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _LEDGER_PATH.write_text(json.dumps(ledger, indent=2, default=str, ensure_ascii=False))
+def _save(ledger: dict[str, Any], portfolio_id: str | None = None) -> None:
+    path = _ledger_path(portfolio_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(ledger, indent=2, default=str, ensure_ascii=False))
 
 
-def update(positions: list[dict], asof_iso: str) -> None:
+def update(positions: list[dict], asof_iso: str, portfolio_id: str | None = None) -> None:
     """Call once per book build to reconcile the ledger with the current positions.
 
     positions: the assembled book list (each dict must have 'ticker' and 'sleeve' at minimum,
@@ -54,7 +65,7 @@ def update(positions: list[dict], asof_iso: str) -> None:
     asof_iso:  the date string from the regime (used as the 'as_of' watermark).
     """
     now = _now_iso()
-    ledger = _load()
+    ledger = _load(portfolio_id)
 
     # build a set of keys currently in the book
     current_keys: dict[str, dict] = {}
@@ -137,11 +148,12 @@ def update(positions: list[dict], asof_iso: str) -> None:
                 entry["history"].append({"event": "close", "ts": now, "as_of": asof_iso,
                                          "weight": 0, "price": None})
 
-    _save(ledger)
+    _save(ledger, portfolio_id)
 
 
 def record_manual(ticker: str, sleeve: str, *, event: str, weight: float | None = None,
-                  price: float | None = None, asof_iso: str | None = None) -> None:
+                  price: float | None = None, asof_iso: str | None = None,
+                  portfolio_id: str | None = None) -> None:
     """Upsert ONE ledger entry without reconciling the rest of the book.
 
     update() reconciles against the WHOLE book (anything missing is closed), so it must
@@ -150,7 +162,7 @@ def record_manual(ticker: str, sleeve: str, *, event: str, weight: float | None 
     """
     now = _now_iso()
     asof_iso = asof_iso or now[:10]
-    ledger = _load()
+    ledger = _load(portfolio_id)
     key = f"{sleeve}:{ticker.upper()}"
     entry = ledger.get(key)
     closing = event == "close"
@@ -182,12 +194,12 @@ def record_manual(ticker: str, sleeve: str, *, event: str, weight: float | None 
             entry["current_weight"] = weight
     entry.setdefault("history", []).append(
         {"event": event, "ts": now, "as_of": asof_iso, "weight": weight, "price": price})
-    _save(ledger)
+    _save(ledger, portfolio_id)
 
 
-def open_positions() -> list[dict]:
+def open_positions(portfolio_id: str | None = None) -> list[dict]:
     """Return open positions shaped for /api/trades 'open' array."""
-    ledger = _load()
+    ledger = _load(portfolio_id)
     out = []
     for key, e in ledger.items():
         if not e.get("still_open"):
@@ -208,9 +220,9 @@ def open_positions() -> list[dict]:
     return out
 
 
-def closed_positions() -> list[dict]:
+def closed_positions(portfolio_id: str | None = None) -> list[dict]:
     """Return closed positions shaped for /api/trades 'closed' array."""
-    ledger = _load()
+    ledger = _load(portfolio_id)
     out = []
     for key, e in ledger.items():
         if e.get("still_open"):
@@ -227,12 +239,13 @@ def closed_positions() -> list[dict]:
     return out
 
 
-def close_position(sleeve: str, ticker: str, asof_iso: str, reason: str = "hard_exit") -> bool:
+def close_position(sleeve: str, ticker: str, asof_iso: str, reason: str = "hard_exit",
+                   portfolio_id: str | None = None) -> bool:
     """Close a SINGLE open position without touching any other (unlike update(), which closes every
     open key absent from the passed book). Used by the gate-closed hard-exit sweep so a parabolic /
     distress / downtrend name can be exited on a carried-forward day. Returns True if it closed an
     open position."""
-    ledger = _load()
+    ledger = _load(portfolio_id)
     key = f"{sleeve}:{ticker}"
     entry = ledger.get(key)
     if not entry or not entry.get("still_open"):
@@ -244,13 +257,13 @@ def close_position(sleeve: str, ticker: str, asof_iso: str, reason: str = "hard_
     entry["current_weight"] = 0
     entry.setdefault("history", []).append(
         {"event": "close", "ts": now, "as_of": asof_iso, "weight": 0, "price": None, "reason": reason})
-    _save(ledger)
+    _save(ledger, portfolio_id)
     return True
 
 
-def get_entry_info(sleeve: str, ticker: str) -> dict:
+def get_entry_info(sleeve: str, ticker: str, portfolio_id: str | None = None) -> dict:
     """Return {opened_at, held_days, entry_price} for a given position key, or {} if not found."""
-    ledger = _load()
+    ledger = _load(portfolio_id)
     key = f"{sleeve}:{ticker}"
     e = ledger.get(key)
     if not e:

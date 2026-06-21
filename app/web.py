@@ -43,10 +43,19 @@ def _macro_data() -> Path:
     return _PROJECT_ROOT / "vendor" / "macro" / "data"
 
 
-def _account_tickers() -> list[str]:
-    """Tickers currently held in the paper account (for live marks)."""
+def _portfolio_dir(portfolio_id: str | None = None) -> Path:
+    """The per-portfolio state directory (flagship → legacy data/portfolio/)."""
     try:
-        acct = json.loads((_data() / "portfolio" / "account.json").read_text())
+        from portfolio import registry
+        return registry.data_dir(portfolio_id)
+    except Exception:
+        return _data() / "portfolio"
+
+
+def _account_tickers(portfolio_id: str | None = None) -> list[str]:
+    """Tickers currently held in a paper account (for live marks)."""
+    try:
+        acct = json.loads((_portfolio_dir(portfolio_id) / "account.json").read_text())
         return list((acct.get("positions") or {}).keys())
     except Exception:
         return []
@@ -272,11 +281,11 @@ def research_paper_pdf(id: str = "", ticker: str = "") -> Response:
 
 
 @router.get("/api/performance")
-def api_performance() -> JSONResponse:
-    """Equity curve and performance summary for the $1M paper account."""
+def api_performance(portfolio: str = "flagship") -> JSONResponse:
+    """Equity curve and performance summary for a $1M paper account (default: flagship)."""
     try:
         from portfolio import paper_account
-        payload = paper_account.performance()
+        payload = paper_account.performance(portfolio_id=portfolio)
         return JSONResponse(payload)
     except Exception as exc:
         # never 500 — return a safe minimal payload
@@ -297,10 +306,10 @@ def api_performance() -> JSONResponse:
 
 
 @router.get("/api/portfolio")
-def api_portfolio() -> JSONResponse:
-    path = _data() / "portfolio" / "latest.json"
+def api_portfolio(portfolio: str = "flagship") -> JSONResponse:
+    path = _portfolio_dir(portfolio) / "latest.json"
     if not path.exists():
-        return JSONResponse({"error": "no book yet"}, status_code=404)
+        return JSONResponse({"error": "no book yet", "portfolio_id": portfolio}, status_code=404)
     try:
         payload = json.loads(path.read_text())
 
@@ -311,8 +320,8 @@ def api_portfolio() -> JSONResponse:
         # ------------------------------------------------------------------
         try:
             from portfolio import paper_account
-            prices = _live_prices(_account_tickers())
-            pnl = paper_account.positions_pnl(prices) if prices else {}
+            prices = _live_prices(_account_tickers(portfolio))
+            pnl = paper_account.positions_pnl(prices, portfolio_id=portfolio) if prices else {}
             for pos in payload.get("positions", []):
                 rec = pnl.get(pos.get("ticker"))
                 if rec:
@@ -381,6 +390,56 @@ def api_portfolio() -> JSONResponse:
         return JSONResponse(payload)
     except Exception as exc:
         return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+@router.get("/api/portfolios")
+def api_portfolios() -> JSONResponse:
+    """The set of portfolios the dashboard switches between, each with a quick status
+    (NAV, return, vs-SPY, holdings) for the tab labels. The flagship is the gated engine
+    book; the autonomous book is managed free-form by the Opus Brain."""
+    from portfolio import paper_account, registry
+    out = []
+    for meta in registry.all_portfolios():
+        pid = meta["id"]
+        status: dict[str, Any] = {"nav": None, "total_return_pct": None, "vs_spy_pct": None,
+                                  "day_change_pct": None, "holdings": 0, "cash_pct": None, "as_of": None}
+        try:
+            perf = paper_account.performance(portfolio_id=pid)
+            nav = perf.get("current_nav") or 0
+            status.update({
+                "nav": perf.get("current_nav"),
+                "total_return_pct": perf.get("total_return_pct"),
+                "vs_spy_pct": perf.get("vs_spy_pct"),
+                "day_change_pct": perf.get("day_change_pct"),
+                "cash_pct": round((perf.get("cash") or 0) / nav * 100, 1) if nav else None,
+                "as_of": perf.get("realized_since"),
+            })
+        except Exception:
+            pass
+        try:
+            latest = registry.data_dir(pid) / "latest.json"
+            if latest.exists():
+                d = json.loads(latest.read_text())
+                status["holdings"] = len(d.get("positions") or [])
+                status["as_of"] = d.get("as_of") or status["as_of"]
+        except Exception:
+            pass
+        out.append({**{k: meta.get(k) for k in ("id", "name", "tagline", "kind", "manager")},
+                    "status": status})
+    return JSONResponse({"portfolios": out, "default": registry.DEFAULT_ID})
+
+
+@router.get("/api/decisions")
+def api_decisions(portfolio: str = "autonomous", limit: int = 60) -> JSONResponse:
+    """The autonomous Brain's daily decision log — what it bought / sold / held each day, and
+    the rationale for every holding. Empty for the gated flagship (it journals via research papers)."""
+    try:
+        if portfolio != "autonomous":
+            return JSONResponse({"decisions": [], "note": "decision log is autonomous-only"})
+        from bot import autonomous
+        return JSONResponse({"decisions": autonomous.load_decisions(limit)})
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"decisions": [], "error": str(exc)})
 
 
 @router.get("/api/research")
@@ -527,20 +586,24 @@ def api_outcome_ledger() -> JSONResponse:
 
 
 @router.get("/api/trades")
-def api_trades() -> JSONResponse:
+def api_trades(portfolio: str = "flagship") -> JSONResponse:
     """Open/closed position summaries PLUS a complete per-fill blotter (`history`):
     every individual buy/sell, with realized P&L on sells and live unrealized P&L
-    on still-open buy remainders."""
+    on still-open buy remainders. Scoped to a portfolio (default: flagship)."""
     try:
-        from portfolio import position_log, trade_history
-        prices = _live_prices(_account_tickers())
+        from portfolio import market_calendar, paper_account, position_log, trade_history
+        prices = _live_prices(_account_tickers(portfolio))
         return JSONResponse({
-            "open": position_log.open_positions(),
-            "closed": position_log.closed_positions(),
-            "history": trade_history.history(prices),
+            "open": position_log.open_positions(portfolio_id=portfolio),
+            "closed": position_log.closed_positions(portfolio_id=portfolio),
+            "history": trade_history.history(prices, portfolio_id=portfolio),
+            # PENDING orders queued while the market is closed — fill at next open
+            "pending": paper_account.load_pending(portfolio),
+            "market": market_calendar.status(),
         })
     except Exception as exc:
-        return JSONResponse({"open": [], "closed": [], "history": [], "error": str(exc)})
+        return JSONResponse({"open": [], "closed": [], "history": [],
+                             "pending": [], "market": {}, "error": str(exc)})
 
 
 # ---------------------------------------------------------------------------
@@ -653,16 +716,117 @@ def api_outcomes() -> JSONResponse:
     try:
         import bot  # noqa: F401 — bootstraps vendor/macro for the price accessor
         from datetime import date as _date
-        from brain import outcomes, scorer
+        from brain import calibration, outcomes, scorer
         asof = _date.today()
         realized = outcomes.realized_returns(asof)
+        try:
+            cal = calibration.load() or calibration.compute(asof)
+        except Exception:  # noqa: BLE001
+            cal = {}
         return JSONResponse({
             "labels": outcomes.all_labels(asof),
             "summary": outcomes.summary(asof),
             "track_record": scorer.track_record(asof, realized=realized),
+            "calibration": cal,
         })
     except Exception as exc:  # noqa: BLE001
-        return JSONResponse({"labels": [], "summary": {}, "track_record": {}, "error": str(exc)})
+        return JSONResponse({"labels": [], "summary": {}, "track_record": {},
+                             "calibration": {}, "error": str(exc)})
+
+
+@router.get("/api/shadow_books")
+def api_shadow_books() -> JSONResponse:
+    """Parallel forward shadow books — the leakage-free A/B of decision policies (prod vs
+    no-committee vs no-calibration vs engine-only). Returns the persisted leaderboard
+    (per-policy forward NAV return, hit rate, Brier, holdings divergence vs prod). Best-effort:
+    falls back to a live recompute if the file is absent, then to empty-but-valid."""
+    try:
+        import bot  # noqa: F401 — bootstraps vendor/macro for the price accessor
+        from portfolio import shadow_books
+        data = shadow_books.load_leaderboard()
+        if not data:
+            from datetime import date as _date
+            data = shadow_books.run(_date.today().isoformat())
+        return JSONResponse({
+            "as_of": data.get("as_of"),
+            "leaderboard": data.get("leaderboard", []),
+            "books": data.get("books", {}),
+            "policies": [{"id": p["id"], "label": p["label"], "label_zh": p.get("label_zh"),
+                          "desc": p.get("desc"), "desc_zh": p.get("desc_zh")}
+                         for p in shadow_books.POLICIES],
+        })
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"leaderboard": [], "books": {}, "policies": [], "error": str(exc)})
+
+
+@router.get("/api/predictions")
+def api_predictions() -> JSONResponse:
+    """Universe-wide forward prediction log — a falsifiable rel-return thesis on EVERY name the
+    engine has a directional opinion on (~1,600), forward-labeled. Returns coverage + a
+    date-CLUSTERED cross-sectional scorecard (rank-IC of ladder.score vs forward rel-return,
+    directional hit-rate + Brier, 'up' edge), each with a CI + effective-n so small samples never
+    overclaim. This is the statistical-power unlock — n grows with breadth, not portfolio turnover."""
+    try:
+        import bot  # noqa: F401 — bootstraps vendor/macro for the price panel
+        from datetime import date as _date
+        from portfolio import predictions
+        return JSONResponse(predictions.summary(_date.today().isoformat()))
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"coverage": {}, "scorecard": {}, "error": str(exc)})
+
+
+@router.get("/api/engine_backtest")
+def api_engine_backtest() -> JSONResponse:
+    """Historical engine-backtest verdict — the HIGH-statistical-power, leakage-free read on the
+    deterministic engine (DSR / PBO / BH-FDR / one-shot holdout over the survivorship-safe S&P-1500
+    panel). Read-only: surfaces the persisted artifact (generated on demand by
+    scripts/run_engine_backtest.py); honest 'unavailable' until a run is recorded."""
+    try:
+        import bot  # noqa: F401
+        from loop import engine_backtest
+        return JSONResponse(engine_backtest.load())
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"status": "unavailable", "error": str(exc)})
+
+
+@router.get("/api/factor_zoo")
+def api_factor_zoo() -> JSONResponse:
+    """Advanced factor-alpha lab — a broad price-factor library + IC term-structure + a
+    holdout-validated COMPOSITE, scored under the frozen multiple-testing gauntlet (DSR re-deflated
+    at effective-N over the whole pool, PBO/CSCV, BH-FDR, one-shot 2022+ holdout). Read-only:
+    surfaces the persisted artifact (generated on demand by scripts/run_factor_zoo.py)."""
+    try:
+        import bot  # noqa: F401
+        from loop import factor_zoo
+        return JSONResponse(factor_zoo.load())
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"status": "unavailable", "error": str(exc)})
+
+
+@router.get("/api/fundamentals")
+def api_fundamentals() -> JSONResponse:
+    """PIT fundamental factors (value + quality) from SEC EDGAR — point-in-time (asof_date-gated, no
+    look-ahead), scored through the frozen gauntlet, with regime-conditional IC. Read-only: surfaces
+    the persisted artifact (generated on demand by scripts/run_fundamentals.py)."""
+    try:
+        import bot  # noqa: F401
+        from loop import fundamentals
+        return JSONResponse(fundamentals.load())
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"status": "unavailable", "error": str(exc)})
+
+
+@router.get("/api/readiness")
+def api_readiness() -> JSONResponse:
+    """Forward-proof readiness — which thresholds have crossed (calibration left cold-start,
+    cross-sectional IC now statistically honest, shadow books first resolved) + the persistent
+    alerts the daily build records. Drives the dashboard's 'go look now' banner."""
+    try:
+        import bot  # noqa: F401
+        from portfolio import readiness
+        return JSONResponse({"status": readiness.status(), "alerts": readiness.alerts()})
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"status": {}, "alerts": [], "error": str(exc)})
 
 
 @router.get("/api/macro")

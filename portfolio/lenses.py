@@ -714,6 +714,32 @@ def _policy_row(theme_id: str) -> dict:
 
 
 # ---------------- macro lenses (shared) ----------------
+def _vol_regime_row() -> dict:
+    """The validated INDEX vol-regime (engine/vol_regime -> site/vol/mastermind.json, schema
+    vol_regime.context.v1). CONTEXT-only and SUBTRACT-ONLY: it votes BEAR (nudges gross DOWN)
+    in a risk-off kill-switch state (warning / backwardation-stress) and NEUTRAL otherwise —
+    it can never manufacture a bullish vote to size UP. It sits in the de-correlated _MACRO_BLOC
+    (it reads the same risk-on/off surface as macro_risk / cross_asset), so it never sizes alone;
+    it only sharpens the one net macro vote toward caution when market vol stress is rising.
+    Drawdown / capital-efficiency, not alpha. Absent file -> 'missing' (shown, never imputed)."""
+    v = _load("site/vol/mastermind.json") or _load("data/vol/mastermind.json")
+    if not v:
+        return _row("vol_regime", None, "missing", None)
+    regime = v.get("regime")
+    risk_off = regime in ("warning", "backwardation-stress")
+    return _row("vol_regime", {
+        "regime": regime,
+        "kill_switch": bool(v.get("kill_switch")),
+        "vol_target_scalar": v.get("vol_target_scalar"),
+        "scored_active": bool(v.get("scored_active")),     # gate state — display vs validated
+        "scored_score": v.get("scored_score"),
+        "ts_slope_state": v.get("ts_slope_state"),
+        "fragility": v.get("fragility_confluence"),
+    }, "context", "bear" if risk_off else "neutral",
+        note=("index vol-regime risk-off — trim gross (context caution, not a size driver)"
+              if risk_off else ""))
+
+
 def _macro_rows() -> list[dict]:
     r = _load("data/regime/latest.json") or {}
     mr = _g(r, "macro_risk.score")
@@ -726,6 +752,7 @@ def _macro_rows() -> list[dict]:
              "bull" if (cuts or 0) > 0 else "bear" if (cuts or 0) < 0 else "neutral"),
         _row("cross_asset", {"verdict": ca, "absorption": _g(r, "cross_asset.absorption_ratio")}, "context",
              "bear" if ca in ("concentrated", "one-trade", "fragile") else "neutral"),
+        _vol_regime_row(),
     ]
 
 
@@ -791,7 +818,7 @@ def _divergences(rows: list[dict]) -> list[dict]:
 # cohort can't manufacture confluence by tripping five correlated lenses at once. The leadership,
 # price, flow and positioning lenses stay INDEPENDENT (they are genuinely different evidence).
 _FUND_BLOC = {"valuation", "quality", "growth", "solvency", "asymmetry"}   # the value/quality story
-_MACRO_BLOC = {"macro_risk", "fed_path", "cross_asset", "rate_inflation"}  # the shared regime story
+_MACRO_BLOC = {"macro_risk", "fed_path", "cross_asset", "rate_inflation", "vol_regime"}  # the shared regime story
 
 # ── self-calibrating gate: weight each lens vote by its EMPIRICAL reliability ──────────────────────
 # The confluence below is no longer a flat vote COUNT — each effective vote is scaled by how often

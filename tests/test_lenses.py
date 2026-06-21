@@ -117,3 +117,46 @@ def test_nvda_growth_leader_passes_gate():
     assert rows["valuation"]["direction"] != "bear"
     assert "distribution" not in [d["pattern"] for d in f["synthesis"]["divergences"]]
     assert f["synthesis"]["size_authority"] == "up" and not f["synthesis"]["vetoes"]
+
+
+# ---------------- vol-regime context lens (subtract-only gross caution) ----------------
+def _vol_mm(regime="backwardation-stress", **extra):
+    return {"schema": "vol_regime.context.v1", "regime": regime, "kill_switch": regime == "backwardation-stress",
+            "vol_target_scalar": 0.7, "scored_active": False, "scored_score": None,
+            "ts_slope_state": "backwardation", "fragility_confluence": 3, **extra}
+
+
+def test_vol_regime_lens_present_and_subtract_only(monkeypatch):
+    """The vol-regime lens votes BEAR in a risk-off state and NEUTRAL when calm — it can never
+    vote BULL (it is a subtract-only gross caution, not a size driver). It rides in _macro_rows
+    so every name/theme matrix with macro context carries it."""
+    monkeypatch.setattr(lenses, "_load",
+                        lambda rel: _vol_mm() if "vol/mastermind" in rel else None)
+    r = lenses._vol_regime_row()
+    assert r["lens"] == "vol_regime" and r["status"] == "context" and r["direction"] == "bear"
+    assert r["value"]["regime"] == "backwardation-stress" and r["value"]["vol_target_scalar"] == 0.7
+    assert "vol_regime" in {row["lens"] for row in lenses._macro_rows()}   # wired into the macro rows
+
+    monkeypatch.setattr(lenses, "_load",
+                        lambda rel: _vol_mm(regime="normalizing", kill_switch=False) if "vol/mastermind" in rel else None)
+    assert lenses._vol_regime_row()["direction"] == "neutral"             # calm => no vote (never bull)
+
+
+def test_vol_regime_lens_missing_is_graceful(monkeypatch):
+    monkeypatch.setattr(lenses, "_load", lambda rel: None)
+    r = lenses._vol_regime_row()
+    assert r["status"] == "missing" and r["value"] is None
+
+
+def test_vol_regime_is_in_macro_bloc_and_nudges_down():
+    """vol_regime sits in the de-correlated macro bloc, so a risk-off vol read can only push the
+    ONE net macro vote toward bear (caution) — it never adds an independent vote that sizes alone."""
+    assert "vol_regime" in lenses._MACRO_BLOC
+    # macro bloc otherwise neutral; vol_regime stress flips the net macro vote bearish
+    fake = {"rows": [
+        {"lens": "macro_risk", "direction": "neutral", "value": {}},
+        {"lens": "vol_regime", "direction": "bear", "value": _vol_mm()},
+        {"lens": "conviction", "direction": "bull", "value": {"band": "high"}},
+    ]}
+    s = lenses.synthesize(fake)
+    assert s["bloc_macro"] == "bear"
