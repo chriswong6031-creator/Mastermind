@@ -1359,6 +1359,49 @@ body.page-mm .mm-rp-view:hover { border-color: var(--info); color: var(--info); 
 body.page-mm .mm-mode-tag { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted);
   border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; margin-left: 6px; vertical-align: middle; }
 
+/* ── Calibration page ────────────────────────────────────────────────────── */
+/* research sub-nav (Theses / Calibration) — lighter than the top nav tabs */
+body.page-mm .mm-rsub-bar { display: flex; gap: 8px; margin: 0 0 4px; }
+body.page-mm .mm-rsub-tab { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 5px 16px;
+  font-size: 12px; font-weight: 700; cursor: pointer; color: var(--muted); letter-spacing: .02em; transition: all .12s ease; }
+body.page-mm .mm-rsub-tab:hover { color: var(--text); border-color: var(--muted); }
+body.page-mm .mm-rsub-tab.active { color: var(--bg); background: var(--info); border-color: var(--info); }
+body.page-mm .mm-cal-explain { font-size: 12.5px; color: var(--muted); line-height: 1.55; margin: 2px 0 16px; }
+body.page-mm .mm-cal-building { display: flex; gap: 12px; align-items: flex-start; padding: 16px 18px; margin: 0 0 18px;
+  border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--info) 8%, var(--panel2)); }
+body.page-mm .mm-cal-building .ic { font-size: 22px; line-height: 1.2; color: var(--info); flex: none; }
+body.page-mm .mm-cal-building .tx { font-size: 12.5px; color: var(--text); line-height: 1.55; }
+body.page-mm .mm-cal-building .tx strong { color: var(--info); }
+body.page-mm .mm-cal-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin: 0 0 22px; }
+body.page-mm .mm-cal-card { border: 1px solid var(--line); border-radius: 10px; background: var(--panel2); padding: 12px 14px; text-align: center; }
+body.page-mm .mm-cal-card .lbl { font-size: 9.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 5px; }
+body.page-mm .mm-cal-card .val { font-size: 21px; font-weight: 800; font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; color: var(--text); }
+body.page-mm .mm-cal-sec { margin: 0 0 26px; }
+body.page-mm .mm-cal-sec-h { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .07em; color: var(--info); margin: 0 0 4px; }
+body.page-mm .mm-cal-sec-cap { font-size: 11.5px; color: var(--muted); font-style: italic; margin: 0 0 12px; }
+/* reliability diagram */
+body.page-mm .mm-cal-rel-row { display: grid; grid-template-columns: 92px 44px 1fr; gap: 12px; align-items: center;
+  padding: 9px 0; border-bottom: 1px solid var(--line); }
+body.page-mm .mm-cal-rel-bucket { font-size: 12px; font-weight: 700; font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; }
+body.page-mm .mm-cal-rel-n { font-size: 11px; color: var(--muted); text-align: right; }
+body.page-mm .mm-cal-bars { display: flex; flex-direction: column; gap: 5px; }
+body.page-mm .mm-cal-bar-line { display: flex; align-items: center; gap: 8px; }
+body.page-mm .mm-cal-bar-tag { font-size: 9px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); width: 56px; flex: none; }
+body.page-mm .mm-cal-bar-track { flex: 1; height: 7px; background: color-mix(in srgb, var(--muted) 18%, transparent); border-radius: 4px; overflow: hidden; }
+body.page-mm .mm-cal-bar-fill { height: 100%; border-radius: 4px; }
+body.page-mm .mm-cal-bar-fill.pred { background: var(--muted); }
+body.page-mm .mm-cal-bar-fill.real { background: var(--info); }
+body.page-mm .mm-cal-bar-val { font-size: 10.5px; font-weight: 700; font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; width: 42px; flex: none; text-align: right; }
+/* lens edge + resolved log reuse the mm-rp-table look */
+body.page-mm .mm-cal-dir { display: inline-block; padding: 1px 8px; border-radius: 5px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; }
+body.page-mm .mm-cal-dir.bull { background: color-mix(in srgb, var(--up) 16%, var(--panel2)); color: var(--up); }
+body.page-mm .mm-cal-dir.bear { background: color-mix(in srgb, var(--down) 16%, var(--panel2)); color: var(--down); }
+body.page-mm .mm-cal-weight { font-weight: 700; font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; }
+body.page-mm .mm-cal-weight.up { color: var(--up); } body.page-mm .mm-cal-weight.down { color: var(--down); }
+body.page-mm .mm-cal-out { font-weight: 800; }
+body.page-mm .mm-cal-out.hit { color: var(--up); } body.page-mm .mm-cal-out.miss { color: var(--down); }
+body.page-mm .mm-cal-rel-pct { font-weight: 700; font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; }
+
 /* ── Research thesis modal ───────────────────────────────────────────────── */
 body.page-mm #mm-thesis-modal { position: fixed; inset: 0; z-index: 200; display: none; align-items: flex-start; justify-content: center;
   background: rgba(0,0,0,.55); padding: 40px 16px; overflow-y: auto; }
@@ -1631,6 +1674,17 @@ body.page-mm .mm-rd-link:hover { border-color: var(--info); color: var(--info); 
 
 <!-- ── RESEARCH VIEW (toggled by #mm-nav) ───────────────────────────────────── -->
 <div id="view-research">
+  <!-- sub-nav: Theses (existing) / Calibration (new) -->
+  <div class="mm-section" style="margin-bottom:0">
+    <div class="span12" style="grid-column:span 12">
+      <div class="mm-rsub-bar">
+        <button class="mm-rsub-tab active" id="rsub-theses" type="button" onclick="showResearchSub('theses')"><span class="l-en">Theses</span><span class="l-zh">研究论文</span></button>
+        <button class="mm-rsub-tab" id="rsub-calibration" type="button" onclick="showResearchSub('calibration')"><span class="l-en">Calibration</span><span class="l-zh">校准</span></button>
+      </div>
+    </div>
+  </div>
+
+  <div id="research-sub-theses">
   <div class="mm-section">
     <div class="panel span12" style="grid-column:span 12">
       <h2><span class="l-en">Research &mdash; Investment Theses</span><span class="l-zh">研究 &mdash; 投资论文</span></h2>
@@ -1640,6 +1694,18 @@ body.page-mm .mm-rd-link:hover { border-color: var(--info); color: var(--info); 
       </div>
       <div id="rp-host">
         <div class="mm-empty"><span class="mm-empty-icon">⊙</span><span class="l-en">Loading research…</span><span class="l-zh">加载研究中…</span></div>
+      </div>
+    </div>
+  </div>
+  </div><!-- /#research-sub-theses -->
+
+  <!-- Calibration sub-page (filled by renderCalibration) -->
+  <div id="research-sub-calibration" style="display:none">
+    <div class="mm-section">
+      <div class="panel span12" style="grid-column:span 12">
+        <div id="calib-host">
+          <div class="mm-empty"><span class="mm-empty-icon">⊙</span><span class="l-en">Loading calibration…</span><span class="l-zh">加载校准中…</span></div>
+        </div>
       </div>
     </div>
   </div>
@@ -1772,6 +1838,44 @@ var I18N = {
   'rp.viab_avoid':        { en: 'avoid', zh: '回避' },
   'rd.head':              { en: 'Research Desk', zh: '研究台' },
   'rd.view_full':         { en: 'View full thesis →', zh: '查看完整论文 →' },
+  // Calibration page (outcome ledger — the engine's accountability scorecard)
+  'cal.sub_theses':       { en: 'Theses', zh: '研究论文' },
+  'cal.sub_calibration':  { en: 'Calibration', zh: '校准' },
+  'cal.title':            { en: 'Calibration — has the engine earned its confidence?', zh: '校准 — 引擎配得上它的信心吗？' },
+  'cal.explain':          { en: 'The engine records what it believed on every decision and grades itself the day a thesis resolves: whether its stated probabilities hold up, which lenses actually predicted, and every resolved call.', zh: '引擎在每个决策上记录它当时的判断，并在论文兑现的那一天给自己打分：它给出的概率是否经得起检验、哪些视角真正预测准确，以及每一笔已了结的判断。' },
+  'cal.building':         { en: '<strong>Building</strong> — the first cohort matures 2026-07-17. The engine is recording every decision now; once theses resolve it grades itself here.', zh: '<strong>构建中</strong> — 首批样本将于 2026-07-17 成熟。引擎正在记录每个决策；论文兑现后将在此给自己打分。' },
+  'cal.no_data':          { en: 'no graded calls yet', zh: '暂无已评分的判断' },
+  'cal.card_status':      { en: 'Status', zh: '状态' },
+  'cal.card_graded':      { en: 'Graded', zh: '已评分' },
+  'cal.card_hitrate':     { en: 'Hit-rate', zh: '命中率' },
+  'cal.card_brier':       { en: 'Brier', zh: 'Brier 分' },
+  'cal.card_calerr':      { en: 'Calibration error', zh: '校准误差' },
+  'cal.status_building':  { en: 'building', zh: '构建中' },
+  'cal.status_scoring':   { en: 'scoring', zh: '评分中' },
+  'cal.rel_h':            { en: 'Reliability', zh: '可靠性' },
+  'cal.rel_cap':          { en: 'When the engine said X%, it was right Y%.', zh: '当引擎说 X% 时，它实际正确的比例是 Y%。' },
+  'cal.rel_predicted':    { en: 'Predicted', zh: '预测' },
+  'cal.rel_realized':     { en: 'Realized', zh: '实际' },
+  'cal.lens_h':           { en: 'Lens edge', zh: '视角优势' },
+  'cal.lens_cap':         { en: 'Which lenses actually predicted — and how the self-calibrating gate now weights them.', zh: '哪些视角真正预测准确——以及自校准闸门现在如何对其加权。' },
+  'cal.lens_col_lens':    { en: 'Lens', zh: '视角' },
+  'cal.lens_col_dir':     { en: 'Direction', zh: '方向' },
+  'cal.lens_col_n':       { en: 'n', zh: '样本数' },
+  'cal.lens_col_hit':     { en: 'Hit-rate', zh: '命中率' },
+  'cal.lens_col_weight':  { en: 'Gate weight', zh: '闸门权重' },
+  'cal.lens_empty':       { en: 'No lens edge yet — appears once calls resolve.', zh: '暂无视角优势 — 判断兑现后将显示。' },
+  'cal.dir_bull':         { en: 'bull', zh: '看多' },
+  'cal.dir_bear':         { en: 'bear', zh: '看空' },
+  'cal.log_h':            { en: 'Resolved log', zh: '已了结记录' },
+  'cal.log_col_subject':  { en: 'Subject', zh: '标的' },
+  'cal.log_col_window':   { en: 'Decided → resolved', zh: '决策 → 了结' },
+  'cal.log_col_prob':     { en: 'Predicted', zh: '预测概率' },
+  'cal.log_col_realized': { en: 'Realized rel', zh: '实际相对' },
+  'cal.log_col_outcome':  { en: 'Outcome', zh: '结果' },
+  'cal.log_col_quad':     { en: 'Quad', zh: '象限' },
+  'cal.log_hit':          { en: 'hit', zh: '命中' },
+  'cal.log_miss':         { en: 'miss', zh: '未中' },
+  'cal.log_empty':        { en: 'No resolved theses yet — first resolve ~2026-07-17', zh: '暂无已了结论文 — 首次了结约在 2026-07-17' },
   // Runs / brain activity
   'runs.title':           { en: 'Brain Activity — Full Trace', zh: '脑波活动 — 完整追踪' },
   'runs.subtitle':        { en: 'expand a run for complete step-by-step reasoning', zh: '展开运行记录查看完整推理过程' },
@@ -2013,6 +2117,8 @@ var _perf = null, _runs = [], _rejected = [], _macro = null;
 var _papers = [];                 // research papers (the Research page rows)
 var _papersErr = null;            // server-side error from /api/research_papers, surfaced in the empty state
 var _openPaperId = null;          // id of the paper currently shown in the thesis modal (for PDF export)
+var _calib = null;                // outcome ledger (the Calibration sub-page)
+var _researchSub = 'theses';      // 'theses' | 'calibration'
 var _currentView = 'dashboard';   // 'dashboard' | 'research'
 // run drilldown cache
 var _runLogCache = {};
@@ -3152,6 +3258,152 @@ function renderResearchPapers() {
   host.innerHTML = html;
 }
 
+// ── CALIBRATION (outcome ledger) ──────────────────────────────────────────────
+// toggle between the Theses sub-page and the Calibration sub-page
+window.showResearchSub = function(sub) {
+  _researchSub = (sub === 'calibration') ? 'calibration' : 'theses';
+  var th = E('research-sub-theses'), ca = E('research-sub-calibration');
+  var tt = E('rsub-theses'), ct = E('rsub-calibration');
+  if (th) th.style.display = (_researchSub === 'theses') ? '' : 'none';
+  if (ca) ca.style.display = (_researchSub === 'calibration') ? '' : 'none';
+  if (tt) tt.classList.toggle('active', _researchSub === 'theses');
+  if (ct) ct.classList.toggle('active', _researchSub === 'calibration');
+  if (_researchSub === 'calibration') renderCalibration();
+};
+
+function _calPct(v) { return (v == null) ? '—' : (v * 100).toFixed(0) + '%'; }
+function _calNum(v, d) { return (v == null) ? '—' : Number(v).toFixed(d == null ? 3 : d); }
+
+function renderCalibration() {
+  var host = E('calib-host');
+  if (!host) return;
+  var d = _calib || {};
+  var sum = d.summary || {};
+  var curve = d.reliability_curve || [];
+  var edge = d.lens_edge || [];
+  var weights = d.lens_weights || {};
+  var records = d.records || [];
+  var building = (!sum.n) || sum.status === 'building';
+
+  var html = '';
+
+  // header + explainer
+  html += '<h2><span class="l-en">Calibration — has the engine earned its confidence?</span>' +
+          '<span class="l-zh">校准 — 引擎配得上它的信心吗？</span></h2>';
+  html += '<div class="mm-cal-explain">' + t('cal.explain') + '</div>';
+
+  // building / empty banner
+  if (building) {
+    html += '<div class="mm-cal-building"><span class="ic">⊙</span><span class="tx">' + t('cal.building') + '</span></div>';
+  }
+
+  // summary cards
+  var statusLbl = sum.status === 'scoring' ? t('cal.status_scoring') : t('cal.status_building');
+  var cards = [
+    { lbl: t('cal.card_status'),  val: statusLbl },
+    { lbl: t('cal.card_graded'),  val: (sum.n != null ? sum.n : 0) },
+    { lbl: t('cal.card_hitrate'), val: _calPct(sum.hit_rate) },
+    { lbl: t('cal.card_brier'),   val: _calNum(sum.brier, 3) },
+    { lbl: t('cal.card_calerr'),  val: _calNum(sum.calibration_error, 3) },
+  ];
+  html += '<div class="mm-cal-cards">';
+  cards.forEach(function(c) {
+    html += '<div class="mm-cal-card"><div class="lbl">' + c.lbl + '</div><div class="val">' + esc(String(c.val)) + '</div></div>';
+  });
+  html += '</div>';
+
+  // reliability diagram
+  html += '<div class="mm-cal-sec"><div class="mm-cal-sec-h">' + t('cal.rel_h') + '</div>' +
+          '<div class="mm-cal-sec-cap">' + t('cal.rel_cap') + '</div>';
+  if (!curve.length) {
+    html += '<div class="mm-empty"><span class="mm-empty-icon">○</span>' + t('cal.no_data') + '</div>';
+  } else {
+    curve.forEach(function(b) {
+      var predW = Math.max(0, Math.min(100, (b.mean_predicted || 0) * 100));
+      var realW = Math.max(0, Math.min(100, (b.hit_rate || 0) * 100));
+      html += '<div class="mm-cal-rel-row">' +
+        '<div class="mm-cal-rel-bucket">' + esc(b.bin || '—') + '</div>' +
+        '<div class="mm-cal-rel-n">n=' + (b.n != null ? b.n : 0) + '</div>' +
+        '<div class="mm-cal-bars">' +
+          '<div class="mm-cal-bar-line"><span class="mm-cal-bar-tag">' + t('cal.rel_predicted') + '</span>' +
+            '<span class="mm-cal-bar-track"><span class="mm-cal-bar-fill pred" style="width:' + predW.toFixed(0) + '%"></span></span>' +
+            '<span class="mm-cal-bar-val">' + _calPct(b.mean_predicted) + '</span></div>' +
+          '<div class="mm-cal-bar-line"><span class="mm-cal-bar-tag">' + t('cal.rel_realized') + '</span>' +
+            '<span class="mm-cal-bar-track"><span class="mm-cal-bar-fill real" style="width:' + realW.toFixed(0) + '%"></span></span>' +
+            '<span class="mm-cal-bar-val">' + _calPct(b.hit_rate) + '</span></div>' +
+        '</div>' +
+      '</div>';
+    });
+  }
+  html += '</div>';
+
+  // lens edge table
+  html += '<div class="mm-cal-sec"><div class="mm-cal-sec-h">' + t('cal.lens_h') + '</div>' +
+          '<div class="mm-cal-sec-cap">' + t('cal.lens_cap') + '</div>';
+  if (!edge.length) {
+    html += '<div class="mm-empty"><span class="mm-empty-icon">○</span>' + t('cal.lens_empty') + '</div>';
+  } else {
+    var sortedEdge = edge.slice().sort(function(a, b) { return (b.n || 0) - (a.n || 0); });
+    html += '<div class="mm-rp-wrap"><table class="mm-rp-table"><thead><tr>' +
+      '<th class="l">' + t('cal.lens_col_lens') + '</th>' +
+      '<th class="l">' + t('cal.lens_col_dir') + '</th>' +
+      '<th>' + t('cal.lens_col_n') + '</th>' +
+      '<th>' + t('cal.lens_col_hit') + '</th>' +
+      '<th>' + t('cal.lens_col_weight') + '</th>' +
+      '</tr></thead><tbody>';
+    sortedEdge.forEach(function(r) {
+      var dir = (r.direction === 'bear') ? 'bear' : 'bull';
+      var dirLbl = (dir === 'bear') ? t('cal.dir_bear') : t('cal.dir_bull');
+      var w = weights[r.lens];
+      var wCls = (w == null) ? '' : (w > 1.0 ? 'up' : (w < 1.0 ? 'down' : ''));
+      var wTxt = (w == null) ? '—' : Number(w).toFixed(2) + '×';
+      html += '<tr>' +
+        '<td class="l"><span class="mm-rp-ticker" style="font-size:12.5px">' + esc(r.lens || '—') + '</span></td>' +
+        '<td class="l"><span class="mm-cal-dir ' + dir + '">' + dirLbl + '</span></td>' +
+        '<td>' + (r.n != null ? r.n : 0) + '</td>' +
+        '<td><span class="mm-rp-score">' + _calPct(r.hit_rate) + '</span></td>' +
+        '<td><span class="mm-cal-weight ' + wCls + '">' + wTxt + '</span></td>' +
+      '</tr>';
+    });
+    html += '</tbody></table></div>';
+  }
+  html += '</div>';
+
+  // resolved log table
+  html += '<div class="mm-cal-sec"><div class="mm-cal-sec-h">' + t('cal.log_h') + '</div>';
+  if (!records.length) {
+    html += '<div class="mm-empty"><span class="mm-empty-icon">○</span>' + t('cal.log_empty') + '</div>';
+  } else {
+    html += '<div class="mm-rp-wrap"><table class="mm-rp-table"><thead><tr>' +
+      '<th class="l">' + t('cal.log_col_subject') + '</th>' +
+      '<th class="l">' + t('cal.log_col_window') + '</th>' +
+      '<th>' + t('cal.log_col_prob') + '</th>' +
+      '<th>' + t('cal.log_col_realized') + '</th>' +
+      '<th class="l">' + t('cal.log_col_outcome') + '</th>' +
+      '<th>' + t('cal.log_col_quad') + '</th>' +
+      '</tr></thead><tbody>';
+    records.forEach(function(r) {
+      var hit = (r.outcome === 1);
+      var outTxt = hit ? ('✓ ' + t('cal.log_hit')) : ('✗ ' + t('cal.log_miss'));
+      var rel = r.realized_rel;
+      var relTxt = (rel == null) ? '—' : ((rel >= 0 ? '+' : '') + (rel * 100).toFixed(1) + '%');
+      var relCls = (rel == null) ? '' : (rel >= 0 ? 'mm-cal-out hit' : 'mm-cal-out miss');
+      html += '<tr>' +
+        '<td class="l"><span class="mm-rp-ticker" style="font-size:13px">' + esc(r.subject || '—') + '</span></td>' +
+        '<td class="l"><span class="mm-rp-time">' + esc(fmtDate(r.asof_decided)) + ' → ' + esc(fmtDate(r.asof_resolved)) + '</span></td>' +
+        '<td><span class="mm-cal-rel-pct">' + _calPct(r.prob_correct) + '</span></td>' +
+        '<td><span class="' + relCls + '" style="font-weight:700;font-family:\'SF Mono\',ui-monospace,Menlo,Consolas,monospace">' + relTxt + '</span></td>' +
+        '<td class="l"><span class="mm-cal-out ' + (hit ? 'hit' : 'miss') + '">' + outTxt + '</span></td>' +
+        '<td>' + esc(r.quad_at_entry != null ? String(r.quad_at_entry) : '—') + '</td>' +
+      '</tr>';
+    });
+    html += '</tbody></table></div>';
+  }
+  html += '</div>';
+
+  host.innerHTML = html;
+}
+
 window.openThesis = function(id) {
   var p = null;
   for (var i = 0; i < _papers.length; i++) { if (_papers[i].id === id) { p = _papers[i]; break; } }
@@ -3234,7 +3486,7 @@ window.showView = function(view) {
   if (nd) nd.classList.toggle('active', _currentView === 'dashboard');
   if (nr) nr.classList.toggle('active', _currentView === 'research');
   try { history.replaceState(null, '', _currentView === 'research' ? '/research' : '/'); } catch (e) {}
-  if (_currentView === 'research') renderResearchPapers();
+  if (_currentView === 'research') { renderResearchPapers(); renderCalibration(); }
   window.scrollTo(0, 0);
 };
 
@@ -3318,7 +3570,7 @@ function _renderAll() {
     ['hero', renderHero], ['allocation', renderAllocation], ['positions', renderPositions],
     ['trades', renderTrades], ['brainLog', renderBrainLog], ['research', renderResearch],
     ['runs', renderRuns], ['rejected', renderRejected], ['competitors', renderCompetitors],
-    ['researchPapers', renderResearchPapers], ['footer', renderFooter],
+    ['researchPapers', renderResearchPapers], ['calibration', renderCalibration], ['footer', renderFooter],
   ];
   for (var i = 0; i < steps.length; i++) {
     try { steps[i][1](); }
@@ -3327,7 +3579,7 @@ function _renderAll() {
 }
 
 async function fetchAll() {
-  var [bookRes, tradesRes, actRes, researchRes, compRes, regimeRes, perfRes, runsRes, macroRes, papersRes] = await Promise.allSettled([
+  var [bookRes, tradesRes, actRes, researchRes, compRes, regimeRes, perfRes, runsRes, macroRes, papersRes, calibRes] = await Promise.allSettled([
     fetch('/api/portfolio').then(function(r) { return r.ok ? r.json() : null; }).catch(function() { return null; }),
     fetch('/api/trades').then(function(r)    { return r.ok ? r.json() : null; }).catch(function() { return null; }),
     fetch('/api/activity').then(function(r)  { return r.ok ? r.json() : [];   }).catch(function() { return []; }),
@@ -3338,6 +3590,7 @@ async function fetchAll() {
     fetch('/api/runs').then(function(r)       { return r.ok ? r.json() : [];   }).catch(function() { return []; }),
     fetch('/api/macro').then(function(r)      { return r.ok ? r.json() : null; }).catch(function() { return null; }),
     fetch('/api/research_papers').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
+    fetch('/api/outcome_ledger').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
   ]);
 
   _book        = bookRes.status    === 'fulfilled' ? bookRes.value    : null;
@@ -3352,6 +3605,7 @@ async function fetchAll() {
   var _papersResp = (papersRes.status === 'fulfilled' ? papersRes.value : null) || {};
   _papers      = _papersResp.papers || [];
   _papersErr   = _papersResp.error || (papersRes.status === 'rejected' ? String(papersRes.reason || 'fetch failed') : null);
+  _calib       = calibRes.status   === 'fulfilled' ? calibRes.value   : null;
 
   // extract rejected from portfolio
   _rejected = (_book && _book.rejected) ? _book.rejected : [];
