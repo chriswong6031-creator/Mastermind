@@ -42,6 +42,12 @@ def _read_json(p: Path):
     return json.loads(p.read_text()) if p.exists() else None
 
 
+def _pick(d, keys):
+    """Shallow projection — {k: d[k]} for the keys present (drops noise/bulk)."""
+    d = d or {}
+    return {k: d.get(k) for k in keys if k in d}
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -284,6 +290,73 @@ async def get_ticker_package(args):
     return _json(pkg)
 
 
+@tool("get_fundamentals",
+      "Valuation + financials + earnings + accounting-quality + the engine's conviction read for a NAME "
+      "(from the per-ticker stock file). Use this for a fundamental picture before an add/cut verdict — "
+      "P/E + forward tier, margins/growth/ROE/accruals, next earnings + SUE, analyst rating/target, the "
+      "Piotroski/accounting verdict, and the composite conviction score/band/size with its cautions.",
+      {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]})
+async def get_fundamentals(args):
+    t = (args.get("ticker") or "").upper()
+    d = _read_json(_V / "site" / "stockdata" / f"{t}.json")
+    if not d:
+        return _ok(f"no stock file for {t} (covered: S&P 1500 + crypto; ships in the Pages artifact).")
+    return _json({
+        "ticker": t, "name": d.get("name"), "sector": d.get("sector"), "asof": d.get("asof"),
+        "valuation": _pick(d.get("valuation"), ["trailing_pe", "forward_pe", "forward_tier", "price_to_book",
+                           "price_to_sales", "earnings_yield", "shareholder_yield", "value_z"]),
+        "financials": _pick(d.get("financials"), ["gross_margin", "net_margin", "fcf_margin", "rev_growth",
+                            "ni_growth", "roe", "roa", "debt_to_assets", "accruals"]),
+        "earnings": _pick(d.get("earnings"), ["next_date", "eps_forecast", "sue_z", "summary"]),
+        "analyst": _pick(d.get("analyst"), ["rating", "target", "forward_pe", "div_yield"]),
+        "accounting_quality": _pick(d.get("accounting_quality"), ["verdict", "headline", "piotroski", "n_caution"]),
+        "factors": _pick(d.get("factors"), ["composite", "fundamental_score"]),
+        "tech": _pick(d.get("tech"), ["price", "pct_vs_50dma", "pct_vs_200dma", "rsi14", "off_52w_high_pct"]),
+        "conviction": _pick(d.get("conviction"), ["score", "band", "verdict", "size", "risk",
+                            "cycle_blocked", "cautions"]),
+    })
+
+
+@tool("get_options",
+      "Dealer-positioning / options read for a liquid NAME (gamma exposure): the GEX regime (long/short) + "
+      "gamma-flip level + distance, magnets, IV30, put/call OI, max pain, call/put walls, the expected daily/"
+      "weekly move, and the volatility-hole state (compression -> where price can vacuum to). Use for entry "
+      "timing + risk bands, not stock selection.",
+      {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]})
+async def get_options(args):
+    t = (args.get("ticker") or "").upper()
+    d = _read_json(_V / "site" / "gex" / f"{t}.json")
+    if not d:
+        return _ok(f"no options/GEX file for {t} (only the ~liquid options universe is covered).")
+    return _json({
+        "ticker": t, "asof": (d.get("meta") or {}).get("asof"),
+        "summary": _pick(d.get("summary"), ["spot", "regime", "tier", "net_gex_bn", "gamma_flip",
+                         "dist_to_flip_pct", "magnet_up", "magnet_down", "iv30", "put_call_oi_ratio",
+                         "max_pain", "call_wall", "put_wall"]),
+        "expected_move": _pick(d.get("expected_move"), ["daily_pct", "weekly_pct", "front"]),
+        "vol_hole": _pick(d.get("vol_hole"), ["state", "bias", "upper", "lower", "to_upper_pct",
+                          "to_lower_pct", "compression"]),
+    })
+
+
+@tool("get_anticipation",
+      "The forward-looking anticipation index for a watchlist NAME — a directional conviction read with "
+      "multi-leg confluence: the index (-1..+1) + band, how many drivers align, how much to TRUST the "
+      "direction, the realized-vol cone, and per-horizon (short/medium/long) expected moves + the drivers/"
+      "guards/caveats. Context for a timing lean; honest about trust.",
+      {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]})
+async def get_anticipation(args):
+    t = (args.get("ticker") or "").upper()
+    d = _read_json(_V / "site" / "anticipationdata" / f"{t}.json")
+    if not d:
+        return _ok(f"no anticipation file for {t} (only the curated forward-signal watchlist is covered).")
+    return _json({
+        "ticker": t, "name": d.get("name"), "group": d.get("group"), "as_of": d.get("as_of"),
+        **_pick(d, ["anticipation_index", "index_band", "confluence_value", "n_go_legs",
+                    "direction_trust", "trust", "vol_cone_ann", "horizons", "drivers", "guards", "caveats"]),
+    })
+
+
 @tool("read_signal", "Read a published signal/data JSON by path (allowlisted to the dashboard + bot data roots).",
       {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]})
 async def read_signal(args):
@@ -338,7 +411,8 @@ async def recommend_action(args):
 
 _READ = [get_regime, get_themes, get_standouts, get_portfolio, get_decision_matrix, get_divergences,
          get_altdata, get_news, get_intelligence, get_daily_briefing, get_intake_candidates,
-         get_ticker_package, get_quote, get_quiver_strategy, get_quiver_compare, read_signal]
+         get_ticker_package, get_fundamentals, get_options, get_anticipation, get_quote,
+         get_quiver_strategy, get_quiver_compare, read_signal]
 _ACTION = [save_research_note, propose_thesis, flag_emerging_theme, recommend_action]
 _ALL = _READ + _ACTION
 SERVER_NAME = "bot"

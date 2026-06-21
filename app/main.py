@@ -89,3 +89,59 @@ if FastAPI is not None:
         nothing auto-executes."""
         return await cli_bridge.research(
             req.prompt, role=req.role, max_turns=req.max_turns, resume=req.resume)
+
+    # ---- Live advisor chat (streamed) -------------------------------------
+    from fastapi.responses import StreamingResponse
+
+    class ChatReq(BaseModel):
+        message: str
+        conversation_id: str | None = None   # carry across turns to keep context
+
+    def _sse(obj: dict) -> str:
+        return f"data: {json.dumps(obj, default=str)}\n\n"
+
+    @app.post("/chat")
+    async def chat(req: ChatReq) -> StreamingResponse:
+        """Talk to the Brain live. Streams the armed advisor's reasoning, tool use, and
+        verdict back over SSE. The Brain reads the dashboard / book on demand and can stage
+        recommendations + theses into the review queue — it never executes a trade.
+
+        Each SSE frame is a JSON event: start | text | tool | tool_result | done | error.
+        Pass back `conversation_id` (from the `start` frame) on the next turn for continuity.
+        """
+        from brain import advisor
+
+        conv_id = req.conversation_id or advisor.new_conversation_id()
+        resume = advisor.get_session(conv_id)
+
+        async def gen():
+            yield _sse({"type": "start", "conversation_id": conv_id})
+            advisor.append_turn(conv_id, "user", req.message)
+            last_sid, acc, tools = resume, "", []
+            try:
+                async for ev in cli_bridge.chat_stream(
+                        req.message, resume=resume, append_system=advisor.SYSTEM):
+                    et = ev.get("type")
+                    if et == "text":
+                        acc += ev.get("text") or ""
+                    elif et == "tool":
+                        tools.append({"name": ev.get("name"), "args": ev.get("args")})
+                    elif et == "done" and ev.get("session_id"):
+                        last_sid = ev["session_id"]
+                    yield _sse(ev)
+            except Exception as exc:                       # never leave the stream hanging
+                yield _sse({"type": "error", "error": repr(exc)[:300]})
+            finally:
+                advisor.set_session(conv_id, last_sid)
+                advisor.append_turn(conv_id, "brain", acc, tools)
+
+        return StreamingResponse(gen(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache",
+                                          "X-Accel-Buffering": "no"})
+
+    @app.get("/chat/history")
+    def chat_history(conversation_id: str) -> dict:
+        """The stored transcript for a conversation so the popup rehydrates on reload."""
+        from brain import advisor
+        return {"conversation_id": conversation_id,
+                "turns": advisor.load_history(conversation_id)}

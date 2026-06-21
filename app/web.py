@@ -141,6 +141,16 @@ def theme_js() -> FileResponse:
     return FileResponse(_STATIC / "theme.js", media_type="application/javascript")
 
 
+@router.get("/chat.js", include_in_schema=False)
+def chat_js() -> FileResponse:
+    """Serve the live advisor chat widget (the floating Brain popup).
+
+    no-cache so a widget update is never masked by the browser's heuristic cache.
+    """
+    return FileResponse(_STATIC / "chat.js", media_type="application/javascript",
+                        headers={"Cache-Control": "no-cache"})
+
+
 @router.get("/api/performance")
 def api_performance() -> JSONResponse:
     """Equity curve and performance summary for the $1M paper account."""

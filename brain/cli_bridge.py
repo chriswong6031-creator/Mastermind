@@ -283,6 +283,71 @@ async def research(prompt: str, *, role: str = "deep", max_turns: int | None = N
     return await reason(prompt, role=role, arm=True, max_turns=max_turns, resume=resume)
 
 
+async def chat_stream(prompt: str, *, resume: str | None = None,
+                      append_system: str | None = None, role: str = "deep",
+                      max_turns: int | None = None):
+    """An ARMED, multi-turn ADVISOR chat turn, STREAMED.
+
+    Same armed Brain as research() (bot MCP tools + web + read-only files), but instead of
+    buffering to a dict this yields events as the SDK produces them, so the web layer can
+    push them to the browser over SSE. Conversation continuity is via `resume` (the SDK
+    persists the session transcript). Events:
+        {"type": "text", "text": str}                 # an assistant text chunk
+        {"type": "tool", "name": str, "args": dict}   # the Brain calling a tool
+        {"type": "tool_result"}                       # a tool returned (chip can settle)
+        {"type": "done", "session_id", "cost_usd", "tools_used"}
+        {"type": "error", "error": str}
+    """
+    if not _SDK:
+        yield {"type": "error", "error": "reasoning needs the Claude Agent SDK + a subscription credential"}
+        return
+    if not cli_path():
+        yield {"type": "error", "error": "claude CLI not installed (npm i -g @anthropic-ai/claude-code)"}
+        return
+
+    from brain import bot_mcp
+    rc = _cfg().get("reasoning", {})
+    mdl = resolve_model(role)
+    opts = _Options(
+        model=mdl,
+        allowed_tools=bot_mcp.armed_allowed_tools(),
+        add_dirs=_abs_dirs(rc.get("add_dirs", [])),
+        cwd=str(_ROOT),
+        max_turns=max_turns or rc.get("research_max_turns", 16),
+        permission_mode=rc.get("permission_mode", "default"),
+        env=_subscription_env(),
+    )
+    opts.mcp_servers = {bot_mcp.SERVER_NAME: bot_mcp.build_server()}
+    if resume:
+        opts.resume = resume
+    if append_system:
+        opts.append_system_prompt = append_system
+
+    sid, cost, used = resume, None, []
+    try:
+        async for msg in _sdk_query(prompt=prompt, options=opts):
+            if hasattr(msg, "result"):                         # ResultMessage (end of turn)
+                sid = getattr(msg, "session_id", None) or sid
+                cost = getattr(msg, "total_cost_usd", None)
+            elif hasattr(msg, "content"):                      # AssistantMessage
+                for b in (getattr(msg, "content", []) or []):
+                    bt = getattr(b, "type", "")
+                    if bt == "text" and getattr(b, "text", ""):
+                        yield {"type": "text", "text": b.text}
+                    elif bt == "tool_use":
+                        name = getattr(b, "name", "?")
+                        used.append(name)
+                        yield {"type": "tool", "name": name,
+                               "args": getattr(b, "input", {}) or {}}
+            elif hasattr(msg, "tool_use_id") or getattr(msg, "type", "") == "tool_result":
+                yield {"type": "tool_result"}
+    except Exception as e:                                      # surface, don't crash the stream
+        yield {"type": "error", "error": repr(e)[:300]}
+        return
+
+    yield {"type": "done", "session_id": sid, "cost_usd": cost, "tools_used": used}
+
+
 def reason_sync(prompt: str, **kw) -> dict:
     """Blocking wrapper for the (sync) brain. Do NOT call from inside a running loop."""
     return asyncio.run(reason(prompt, **kw))
