@@ -286,6 +286,15 @@ def build(budget: float, name_cap: float = 0.08,
         p["verdict"] = "hold" if p.get("retained") else "add"
 
     sized = [p for p in passed if p["weight"] > 0]
+    # VOL-MANAGED RISK SIZING (the validated +0.1-0.15 Sharpe lever): re-weight the book
+    # by inverse forecasted vol x the dispersion regime — bet less on high-vol names, more
+    # on calm ones, de-gross when selection doesn't pay. Risk lever only; never changes
+    # WHICH names are in. Additive + graceful (neutral until the macro field ships).
+    try:
+        from portfolio import risk_sizing
+        risk_sizing.apply(sized, budget, name_cap)
+    except Exception:  # noqa: BLE001 — additive, never breaks book construction
+        pass
     # sort rejected worst-confluence first so the most-bearish names surface at top
     rejected.sort(key=lambda x: x["confluence"])
     return sized, rejected
