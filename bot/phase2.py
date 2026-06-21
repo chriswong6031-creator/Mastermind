@@ -556,6 +556,19 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
     except Exception as _e:
         _rl_log(_run_id, "decision", "signal history error", f"{_e!r}"[:160])
 
+    # ———— OUTCOME LEDGER: grade resolved theses (prediction vs outcome vs what-it-saw) ————
+    # The reliability + lens-edge substrate (complementary to the agent de-confidencing in
+    # brain/calibration.py): when a thesis matures (first cohort ~2026-07-17), record prob_correct vs
+    # realized hit + the decision-time lens snapshot, so the engine can finally measure whether its
+    # confidence is CALIBRATED and which lenses actually predicted. No-op until resolutions; degrade-safe.
+    try:
+        from brain import outcome_ledger
+        _n_ol = outcome_ledger.resolve(asof)
+        if _n_ol:
+            _rl_log(_run_id, "book_step", "outcome ledger recorded", f"resolutions={_n_ol}")
+    except Exception as _e:
+        _rl_log(_run_id, "decision", "outcome ledger error", f"{_e!r}"[:160])
+
     # ———— persist + score + bridge ————
     for p in book:
         store.upsert_position(con, asof, {**p, "size_pct": int(round(p["weight"] * 100)),
