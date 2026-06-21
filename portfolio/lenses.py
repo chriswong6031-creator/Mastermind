@@ -422,31 +422,39 @@ def _sector_rs_row(d) -> dict:
     etf = proxy or _SECTOR_ETF.get(sec)
     r = _load("data/regime/latest.json") or {}
     rec = next((x for x in (r.get("sector_rs") or []) if x.get("ticker") == etf), None) if etf else None
-    # COMMODITY-DRIVEN name (a miner): the regime's sector-ETF RS table does NOT carry the driving
-    # commodity (GC=F), so a gold miner in a gold BEAR market would otherwise read 'missing' here
-    # and sail through the leadership gate — exactly the NEM trap. Derive the commodity's regime
-    # from its OWN price series instead, and vote bear when it's below trend / falling.
-    if proxy and not rec:
-        cr = _commodity_regime(proxy)
-        if cr:
-            a200 = cr["above_200d_trend"]
-            mom60 = cr["mom_60d_pct"]
-            lagging = (a200 is False) and (cr["downtrend"] or (mom60 or 0) <= -2)
-            direction = "bull" if (a200 and (mom60 or 0) >= 8) else "bear" if lagging else "neutral"
-            note = (f"{sec or 'miner'} driven by {proxy}: "
-                    f"{'above' if a200 else 'below'} 200d trend"
-                    + (f", 60d {mom60:+.0f}%" if mom60 is not None else ""))
+    # COMMODITY-DRIVEN name (a miner): judge it by the DRIVING COMMODITY (gold = GC=F) with
+    # COMMODITY-appropriate thresholds — a miner that trades on gold must not get the lenient
+    # broad-sector RS bar (mom60 <= -12), which would let a mild gold bear pass (the NEM trap). Use
+    # the regime table's GC=F row when present, else derive the commodity's trend from its own price
+    # series; either way a below-200d + softening commodity votes bear.
+    if proxy:
+        _a200 = _mom60 = None
+        _src = None
+        if rec:
+            _a200, _mom60, _src = rec.get("above_200d_trend"), rec.get("mom_60d_pct"), "regime_table"
+        else:
+            cr = _commodity_regime(proxy)
+            if cr:
+                _a200, _mom60, _src = cr["above_200d_trend"], cr["mom_60d_pct"], "price_series"
+        if _a200 is not None:
+            lagging = (_a200 is False) and ((_mom60 or 0) <= -2)
+            direction = "bull" if (_a200 and (_mom60 or 0) >= 8) else "bear" if lagging else "neutral"
+            note = (f"{sec or 'miner'} driven by {proxy} ({_src}): "
+                    f"{'above' if _a200 else 'below'} 200d trend"
+                    + (f", 60d {_mom60:+.0f}%" if _mom60 is not None else ""))
             return _row("sector_rs", {"sector": sec, "etf": proxy, "commodity": proxy,
-                                      "above_200d_trend": a200, "mom_60d_pct": mom60,
-                                      "commodity_driven": True}, "validated", direction, note)
-        # commodity price history unavailable (cold store / offline): fail toward CAUTION using the
-        # miner's OWN long-term trend (a miner tracks its commodity) rather than silently passing the
-        # leadership gate — otherwise the NEM trap regresses whenever the price store is cold.
+                                      "above_200d_trend": _a200, "mom_60d_pct": _mom60,
+                                      "commodity_driven": True, "source": _src},
+                        "validated", direction, note)
+        # commodity regime unavailable (cold store / offline): fail toward CAUTION using the miner's
+        # OWN long-term trend (a miner tracks its commodity) rather than silently passing the gate.
         own = (d or {}).get("tech") or {}
         if own.get("above200") is False:
             return _row("sector_rs", {"sector": sec, "etf": proxy, "commodity_driven": True,
                                       "fallback": "own_200dma"}, "validated", "bear",
                         f"{proxy} regime unavailable; {ticker} below its own 200dma — treat driver as bear")
+        return _row("sector_rs", {"sector": sec, "etf": proxy, "commodity_driven": True},
+                    "missing", None, f"{proxy} regime unavailable")
     if not rec:
         return _row("sector_rs", {"sector": sec, "etf": etf}, "missing", None, "no sector RS map")
     pct = rec.get("pctile_252d")

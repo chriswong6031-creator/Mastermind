@@ -98,7 +98,10 @@ def test_commodity_miner_bear_in_gold_bear():
     """NEM maps to GC=F, which is NOT in the sector-ETF RS table; the commodity-regime fallback
     must derive gold's trend from its own series and vote bear when gold is below trend + falling."""
     bear = {"above_200d_trend": False, "mom_60d_pct": -15.0, "downtrend": True}
-    with mock.patch.object(_lenses_mod, "_commodity_regime", return_value=bear):
+    # hermetic: force GC=F ABSENT from the table so the price-series fallback is exercised regardless
+    # of whatever the live regime data happens to carry.
+    with mock.patch.object(_lenses_mod, "_commodity_regime", return_value=bear), \
+         mock.patch.object(_lenses_mod, "_load", return_value={"sector_rs": []}):
         row = lenses._sector_rs_row({"ticker": "NEM", "sector": "Materials"})
     assert row["direction"] == "bear"
     assert row["value"].get("commodity_driven") is True
@@ -107,7 +110,8 @@ def test_commodity_miner_bear_in_gold_bear():
 def test_commodity_miner_bear_fails_leadership_gate():
     """The bear sector_rs vote must flow into the leadership gate so the miner is not a buy."""
     bear = {"above_200d_trend": False, "mom_60d_pct": -15.0, "downtrend": True}
-    with mock.patch.object(_lenses_mod, "_commodity_regime", return_value=bear):
+    with mock.patch.object(_lenses_mod, "_commodity_regime", return_value=bear), \
+         mock.patch.object(_lenses_mod, "_load", return_value={"sector_rs": []}):
         sr = lenses._sector_rs_row({"ticker": "NEM", "sector": "Materials"})
     rows = [_row("valuation", "bull"), _row("growth", "bull"),
             _row("asymmetry", "bull", {"upside_downside": 2.0}),
@@ -121,9 +125,22 @@ def test_commodity_miner_bear_fails_leadership_gate():
 def test_commodity_miner_bull_in_gold_bull_allowed():
     """A gold miner while gold is LEADING is a legitimate buy — the gate must not over-block."""
     bull = {"above_200d_trend": True, "mom_60d_pct": 12.0, "downtrend": False}
-    with mock.patch.object(_lenses_mod, "_commodity_regime", return_value=bull):
+    with mock.patch.object(_lenses_mod, "_commodity_regime", return_value=bull), \
+         mock.patch.object(_lenses_mod, "_load", return_value={"sector_rs": []}):
         row = lenses._sector_rs_row({"ticker": "NEM", "sector": "Materials"})
     assert row["direction"] == "bull"
+
+
+def test_commodity_miner_uses_commodity_thresholds_from_regime_table():
+    """When GC=F IS in the sector_rs table (the live-data case), a MILD gold bear (below 200d, only
+    -5% over 60d) must still read bear via the COMMODITY threshold (<= -2), not the lenient broad-
+    sector threshold (<= -12) that would let it pass."""
+    regime = {"sector_rs": [{"ticker": "GC=F", "above_200d_trend": False, "mom_60d_pct": -5.0,
+                             "pctile_252d": 45, "rank": 8}]}
+    with mock.patch.object(_lenses_mod, "_load", return_value=regime):
+        row = lenses._sector_rs_row({"ticker": "NEM", "sector": "Materials"})
+    assert row["direction"] == "bear"
+    assert row["value"].get("source") == "regime_table"
 
 
 # ---------------------------------------------------------------------------
