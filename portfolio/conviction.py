@@ -45,6 +45,12 @@ def _us_standouts(n: int = TOP_US) -> list[str]:
 
 SECTOR_MAX_NAMES = 3   # concentration firebreak: at most N names from any one sector in the book
 
+# EXIT HYSTERESIS — to ENTER, a new name must clear the full 'up' gate (confluence > 0.30). To be
+# DROPPED, a name we ALREADY hold has to fall below this LOWER floor (or trip a hard exit). The
+# asymmetric entry/exit bars stop a name being churned in and out across builds when it wobbles
+# around the 0.30 entry line (the NVDA bought-then-immediately-closed problem).
+_EXIT_CONFLUENCE_FLOOR = 0.15
+
 
 def _sector_of(t: str) -> str:
     """Normalised sector key for the concentration cap — collapses synonym labels
@@ -124,17 +130,39 @@ def build(budget: float, name_cap: float = 0.08,
 
         vetoes: list[str] = syn.get("vetoes", [])
         confluence: float = syn.get("confluence", 0.0)
+        sa = syn.get("size_authority")
+        is_held = t.upper() in held
 
-        if syn.get("size_authority") == "up" and not vetoes:
+        # HARD exits — a held name is dropped IMMEDIATELY on any of these (no hysteresis for a
+        # genuinely broken name): a hard veto (parabolic / Altman / cycle-blocked), a CONFIRMED
+        # structural downtrend, or size_authority blocked. A fresh falling-knife or a softened
+        # sector is NOT a hard exit, so a name we already own rides through a rough week.
+        hard_exit = bool(vetoes) or bool(syn.get("price_downtrend")) or sa == "blocked"
+        entry_ok = (sa == "up") and not vetoes
+        hold_ok = is_held and not hard_exit and confluence > _EXIT_CONFLUENCE_FLOOR
+
+        if entry_ok or hold_ok:
             passed.append({"ticker": t, "confluence": max(0.0, confluence),
                            "bull": syn["bull"], "bear": syn["bear"],
+                           "retained": bool(hold_ok and not entry_ok),
                            "divergences": [d["pattern"] for d in syn.get("divergences", [])]})
         else:
-            # Determine a short human-readable rejection reason.
+            # Determine a short human-readable rejection reason (most-specific first).
             if vetoes:
                 reason = "Vetoed: " + ", ".join(vetoes)
-            elif syn.get("size_authority") == "blocked":
+            elif sa == "blocked":
                 reason = "Blocked (size_authority=blocked)"
+            elif syn.get("price_downtrend"):
+                reason = "Downtrend — price rolling over (no falling knives)"
+            elif syn.get("price_falling_fast"):
+                reason = "Falling knife — sharp recent multi-day decline (await stabilization)"
+            elif not syn.get("leadership_ok", True):
+                reason = "Lagging sector/commodity — leadership gate (fighting the tape)"
+            elif syn.get("weak_asymmetry"):
+                _ar = syn.get("asym_ratio")
+                reason = ("Weak asymmetry — upside/downside cone "
+                          + (f"{_ar:.2f}" if isinstance(_ar, (int, float)) else "?")
+                          + " (not asymmetric)")
             elif confluence <= -0.3:
                 reason = f"Negative confluence ({confluence:+.2f})"
             else:

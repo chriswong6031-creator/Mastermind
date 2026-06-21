@@ -48,7 +48,11 @@ _INDEX = _PAPERS / "index.jsonl"
 _NOTES = _ROOT / "data" / "research" / "notes"
 
 SCHEMA = "research_paper.v1"
-CONFIRM_THRESHOLD = 60            # combined "Conviction Index" needed to confirm a buy
+CONFIRM_THRESHOLD = 60            # combined "Conviction Index" needed to confirm a NEW buy
+# hysteresis: a name we ALREADY hold stays confirmed down to a lower bar, so a carried position
+# isn't churned out of the book on a marginal combined-score wobble around the 60 line. A genuine
+# exit (viability='avoid' or, upstream, a hard veto) still drops it immediately.
+_HELD_HYSTERESIS = 8
 VIABILITIES = ("compelling", "fair", "rich", "avoid")
 
 # the holistic report's required sections, in render order: (key, display heading)
@@ -99,7 +103,7 @@ def engine_score(confluence: float) -> int:
 # combined gate — research score + engine buy-score -> confirm / veto / size
 # ---------------------------------------------------------------------------
 
-def score_breakdown(confluence: float, paper: dict) -> dict:
+def score_breakdown(confluence: float, paper: dict, held: bool = False) -> dict:
     """Combine the engine buy-score and the paper's research_score into the decision.
 
     Returns {engine_score, research_score, combined, confirmed, size_mult, viability,
@@ -107,8 +111,10 @@ def score_breakdown(confluence: float, paper: dict) -> dict:
 
     Rules (doctrine-faithful):
       - combined = round(0.5*engine_score + 0.5*research_score)
-      - BLOCK if combined < CONFIRM_THRESHOLD, or viability == 'avoid', or (LLM mode and
+      - BLOCK if combined < the confirm bar, or viability == 'avoid', or (LLM mode and
         the paper does not recommend). A blocked buy is held (size 0) — never executed.
+      - `held` lowers the confirm bar by _HELD_HYSTERESIS so a CARRIED position isn't churned
+        out on a marginal wobble (a new buy still needs the full CONFIRM_THRESHOLD).
       - When confirmed, size_mult scales the engine weight: 60->0.5 (starter), 80->1.0,
         >=92->1.3 (boost). The caller re-caps at the per-name cap, so a boost never breaches
         the cap; a hard-vetoed name never reaches this gate at all.
@@ -119,11 +125,12 @@ def score_breakdown(confluence: float, paper: dict) -> dict:
     viability = paper.get("viability", "fair")
     mode = paper.get("mode", "engine")
     recommend = bool(paper.get("recommend", True))
+    bar = CONFIRM_THRESHOLD - (_HELD_HYSTERESIS if held else 0)
 
     reason = ""
     confirmed = True
-    if combined < CONFIRM_THRESHOLD:
-        confirmed, reason = False, f"combined conviction {combined} < {CONFIRM_THRESHOLD}"
+    if combined < bar:
+        confirmed, reason = False, f"combined conviction {combined} < {bar}"
     elif viability == "avoid":
         confirmed, reason = False, "research viability = avoid"
     elif mode == "llm" and not recommend:

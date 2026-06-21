@@ -176,7 +176,7 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
                                     armed=(_armed_ok and is_new))
             rpaper.save_paper(paper)
             rpaper.write_feed_note(paper)
-        breakdown = rpaper.score_breakdown(c["confluence"], paper)
+        breakdown = rpaper.score_breakdown(c["confluence"], paper, held=not is_new)
         research_block = {
             "paper_id": paper["id"], "mode": paper["mode"],
             "engine_score": breakdown["engine_score"], "research_score": breakdown["research_score"],

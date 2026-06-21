@@ -40,6 +40,119 @@ def _row(lens, value, status, direction, note=""):
     return {"lens": lens, "value": value, "status": status, "direction": direction, "note": note}
 
 
+# ───────────────────────── price-series helpers (engine store) ─────────────────────────
+# A couple of vetoes need real price HISTORY the published per-name JSON does not carry:
+#   • the FALLING-KNIFE check needs a recent multi-day return (a 4-day -10% freefall is invisible
+#     to the slow 50/200dma + 52w-high fields — they only see it days later), and
+#   • the COMMODITY-REGIME gate needs the DRIVING COMMODITY's trend (a gold miner trades on gold,
+#     and GC=F is NOT a row in the regime's sector-ETF RS table — so the proxy lookup silently
+#     missed and the miner got a free pass).
+# Both are computed from the same engine price store paper_account uses (the yahoo store + the
+# breadth closes parquet), loaded once and cached. Everything is guarded: if the store is
+# unavailable (offline / CI / an un-checked-out submodule) the helpers return None and the
+# dependent veto simply does not fire — no false vetoes, behaviour unchanged from before.
+_SERIES_CACHE: dict[str, object] = {}
+_BREADTH_FRAME = None
+_BREADTH_LOADED = False
+
+
+def _breadth_frame():
+    """The macro engine's wide closes cache (S&P single names as columns), loaded once."""
+    global _BREADTH_FRAME, _BREADTH_LOADED
+    if _BREADTH_LOADED:
+        return _BREADTH_FRAME
+    _BREADTH_LOADED = True
+    try:
+        import pandas as pd  # noqa: F401
+        from lib import config
+        p = config.data_dir() / "breadth" / "_closes_cache.parquet"
+        if p.exists():
+            import pandas as _pd
+            _BREADTH_FRAME = _pd.read_parquet(p)
+    except Exception:
+        _BREADTH_FRAME = None
+    return _BREADTH_FRAME
+
+
+def _closes(ticker: str):
+    """Cached ascending close-price Series for a ticker (single name OR ETF/commodity), or None.
+    Mirrors paper_account: the breadth parquet first (S&P single names), then the yahoo store
+    (sector ETFs, SPY, commodity futures like GC=F)."""
+    if ticker in _SERIES_CACHE:
+        return _SERIES_CACHE[ticker]
+    s = None
+    try:
+        import pandas as pd
+        fr = _breadth_frame()
+        if fr is not None and ticker in getattr(fr, "columns", []):
+            s = fr[ticker].astype(float).dropna()
+            s.index = pd.to_datetime(s.index)
+    except Exception:
+        s = None
+    if s is None or len(s) == 0:
+        try:
+            import pandas as pd
+            from lib import store
+            df = store.read("yahoo", ticker)
+            if df is not None and "close" in df.columns and len(df) > 0:
+                s = df["close"].astype(float).dropna()
+                s.index = pd.to_datetime(s.index)
+        except Exception:
+            s = None
+    try:
+        s = s.sort_index() if (s is not None and len(s) > 0) else None
+    except Exception:
+        s = None
+    _SERIES_CACHE[ticker] = s
+    return s
+
+
+def _recent_return(ticker: str | None, sessions: int) -> float | None:
+    """Trailing total return over the last `sessions` trading days, as a fraction (-0.10 = -10%).
+    None when no price history is available (so the dependent veto simply doesn't fire)."""
+    if not ticker:
+        return None
+    s = _closes(ticker)
+    try:
+        if s is None or len(s) <= sessions:
+            return None
+        last = float(s.iloc[-1])
+        base = float(s.iloc[-1 - sessions])
+        return (last / base - 1.0) if base > 0 else None
+    except Exception:
+        return None
+
+
+def _commodity_regime(symbol: str) -> dict | None:
+    """Trend read on a driving COMMODITY (e.g. GC=F for gold miners) from its own price series:
+    {above_200d_trend, mom_60d_pct, downtrend}. None when no history is available. A commodity
+    below its 200d trend with non-trivial 60d weakness is a BEAR regime — the gold-miner trap."""
+    s = _closes(symbol)
+    try:
+        if s is None or len(s) < 60:
+            return None
+        last = float(s.iloc[-1])
+        ref = s.tail(200) if len(s) >= 200 else s
+        sma200 = float(ref.mean())
+        above200 = last > sma200
+        base60 = float(s.iloc[-60])
+        mom60 = (last / base60 - 1.0) * 100.0 if base60 > 0 else None
+        return {"above_200d_trend": above200, "mom_60d_pct": mom60,
+                "downtrend": (not above200) and ((mom60 or 0.0) <= -2.0)}
+    except Exception:
+        return None
+
+
+# falling-knife thresholds: a sharp, recent multi-day decline we must NOT buy INTO (confirmation
+# over prediction — wait for it to stop falling). Tuned to catch a ~4-day -10% freefall (the LPG
+# case) that the slow MA / 52w-high fields are still blind to.
+_FALL_5D = -0.09          # <= -9% over the last 5 sessions
+_FALL_10D = -0.14         # <= -14% over the last 10 sessions
+# minimum upside/downside cone for a NEW full-size buy — a symmetric (or inverted) cone is "not
+# actually asymmetric", so it does not earn a discretionary conviction slot.
+_ASYM_GATE_MIN = 1.1
+
+
 def _valuation_dir(value_z, cheap, fwd, rev_cagr, eps_cagr):
     """GROWTH-ADJUSTED valuation direction + the PEG used. The raw value factor (P/B, P/S, EY)
     structurally flags every hyper-growth leader 'expensive'; we consult forward-P/E-vs-growth so
@@ -214,13 +327,26 @@ def _trend_row(d) -> dict:
     #   • below 50dma AND MACD- AND RSI < 40 — momentum breaking down.
     off = offhi if offhi is not None else 0
     below200_broken = a200 is False and (p200 is None or p200 <= -2)   # a MEANINGFUL break, not a shallow cross
+    # STRUCTURAL downtrend (slow signals) — this is the "name is broken" read and is a HARD exit.
     downtrend = below200_broken \
         or (a50 is False and off <= -18) \
         or (a50 is False and macd is False and off <= -16) \
         or (a50 is False and macd is False and (rsi is not None and rsi < 40))
-    # CONFIRMED UPTREND (bull): above both MAs, MACD+, healthy (not overbought) RSI, near the high.
+    # FALLING KNIFE (acute velocity) — a sharp, RECENT multi-day collapse the slow fields miss: a
+    # name fresh off its highs that just dropped ~10% in four sessions is still above its 200dma,
+    # only mildly off its 52w high, and MACD hasn't crossed — so every structural test above is
+    # silent (the LPG freefall the gate bought into). Computed from the real price series. This is
+    # an ENTRY veto (don't catch the knife), NOT a structural-downtrend hard exit — so a name we
+    # already hold isn't churned out on a single rough week (the synthesis gate splits them).
+    tkr = d.get("ticker")
+    r5 = _recent_return(tkr, 5)
+    r10 = _recent_return(tkr, 10)
+    falling_fast = (r5 is not None and r5 <= _FALL_5D) or (r10 is not None and r10 <= _FALL_10D)
+    # CONFIRMED UPTREND (bull): above both MAs, MACD+, healthy (not overbought) RSI, near the high
+    # AND not in a fresh freefall.
     uptrend = (a50 is True and a200 is True and macd is True
-               and (rsi is None or 45 <= rsi <= 75) and (offhi is None or offhi > -12))
+               and (rsi is None or 45 <= rsi <= 75) and (offhi is None or offhi > -12)
+               and not falling_fast)
     notes = []
     if a200 is False:
         notes.append("below 200dma (trend broken)")
@@ -232,13 +358,23 @@ def _trend_row(d) -> dict:
         notes.append(f"{offhi:.0f}% off 52w high")
     if rsi is not None and rsi < 40:
         notes.append(f"RSI {rsi:.0f}")
+    if falling_fast:
+        _drop = min([x for x in (r5, r10) if x is not None], default=None)
+        if _drop is not None:
+            notes.append(f"down {_drop * 100:.0f}% in recent sessions (falling knife)")
     direction = "bear" if downtrend else "bull" if uptrend else "neutral"
-    note = ("downtrend — " + ", ".join(notes)) if direction == "bear" else \
-           "price confirmed (uptrend intact)" if direction == "bull" else \
-           "in a pullback / unconfirmed — not a downtrend"
+    if direction == "bear":
+        note = "downtrend — " + ", ".join(notes)
+    elif falling_fast:
+        note = "falling knife — " + ", ".join(notes)
+    elif direction == "bull":
+        note = "price confirmed (uptrend intact)"
+    else:
+        note = "in a pullback / unconfirmed — not a downtrend"
     return _row("trend", {"above50": a50, "above200": a200, "pct_vs_50dma": p50,
                           "pct_vs_200dma": p200, "macd_pos": macd, "rsi14": rsi,
                           "off_52w_high_pct": offhi, "downtrend": downtrend,
+                          "falling_fast": falling_fast, "ret_5d": r5, "ret_10d": r10,
                           "confirmed_uptrend": uptrend}, "validated", direction, note)
 
 
@@ -272,9 +408,27 @@ def _sector_rs_row(d) -> dict:
     a steep recent 60-day decline); bull = top-RS benchmark above its trend."""
     sec = (d or {}).get("sector")
     ticker = (d or {}).get("ticker")
-    etf = _COMMODITY_PROXY.get((ticker or "").upper()) or _SECTOR_ETF.get(sec)
+    proxy = _COMMODITY_PROXY.get((ticker or "").upper())
+    etf = proxy or _SECTOR_ETF.get(sec)
     r = _load("data/regime/latest.json") or {}
     rec = next((x for x in (r.get("sector_rs") or []) if x.get("ticker") == etf), None) if etf else None
+    # COMMODITY-DRIVEN name (a miner): the regime's sector-ETF RS table does NOT carry the driving
+    # commodity (GC=F), so a gold miner in a gold BEAR market would otherwise read 'missing' here
+    # and sail through the leadership gate — exactly the NEM trap. Derive the commodity's regime
+    # from its OWN price series instead, and vote bear when it's below trend / falling.
+    if proxy and not rec:
+        cr = _commodity_regime(proxy)
+        if cr:
+            a200 = cr["above_200d_trend"]
+            mom60 = cr["mom_60d_pct"]
+            lagging = (a200 is False) and (cr["downtrend"] or (mom60 or 0) <= -2)
+            direction = "bull" if (a200 and (mom60 or 0) >= 8) else "bear" if lagging else "neutral"
+            note = (f"{sec or 'miner'} driven by {proxy}: "
+                    f"{'above' if a200 else 'below'} 200d trend"
+                    + (f", 60d {mom60:+.0f}%" if mom60 is not None else ""))
+            return _row("sector_rs", {"sector": sec, "etf": proxy, "commodity": proxy,
+                                      "above_200d_trend": a200, "mom_60d_pct": mom60,
+                                      "commodity_driven": True}, "validated", direction, note)
     if not rec:
         return _row("sector_rs", {"sector": sec, "etf": etf}, "missing", None, "no sector RS map")
     pct = rec.get("pctile_252d")
@@ -620,6 +774,15 @@ def synthesize(matrix: dict) -> dict:
     theme_dir = (by_lens.get("narrative") or {}).get("direction")
     sector_dir = (by_lens.get("sector_rs") or {}).get("direction")
     sector_lagging = sector_dir == "bear"            # name's sector is below its 200d trend + bottom-third RS
+    # ASYMMETRY GATE — a discretionary conviction buy must actually BE asymmetric (upside cone
+    # meaningfully larger than the downside cone). A symmetric (~1.0) or inverted cone is "not
+    # asymmetric" and does not earn a slot, no matter how the rest reads. None (no cone data) does
+    # NOT block — degrade gracefully, same as before.
+    asym_ratio = ((by_lens.get("asymmetry") or {}).get("value") or {}).get("upside_downside")
+    weak_asymmetry = asym_ratio is not None and asym_ratio < _ASYM_GATE_MIN
+    # FALLING KNIFE — an acute recent multi-day collapse blocks a NEW buy (don't catch the knife)
+    # but is kept SEPARATE from the structural downtrend so a held name isn't force-exited on it.
+    price_falling_fast = bool(((by_lens.get("trend") or {}).get("value") or {}).get("falling_fast"))
     # LEADERSHIP GATE (doctrine: be present in the leader; correlation-structure breaking is the
     # earliest signal). A cheap name in a hard-lagging sector is fighting the tape — it does not
     # get a BUY no matter how cheap, UNLESS it sits in a genuine LEADING theme (a cross-sectional
@@ -635,7 +798,8 @@ def synthesize(matrix: dict) -> dict:
     price_downtrend = trend_dir == "bear"
     if vetoes:
         size_authority = "blocked"
-    elif confluence > 0.3 and leadership_ok and not price_downtrend:
+    elif (confluence > 0.3 and leadership_ok and not price_downtrend
+          and not price_falling_fast and not weak_asymmetry):
         size_authority = "up"
     elif confluence < -0.3:
         size_authority = "down"
@@ -646,7 +810,9 @@ def synthesize(matrix: dict) -> dict:
             "bloc_fund": fund, "bloc_macro": macro,
             "price_unconfirmed": trend_dir == "bear", "theme_unconfirmed": theme_dir == "bear",
             "sector_lagging": sector_lagging, "leadership_ok": leadership_ok,
-            "price_downtrend": price_downtrend, "size_authority": size_authority}
+            "price_downtrend": price_downtrend, "price_falling_fast": price_falling_fast,
+            "weak_asymmetry": weak_asymmetry, "asym_ratio": asym_ratio,
+            "size_authority": size_authority}
 
 
 def full(subject: str, kind: str = "name") -> dict:
