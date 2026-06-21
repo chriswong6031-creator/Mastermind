@@ -74,10 +74,29 @@ def _breadth_frame():
     return _BREADTH_FRAME
 
 
+# the engine's price universe (S&P large-caps, sector ETFs, commodity futures) trades FAR above $1, so
+# a sub-$1 (or non-positive) close is a CONTAMINATED tick — the breadth caches carry zero / sub-cent /
+# unadjusted ticks (a single $0.005 print next to a $170 one manufactures a +33,999% one-day "return").
+# Such a bad `base` price silently poisons the falling-knife velocity (_recent_return) and commodity
+# regime reads. Drop them so a data error can't fire (or suppress) a veto. Conservative: it only ever
+# removes implausible prices, never a real one for this universe.
+_PRICE_FLOOR = 1.0
+
+
+def _clean_closes(s):
+    """Drop non-positive / sub-$1 contaminated ticks from a close-price Series (returns it unchanged
+    on any error). Idempotent and safe for the engine's liquid universe."""
+    try:
+        cleaned = s[s >= _PRICE_FLOOR]
+        return cleaned if len(cleaned) else s
+    except Exception:
+        return s
+
+
 def _closes(ticker: str):
-    """Cached ascending close-price Series for a ticker (single name OR ETF/commodity), or None.
-    Mirrors paper_account: the breadth parquet first (S&P single names), then the yahoo store
-    (sector ETFs, SPY, commodity futures like GC=F)."""
+    """Cached ascending, CLEANED close-price Series for a ticker (single name OR ETF/commodity), or
+    None. Mirrors paper_account: the breadth parquet first (S&P single names), then the yahoo store
+    (sector ETFs, SPY, commodity futures like GC=F). Contaminated sub-$1 ticks are dropped."""
     if ticker in _SERIES_CACHE:
         return _SERIES_CACHE[ticker]
     s = None
@@ -100,7 +119,7 @@ def _closes(ticker: str):
         except Exception:
             s = None
     try:
-        s = s.sort_index() if (s is not None and len(s) > 0) else None
+        s = _clean_closes(s.sort_index()) if (s is not None and len(s) > 0) else None
     except Exception:
         s = None
     _SERIES_CACHE[ticker] = s
