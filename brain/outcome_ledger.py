@@ -1,20 +1,22 @@
-"""Calibration capture — the engine's CONSCIENCE (closes the perception-to-outcome loop).
+"""Outcome ledger — the per-thesis reliability + LENS-EDGE substrate (the self-calibrating gate's input).
 
-A correct engine asserts probabilities it never verifies. This records, when a thesis resolves, a
-CALIBRATION RECORD that joins three things the engine otherwise never connects:
+Coexists with, and is complementary to, brain/calibration.py (which de-confidences agents with a
+shrink-only multiplier). This module does the OTHER half of closing the perception-to-outcome loop:
+when a thesis resolves, it records a row joining three things the engine otherwise never connects:
   1. what it PREDICTED   — prob_correct + the falsifier (brain/decision, brain/ledger),
   2. what HAPPENED        — realized rel-return vs SPY and the hit/miss (brain/scorer.realize_returns),
   3. what it SAW          — the point-in-time lens snapshot at decision time (brain/signal_history).
 
 From these it answers the two questions that turn opinion into skill: "when the engine said 60%, was
-it right 60%?" (reliability) and "which lenses/regimes actually predicted?" (lens_edge) — the exact
-input a future SELF-CALIBRATING gate consumes. No resolutions exist until the first cohort matures
-(~2026-07-17); this is the plumbing so that cohort is captured cleanly the day it lands.
+it right 60%?" (reliability) and "which LENSES/regimes actually predicted?" (lens_edge) — the exact
+input a future SELF-CALIBRATING gate consumes to weight lenses by realized edge instead of equal
+votes. No resolutions exist until the first cohort matures (~2026-07-17); this is the plumbing so that
+cohort is captured cleanly the day it lands.
 
-Append-only JSONL (data/brain/calibration.jsonl), KEEP-FIRST per thesis_id. Crash-safe / degrade-never.
-Decoupled: `realized` may be passed in (to share the track-record's source) or computed via
-scorer.realize_returns. Records whose decision predates signal_history simply carry an empty lens
-snapshot — reliability still works from day one; lens_edge compounds as fully-recorded cohorts resolve.
+Append-only JSONL (data/brain/outcome_ledger.jsonl), KEEP-FIRST per thesis_id. Crash-safe / degrade-
+never. Decoupled: `realized` may be passed in (to share the track-record's source) or computed via
+scorer.realize_returns. Records whose decision predates signal_history carry an empty lens snapshot —
+reliability still works from day one; lens_edge compounds as fully-recorded cohorts resolve.
 """
 from __future__ import annotations
 
@@ -25,7 +27,7 @@ from pathlib import Path
 from brain.ledger import all_theses
 
 _ROOT = Path(__file__).resolve().parent.parent
-_PATH = _ROOT / "data" / "brain" / "calibration.jsonl"
+_PATH = _ROOT / "data" / "brain" / "outcome_ledger.jsonl"
 
 
 def _now_iso() -> str:
@@ -90,7 +92,7 @@ def _outcome(check: dict, realized: float) -> int | None:
 
 
 def resolve(asof, realized: dict | None = None, *, theses: list | None = None) -> int:
-    """Emit calibration records for every thesis that has resolved (id present in `realized`), joining
+    """Emit ledger records for every thesis that has resolved (id present in `realized`), joining
     prediction + outcome + the decision-time lens snapshot. KEEP-FIRST per thesis_id. Returns the
     count written. `realized` defaults to scorer.realize_returns(asof). Never raises."""
     try:
