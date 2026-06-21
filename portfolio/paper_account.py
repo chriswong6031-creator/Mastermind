@@ -259,18 +259,24 @@ def rebalance(
 
     fills: list[dict] = []
 
-    # ---- determine target shares for each ticker ----
+    # ---- determine target shares for each ticker we can PRICE this run ----
+    targeted = set(target_weights)                 # everything we INTEND to hold (priced or not)
     target_shares: dict[str, float] = {}
     for ticker, weight in target_weights.items():
         px = prices.get(ticker)
         if px is None or px <= 0:
-            continue
+            continue                               # targeted but unpriceable this run -> carry, don't trade
         target_dollar = weight * current_nav
         target_shares[ticker] = target_dollar / px
 
     # ---- process sells first (free up cash before buys) ----
+    # ONLY adjust a held position we can price AND that is in the target. A held name that is
+    # targeted but has no price THIS run is NOT touched (the old code defaulted its target to 0 and
+    # liquidated the whole position on a transient missing quote — a spurious exit).
     for ticker, pos in list(state["positions"].items()):
-        tgt = target_shares.get(ticker, 0.0)
+        if ticker not in target_shares:
+            continue
+        tgt = target_shares[ticker]
         cur = pos["shares"]
         diff = tgt - cur
         if diff < -1e-9:
@@ -290,9 +296,9 @@ def rebalance(
                 "value": round(value, 2),
             })
 
-    # also close out tickers no longer in target
+    # close out only tickers GENUINELY dropped from the target (not merely unpriceable this run)
     for ticker in list(state["positions"].keys()):
-        if ticker not in target_shares:
+        if ticker not in targeted:
             pos = state["positions"][ticker]
             px = prices.get(ticker, pos["avg_cost"])
             sell_shares = pos["shares"]

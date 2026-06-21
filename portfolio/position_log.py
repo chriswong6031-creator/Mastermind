@@ -84,6 +84,7 @@ def update(positions: list[dict], asof_iso: str) -> None:
                 "entry_price": price,
                 "current_weight": weight,
                 "thesis_id": p.get("thesis_id"),
+                "time_stop_by": p.get("time_stop_by"),
                 "history": [{"event": "open", "ts": now, "weight": weight, "price": price}],
             }
         else:
@@ -97,7 +98,11 @@ def update(positions: list[dict], asof_iso: str) -> None:
                 entry["still_open"] = True
                 entry["entry_weight"] = weight
                 entry["entry_price"] = price
+                entry["time_stop_by"] = p.get("time_stop_by")
                 entry["history"].append({"event": "open", "ts": now, "weight": weight, "price": price})
+            # backfill the time-stop clock for an already-open entry that predates this field
+            elif entry.get("time_stop_by") is None and p.get("time_stop_by"):
+                entry["time_stop_by"] = p.get("time_stop_by")
 
             # track material weight changes
             prior_weight = entry.get("current_weight") or 0.0
@@ -138,6 +143,8 @@ def open_positions() -> list[dict]:
             "entry_weight": e.get("entry_weight"),
             "current_weight": e.get("current_weight"),
             "entry_price": e.get("entry_price"),
+            "time_stop_by": e.get("time_stop_by"),
+            "thesis_id": e.get("thesis_id"),
         })
     # newest first (most recently opened)
     out.sort(key=lambda x: x.get("opened_at") or "", reverse=True)
@@ -195,4 +202,5 @@ def get_entry_info(sleeve: str, ticker: str) -> dict:
         "opened_at": e.get("opened_at"),
         "held_days": _held_days(e.get("opened_at")),
         "entry_price": e.get("entry_price"),
+        "time_stop_by": e.get("time_stop_by"),
     }

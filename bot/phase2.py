@@ -74,6 +74,36 @@ def _is_hard_exit(syn: dict) -> bool:
             or syn.get("size_authority") == "blocked")
 
 
+def _build_d5_lots(open_positions: list[dict], prices: dict, sector_pctile: dict,
+                   leader_pctile, asof_date) -> list[dict]:
+    """Assemble the D5 dead-capital lots from open CONVICTION positions: the time-stop clock
+    (time_stop_by), the realized rel-return since entry (current px vs stored entry px), and the RS
+    gap to the leading sector (the sector-pctile gap is a robust proxy — the engine carries no
+    stable per-name RS pctile). detectors.d5_dead_capital then flags any lot that is elapsed AND
+    unresolved AND lagging. (Inputs were never populated before, so D5 could never fire.)"""
+    from datetime import date as _date
+    lots: list[dict] = []
+    for p in open_positions:
+        if p.get("sleeve") != "conviction":
+            continue
+        tsb = p.get("time_stop_by")
+        if not tsb:
+            continue
+        try:
+            tsb_d = _date.fromisoformat(tsb) if isinstance(tsb, str) else tsb
+        except Exception:
+            continue
+        t = p["ticker"]
+        entry, cur = p.get("entry_price"), prices.get(t)
+        rel = (cur / entry - 1.0) if (entry and cur and float(entry) > 0) else 0.0
+        sp = sector_pctile.get(t)
+        gap = (max(0.0, (leader_pctile - sp) / 100.0)
+               if (sp is not None and leader_pctile is not None) else 0.0)
+        lots.append({"ticker": t, "id": p.get("thesis_id"), "time_stop_by": tsb_d,
+                     "rel_return_since_entry": round(rel, 4), "rs_leader_gap": round(gap, 4)})
+    return lots
+
+
 def run(asof: str | None = None, force: bool = False, research: bool = False) -> dict:
     # —— open run log ——
     _run_id: str | None = None
@@ -135,6 +165,20 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
             if _run_id:
                 runlog.end_run(_run_id, summary=f"carried forward — no material change"
                                + (f"; hard-exit swept {_swept}" if _swept else ""))
+        except Exception:
+            pass
+        # mark the paper-account NAV even on a carried day (read-only snapshot of held positions at
+        # current prices — no trades) so the equity curve advances daily, not only on rebuild days.
+        try:
+            from portfolio import paper_account as _pa_mark
+            _open_tk = {hp["ticker"] for hp in position_log.open_positions()}
+            _mp = {}
+            for _t in _open_tk | {"SPY"}:
+                _px = _pa_mark._current_price(_t)
+                if _px and _px > 0:
+                    _mp[_t] = _px
+            if _mp:
+                _pa_mark.mark(_mp, asof)
         except Exception:
             pass
         return {"ran": False, "reason": "carried forward (no material change)",
@@ -329,6 +373,34 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
     fired = detectors.d3_no_rotation_capacity(cash, top_theme_conc, "self") + \
         detectors.d6_cap_breach(capped["breaches"], "self")
 
+    # D5 dead-capital time-stop (advisory) — surface conviction lots that are past their time_stop_by
+    # AND flat/negative since entry AND lagging the leading sector. Previously unwired with unpopulated
+    # inputs, so it could never fire. (Advisory like D3/D6 — it flags dead capital for redeploy; it
+    # does not itself force the exit.)
+    try:
+        from portfolio import paper_account as _pa_d5
+        # use the PRE-update ledger so a carried name carries its ORIGINAL time_stop_by (the book's is
+        # recomputed each run, which would reset the clock and the time-stop could never elapse), and
+        # restrict to names still in today's book.
+        _book_conv = {p["ticker"] for p in book if p.get("sleeve") == "conviction"}
+        _open_conv = [hp for hp in position_log.open_positions()
+                      if hp.get("sleeve") == "conviction" and hp["ticker"] in _book_conv]
+        _leader_pctile = secrs[0].get("pctile_252d") if secrs else None
+        _etf_pctile = {x.get("ticker"): x.get("pctile_252d") for x in secrs}
+        _sector_pctile, _d5_prices = {}, {}
+        for _hp in _open_conv:
+            _t = _hp["ticker"]
+            _sd = lenses_mod._load(f"site/stockdata/{_t}.json") or {}
+            _sector_pctile[_t] = _etf_pctile.get(lenses_mod._SECTOR_ETF.get(_sd.get("sector")))
+            _px = _pa_d5._current_price(_t)
+            if _px:
+                _d5_prices[_t] = _px
+        _d5_lots = _build_d5_lots(_open_conv, _d5_prices, _sector_pctile, _leader_pctile,
+                                  date.fromisoformat(asof))
+        fired = fired + detectors.d5_dead_capital(_d5_lots, date.fromisoformat(asof), "self")
+    except Exception as _e:
+        _rl_log(_run_id, "decision", "d5 wiring error", f"{_e!r}"[:160])
+
     if fired:
         _rl_log(_run_id, "decision", "detectors fired",
                 f"codes={[d['code'] for d in fired]}")
@@ -354,6 +426,9 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
         p["held_days"] = ledger_info.get("held_days")
         if p.get("entry_price") is None:
             p["entry_price"] = ledger_info.get("entry_price")
+        # honest time-stop: count from the ORIGINAL entry (persisted), not this run's recomputed value
+        if ledger_info.get("time_stop_by"):
+            p["time_stop_by"] = ledger_info["time_stop_by"]
 
         sleeve = p.get("sleeve", "leadership")
         if sleeve == "conviction":
@@ -369,8 +444,45 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
     for p in book:
         store.upsert_position(con, asof, {**p, "size_pct": int(round(p["weight"] * 100)),
                                           "cycle_blocked": 0, "reason": {"sleeve": p["sleeve"]}})
-    tr = scorer.track_record(date.fromisoformat(asof))
+
+    # Brier track record — feed REALIZED rel-returns (the scorer was always called with realized={}
+    # and so was permanently stuck at n=0). Then CLOSE resolved theses so they leave the open set.
+    _realized: dict = {}
+    try:
+        _realized = scorer.realize_returns(asof)
+    except Exception:
+        _realized = {}
+    tr = scorer.track_record(date.fromisoformat(asof), realized=_realized)
+    if _realized:
+        _by_id = {t["id"]: t for t in ledger.all_theses()}
+        for _tid, _rr in _realized.items():
+            _th = _by_id.get(_tid)
+            if _th and _th.get("status", "open") == "open":
+                try:
+                    ledger.close(_th["subject"], "resolved", realized=_rr)
+                except Exception:
+                    pass
     store.save_track_record(con, asof, tr)
+
+    # ———— paper $1M account: actually TRADE the book + MARK NAV (was never wired) ————
+    try:
+        from collections import defaultdict as _dd
+        from portfolio import paper_account
+        _tw: dict = _dd(float)
+        for p in book:
+            _tw[p["ticker"]] += p.get("weight", 0.0)
+        _prices: dict = {}
+        for _t in set(_tw) | {"SPY"}:
+            _px = paper_account._current_price(_t)
+            if _px and _px > 0:
+                _prices[_t] = _px
+        paper_account.rebalance(dict(_tw), _prices, asof)
+        paper_account.mark(_prices, asof)
+        _rl_log(_run_id, "book_step", "paper account marked",
+                f"priced={len(_prices)}/{len(_tw) + 1} positions={len(_tw)}")
+    except Exception as _e:
+        _rl_log(_run_id, "decision", "paper account error", f"{_e!r}"[:160])
+
     store.record_run(con, asof, True, decision["triggers"], sig, datetime.now(timezone.utc).isoformat())
 
     payload = {
