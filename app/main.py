@@ -71,7 +71,13 @@ if FastAPI is not None:
     @app.on_event("startup")
     def _start_scheduler():
         from app import scheduler
-        app.state.scheduler = scheduler.start()   # daily loop on cron; None if apscheduler absent
+        app.state.scheduler = scheduler.start()   # daily loops on cron; None if apscheduler absent
+        # First turn-on: let the autonomous book buy right away instead of waiting for the next
+        # scheduled close. No-op once it has a track record; runs in a daemon thread (non-blocking).
+        try:
+            app.state.autonomous_first_run = scheduler.maybe_first_autonomous_run()
+        except Exception:
+            app.state.autonomous_first_run = False
 
     @app.post("/daily")
     def daily(force: bool = False) -> dict:
@@ -80,6 +86,24 @@ if FastAPI is not None:
         out = run_daily(force=force)
         return {k: out.get(k) for k in ("asof", "research", "competitor")} | {
             "book_ran": (out.get("book") or {}).get("ran")}
+
+    @app.post("/api/autonomous/run")
+    async def autonomous_run(force: bool = False, wait: bool = False) -> dict:
+        """Manually fire the autonomous Opus-Brain book (research → free-form rebalance).
+
+        The Brain call is long; by default this starts it in the background and returns
+        immediately. Pass ?wait=true to block until it finishes (returns the run summary)."""
+        from bot import autonomous
+        if wait:
+            import asyncio as _aio
+            out = await _aio.to_thread(autonomous.run_autonomous, force=force)
+            return {k: out.get(k) for k in
+                    ("asof", "inaugural", "trading_day", "decided", "holdings",
+                     "executed", "skipped_unpriceable", "nav", "brain")}
+        import threading
+        threading.Thread(target=lambda: autonomous.run_autonomous(force=force),
+                         name="autonomous-manual-run", daemon=True).start()
+        return {"started": True, "note": "Autonomous Brain run started in the background."}
 
     @app.post("/research")
     async def research(req: ResearchReq) -> dict:

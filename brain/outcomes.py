@@ -27,9 +27,10 @@ _TARGET_PCT = 0.15
 _STOP_PCT = -0.10
 
 
-def _closes(ticker: str, start: str, end: str) -> dict:
+def _closes(ticker: str, start: str, end: str, cache: bool = True) -> dict:
     """{YYYY-MM-DD: close} over [start, end]. Local macro yahoo parquet first (free, covers SPY
-    + tracked names), Polygon daily aggregates as the single-name fallback. {} if unavailable."""
+    + tracked names), Polygon daily aggregates as the single-name fallback. Non-positive closes
+    are dropped on both paths. `cache` only governs the Polygon disk cache (immutable windows)."""
     t = (ticker or "").upper().strip()
     if not t:
         return {}
@@ -44,14 +45,9 @@ def _closes(ticker: str, start: str, end: str) -> dict:
         pass
     try:
         from data_layer import polygon
-        return polygon.daily_closes(t, start, end)
+        return polygon.daily_closes(t, start, end, cache=cache)
     except Exception:  # noqa: BLE001
         return {}
-
-
-def _aligned(subj_c: dict, vs_c: dict, entry_iso: str) -> list:
-    """Sorted trading dates present in BOTH series and on/after the entry date."""
-    return sorted(d for d in subj_c if d in vs_c and d >= entry_iso)
 
 
 def label_thesis(thesis: dict, asof: date | None = None) -> dict | None:
@@ -76,30 +72,43 @@ def label_thesis(thesis: dict, asof: date | None = None) -> dict | None:
         if not (subj and entry_iso):
             return base
         d0 = date.fromisoformat(entry_iso)
-        # business→calendar buffer (×1.6 + slack) so holidays/weekends don't truncate the window
-        end = min(d0 + timedelta(days=int(horizon * 1.6) + 8), asof)
-        lo = (d0 - timedelta(days=7)).isoformat()
-        hi = (end + timedelta(days=3)).isoformat()
-        subj_c, vs_c = _closes(subj, lo, hi), _closes(vs, lo, hi)
+        asof_iso = asof.isoformat()
+        # deterministic (asof-independent) end of the falsifier window; ×1.6 + slack converts the
+        # business-day horizon to a safe calendar span across weekends/holidays.
+        final_end = d0 + timedelta(days=int(horizon * 1.6) + 8)
+        is_final = final_end <= asof              # horizon fully elapsed → window is immutable
+        req_end = min(final_end, asof)            # NEVER request data past asof (no look-ahead)
+        lo = (d0 - timedelta(days=10)).isoformat()
+        subj_c = _closes(subj, lo, req_end.isoformat(), cache=is_final)
+        vs_c = _closes(vs, lo, req_end.isoformat(), cache=is_final)
         if not subj_c or not vs_c:
             return base
-        dates = _aligned(subj_c, vs_c, entry_iso)
-        if len(dates) < 2:
+        # common trading dates, sorted, never past asof (belt-and-suspenders look-ahead guard)
+        common = sorted(d for d in subj_c if d in vs_c and d <= asof_iso)
+        if len(common) < 2:
             return base
-        p0s = float(entry_px) if entry_px else subj_c[dates[0]]
-        p0v = vs_c[dates[0]]
+        # anchor BOTH baselines to the SAME date — the last close on/before the entry date — so the
+        # subject and benchmark returns are measured from the identical moment. A weekend/holiday
+        # state_asof no longer shifts the SPY baseline forward and contaminate rel_return.
+        on_or_before = [d for d in common if d <= entry_iso]
+        anchor = on_or_before[-1] if on_or_before else common[0]
+        post = common[common.index(anchor):]      # anchor + every trading day forward
+        if len(post) < 2:
+            return base
+        p0s = float(entry_px) if entry_px else subj_c[anchor]
+        p0v = vs_c[anchor]
         if not (p0s and p0v):
             return base
-        resolved = (len(dates) - 1) >= horizon
-        idx = min(horizon, len(dates) - 1)
-        dh = dates[idx]
+        resolved = (len(post) - 1) >= horizon
+        idx = min(horizon, len(post) - 1)
+        dh = post[idx]
         abs_ret = subj_c[dh] / p0s - 1.0
         vs_ret = vs_c[dh] / p0v - 1.0
         rel = abs_ret - vs_ret
         # triple-barrier scan over the realized path up to the horizon (absolute price)
         target_px, stop_px = p0s * (1 + _TARGET_PCT), p0s * (1 + _STOP_PCT)
         barrier, bdate, bpx = None, dh, subj_c[dh]
-        for d in dates[1:idx + 1]:
+        for d in post[1:idx + 1]:
             px = subj_c[d]
             if px >= target_px:
                 barrier, bdate, bpx = "target", d, px

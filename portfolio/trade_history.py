@@ -22,12 +22,22 @@ _ROOT = Path(__file__).resolve().parent.parent
 _FILLS_PATH = _ROOT / "data" / "portfolio" / "fills.jsonl"
 
 
-def _load_fills() -> list[dict]:
+def _fills_path(portfolio_id: str | None = None) -> Path:
+    """Resolve the fills file. None/default → the legacy module-global (kept patchable
+    for the test fixtures); any other id → data/portfolios/<id>/fills.jsonl."""
+    from portfolio import registry
+    if not portfolio_id or portfolio_id == registry.DEFAULT_ID:
+        return _FILLS_PATH
+    return registry.data_dir(portfolio_id) / "fills.jsonl"
+
+
+def _load_fills(portfolio_id: str | None = None) -> list[dict]:
     """All fills, oldest first (stable within a date). Skips corrupt lines."""
-    if not _FILLS_PATH.exists():
+    path = _fills_path(portfolio_id)
+    if not path.exists():
         return []
     rows: list[dict] = []
-    for i, line in enumerate(_FILLS_PATH.read_text(encoding="utf-8").splitlines()):
+    for i, line in enumerate(path.read_text(encoding="utf-8").splitlines()):
         line = line.strip()
         if not line:
             continue
@@ -41,7 +51,8 @@ def _load_fills() -> list[dict]:
     return rows
 
 
-def history(live_prices: Optional[dict[str, float]] = None) -> list[dict]:
+def history(live_prices: Optional[dict[str, float]] = None,
+            portfolio_id: str | None = None) -> list[dict]:
     """Return the complete blotter, NEWEST first. Each row:
 
         {date, ticker, action: 'buy'|'sell', shares, price, value, exit_price,
@@ -50,7 +61,7 @@ def history(live_prices: Optional[dict[str, float]] = None) -> list[dict]:
 
     `live_prices` ({TICKER: px}) marks open BUY remainders to market for unrealized.
     """
-    fills = _load_fills()
+    fills = _load_fills(portfolio_id)
     live = {(k or "").upper(): v for k, v in (live_prices or {}).items()}
     # ticker -> FIFO queue of [shares_remaining, cost, row_ref]
     lots: dict[str, deque] = defaultdict(deque)
@@ -115,6 +126,6 @@ def history(live_prices: Optional[dict[str, float]] = None) -> list[dict]:
     return rows
 
 
-def realized_total() -> float:
+def realized_total(portfolio_id: str | None = None) -> float:
     """Sum of realized P&L across all closed (matched) shares — paper lifetime."""
-    return round(sum((r.get("realized_pnl") or 0.0) for r in history()), 2)
+    return round(sum((r.get("realized_pnl") or 0.0) for r in history(portfolio_id=portfolio_id)), 2)

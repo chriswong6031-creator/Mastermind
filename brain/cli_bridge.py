@@ -76,19 +76,21 @@ async def reason(prompt: str, *, role: str = "pm", model: str | None = None,
                  allowed_tools: list[str] | None = None, add_dirs: list[str] | None = None,
                  max_turns: int | None = None, cwd: str | None = None,
                  arm: bool = False, resume: str | None = None,
+                 mcp_servers: dict | None = None,
                  log_run: bool = True) -> dict:
-    """Run a headless Claude Code reasoning pass. With arm=True, attaches the bot's MCP
-    tools (read the dashboard + write conclusions back) + WebSearch/WebFetch and runs a
-    multi-turn research loop. Returns {ok, text, model, role, armed, tools_used, cost_usd,
-    session_id, usage, backend, error}."""
+    """Run a headless Claude Code reasoning pass. With arm=True, attaches MCP tools (read the
+    dashboard + write conclusions back) + WebSearch/WebFetch and runs a multi-turn research loop.
+    Pass `mcp_servers` (with a matching `allowed_tools`) to arm a CUSTOM tool surface — e.g. the
+    autonomous desk's free-form trade tools — instead of the default gated bot server. Returns
+    {ok, text, model, role, armed, tools_used, cost_usd, session_id, usage, backend, error}."""
     c = _cfg()
     rc = c.get("reasoning", {})
-    mcp_servers = None
     if arm:
-        from brain import bot_mcp
-        mcp_servers = {bot_mcp.SERVER_NAME: bot_mcp.build_server()}
-        if allowed_tools is None:
-            allowed_tools = bot_mcp.armed_allowed_tools()
+        if mcp_servers is None:
+            from brain import bot_mcp
+            mcp_servers = {bot_mcp.SERVER_NAME: bot_mcp.build_server()}
+            if allowed_tools is None:
+                allowed_tools = bot_mcp.armed_allowed_tools()
         if role == "pm":
             role = "deep"
         max_turns = max_turns or rc.get("research_max_turns", 16)

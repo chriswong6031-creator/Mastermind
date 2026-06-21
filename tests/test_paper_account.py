@@ -328,6 +328,61 @@ def test_realized_uses_nav_history(tmp_account: None) -> None:
     )
 
 
+def test_queue_orders_when_closed_does_not_fill(tmp_account: None) -> None:
+    """Queuing a buy while the market is closed must NOT move cash or positions —
+    it only records a PENDING order sized at the estimated (prev-close) price."""
+    from portfolio import paper_account
+
+    pending = paper_account.queue_orders(
+        {"AAPL": 0.4, "MSFT": 0.4}, _PRICES_1, "2026-06-21", fill_after="2026-06-22",
+    )
+    state = paper_account._load_account()
+    assert state["positions"] == {}                      # nothing bought
+    assert abs(state["cash"] - paper_account._STARTING_NAV) < 1e-6  # full cash intact
+    assert paper_account._load_jsonl(paper_account._FILLS_PATH) == []  # no fills
+
+    assert {o["ticker"] for o in pending} == {"AAPL", "MSFT"}
+    aapl = next(o for o in pending if o["ticker"] == "AAPL")
+    assert aapl["side"] == "buy" and aapl["status"] == "pending"
+    assert aapl["est_price"] == _PRICES_1["AAPL"]
+    assert abs(aapl["shares"] - (0.4 * paper_account._STARTING_NAV) / _PRICES_1["AAPL"]) < 0.01
+    assert aapl["fill_after"] == "2026-06-22"
+    assert paper_account.load_pending() == pending       # persisted
+
+
+def test_fill_pending_executes_at_market_price(tmp_account: None) -> None:
+    """At the open, pending orders fill for their queued share count at the REAL
+    market price (here +10% vs the prev-close estimate), then the queue clears."""
+    from portfolio import paper_account
+
+    paper_account.queue_orders({"AAPL": 0.5}, _PRICES_1, "2026-06-21", fill_after="2026-06-22")
+    want = paper_account.load_pending()[0]["shares"]
+
+    fills = paper_account.fill_pending(_PRICES_2, "2026-06-22")   # AAPL 200 -> 220
+    assert len(fills) == 1
+    assert fills[0]["ticker"] == "AAPL"
+    assert fills[0]["price"] == _PRICES_2["AAPL"]                 # filled at market, not estimate
+    assert fills[0].get("from_pending") is True
+
+    state = paper_account._load_account()
+    assert abs(state["positions"]["AAPL"]["shares"] - want) < 1e-6  # full share count filled
+    assert paper_account.load_pending() == []                    # queue drained
+    # cash spent at the higher market price
+    assert abs(state["cash"] - (paper_account._STARTING_NAV - want * _PRICES_2["AAPL"])) < 1.0
+
+
+def test_fill_pending_keeps_unpriceable_orders_queued(tmp_account: None) -> None:
+    from portfolio import paper_account
+
+    # ZZZZ is a non-existent ticker: no market price and no price-store fallback
+    paper_account.queue_orders({"AAPL": 0.3, "ZZZZ": 0.3},
+                               {"AAPL": 200.0, "ZZZZ": 50.0}, "2026-06-21")
+    # only AAPL has a market price at the open; ZZZZ stays queued (can't fill)
+    fills = paper_account.fill_pending({"AAPL": 200.0}, "2026-06-22")
+    assert {f["ticker"] for f in fills} == {"AAPL"}
+    assert {o["ticker"] for o in paper_account.load_pending()} == {"ZZZZ"}
+
+
 def test_max_drawdown_computed(tmp_account: None) -> None:
     from portfolio import paper_account
 
