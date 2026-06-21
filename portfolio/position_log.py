@@ -84,10 +84,18 @@ def update(positions: list[dict], asof_iso: str) -> None:
                 "entry_price": price,
                 "current_weight": weight,
                 "thesis_id": p.get("thesis_id"),
-                "history": [{"event": "open", "ts": now, "weight": weight, "price": price}],
+                "history": [{"event": "open", "ts": now, "as_of": asof_iso,
+                             "weight": weight, "price": price}],
             }
         else:
             entry = ledger[key]
+            # IDEMPOTENT PER BUILD DATE: a trade event is logged at most once per `as_of`. The book
+            # may be rebuilt many times intra-day (dev runs, event interrupts); those rebuilds
+            # update the weight silently — they are NOT each a new ADD/TRIM. Without this guard the
+            # activity feed shows phantom ADD/TRIM churn (e.g. AVGO ADD 4.8% / TRIM 3.5% / ADD 4.8%
+            # within a minute) from successive same-day rebuilds.
+            logged_today = (entry.get("history") or [{}])[-1].get("as_of") == asof_iso
+
             if not entry.get("still_open"):
                 # re-opened position — restart
                 entry["opened_at"] = now
@@ -97,28 +105,32 @@ def update(positions: list[dict], asof_iso: str) -> None:
                 entry["still_open"] = True
                 entry["entry_weight"] = weight
                 entry["entry_price"] = price
-                entry["history"].append({"event": "open", "ts": now, "weight": weight, "price": price})
+                if not logged_today:
+                    entry["history"].append({"event": "open", "ts": now, "as_of": asof_iso,
+                                             "weight": weight, "price": price})
+                    logged_today = True
 
-            # track material weight changes
+            # track material weight changes — one rebalance event per build date, not per rebuild
             prior_weight = entry.get("current_weight") or 0.0
-            if weight is not None and prior_weight is not None:
+            if weight is not None and prior_weight is not None and not logged_today:
                 delta = abs((weight or 0.0) - (prior_weight or 0.0))
                 if delta > _WEIGHT_CHANGE_THRESHOLD:
                     event = "add" if (weight or 0) > (prior_weight or 0) else "trim"
-                    entry["history"].append({"event": event, "ts": now,
+                    entry["history"].append({"event": event, "ts": now, "as_of": asof_iso,
                                              "weight": weight, "price": price})
 
             entry["last_seen"] = now
             entry["current_weight"] = weight
 
-    # --- handle positions that have left the book ---
+    # --- handle positions that have left the book (close once per build date) ---
     for key, entry in ledger.items():
         if entry.get("still_open") and key not in current_keys:
             entry["still_open"] = False
             entry["closed_at"] = now
             entry["close_as_of"] = asof_iso
-            entry["history"].append({"event": "close", "ts": now,
-                                     "weight": 0, "price": None})
+            if (entry.get("history") or [{}])[-1].get("as_of") != asof_iso:
+                entry["history"].append({"event": "close", "ts": now, "as_of": asof_iso,
+                                         "weight": 0, "price": None})
 
     _save(ledger)
 

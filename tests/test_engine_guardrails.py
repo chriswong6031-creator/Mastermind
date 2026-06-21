@@ -151,6 +151,24 @@ def test_theme_lens_fires_end_to_end():
 # profit calc: cost-basis reset wipes unrealized P&L
 # ---------------------------------------------------------------------------
 
+def test_position_log_idempotent_per_build_date(tmp_path, monkeypatch):
+    """Rebuilding the book many times with the SAME asof must not spam ADD/TRIM history (the
+    AVGO 'ADD 4.8% / TRIM 3.5% / ADD 4.8% within a minute' churn bug)."""
+    from portfolio import position_log as pl
+    monkeypatch.setattr(pl, "_LEDGER_PATH", tmp_path / "led.json", raising=False)
+    pl.update([{"ticker": "ZZZ", "sleeve": "conviction", "weight": 0.05, "entry_price": 10.0}], "2026-06-18")
+    # three intra-day rebuilds with jittering weights, same asof
+    for w in (0.03, 0.06, 0.04):
+        pl.update([{"ticker": "ZZZ", "sleeve": "conviction", "weight": w, "entry_price": 10.0}], "2026-06-18")
+    import json
+    hist = json.loads((tmp_path / "led.json").read_text())["conviction:ZZZ"]["history"]
+    assert len(hist) == 1 and hist[0]["event"] == "open", hist     # one event for the build date
+    # a NEW build date with a material change logs exactly one rebalance
+    pl.update([{"ticker": "ZZZ", "sleeve": "conviction", "weight": 0.02, "entry_price": 10.0}], "2026-06-19")
+    hist = json.loads((tmp_path / "led.json").read_text())["conviction:ZZZ"]["history"]
+    assert len(hist) == 2 and hist[-1]["event"] == "trim"
+
+
 def test_reset_cost_basis_zeroes_unrealized(tmp_path, monkeypatch):
     from portfolio import paper_account as pa
     monkeypatch.setattr(pa, "_DATA", tmp_path, raising=False)

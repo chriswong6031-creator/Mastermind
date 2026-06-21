@@ -21,6 +21,23 @@ def _isolate_runlog(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_positions_ledger(tmp_path, monkeypatch):
+    """Isolate the positions ledger + fills blotter so the real book build tests (phase2 /
+    tracking) don't write phantom ADD/TRIM history into the LIVE data/portfolio/*.json — which
+    otherwise pollutes the dashboard activity feed on every `pytest` run."""
+    try:
+        import portfolio.position_log as pl
+        monkeypatch.setattr(pl, "_LEDGER_PATH", tmp_path / "_positions_ledger.json", raising=False)
+    except Exception:
+        pass
+    try:
+        import portfolio.trade_history as th
+        monkeypatch.setattr(th, "_FILLS_PATH", tmp_path / "_fills.jsonl", raising=False)
+    except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
 def _isolate_research_papers(tmp_path, monkeypatch):
     """Force the deterministic research-paper path (no armed Claude session during pytest) and
     redirect the papers/feed-note writes into a tmp dir, so the book build's research gate never

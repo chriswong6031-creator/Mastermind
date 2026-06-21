@@ -199,6 +199,11 @@ def _client():
 
 def test_api_trades_returns_open_closed_shape():
     """/api/trades must return {open: [...], closed: [...]}."""
+    # seed an open position in the (test-isolated) ledger so this is self-contained and does not
+    # depend on the LIVE ledger having state (the conftest now isolates positions_ledger).
+    from portfolio import position_log
+    position_log.update([{"ticker": "TEST", "sleeve": "conviction", "weight": 0.05,
+                          "entry_price": 100.0}], "2026-06-18")
     client = _client()
     r = client.get("/api/trades")
     assert r.status_code == 200
