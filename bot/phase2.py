@@ -253,6 +253,32 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
     gate_info: dict[str, dict] = {}          # ticker -> {full, paper, breakdown, research_block}
     confirmed_sized: list[dict] = []
     research_held: list[dict] = []
+    # ── shadow-book decision inputs: one self-contained record per evaluated candidate so the
+    #    forward shadow books (portfolio.shadow_books) can replay TODAY under counterfactual policies
+    #    (committee on/off, calibration on/off, alt sizing) WITHOUT re-running any LLM — purely from
+    #    these stored inputs. Captures the full SENTINEL verdict (raw + de-confidenced confidence) so
+    #    the no-calibration policy can re-derive NEXUS deterministically. Best-effort; never blocks.
+    _shadow_inputs: list[dict] = []
+
+    def _emit_shadow(ticker, c, breakdown, *, forge_confirmed, weight_prod,
+                     committee_block, sentinel, price, is_new):
+        sm = breakdown.get("size_mult") or 1.0
+        wf = round(min(name_cap, (c.get("weight") or 0.0) * sm), 4) if forge_confirmed else 0.0
+        _shadow_inputs.append({
+            "ticker": ticker, "confluence": c.get("confluence"),
+            "is_new": bool(is_new), "retained": bool(c.get("retained")),
+            "forge_confirmed": bool(forge_confirmed),
+            "engine_score": breakdown.get("engine_score"),
+            "research_score": breakdown.get("research_score"),
+            "combined": breakdown.get("combined"), "viability": breakdown.get("viability"),
+            "size_mult": breakdown.get("size_mult"), "base_weight": c.get("weight"),
+            "name_cap": name_cap, "weight_forge": wf,
+            "weight_prod": round(float(weight_prod or 0.0), 4),
+            "committee": committee_block, "sentinel": sentinel, "price": price,
+            "raw_prob_correct": round(0.55 + min(0.15, (c.get("confluence") or 0.0) * 0.4), 2),
+            "horizon_d": 21, "thesis_id": f"{asof}-{ticker}-conv",
+        })
+
     for c in sized:
         t = c["ticker"]
         try:
@@ -289,6 +315,7 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
             # ── blind adversarial committee (SENTINEL → NEXUS): a NEW buy FORGE confirmed gets an
             #    independent bear case; the committee can only DE-ESCALATE (trim/drop), never escalate.
             committee_block = None
+            _sent = None
             if is_new:
                 try:
                     from brain import committee as _committee
@@ -298,9 +325,14 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
                                                regime=regime, portfolio_ctx=pctx)
                         committee_block = {k: cm.get(k) for k in
                                            ("action", "scale", "lean", "rationale", "sentinel_stance")}
+                        _sv = cm.get("sentinel") or {}
+                        _sent = {k: _sv.get(k) for k in ("stance", "raw_confidence", "confidence")} \
+                            if _sv else None
                         if cm.get("action") == "drop":
                             research_held.append({"ticker": t, "reason": "committee: " + cm.get("rationale", ""),
                                                   **research_block, "committee": committee_block})
+                            _emit_shadow(t, c, breakdown, forge_confirmed=True, weight_prod=0.0,
+                                         committee_block=committee_block, sentinel=_sent, price=px, is_new=is_new)
                             _rl_log(_run_id, "decision", f"COMMITTEE DROP {t}",
                                     f"sentinel={cm.get('sentinel_stance')} {cm.get('rationale')}", ticker=t)
                             continue
@@ -312,6 +344,8 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
             if committee_block:
                 entry["committee"] = committee_block
             confirmed_sized.append(entry)
+            _emit_shadow(t, c, breakdown, forge_confirmed=True, weight_prod=scaled,
+                         committee_block=committee_block, sentinel=_sent, price=px, is_new=is_new)
             _rl_log(_run_id, "decision", f"RESEARCH CONFIRM {t}",
                     f"combined={breakdown['combined']} (engine {breakdown['engine_score']} + "
                     f"research {breakdown['research_score']}) viab={breakdown['viability']} "
@@ -321,6 +355,8 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
                     ticker=t, **research_block)
         else:
             research_held.append({"ticker": t, "reason": breakdown["reason"], **research_block})
+            _emit_shadow(t, c, breakdown, forge_confirmed=False, weight_prod=0.0,
+                         committee_block=None, sentinel=None, price=px, is_new=is_new)
             _rl_log(_run_id, "decision", f"RESEARCH HOLD {t}",
                     f"reason={breakdown['reason']} combined={breakdown['combined']} "
                     f"viab={breakdown['viability']}",
@@ -329,6 +365,12 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
     _rl_log(_run_id, "book_step", "research gate evaluated",
             f"confirmed={len(sized)} research_held={len(research_held)} "
             f"rejected={len(_rejected)} armed={_armed_ok}")
+    # persist today's shadow-book decision inputs (audit + standalone replay source)
+    try:
+        from portfolio import shadow_books as _shadow
+        _shadow.write_inputs(asof, _shadow_inputs)
+    except Exception:  # noqa: BLE001 — shadow books are additive; never block the build
+        pass
 
     for c in sized:
         t = c["ticker"]
@@ -360,9 +402,17 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
             _thesis = (f"Multi-sided confluence {c['confluence']:+.2f} (bull {c['bull']}/bear {c['bear']}); "
                        f"all sides confirm and no hard veto — sized {round(c['weight']*100)}%.")
             _evidence = [f"size_authority=up", f"confluence={c['confluence']:+.2f}"]
+        # FORGE confidence, de-confidenced by its realized calibration (≤1.0 shrink only). The RAW
+        # value is stored so calibration always grades the model's native confidence (convergent).
+        _raw_pc = round(0.55 + min(0.15, c["confluence"] * 0.4), 2)
+        try:
+            from brain import calibration as _calib
+            _pc = round(_raw_pc * _calib.multiplier("forge"), 2)
+        except Exception:  # noqa: BLE001
+            _pc = _raw_pc
         doc = DecisionDoc(
             id=f"{asof}-{t}-conv", subject=t, lean=_lean, conviction="medium",
-            prob_correct=round(0.55 + min(0.15, c["confluence"] * 0.4), 2),
+            prob_correct=_pc, raw_prob_correct=_raw_pc,
             horizon_d=21, state_asof=asof, sleeve="conviction", order_layer=1,
             thesis=_thesis,
             evidence=_evidence
@@ -593,11 +643,28 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
                 except Exception:
                     pass
     store.save_track_record(con, asof, tr)
+    # refresh the empirical calibration from the freshly-resolved outcomes → each agent's
+    # confidence multiplier tracks its realized reliability for the NEXT build (safe, bounded,
+    # de-confidence-only; inert until an agent has MIN_N resolved decisions).
+    try:
+        from brain import calibration as _calibration
+        _calibration.persist(date.fromisoformat(asof))
+    except Exception:  # noqa: BLE001 — calibration refresh is best-effort, never fatal
+        pass
 
-    # ———— paper $1M account: actually TRADE the book + MARK NAV (was never wired) ————
+    # ———— paper $1M account: TRADE only during market hours, else QUEUE pending ————
+    # Doctrine: the desk trades ONLY during the regular US cash session, at the live
+    # market price. A build that runs while the market is CLOSED (overnight, weekend,
+    # holiday) NEVER books an instantaneous fill at a stale close — it queues PENDING
+    # buy orders (estimated at the previous close) that settle at the next open. When a
+    # build does run while open, any queued orders fill FIRST, then the book rebalances.
+    _market_open = False
+    _pending_orders: list = []
     try:
         from collections import defaultdict as _dd
-        from portfolio import paper_account
+        from portfolio import market_calendar, paper_account
+        _market_open = market_calendar.is_open()
+        _next_open_day = market_calendar.next_open_day().isoformat()
         _tw: dict = _dd(float)
         for p in book:
             _tw[p["ticker"]] += p.get("weight", 0.0)
@@ -606,12 +673,68 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
             _px = paper_account._current_price(_t)
             if _px and _px > 0:
                 _prices[_t] = _px
-        paper_account.rebalance(dict(_tw), _prices, asof)
-        paper_account.mark(_prices, asof)
-        _rl_log(_run_id, "book_step", "paper account marked",
-                f"priced={len(_prices)}/{len(_tw) + 1} positions={len(_tw)}")
+
+        if _market_open:
+            _settled = paper_account.fill_pending(_prices, asof)   # settle overnight orders at the open
+            paper_account.rebalance(dict(_tw), _prices, asof)      # then move the book at market prices
+            paper_account.mark(_prices, asof)
+            _rl_log(_run_id, "book_step", "paper account traded (market open)",
+                    f"priced={len(_prices)}/{len(_tw) + 1} filled_pending={len(_settled)} positions={len(_tw)}")
+        else:
+            # market closed → queue buys at the prev-close estimate, fill at next open. No sells.
+            _pending_orders = paper_account.queue_orders(
+                dict(_tw), _prices, asof, nav_base=paper_account._STARTING_NAV,
+                fill_after=_next_open_day)
+            paper_account.mark(_prices, asof)                      # NAV unchanged; nothing executed
+            # tag the book so the dashboard renders each holding as PENDING (fills at next open)
+            _pend_by_tk = {o["ticker"]: o for o in _pending_orders}
+            for p in book:
+                o = _pend_by_tk.get(p["ticker"])
+                if o:
+                    p["pending"] = True
+                    p["status"] = "pending_open"
+                    p["est_price"] = o["est_price"]
+                    p["fill_after"] = _next_open_day
+            _rl_log(_run_id, "book_step", "orders queued (market closed)",
+                    f"pending={len(_pending_orders)} next_open={_next_open_day} priced={len(_prices)}/{len(_tw) + 1}")
     except Exception as _e:
         _rl_log(_run_id, "decision", "paper account error", f"{_e!r}"[:160])
+        _prices = {}
+
+    # ———— parallel forward SHADOW BOOKS — leakage-free A/B of decision policies ————
+    # Re-derive today's book under counterfactual policies (committee on/off, calibration on/off,
+    # alt sizing) from the stored decision inputs, run each as an isolated paper book, and label it
+    # forward. No LLM, no look-ahead, never touches prod state. Best-effort.
+    try:
+        from portfolio import shadow_books as _shadow
+        _sb = _shadow.run(asof, prices=_prices, inputs=_shadow_inputs)
+        _rl_log(_run_id, "book_step", "shadow books marked",
+                f"policies={len(_sb.get('books', {}))}")
+    except Exception as _e:
+        _rl_log(_run_id, "decision", "shadow books error", f"{_e!r}"[:160])
+
+    # ———— universe-wide forward PREDICTION LOG — the statistical-power unlock ————
+    # Log + forward-label a falsifiable rel-return thesis for EVERY name the engine has a directional
+    # opinion on (~1,600), not just the owned ~7 → cross-sectional date-clustered edge measurement in
+    # weeks, not years. Isolated from the prod ledger; no LLM, no look-ahead. Best-effort.
+    try:
+        from portfolio import predictions as _pred
+        _pc = _pred.record(asof)
+        _rl_log(_run_id, "book_step", "prediction log updated",
+                f"open={_pc.get('n_open')} resolved={_pc.get('n_resolved')} total={_pc.get('n_total')}")
+    except Exception as _e:
+        _rl_log(_run_id, "decision", "prediction log error", f"{_e!r}"[:160])
+
+    # ———— forward-proof READINESS watcher — pings (persistent dashboard alert) the moment a
+    #      forward threshold crosses (calibration n≥min, cross-sectional IC ≥ enough clusters, shadow
+    #      books first resolved). Rides this daily heartbeat; once-per-crossing. Best-effort. ————
+    try:
+        from portfolio import readiness as _readiness
+        _rr = _readiness.check_and_record(asof)
+        if _rr.get("new"):
+            _rl_log(_run_id, "decision", "READINESS crossed", f"newly_ready={_rr['new']}")
+    except Exception as _e:
+        _rl_log(_run_id, "decision", "readiness check error", f"{_e!r}"[:160])
 
     store.record_run(con, asof, True, decision["triggers"], sig, datetime.now(timezone.utc).isoformat())
 
@@ -626,6 +749,9 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
         "rejected": _rejected,
         "research_held": research_held,
         "llm_used": bool(_armed_ok),
+        # market-hours discipline: whether this book is live-traded or queued for the next open
+        "market_status": "open" if _market_open else "closed",
+        "pending_orders": _pending_orders,
     }
     paths = write(payload)
 
