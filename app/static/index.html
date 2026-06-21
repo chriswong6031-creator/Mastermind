@@ -533,6 +533,40 @@ body.page-mm td.l { text-align: left; }
   flex-direction: column;
   gap: 0;
 }
+/* paged-feed controls (Brain Log + Research Feed) */
+.mm-pager {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line);
+}
+.mm-pager-btn {
+  background: var(--panel2); border: 1px solid var(--line); color: var(--muted);
+  padding: 5px 12px; border-radius: 8px; font: inherit; font-size: 12px; font-weight: 600;
+  cursor: pointer; transition: color .15s, border-color .15s, opacity .15s;
+}
+.mm-pager-btn:hover:not(:disabled) { color: var(--text); border-color: var(--link); }
+.mm-pager-btn:disabled { opacity: .4; cursor: default; }
+.mm-pager-info { font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; min-width: 64px; text-align: center; }
+/* feed columns take their natural content height (no forced equal-height stretch) so the
+   shorter one — usually Brain Log — has NO dead whitespace below it; the pager sits right
+   after the content. Counts are biased (more brain rows, fewer research cards) so the two
+   columns still land close in length. */
+.mm-feeds-row { align-items: start; }
+#brainlog, #research { display: flex; flex-direction: column; }
+/* wide tables (Positions, Trade History) scroll horizontally instead of bursting the panel on mobile */
+.mm-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+/* Trade History summary scorecard */
+.mm-th-summary { display: flex; flex-wrap: wrap; gap: 10px; margin: 4px 0 14px; }
+.mm-th-stat { flex: 1; min-width: 92px; background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 9px 13px; }
+.mm-th-stat-val { font-size: 18px; font-weight: 800; color: var(--text); font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+.mm-th-stat-lbl { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin-top: 2px; font-weight: 600; }
+.mm-th-note { font-size: 11px; color: var(--muted); margin-top: 10px; line-height: 1.5; }
+/* mobile: hide secondary table columns so Positions / Trade History don't overflow */
+@media (max-width: 640px) { body.page-mm .mm-hide-sm { display: none !important; } }
+/* macro vitals integrated into the top Performance scorecard */
+.mm-perf-macro { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.mm-perf-macro:empty { display: none; }
+.mm-perf-macro-head { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 10px; }
+.mm-perf-macro-sub { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--muted); opacity: .8; margin-left: 7px; }
 .mm-tl-item {
   display: grid;
   grid-template-columns: 64px 12px 1fr;
@@ -1234,8 +1268,8 @@ body.page-mm .mm-help .mm-help-pop { position: absolute; z-index: 50; bottom: ca
 body.page-mm .mm-help:hover .mm-help-pop, body.page-mm .mm-help:focus .mm-help-pop { opacity: 1; visibility: visible; }
 
 /* ── live P&L cells ──────────────────────────────────────────────────────── */
-body.page-mm td.mm-pnl-pos { color: var(--up); font-variant-numeric: tabular-nums; }
-body.page-mm td.mm-pnl-neg { color: var(--down); font-variant-numeric: tabular-nums; }
+body.page-mm .mm-pnl-pos { color: var(--up); font-variant-numeric: tabular-nums; }
+body.page-mm .mm-pnl-neg { color: var(--down); font-variant-numeric: tabular-nums; }
 body.page-mm .mm-side-chip { display: inline-block; padding: 1px 8px; border-radius: 5px; font-size: 10px; font-weight: 700; letter-spacing: .03em; }
 body.page-mm .mm-side-chip.buy  { background: color-mix(in srgb, var(--up) 15%, var(--panel2));   color: var(--up); }
 body.page-mm .mm-side-chip.sell { background: color-mix(in srgb, var(--down) 15%, var(--panel2)); color: var(--down); }
@@ -1259,7 +1293,9 @@ body.page-mm .mm-macro-tag.neu  { background: color-mix(in srgb, var(--muted) 16
 body.page-mm #mm-nav { position: sticky; top: 0; z-index: 60; display: flex; align-items: center; gap: 14px;
   flex-wrap: wrap; padding: 9px 4px; margin-bottom: 4px; background: color-mix(in srgb, var(--bg) 88%, transparent);
   backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
-body.page-mm .mm-nav-brand { font-size: 12px; font-weight: 800; letter-spacing: .08em; color: var(--text); display: flex; align-items: center; gap: 7px; }
+body.page-mm .mm-nav-brand { display: flex; align-items: center; gap: 8px; }
+body.page-mm .mm-logo-mark { width: 24px; height: 24px; display: block; flex: none; border-radius: 7px; box-shadow: 0 1px 5px rgba(20,30,80,.28); }
+body.page-mm .mm-logo-word { font-size: 13.5px; font-weight: 800; letter-spacing: .13em; color: var(--text); white-space: nowrap; }
 body.page-mm .mm-nav-brand .mm-hb { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--up); box-shadow: 0 0 0 3px color-mix(in srgb, var(--up) 25%, transparent); }
 body.page-mm .mm-nav-tabs { display: flex; gap: 6px; }
 body.page-mm .mm-nav-tab { background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 5px 14px;
@@ -1335,6 +1371,10 @@ body.page-mm .mm-modal-head .t { font-size: 18px; font-weight: 800; letter-spaci
 body.page-mm .mm-modal-close { margin-left: auto; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px;
   width: 30px; height: 30px; font-size: 16px; cursor: pointer; color: var(--muted); line-height: 1; }
 body.page-mm .mm-modal-close:hover { color: var(--text); border-color: var(--muted); }
+body.page-mm .mm-pdf-btn { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; background: var(--panel2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 12px; color: var(--text); font-size: 12.5px; font-weight: 700; cursor: pointer; transition: color .15s, border-color .15s; }
+body.page-mm .mm-pdf-btn:hover:not(:disabled) { color: var(--up); border-color: var(--up); }
+body.page-mm .mm-pdf-btn:disabled { opacity: .55; cursor: default; }
+body.page-mm .mm-pdf-btn + .mm-modal-close { margin-left: 8px; }
 body.page-mm .mm-modal-scores { display: flex; gap: 18px; flex-wrap: wrap; padding: 14px 22px; border-bottom: 1px solid var(--line); background: var(--panel2); }
 body.page-mm .mm-modal-score { text-align: center; }
 body.page-mm .mm-modal-score .lbl { font-size: 9.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 3px; }
@@ -1363,7 +1403,15 @@ body.page-mm .mm-rd-link:hover { border-color: var(--info); color: var(--info); 
 
 <!-- ── TOP NAV (Dashboard / Research view switch) ────────────────────────────── -->
 <div id="mm-nav">
-  <span class="mm-nav-brand"><span class="mm-hb"></span> MASTERMIND</span>
+  <span class="mm-nav-brand" aria-label="Mastermind">
+    <svg class="mm-logo-mark" viewBox="0 0 32 32" aria-hidden="true">
+      <defs><linearGradient id="mm-logo-grad" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#3b82f6"/><stop offset="1" stop-color="#7c5cff"/></linearGradient></defs>
+      <rect x="1.5" y="1.5" width="29" height="29" rx="8" fill="url(#mm-logo-grad)"/>
+      <path d="M8 22.5 V11 L16 18.5 L24 11 V22.5" fill="none" stroke="#fff" stroke-width="2.7" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <span class="mm-logo-word">MASTERMIND</span>
+  </span>
   <span class="mm-nav-tabs">
     <button class="mm-nav-tab active" id="nav-dashboard" type="button" onclick="showView('dashboard')"><span class="l-en">Dashboard</span><span class="l-zh">仪表盘</span></button>
     <button class="mm-nav-tab" id="nav-research" type="button" onclick="showView('research')"><span class="l-en">Research</span><span class="l-zh">研究</span></button>
@@ -1475,14 +1523,8 @@ body.page-mm .mm-rd-link:hover { border-color: var(--info); color: var(--info); 
         <div class="mm-perf-stat-sub" id="perf-cash-lbl"><span class="l-en">cash: —</span><span class="l-zh">现金: —</span></div>
       </div>
     </div>
-  </div>
-</div>
-
-<!-- ── MACRO REGIME VITALS ────────────────────────────────────────────────── -->
-<div class="mm-section">
-  <div class="panel span12" id="macro-metrics" style="grid-column:span 12">
-    <h2><span class="l-en">Macro Dashboard &mdash; Regime Vitals</span><span class="l-zh">宏观仪表盘 &mdash; 市场体征</span> <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px"><span class="l-en">the rates / dollar / vol backdrop</span><span class="l-zh">利率/美元/波动率环境</span></span></h2>
-    <div class="mm-empty"><span class="mm-empty-icon">⊙</span><span class="l-en">Loading macro…</span><span class="l-zh">加载宏观数据中…</span></div>
+    <!-- macro regime vitals, integrated into the top scorecard (filled by renderMacro) -->
+    <div class="mm-perf-macro" id="perf-macro"></div>
   </div>
 </div>
 
@@ -1547,13 +1589,13 @@ body.page-mm .mm-rd-link:hover { border-color: var(--info); color: var(--info); 
 </div>
 
 <!-- ── BRAIN LOG + RESEARCH (side-by-side on wide screens) ─────────────────── -->
-<div class="mm-section grid">
-  <div class="panel span6" id="brainlog">
-    <h2><span class="l-en">Brain Log</span><span class="l-zh">脑波日志</span></h2>
+<div class="mm-section grid mm-feeds-row">
+  <div class="panel span6 mm-collapsible" id="brainlog">
+    <h2 class="mm-coll-h2" onclick="toggleCollapse('brainlog')"><span class="mm-coll-chev">&#9654;</span><span class="l-en">Brain Log</span><span class="l-zh">脑波日志</span></h2>
     <div class="mm-empty"><span class="mm-empty-icon">⊙</span><span class="l-en">Loading activity…</span><span class="l-zh">加载动态中…</span></div>
   </div>
-  <div class="panel span6" id="research">
-    <h2><span class="l-en">Research Feed</span><span class="l-zh">研究动态</span></h2>
+  <div class="panel span6 mm-collapsible" id="research">
+    <h2 class="mm-coll-h2" onclick="toggleCollapse('research')"><span class="mm-coll-chev">&#9654;</span><span class="l-en">Research Feed</span><span class="l-zh">研究动态</span></h2>
     <div class="mm-empty"><span class="mm-empty-icon">⊙</span><span class="l-en">Loading research…</span><span class="l-zh">加载研究中…</span></div>
   </div>
 </div>
@@ -1609,6 +1651,10 @@ body.page-mm .mm-rd-link:hover { border-color: var(--info); color: var(--info); 
     <div class="mm-modal-head">
       <span class="t" id="mm-modal-title">&mdash;</span>
       <span id="mm-modal-viab"></span>
+      <button class="mm-pdf-btn" id="mm-pdf-btn" type="button" onclick="downloadPaperPdf()" aria-label="Download PDF">
+        <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true" style="vertical-align:-2px"><path d="M8 1.5v8m0 0L5 6.5m3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.5 11.5v1.5a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-1.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        <span class="l-en">PDF</span><span class="l-zh">PDF</span>
+      </button>
       <button class="mm-modal-close" type="button" onclick="closeThesis()" aria-label="Close">&times;</button>
     </div>
     <div class="mm-modal-scores" id="mm-modal-scores"></div>
@@ -1702,6 +1748,9 @@ var I18N = {
   'research.empty':       { en: 'No research notes yet — notes appear here after runs.', zh: '暂无研究笔记 — 运行后将显示。' },
   'research.show_more':   { en: 'Show more ↓', zh: '展开 ↓' },
   'research.show_less':   { en: 'Show less ↑', zh: '收起 ↑' },
+  // paged-feed controls (newest-first, so "Newer" steps toward page 1)
+  'feed.newer':           { en: '‹ Newer', zh: '‹ 较新' },
+  'feed.older':           { en: 'Older ›', zh: '较旧 ›' },
   // Research page (gated-decisions table + thesis modal)
   'rp.empty':             { en: 'No research papers yet — each appears here when the bot evaluates a buy.', zh: '暂无研究论文 — 机器人评估买入后将显示。' },
   'rp.col_ticker':        { en: 'Ticker', zh: '标的' },
@@ -1814,11 +1863,14 @@ var I18N = {
   'trades.buy':           { en: 'BUY', zh: '买入' },
   'trades.sell':          { en: 'SELL', zh: '卖出' },
   'trades.shares':        { en: 'Shares', zh: '股数' },
-  'trades.price':         { en: 'Price', zh: '价格' },
   'trades.exit_px':       { en: 'Exit Price', zh: '退出价格' },
-  'trades.unrealized':    { en: 'Unrealized', zh: '未实现' },
   'trades.realized':      { en: 'Realized', zh: '已实现' },
   'trades.no_history':    { en: 'No fills yet — trades appear here as the book transacts.', zh: '暂无成交 — 组合交易后将在此显示。' },
+  'trades.sum_realized':  { en: 'Realized P&L', zh: '已实现盈亏' },
+  'trades.sum_closed':    { en: 'Closed Trades', zh: '已平仓' },
+  'trades.sum_buys':      { en: 'Buys', zh: '买入笔数' },
+  'trades.sum_win':       { en: 'Win Rate', zh: '胜率' },
+  'trades.realized_note': { en: 'Realized P&L only — it accrues when a position is sold. Open positions and their live mark-to-market are shown in the Positions panel above.', zh: '仅显示已实现盈亏 —— 在持仓卖出后才会累计。未平仓持仓及其实时市值见上方“持仓”面板。' },
 };
 
 function t(key) {
@@ -1931,17 +1983,44 @@ var fmtTsShort = function(s) {
 
 // ── state ────────────────────────────────────────────────────────────────────
 var _book = null, _trades = null, _activity = [], _research = [], _competitors = null, _regime = null;
+var _outcomes = null;             // live thesis-outcome labels + Brier track record (/api/outcomes)
+// paged-feed state (Brain Log + Research Feed) — preserved across re-renders, clamped on reload
+var _brainPage = 0, _researchPage = 0;
+// brain rows are compact, research cards are tall — bias counts so the two columns end ~level
+var BRAIN_PAGE_SIZE = 14, RESEARCH_PAGE_SIZE = 4;
+var _tradesPage = 0, TRADES_PAGE_SIZE = 12;
+// shared pager footer: cur/pages are 0-based page index + total; fn is the global step handler name
+function _pager(cur, pages, fn) {
+  if (pages <= 1) return '';
+  return '<div class="mm-pager">' +
+    '<button class="mm-pager-btn" onclick="' + fn + '(-1)"' + (cur <= 0 ? ' disabled' : '') + '>' + t('feed.newer') + '</button>' +
+    '<span class="mm-pager-info">' + (cur + 1) + ' / ' + pages + '</span>' +
+    '<button class="mm-pager-btn" onclick="' + fn + '(1)"' + (cur >= pages - 1 ? ' disabled' : '') + '>' + t('feed.older') + '</button>' +
+  '</div>';
+}
+window.brainPage = function(d) {
+  var pages = Math.max(1, Math.ceil(_activity.length / BRAIN_PAGE_SIZE));
+  _brainPage = Math.max(0, Math.min(pages - 1, _brainPage + d));
+  renderBrainLog();
+};
+window.researchPage = function(d) {
+  var pages = Math.max(1, Math.ceil(_research.length / RESEARCH_PAGE_SIZE));
+  _researchPage = Math.max(0, Math.min(pages - 1, _researchPage + d));
+  renderResearch();
+};
 var _expandedIdx = null;
 var _perf = null, _runs = [], _rejected = [], _macro = null;
 var _papers = [];                 // research papers (the Research page rows)
+var _papersErr = null;            // server-side error from /api/research_papers, surfaced in the empty state
+var _openPaperId = null;          // id of the paper currently shown in the thesis modal (for PDF export)
 var _currentView = 'dashboard';   // 'dashboard' | 'research'
 // run drilldown cache
 var _runLogCache = {};
 
 // ── collapsible panels (Brain Activity / Evaluated): default collapsed, click to toggle, persisted ──
-var _collapsed = { runs: true, rejected: true };
+var _collapsed = { runs: true, rejected: true, brainlog: false, research: false };
 try {
-  ['runs', 'rejected'].forEach(function (id) {
+  ['runs', 'rejected', 'brainlog', 'research'].forEach(function (id) {
     var v = localStorage.getItem('mm_coll_' + id);
     if (v !== null) _collapsed[id] = (v === '1');
   });
@@ -1950,11 +2029,23 @@ function applyColl(id) {
   var el = E(id);
   if (el) el.classList.toggle('mm-collapsed', !!_collapsed[id]);
 }
+// apply saved collapse state to the feed panels up-front (before the async data fetch resolves)
+// so a previously-collapsed feed doesn't flash open on reload; render-time applyColl keeps it in sync
+['brainlog', 'research'].forEach(applyColl);
 window.toggleCollapse = function (id) {
   _collapsed[id] = !_collapsed[id];
   try { localStorage.setItem('mm_coll_' + id, _collapsed[id] ? '1' : '0'); } catch (e) {}
   applyColl(id);
 };
+// collapsible panel header (chevron + bilingual title + optional sub) — rebuilt on every render,
+// so the click handler + chevron survive innerHTML replacement (panel keeps the .mm-collapsed class)
+function collH2(id, en, zh, sub) {
+  return '<h2 class="mm-coll-h2" onclick="toggleCollapse(\'' + id + '\')">'
+    + '<span class="mm-coll-chev">&#9654;</span>'
+    + '<span class="l-en">' + en + '</span><span class="l-zh">' + zh + '</span>'
+    + (sub ? ' <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px">' + sub + '</span>' : '')
+    + '</h2>';
+}
 
 // quad meta — names/says resolved at render time via t() so lang switches work
 var QUAD_META = {
@@ -2519,11 +2610,11 @@ function _macroCell(label, value, sub, tag) {
        + (tag || '') + '</div>';
 }
 function renderMacro() {
-  var el = E('macro-metrics');
+  var el = E('perf-macro');   // integrated into the top Performance scorecard
   if (!el) return;
   var m = _macro;
   if (!m || (!m.yield_curve && !m.real_yield && !m.dxy && !m.vix)) {
-    el.innerHTML = macroH2() + '<div class="mm-empty"><span class="mm-empty-icon">○</span>' + t('macro.empty') + '</div>';
+    el.innerHTML = '';        // no macro data yet — keep the top scorecard clean (:empty hides the divider)
     return;
   }
   var cells = '';
@@ -2565,7 +2656,9 @@ function renderMacro() {
     cells += _macroCell(t('macro.vix'), vval, vsub, _macroTag(t('macro.band_' + (vx.band || 'normal')), bandCls));
   }
 
-  el.innerHTML = macroH2() + '<div class="mm-macro-grid">' + cells + '</div>';
+  el.innerHTML = '<div class="mm-perf-macro-head"><span class="l-en">Macro Backdrop</span><span class="l-zh">宏观环境</span>'
+    + '<span class="mm-perf-macro-sub"><span class="l-en">rates · dollar · vol</span><span class="l-zh">利率 · 美元 · 波动率</span></span></div>'
+    + '<div class="mm-macro-grid">' + cells + '</div>';
 }
 
 // ── HERO ─────────────────────────────────────────────────────────────────────
@@ -2685,16 +2778,16 @@ function renderPositions() {
 
     rows += '<tr class="pos-row" data-idx="' + i + '" onclick="toggleExpand(' + i + ')">' +
       '<td><span class="pos-ticker">' + esc(p.ticker) + '</span></td>' +
-      '<td class="l"><span class="mm-sleeve-chip ' + sleeveClass + '">' + sleeveName + '</span></td>' +
-      '<td>' + (p.stage != null ? p.stage : '—') + '</td>' +
+      '<td class="l mm-hide-sm"><span class="mm-sleeve-chip ' + sleeveClass + '">' + sleeveName + '</span></td>' +
+      '<td class="mm-hide-sm">' + (p.stage != null ? p.stage : '—') + '</td>' +
       '<td style="font-variant-numeric:tabular-nums;font-weight:700">' + pct(p.weight) + '</td>' +
-      '<td style="font-variant-numeric:tabular-nums">' + entryStr + '</td>' +
-      '<td style="font-variant-numeric:tabular-nums">' + curStr + '</td>' +
+      '<td class="mm-hide-sm" style="font-variant-numeric:tabular-nums">' + entryStr + '</td>' +
+      '<td class="mm-hide-sm" style="font-variant-numeric:tabular-nums">' + curStr + '</td>' +
       '<td class="' + u.cls + '">' + u.txt + '</td>' +
       '<td><span class="mm-verdict-chip ' + verdict + '">' + vLabel + '</span></td>' +
-      '<td>' + rsStr + '</td>' +
-      '<td>' + conflStr + '</td>' +
-      '<td class="l" style="font-size:11.5px;color:var(--muted)">' + heldStr + '</td>' +
+      '<td class="mm-hide-sm">' + rsStr + '</td>' +
+      '<td class="mm-hide-sm">' + conflStr + '</td>' +
+      '<td class="l mm-hide-sm" style="font-size:11.5px;color:var(--muted)">' + heldStr + '</td>' +
     '</tr>';
 
     // expandable thesis
@@ -2798,22 +2891,22 @@ function renderPositions() {
   });
 
   el.innerHTML = '<h2><span class="l-en">Positions</span><span class="l-zh">持仓</span> <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px">' + t('pos.subtitle') + '</span></h2>' +
-    '<table>' +
+    '<div class="mm-table-wrap"><table>' +
     '<thead><tr>' +
     '<th>' + t('pos.ticker') + '</th>'
-    + '<th class="l">' + t('pos.sleeve') + helpIcon('help.sleeve') + '</th>'
-    + '<th>' + t('pos.stage') + '</th>'
+    + '<th class="l mm-hide-sm">' + t('pos.sleeve') + helpIcon('help.sleeve') + '</th>'
+    + '<th class="mm-hide-sm">' + t('pos.stage') + '</th>'
     + '<th>' + t('pos.weight') + '</th>'
-    + '<th>' + t('pos.entry_px') + '</th>'
-    + '<th>' + t('pos.current_px') + '</th>'
+    + '<th class="mm-hide-sm">' + t('pos.entry_px') + '</th>'
+    + '<th class="mm-hide-sm">' + t('pos.current_px') + '</th>'
     + '<th>' + t('pos.unrealized') + '</th>'
     + '<th>' + t('pos.verdict') + '</th>'
-    + '<th>' + t('pos.rs_pctile') + helpIcon('help.rs') + '</th>'
-    + '<th>' + t('pos.confluence') + '</th>'
-    + '<th class="l">' + t('pos.held_since') + '</th>' +
+    + '<th class="mm-hide-sm">' + t('pos.rs_pctile') + helpIcon('help.rs') + '</th>'
+    + '<th class="mm-hide-sm">' + t('pos.confluence') + '</th>'
+    + '<th class="l mm-hide-sm">' + t('pos.held_since') + '</th>' +
     '</tr></thead>' +
     '<tbody>' + rows + '</tbody>' +
-    '</table>';
+    '</table></div>';
 }
 
 window.toggleExpand = function(idx) {
@@ -2846,54 +2939,86 @@ function renderTrades() {
     return;
   }
 
-  var html = h2 + '<table><thead><tr>' +
+  // summary scorecard — REALIZED only (unrealized intentionally excluded; open marks live in Positions)
+  var sells = hist.filter(function(r) { return r.action === 'sell' && r.realized_pnl != null; });
+  var buys = hist.filter(function(r) { return r.action === 'buy'; });
+  var realizedTotal = sells.reduce(function(a, r) { return a + (r.realized_pnl || 0); }, 0);
+  var wins = sells.filter(function(r) { return (r.realized_pnl || 0) > 0; }).length;
+  var realCls = sells.length ? (realizedTotal > 0 ? 'mm-pnl-pos' : realizedTotal < 0 ? 'mm-pnl-neg' : '') : '';
+  var realTxt = sells.length ? (realizedTotal >= 0 ? '+$' : '-$') + Math.abs(Math.round(realizedTotal)).toLocaleString() : '—';
+  var winTxt = sells.length ? Math.round(wins / sells.length * 100) + '%' : '—';
+  var summary = '<div class="mm-th-summary">' +
+    '<div class="mm-th-stat"><div class="mm-th-stat-val ' + realCls + '">' + realTxt + '</div><div class="mm-th-stat-lbl">' + t('trades.sum_realized') + '</div></div>' +
+    '<div class="mm-th-stat"><div class="mm-th-stat-val">' + sells.length + '</div><div class="mm-th-stat-lbl">' + t('trades.sum_closed') + '</div></div>' +
+    '<div class="mm-th-stat"><div class="mm-th-stat-val">' + buys.length + '</div><div class="mm-th-stat-lbl">' + t('trades.sum_buys') + '</div></div>' +
+    '<div class="mm-th-stat"><div class="mm-th-stat-val">' + winTxt + '</div><div class="mm-th-stat-lbl">' + t('trades.sum_win') + '</div></div>' +
+  '</div>';
+
+  // pagination over the full blotter (newest-first)
+  var pages = Math.max(1, Math.ceil(hist.length / TRADES_PAGE_SIZE));
+  _tradesPage = Math.max(0, Math.min(pages - 1, _tradesPage));
+  var start = _tradesPage * TRADES_PAGE_SIZE;
+  var pageRows = hist.slice(start, start + TRADES_PAGE_SIZE);
+
+  var html = h2 + summary + '<div class="mm-table-wrap"><table><thead><tr>' +
     '<th class="l">' + t('trades.date') + '</th>' +
     '<th>' + t('trades.ticker') + '</th>' +
     '<th>' + t('trades.action') + '</th>' +
-    '<th>' + t('trades.shares') + '</th>' +
-    '<th>' + t('trades.price') + '</th>' +
+    '<th class="mm-hide-sm">' + t('trades.shares') + '</th>' +
+    '<th>' + t('trades.entry_px') + '</th>' +
     '<th>' + t('trades.exit_px') + '</th>' +
-    '<th>' + t('trades.unrealized') + '</th>' +
     '<th>' + t('trades.realized') + '</th>' +
     '</tr></thead><tbody>';
 
-  hist.forEach(function(r) {
+  pageRows.forEach(function(r) {
     var isBuy = r.action === 'buy';
     var shares = r.shares != null ? Number(r.shares).toLocaleString(undefined, { maximumFractionDigits: 1 }) : '—';
     var price = r.price != null ? '$' + Number(r.price).toFixed(2) : '—';
     var exitPx = r.exit_price != null ? '$' + Number(r.exit_price).toFixed(2) : '—';
-    var u = pnlCell(r.unrealized_pnl, r.unrealized_pct);
-    var rr = pnlCell(r.realized_pnl, r.realized_pct);
+    var rr = pnlCell(r.realized_pnl, r.realized_pct);   // realized only — closed (sell) rows
     html += '<tr>' +
       '<td class="l" style="font-variant-numeric:tabular-nums;color:var(--muted)">' + fmtDate(r.date) + '</td>' +
       '<td><span class="pos-ticker">' + esc(r.ticker || '—') + '</span></td>' +
       '<td><span class="mm-side-chip ' + (isBuy ? 'buy' : 'sell') + '">' + (isBuy ? t('trades.buy') : t('trades.sell')) + '</span></td>' +
-      '<td style="font-variant-numeric:tabular-nums">' + shares + '</td>' +
+      '<td class="mm-hide-sm" style="font-variant-numeric:tabular-nums">' + shares + '</td>' +
       '<td style="font-variant-numeric:tabular-nums">' + price + '</td>' +
       '<td style="font-variant-numeric:tabular-nums">' + exitPx + '</td>' +
-      '<td class="' + u.cls + '">' + u.txt + '</td>' +
       '<td class="' + rr.cls + '">' + rr.txt + '</td>' +
     '</tr>';
   });
-  html += '</tbody></table>';
+  html += '</tbody></table></div>';
+  html += _pager(_tradesPage, pages, 'tradesPage');
+  html += '<div class="mm-th-note">' + t('trades.realized_note') + '</div>';
   el.innerHTML = html;
 }
+
+window.tradesPage = function(d) {
+  var hist = (_trades && _trades.history) || [];
+  var pages = Math.max(1, Math.ceil(hist.length / TRADES_PAGE_SIZE));
+  _tradesPage = Math.max(0, Math.min(pages - 1, _tradesPage + d));
+  renderTrades();
+};
 
 // ── BRAIN LOG ─────────────────────────────────────────────────────────────────
 function renderBrainLog() {
   var el = E('brainlog');
   if (!_activity.length) {
-    el.innerHTML = '<h2><span class="l-en">Brain Log</span><span class="l-zh">脑波日志</span></h2><div class="mm-empty"><span class="mm-empty-icon">○</span>' + t('brain.empty') + '</div>';
+    el.innerHTML = collH2('brainlog', 'Brain Log', '脑波日志') + '<div class="mm-empty"><span class="mm-empty-icon">○</span>' + t('brain.empty') + '</div>';
+    applyColl('brainlog');
     return;
   }
 
+  var pages = Math.max(1, Math.ceil(_activity.length / BRAIN_PAGE_SIZE));
+  _brainPage = Math.max(0, Math.min(pages - 1, _brainPage));   // clamp (data may have shrunk on reload)
+  var start = _brainPage * BRAIN_PAGE_SIZE;
+  var pageItems = _activity.slice(start, start + BRAIN_PAGE_SIZE);
   var ICONS = { trade: '↕', decision: '◉', research: '◎', run: '▷' };
   var KIND_ZH = { trade: '交易', decision: '决策', research: '研究', run: '运行' };
   var isZh = document.documentElement.getAttribute('data-lang') === 'zh';
-  var html = '<h2><span class="l-en">Brain Log</span><span class="l-zh">脑波日志</span></h2><div class="mm-timeline">';
-  _activity.forEach(function(e, i) {
+  var html = collH2('brainlog', 'Brain Log', '脑波日志') + '<div class="mm-timeline">';
+  pageItems.forEach(function(e, i) {
     var kind = e.kind || 'run';
-    var isLast = i === _activity.length - 1;
+    var isLast = i === pageItems.length - 1;
     // zh title/detail come from /api/activity (deterministic labels + cached free-text);
     // fall back to English when a _zh field is absent so nothing ever renders blank
     var title = (isZh && e.title_zh) ? e.title_zh : (e.title || '—');
@@ -2913,20 +3038,27 @@ function renderBrainLog() {
     '</div>';
   });
   html += '</div>';
+  html += _pager(_brainPage, pages, 'brainPage');
   el.innerHTML = html;
+  applyColl('brainlog');
 }
 
 // ── RESEARCH FEED ─────────────────────────────────────────────────────────────
 function renderResearch() {
   var el = E('research');
   if (!_research.length) {
-    el.innerHTML = '<h2><span class="l-en">Research Feed</span><span class="l-zh">研究动态</span></h2><div class="mm-empty"><span class="mm-empty-icon">○</span>' + t('research.empty') + '</div>';
+    el.innerHTML = collH2('research', 'Research Feed', '研究动态') + '<div class="mm-empty"><span class="mm-empty-icon">○</span>' + t('research.empty') + '</div>';
+    applyColl('research');
     return;
   }
   var COLLAPSE_LINES = 12;
   var isZh = document.documentElement.getAttribute('data-lang') === 'zh';
-  var html = '<h2><span class="l-en">Research Feed</span><span class="l-zh">研究动态</span></h2>';
-  _research.forEach(function(n, ni) {
+  var pages = Math.max(1, Math.ceil(_research.length / RESEARCH_PAGE_SIZE));
+  _researchPage = Math.max(0, Math.min(pages - 1, _researchPage));   // clamp on reload
+  var start = _researchPage * RESEARCH_PAGE_SIZE;
+  var pageItems = _research.slice(start, start + RESEARCH_PAGE_SIZE);
+  var html = collH2('research', 'Research Feed', '研究动态');
+  pageItems.forEach(function(n, ni) {
     var chips = (n.tickers||[]).map(function(tk) { return '<span class="mm-ticker-chip">' + esc(tk) + '</span>'; }).join('');
     // zh title + body — fall back to english when _zh missing
     var title = (isZh && n.title_zh) ? n.title_zh : (n.title || '—');
@@ -2934,7 +3066,7 @@ function renderResearch() {
     var body = renderMd(bodyMd);
     var bodyLines = bodyMd.split('\n').length;
     var collapse = bodyLines > COLLAPSE_LINES;
-    var bodyId = 'rb-' + ni;
+    var bodyId = 'rb-' + (start + ni);
     html += '<div class="mm-research-card">' +
       '<div class="mm-research-title">' + esc(title) + '</div>' +
       '<div class="mm-research-meta">' +
@@ -2949,7 +3081,9 @@ function renderResearch() {
     }
     html += '</div>';
   });
+  html += _pager(_researchPage, pages, 'researchPage');
   el.innerHTML = html;
+  applyColl('research');
 }
 
 window.toggleResearch = function(id, btn) {
@@ -2982,7 +3116,9 @@ function renderResearchPapers() {
   var host = E('rp-host');
   if (!host) return;
   if (!_papers.length) {
-    host.innerHTML = '<div class="mm-empty"><span class="mm-empty-icon">○</span>' + t('rp.empty') + '</div>';
+    host.innerHTML = '<div class="mm-empty"><span class="mm-empty-icon">○</span>' + t('rp.empty')
+      + (_papersErr ? '<div style="margin-top:8px;font-size:11.5px;color:var(--down)">' + esc(String(_papersErr)) + '</div>' : '')
+      + '</div>';
     return;
   }
   var html = '<div class="mm-rp-wrap"><table class="mm-rp-table"><thead><tr>' +
@@ -3020,6 +3156,7 @@ window.openThesis = function(id) {
   var p = null;
   for (var i = 0; i < _papers.length; i++) { if (_papers[i].id === id) { p = _papers[i]; break; } }
   if (!p) return;
+  _openPaperId = p.id;
   var isZh = document.documentElement.getAttribute('data-lang') === 'zh';
   E('mm-modal-title').textContent = p.ticker + ' — ' + t('rp.report_title');
   E('mm-modal-viab').innerHTML = '<span class="mm-viab ' + _viabClass(p.viability) + '">' + _viabLabel(p.viability) + '</span>';
@@ -3055,6 +3192,37 @@ window.closeThesis = function() {
   document.body.style.overflow = '';
 };
 document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeThesis(); });
+
+// Generate + download the research paper as a beautifully formatted PDF (server-rendered,
+// ReportLab — deterministic, no AI). Fetch-as-blob so we can show a loading/error state.
+window.downloadPaperPdf = function() {
+  if (!_openPaperId) return;
+  var btn = E('mm-pdf-btn');
+  if (btn && btn.disabled) return;
+  var orig = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="l-en">Generating…</span><span class="l-zh">生成中…</span>'; }
+  var ticker = ((E('mm-modal-title') || {}).textContent || 'research').split(' ')[0].replace(/[^A-Za-z0-9._-]/g, '');
+  fetch('/research_paper.pdf?id=' + encodeURIComponent(_openPaperId))
+    .then(function(r) {
+      if (!r.ok) {
+        return r.text().then(function(body) {
+          var msg = 'HTTP ' + r.status;
+          try { var j = JSON.parse(body); if (j && j.error) msg = j.error; } catch (e) { if (body) msg = body; }
+          throw new Error(msg);
+        });
+      }
+      return r.blob();
+    })
+    .then(function(blob) {
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url; a.download = 'Mastermind_' + (ticker || 'research') + '.pdf';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(function() { URL.revokeObjectURL(url); }, 5000);
+    })
+    .catch(function(e) { alert('PDF generation failed: ' + (e && e.message ? e.message : e)); })
+    .finally(function() { if (btn) { btn.disabled = false; btn.innerHTML = orig; } });
+};
 
 // open a thesis from the Positions panel: switch to Research, then open the modal
 window.openThesisFromPositions = function(id) { showView('research'); openThesis(id); };
@@ -3121,7 +3289,43 @@ function renderFooter() {
   E('footer-disc').textContent = disc;
 }
 
+// ── LIVE THESIS OUTCOMES (track record) ───────────────────────────────────────
+// Decoupled, non-blocking: grades realized thesis outcomes (triple-barrier + rel-return vs
+// SPY) and lights up the hero Track Record vital as positions mature. Honest at n=0.
+function loadOutcomes() {
+  fetch('/api/outcomes').then(function(r) { return r.ok ? r.json() : null; }).then(function(d) {
+    if (!d) return;
+    _outcomes = d;
+    var s = d.summary || {}, tr = d.track_record || {};
+    var n = tr.n || 0, vEl = E('v-tr'), hEl = E('hero-tr');
+    if (vEl) {
+      vEl.textContent = n > 0
+        ? ((tr.hit_rate != null ? (tr.hit_rate * 100).toFixed(0) + '%' : '—') + ' · n=' + n)
+        : (t('hero.building') + (s.n_in_progress ? ' · ' + s.n_in_progress + ' maturing' : ''));
+      vEl.className = 'mm-v-chip tone-' + (n >= 5 ? (tr.hit_rate >= 0.6 ? 'up' : 'warn') : 'muted');
+    }
+    if (hEl && n > 0) hEl.textContent = 'Brier ' + (tr.brier != null ? tr.brier : '—') + ' · n=' + n;
+  }).catch(function() {});
+}
+
 // ── FETCH + RENDER ────────────────────────────────────────────────────────────
+// Render every section RESILIENTLY: a throw in one section (e.g. a transient/partial data
+// state) is caught + logged so it can't cascade and leave later sections — like Research
+// Papers — stuck on their "Loading…" placeholder (which reads as "empty for some reason").
+function _renderAll() {
+  var steps = [
+    ['performance', renderPerformance], ['macro', renderMacro], ['equityCurve', renderEquityCurve],
+    ['hero', renderHero], ['allocation', renderAllocation], ['positions', renderPositions],
+    ['trades', renderTrades], ['brainLog', renderBrainLog], ['research', renderResearch],
+    ['runs', renderRuns], ['rejected', renderRejected], ['competitors', renderCompetitors],
+    ['researchPapers', renderResearchPapers], ['footer', renderFooter],
+  ];
+  for (var i = 0; i < steps.length; i++) {
+    try { steps[i][1](); }
+    catch (e) { try { console.error('[render] ' + steps[i][0] + ' failed:', e); } catch (_) {} }
+  }
+}
+
 async function fetchAll() {
   var [bookRes, tradesRes, actRes, researchRes, compRes, regimeRes, perfRes, runsRes, macroRes, papersRes] = await Promise.allSettled([
     fetch('/api/portfolio').then(function(r) { return r.ok ? r.json() : null; }).catch(function() { return null; }),
@@ -3145,7 +3349,9 @@ async function fetchAll() {
   _perf        = perfRes.status    === 'fulfilled' ? perfRes.value    : null;
   _runs        = (runsRes.status   === 'fulfilled' ? runsRes.value    : null) || [];
   _macro       = macroRes.status   === 'fulfilled' ? macroRes.value   : null;
-  _papers      = ((papersRes.status === 'fulfilled' ? papersRes.value : null) || {}).papers || [];
+  var _papersResp = (papersRes.status === 'fulfilled' ? papersRes.value : null) || {};
+  _papers      = _papersResp.papers || [];
+  _papersErr   = _papersResp.error || (papersRes.status === 'rejected' ? String(papersRes.reason || 'fetch failed') : null);
 
   // extract rejected from portfolio
   _rejected = (_book && _book.rejected) ? _book.rejected : [];
@@ -3155,22 +3361,10 @@ async function fetchAll() {
     _book.regime = { quad: _regime.quad, quad_name: _regime.quad_name, liquidity_overlay: _regime.liquidity_overlay };
   }
 
-  renderPerformance();
-  renderMacro();
-  renderEquityCurve();
-  renderHero();
-  renderAllocation();
-  renderPositions();
-  renderTrades();
-  renderBrainLog();
-  renderResearch();
-  renderRuns();
-  renderRejected();
-  renderCompetitors();
-  renderResearchPapers();
-  renderFooter();
+  _renderAll();
   applyColl('runs');
   applyColl('rejected');
+  loadOutcomes();   // live thesis-outcome track record (decoupled, non-blocking)
 
   var now = new Date();
   E('updated').textContent = t('hero.updated') + ' ' + now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -3180,20 +3374,7 @@ async function fetchAll() {
 document.addEventListener('langchange', function() {
   // Re-render all sections to pick up the new language.
   // Data is already cached; no re-fetch needed.
-  renderPerformance();
-  renderMacro();
-  renderEquityCurve();
-  renderHero();
-  renderAllocation();
-  renderPositions();
-  renderTrades();
-  renderBrainLog();
-  renderResearch();
-  renderRuns();
-  renderRejected();
-  renderCompetitors();
-  renderResearchPapers();
-  renderFooter();
+  _renderAll();
   // Update equity curve legend
   var p = _perf;
   var legPortEl = E('ec-leg-portfolio');

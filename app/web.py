@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 # Lazy import so the module loads even if brain/ isn't fully initialised yet
 def _cached_zh(text: str):
@@ -118,27 +118,33 @@ def _parse_note(path: Path) -> dict[str, Any] | None:
 # routes
 # ---------------------------------------------------------------------------
 
+# no-cache so a UI update (new chat widget, research-paper changes, etc.) is never masked by
+# the browser's heuristic cache — the page revalidates (etag/last-modified) on every load
+# instead of silently serving a stale index that's missing freshly-added features.
+_NOCACHE = {"Cache-Control": "no-cache"}
+
+
 @router.get("/", include_in_schema=False)
 def dashboard() -> FileResponse:
-    return FileResponse(_STATIC / "index.html", media_type="text/html")
+    return FileResponse(_STATIC / "index.html", media_type="text/html", headers=_NOCACHE)
 
 
 @router.get("/research", include_in_schema=False)
 def research_page() -> FileResponse:
     """The Research page — same SPA; the client opens the Research view from this path."""
-    return FileResponse(_STATIC / "index.html", media_type="text/html")
+    return FileResponse(_STATIC / "index.html", media_type="text/html", headers=_NOCACHE)
 
 
 @router.get("/theme.css", include_in_schema=False)
 def theme_css() -> FileResponse:
     """Serve the macro design-system stylesheet the dashboard links."""
-    return FileResponse(_STATIC / "theme.css", media_type="text/css")
+    return FileResponse(_STATIC / "theme.css", media_type="text/css", headers=_NOCACHE)
 
 
 @router.get("/theme.js", include_in_schema=False)
 def theme_js() -> FileResponse:
     """Serve the macro theme toggle script (optional; dark renders without it)."""
-    return FileResponse(_STATIC / "theme.js", media_type="application/javascript")
+    return FileResponse(_STATIC / "theme.js", media_type="application/javascript", headers=_NOCACHE)
 
 
 @router.get("/chat.js", include_in_schema=False)
@@ -149,6 +155,113 @@ def chat_js() -> FileResponse:
     """
     return FileResponse(_STATIC / "chat.js", media_type="application/javascript",
                         headers={"Cache-Control": "no-cache"})
+
+
+def _company_meta(ticker: str) -> dict:
+    """Company name / sector / current price / fundamentals for the research PDF, merged from
+    the vendored macro stockdata (fundamentals) + Polygon (live price, optional description /
+    market cap). Every field is best-effort; missing ones are simply omitted."""
+    t = (ticker or "").upper().strip()
+    meta: dict[str, Any] = {}
+    sd: dict = {}
+    try:
+        p = _PROJECT_ROOT / "vendor" / "macro" / "site" / "stockdata" / f"{t}.json"
+        if p.exists():
+            sd = json.loads(p.read_text())
+    except Exception:  # noqa: BLE001
+        sd = {}
+    fin = sd.get("financials") or {}
+    an = sd.get("analyst") or {}
+    ear = sd.get("earnings") or {}
+    tech = sd.get("tech") or {}
+    fac = sd.get("factors") or {}
+    # macro stockdata stores margins/growth/yields in PERCENT units (e.g. 85.2 = +85.2%);
+    # the PDF formatter expects fractions, so normalise here (÷100, None-safe).
+    def _frac(v):
+        try:
+            return float(v) / 100.0
+        except (TypeError, ValueError):
+            return None
+
+    meta["name"] = sd.get("name")
+    meta["sector"] = fac.get("sector")
+    meta["rev_growth"] = _frac(fin.get("rev_growth"))
+    meta["gross_margin"] = _frac(fin.get("gross_margin"))
+    meta["net_margin"] = _frac(fin.get("net_margin"))
+    meta["roe"] = _frac(fin.get("roe") if fin.get("roe") is not None else an.get("roe"))
+    meta["fwd_pe"] = an.get("forward_pe") if an.get("forward_pe") is not None else an.get("pe_yf")
+    meta["div_yield"] = _frac(an.get("div_yield"))
+    meta["analyst_target"] = an.get("target")
+    meta["rating"] = an.get("rating")
+    meta["next_earnings"] = ear.get("next_date")
+    # live (delayed) price; fall back to the stockdata snapshot price
+    price = None
+    try:
+        from data_layer import polygon
+        price = polygon.quote(t)
+    except Exception:  # noqa: BLE001
+        price = None
+    meta["price"] = price if price else tech.get("price")
+    # optional richer reference: company description + market cap (Polygon, best-effort)
+    try:
+        from data_layer import polygon
+        det = polygon.ticker_details(t)
+        if det:
+            meta["name"] = meta.get("name") or det.get("name")
+            meta["sector"] = meta.get("sector") or det.get("sector")
+            meta["description"] = det.get("description")
+            meta["market_cap"] = det.get("market_cap")
+    except Exception:  # noqa: BLE001
+        pass
+    return {k: v for k, v in meta.items() if v is not None}
+
+
+@router.get("/research_paper.pdf", include_in_schema=False)
+def research_paper_pdf(id: str = "", ticker: str = "") -> Response:
+    """Generate a beautifully formatted research-paper PDF on the spot (deterministic, no AI).
+    `id` selects the exact saved paper; `ticker` falls back to that name's latest paper."""
+    try:
+        from brain import research_paper
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"error": f"research store unavailable: {exc}"}, status_code=503)
+
+    paper = None
+    try:
+        papers = research_paper.load_papers()
+        if id:
+            paper = next((p for p in papers if p.get("id") == id), None)
+        if paper is None and ticker:
+            paper = research_paper.latest_for(ticker)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"error": f"could not load paper: {exc}"}, status_code=500)
+    if paper is None:
+        return JSONResponse({"error": "research paper not found"}, status_code=404)
+
+    try:
+        from app import research_pdf
+    except Exception as exc:  # noqa: BLE001 — reportlab missing, etc.
+        return JSONResponse({"error": f"PDF engine unavailable (is reportlab installed?): {exc}"},
+                            status_code=503)
+
+    meta = {}
+    try:
+        meta = _company_meta(paper.get("ticker") or "")
+    except Exception:  # noqa: BLE001 — metadata is enrichment; render without it on failure
+        meta = {}
+    try:
+        pdf = research_pdf.build(paper, meta)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"error": f"PDF generation failed: {exc}"}, status_code=500)
+
+    tkr = (paper.get("ticker") or "research").upper()
+    datestr = str(paper.get("asof") or paper.get("generated_at") or "")[:10]
+    # allowlist-sanitise: ticker/asof come from the paper JSON; a stray CR/LF/quote would
+    # otherwise produce an illegal Content-Disposition header (and 500 the response)
+    fname = re.sub(r"[^A-Za-z0-9._-]", "_",
+                   f"Mastermind_{tkr}{('_' + datestr) if datestr else ''}.pdf")
+    return Response(content=pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{fname}"',
+                             "Cache-Control": "no-cache"})
 
 
 @router.get("/api/performance")
@@ -383,6 +496,26 @@ def api_trades() -> JSONResponse:
         })
     except Exception as exc:
         return JSONResponse({"open": [], "closed": [], "history": [], "error": str(exc)})
+
+
+@router.get("/api/outcomes")
+def api_outcomes() -> JSONResponse:
+    """Realized thesis outcomes — triple-barrier + rel-return vs SPY (the learning signal that
+    feeds the Brier track record). `labels` per thesis, `summary` stats, and the graded
+    `track_record`. Best-effort: returns empty-but-valid on any failure."""
+    try:
+        import bot  # noqa: F401 — bootstraps vendor/macro for the price accessor
+        from datetime import date as _date
+        from brain import outcomes, scorer
+        asof = _date.today()
+        realized = outcomes.realized_returns(asof)
+        return JSONResponse({
+            "labels": outcomes.all_labels(asof),
+            "summary": outcomes.summary(asof),
+            "track_record": scorer.track_record(asof, realized=realized),
+        })
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"labels": [], "summary": {}, "track_record": {}, "error": str(exc)})
 
 
 @router.get("/api/macro")

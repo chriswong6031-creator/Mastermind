@@ -19,9 +19,16 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 from pathlib import Path
 from typing import Any
+
+# Matches the "*tickers: AVGO, SMH · 2026-06-20T...*" metadata line a research
+# note carries on its second line. Kept in sync with app.web._parse_note so the
+# body string we cache here is byte-identical to the body the /api/research route
+# looks up — otherwise the zh translation never matches and the feed stays English.
+_TICKER_LINE_RE = re.compile(r"\*tickers:\s*(.*?)\s*·\s*([\d\-T:.+Z]+)\*")
 
 _ROOT = Path(__file__).resolve().parent.parent
 _CACHE_PATH = _ROOT / "data" / "brain" / "translations.json"
@@ -71,12 +78,21 @@ def cached_zh(text: str) -> str | None:
         return None
 
 
+# How many strings to send per Haiku request. One giant batch (e.g. all 30
+# research notes at once) makes the model emit a ~100 KB JSON object whose
+# escaping/length frequently breaks json.loads -> the WHOLE batch silently falls
+# back to English. Small chunks keep each response parseable; the cache is saved
+# after every chunk so partial progress survives an interruption.
+_CHUNK_SIZE = 6
+
+
 def translate_and_cache(texts: list[str]) -> dict[str, str]:
     """Translate any uncached *texts* to Simplified Chinese via Claude Haiku.
 
-    Sends ONE batched API request that returns a JSON object mapping each input
-    string to its Chinese translation. Updates the cache, then returns the full
-    en->zh map (both newly translated and previously cached entries).
+    Translates the uncached strings in small batched requests (see _CHUNK_SIZE),
+    each returning a JSON object mapping its inputs to Chinese. Updates the cache
+    after each chunk, then returns the full en->zh map (newly translated AND
+    previously cached entries).
 
     For any string where translation fails (network/creds unavailable, parse
     error, etc.) the result map contains the original English text so callers
@@ -104,17 +120,27 @@ def translate_and_cache(texts: list[str]) -> dict[str, str]:
         if t_stripped in cache:
             result[t_stripped] = cache[t_stripped]
 
-    if unique:
-        translated = _call_haiku(unique)
-        # Merge into cache and result
-        for en_text in unique:
-            zh = translated.get(en_text)
-            if zh and isinstance(zh, str) and zh.strip():
-                cache[en_text] = zh
-                result[en_text] = zh
-            else:
-                # Translation missing for this string — fall back to en
-                result[en_text] = en_text
+    def _store(en_text: str, zh: str | None) -> None:
+        if zh and isinstance(zh, str) and zh.strip():
+            cache[en_text] = zh
+            result[en_text] = zh
+        else:
+            result[en_text] = en_text   # translation missing -> fall back to en
+
+    # Long documents (note bodies, thesis reports) translate one-at-a-time via the
+    # direct, segment-split path; short strings batch through the JSON envelope.
+    short = [t for t in unique if len(t) <= _LONG_THRESHOLD]
+    long_docs = [t for t in unique if len(t) > _LONG_THRESHOLD]
+
+    for start in range(0, len(short), _CHUNK_SIZE):
+        chunk = short[start:start + _CHUNK_SIZE]
+        translated = _call_haiku(chunk)
+        for en_text in chunk:
+            _store(en_text, translated.get(en_text))
+        _save_cache(cache)
+
+    for en_text in long_docs:
+        _store(en_text, _translate_long(en_text))
         _save_cache(cache)
 
     return result
@@ -146,7 +172,11 @@ def _call_haiku(texts: list[str]) -> dict[str, str]:
         )
         # role 'scout' = haiku via the subscription OAuth (NOT a metered key / DeepSeek);
         # log_run=False so these utility translations never appear in the activity log.
-        out = cli_bridge.reason_sync(prompt, role="scout", log_run=False)
+        # allowed_tools=[] + add_dirs=[] keep it a lightweight single-shot text call —
+        # translation needs no repo/tool access, and mounting vendor/macro on every call
+        # makes each one many times slower.
+        out = cli_bridge.reason_sync(prompt, role="scout", log_run=False,
+                                     allowed_tools=[], add_dirs=[])
         raw = (out.get("text") or "").strip()
 
         # tolerate code fences / surrounding prose — extract the outermost JSON object
@@ -164,6 +194,78 @@ def _call_haiku(texts: list[str]) -> dict[str, str]:
         return {}
 
 
+# Strings longer than this are translated as whole documents (direct prompt,
+# segment-split) rather than batched into the JSON envelope of _call_haiku — a
+# big string inside that JSON reliably truncates/breaks json.loads, dropping the
+# WHOLE batch back to English (the research-note bodies and ~10 KB thesis reports
+# are exactly this case).
+_LONG_THRESHOLD = 1200
+# Target characters per translation segment when splitting a long document, so no
+# single response is large enough to hit the model's output-token cap and truncate.
+_SEGMENT_TARGET = 1000
+
+
+def _call_haiku_direct(text: str) -> str | None:
+    """Translate ONE string via a direct (non-JSON) prompt; return raw Chinese or None.
+
+    No JSON envelope means no escaping/parse fragility — the model just emits the
+    translation. Used for long documents where _call_haiku's batched JSON breaks.
+    """
+    try:
+        from brain import cli_bridge
+        if not cli_bridge.available():
+            return None
+        prompt = (
+            "You are a professional financial translator. Translate the text below to "
+            "fluent, natural Simplified Chinese (NOT literal word-for-word). Keep ALL "
+            "ticker symbols (e.g. AVGO, SMH), numbers, percentages and markdown "
+            "formatting (#, ##, ###, **, -, |, tables) EXACTLY as in the source. Output "
+            "ONLY the Chinese translation — no preamble, no commentary, no code fences.\n\n"
+            "--- TEXT TO TRANSLATE ---\n" + text
+        )
+        # lightweight single-shot (no tools / no vendor/macro mount) — see _call_haiku
+        out = cli_bridge.reason_sync(prompt, role="scout", log_run=False,
+                                     allowed_tools=[], add_dirs=[])
+        raw = (out.get("text") or "").strip()
+        if raw.startswith("```"):
+            raw = "\n".join(l for l in raw.splitlines() if not l.startswith("```")).strip()
+        return raw or None
+    except Exception:
+        return None
+
+
+def _split_segments(text: str) -> list[str]:
+    """Split a long markdown document into ~_SEGMENT_TARGET-sized segments on blank-line
+    (paragraph) boundaries, so each translation request stays small and structure is kept."""
+    paras = text.split("\n\n")
+    segments: list[str] = []
+    cur: list[str] = []
+    cur_len = 0
+    for p in paras:
+        if cur and cur_len + len(p) > _SEGMENT_TARGET:
+            segments.append("\n\n".join(cur))
+            cur, cur_len = [], 0
+        cur.append(p)
+        cur_len += len(p) + 2
+    if cur:
+        segments.append("\n\n".join(cur))
+    return segments
+
+
+def _translate_long(text: str) -> str | None:
+    """Translate a long document by segmenting it, translating each segment via the
+    direct path, and rejoining. Returns None if ANY segment fails (so we never cache
+    a half-English document)."""
+    segments = _split_segments(text)
+    out: list[str] = []
+    for seg in segments:
+        zh = _call_haiku_direct(seg)
+        if not zh:
+            return None
+        out.append(zh)
+    return "\n\n".join(out)
+
+
 # ---------------------------------------------------------------------------
 # Warm-up helpers for the batch populate script
 # ---------------------------------------------------------------------------
@@ -177,6 +279,7 @@ def translate_book(book: dict[str, Any]) -> None:
     - positions[].thesis_full.bear[]  (each item)
     - rejected[].reason
     - rejected[].bear[]  (each item)
+    - decisions[].thesis  (each — backs the Brain Log decision events)
     - top-level disclaimer
     """
     texts: list[str] = []
@@ -209,12 +312,26 @@ def translate_book(book: dict[str, Any]) -> None:
             if item:
                 texts.append(item)
 
+    # decision theses — these back the Brain Log (/api/activity) decision events;
+    # the full thesis is cached so the zh detail can be built and sliced client-side
+    for d in book.get("decisions", []):
+        th = d.get("thesis")
+        if th:
+            texts.append(th)
+
     if texts:
         translate_and_cache(texts)
 
 
 def translate_notes(notes_dir: str | Path) -> None:
-    """Warm the cache for all research note bodies + titles found in *notes_dir*."""
+    """Warm the cache for all research note bodies + titles found in *notes_dir*.
+
+    The title + body strings are extracted exactly as app.web._parse_note builds
+    them (title = first # heading; body = everything AFTER the title AND the
+    `*tickers: … · date*` metadata line) so the cached keys match what the
+    /api/research route looks up via cached_zh(). A mismatch here silently leaves
+    body_md_zh None and the feed renders English.
+    """
     notes_dir = Path(notes_dir)
     if not notes_dir.exists():
         return
@@ -226,12 +343,19 @@ def translate_notes(notes_dir: str | Path) -> None:
             lines = raw.splitlines()
             if not lines:
                 continue
-            # title
+            # title from the first # heading (matches _parse_note)
             title = lines[0].lstrip("# ").strip() if lines[0].startswith("#") else path.stem
             if title:
                 texts.append(title)
-            # body = everything from line 1 onward
-            body = "\n".join(lines[1:]).strip()
+            # find the *tickers: … · date* line; body starts after it (or after the
+            # title if there is no ticker line)
+            ticker_idx = None
+            for i, ln in enumerate(lines[1:], 1):
+                if _TICKER_LINE_RE.match(ln):
+                    ticker_idx = i
+                    break
+            body_start = (ticker_idx + 1) if ticker_idx is not None else 1
+            body = "\n".join(lines[body_start:]).strip()
             if body:
                 texts.append(body)
         except Exception:
@@ -239,3 +363,31 @@ def translate_notes(notes_dir: str | Path) -> None:
 
     if texts:
         translate_and_cache(texts)
+
+
+def translate_papers(papers_dir: str | Path) -> None:
+    """Warm the cache for every research paper's summary + full markdown report.
+
+    These back the Research page thesis modal: /api/research_papers injects
+    summary_zh and report_md_zh via cached_zh(). Each report can be ~17 KB, so we
+    translate one paper at a time (its own batch) — a single oversized batched
+    request is far likelier to come back as malformed JSON and fall back to English.
+    """
+    papers_dir = Path(papers_dir)
+    if not papers_dir.exists():
+        return
+
+    for path in sorted(papers_dir.glob("*.json")):
+        try:
+            paper = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        batch: list[str] = []
+        for field in ("summary", "report_md"):
+            v = paper.get(field)
+            if v and isinstance(v, str):
+                batch.append(v)
+        if batch:
+            # one paper per call so a parse failure on a huge report can't poison
+            # the other papers' translations
+            translate_and_cache(batch)

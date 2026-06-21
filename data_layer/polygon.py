@@ -45,6 +45,87 @@ def available() -> bool:
     return _get_client() is not None
 
 
+def daily_closes(ticker: str, start: str, end: str) -> dict:
+    """Adjusted daily closes for [start, end] (ISO dates) as {YYYY-MM-DD: close}. Best-effort
+    (returns {} on any failure); disk-cached under data/cache/aggs since historical closes are
+    immutable. Used for deterministic outcome labeling — full coverage for US single names that
+    the macro yahoo store doesn't track."""
+    import json
+    import os
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    t = (ticker or "").upper().strip()
+    if not t or not start or not end:
+        return {}
+    cdir = Path(__file__).resolve().parent.parent / "data" / "cache" / "aggs"
+    cf = cdir / f"{t}_{start}_{end}.json"
+    try:
+        if cf.exists():
+            return json.loads(cf.read_text())
+    except Exception:  # noqa: BLE001
+        pass
+    out: dict = {}
+    try:
+        import requests
+        key = (os.environ.get("POLYGON_API_KEY") or os.environ.get("MASSIVE_API_KEY") or "").strip()
+        if key:
+            url = f"https://api.polygon.io/v2/aggs/ticker/{t}/range/1/day/{start}/{end}"
+            r = requests.get(url, params={"adjusted": "true", "sort": "asc", "limit": 50000,
+                                          "apiKey": key}, timeout=12)
+            if r.ok:
+                for row in (r.json() or {}).get("results") or []:
+                    ts, c = row.get("t"), row.get("c")
+                    if ts is None or c is None:
+                        continue
+                    d = datetime.fromtimestamp(ts / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+                    out[d] = float(c)
+    except Exception:  # noqa: BLE001 — labeling degrades to 'unresolved' on failure, never fatal
+        out = {}
+    if out:
+        try:
+            cdir.mkdir(parents=True, exist_ok=True)
+            cf.write_text(json.dumps(out))
+        except Exception:  # noqa: BLE001
+            pass
+    return out
+
+
+_details_cache: dict = {}
+
+
+def ticker_details(ticker: str) -> Optional[dict]:
+    """Best-effort company reference (name, description, market_cap, sector) from Polygon's
+    /v3/reference/tickers/{ticker}. Returns None on ANY failure (unkeyed, paywalled, network,
+    timeout) — callers must degrade gracefully. Cached for the process (incl. None results)."""
+    import os
+    t = (ticker or "").upper().strip()
+    if not t:
+        return None
+    if t in _details_cache:
+        return _details_cache[t]
+    out = None
+    try:
+        import requests
+        key = (os.environ.get("POLYGON_API_KEY") or os.environ.get("MASSIVE_API_KEY") or "").strip()
+        if key:
+            r = requests.get(f"https://api.polygon.io/v3/reference/tickers/{t}",
+                             params={"apiKey": key}, timeout=5)
+            if r.ok:
+                res = (r.json() or {}).get("results") or {}
+                sic = (res.get("sic_description") or "").strip()
+                out = {
+                    "name": res.get("name") or None,
+                    "description": (res.get("description") or "").strip() or None,
+                    "market_cap": res.get("market_cap"),
+                    "sector": sic.title() if sic else None,
+                }
+    except Exception:  # noqa: BLE001 — reference lookup is optional context, never fatal
+        out = None
+    _details_cache[t] = out
+    return out
+
+
 def quote(ticker: str) -> Optional[float]:
     """Live (delayed) last/close for one ticker, or None. Cached `_TTL` seconds."""
     t = (ticker or "").upper().strip()

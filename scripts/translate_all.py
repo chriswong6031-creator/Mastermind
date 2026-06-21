@@ -36,7 +36,9 @@ def main() -> None:
               "(CLAUDE_CODE_OAUTH_TOKEN). Check your .env / `claude` install.")
         sys.exit(1)
 
-    from brain.translate import translate_book, translate_notes, _CACHE_PATH, _load_cache
+    from brain.translate import (
+        translate_book, translate_notes, translate_papers, _CACHE_PATH, _load_cache,
+    )
 
     # -----------------------------------------------------------------------
     # 1. Load portfolio book
@@ -75,6 +77,17 @@ def main() -> None:
         translate_notes(notes_dir)
     else:
         print("No research notes found — skipping")
+
+    # -----------------------------------------------------------------------
+    # 4b. Translate research papers (summary + full report markdown)
+    # -----------------------------------------------------------------------
+    papers_dir = _ROOT / "data" / "research" / "papers"
+    n_papers = len(list(papers_dir.glob("*.json"))) if papers_dir.exists() else 0
+    if n_papers:
+        print(f"Translating {n_papers} research paper(s) (summary + report)...")
+        translate_papers(papers_dir)
+    else:
+        print("No research papers found — skipping")
 
     # -----------------------------------------------------------------------
     # 5. Summary

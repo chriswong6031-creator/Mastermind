@@ -291,7 +291,14 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
     for p in book:
         store.upsert_position(con, asof, {**p, "size_pct": int(round(p["weight"] * 100)),
                                           "cycle_blocked": 0, "reason": {"sleeve": p["sleeve"]}})
-    tr = scorer.track_record(date.fromisoformat(asof))
+    # grade matured theses against their realized rel-return path → the Brier loop actually
+    # accrues skill as positions resolve (was always 'building n=0' with no realized feed)
+    try:
+        from brain import outcomes as _outcomes
+        _realized = _outcomes.realized_returns(date.fromisoformat(asof))
+    except Exception:  # noqa: BLE001 — labeling is best-effort; never block the build
+        _realized = {}
+    tr = scorer.track_record(date.fromisoformat(asof), realized=_realized)
     store.save_track_record(con, asof, tr)
     store.record_run(con, asof, True, decision["triggers"], sig, datetime.now(timezone.utc).isoformat())
 

@@ -39,6 +39,28 @@ def run_daily(asof: str | None = None, *, force: bool = False, armed: bool = Tru
             out["competitor"] = competitor_desk.analyze(asof)
         except Exception as e:
             out["competitor"] = {"error": str(e)[:200]}
+
+        # 4. warm the EN->ZH translation cache for the freshly-written book, research
+        #    notes and papers. This is what lets the dashboard render Chinese (Brain
+        #    Log, Research Feed, the thesis reports) WITHOUT a live LLM call in the
+        #    request path — the API only does cache lookups via cached_zh(). Gated on
+        #    `armed` because it needs the Claude bridge, same as steps 2-3 (so the
+        #    offline/deterministic path stays LLM-free). Incremental (skips
+        #    already-cached strings) and best-effort: a missing bridge or slow call
+        #    never breaks the loop; the UI just falls back to English until warmed.
+        try:
+            import json
+            from pathlib import Path
+            from brain import translate as _translate
+            _root = Path(__file__).resolve().parent.parent
+            latest_p = _root / "data" / "portfolio" / "latest.json"
+            if latest_p.exists():
+                _translate.translate_book(json.loads(latest_p.read_text(encoding="utf-8")))
+            _translate.translate_notes(_root / "data" / "research" / "notes")
+            _translate.translate_papers(_root / "data" / "research" / "papers")
+            out["translate"] = {"ok": True}
+        except Exception as e:
+            out["translate"] = {"error": str(e)[:200]}
     return out
 
 
@@ -54,3 +76,5 @@ if __name__ == "__main__":
     ca = (c or {}).get("analysis", {})
     print("competitor:", "note written" if ca.get("ok") else ca.get("error"),
           "| quiver pull:", (c or {}).get("pull", {}).get("ok"))
+    tx = o.get("translate", {})
+    print("translate:", "cache warmed" if tx.get("ok") else tx.get("error"))
