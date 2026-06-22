@@ -418,7 +418,7 @@ def api_portfolios() -> JSONResponse:
                 })
             except Exception:
                 pass
-            out.append({**{k: meta.get(k) for k in ("id", "name", "tagline", "kind", "manager")},
+            out.append({**{k: meta.get(k) for k in ("id", "name", "tagline", "kind", "manager", "benchmark")},
                         "status": status})
             continue
         try:
