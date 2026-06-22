@@ -298,6 +298,34 @@ def api_performance(portfolio: str = "flagship") -> JSONResponse:
         })
 
 
+@router.get("/api/risk")
+def api_risk(portfolio: str = "flagship", recompute: bool = False) -> JSONResponse:
+    """Portfolio safety scorecard: a static-weight historical risk backtest of the live book
+    (max drawdown · diversification · ticker correlations · beta · vol/VaR/CVaR + a 0-100
+    safety score). Serves the nightly-persisted snapshot; pass ?recompute=true to rebuild now
+    (skips the heavier bootstrap CI for a snappy response). Never 500 — read-only, never an order.
+    """
+    try:
+        from portfolio import safety
+        rep = None if recompute else safety.load_safety(portfolio)
+        if rep is None:
+            rep = safety.compute_safety(portfolio, bootstrap=not recompute)
+            # a fresh (not bot-built) read isn't consumed, so show the INDICATED de-gross
+            if "overlay" not in rep:
+                rep["overlay"] = {**safety.gross_overlay(rep), "applied": False}
+            try:
+                safety.persist(rep, portfolio)
+            except Exception:
+                pass
+        return JSONResponse(rep)
+    except Exception as exc:
+        return JSONResponse({
+            "portfolio_id": portfolio, "safety_score": None, "grade": "—",
+            "verdict": "Safety report unavailable.", "metrics": {}, "subscores": {},
+            "breaches": [], "caveats": [], "note": f"Safety unavailable: {exc}",
+        })
+
+
 @router.get("/api/portfolio")
 def api_portfolio(portfolio: str = "flagship") -> JSONResponse:
     path = _portfolio_dir(portfolio) / "latest.json"

@@ -1703,6 +1703,14 @@ body.page-mm .mm-rd-link:hover { border-color: var(--info); color: var(--info); 
   </div>
 </div>
 
+<!-- ── SAFETY (portfolio risk backtest) ───────────────────────────────────── -->
+<div class="mm-section">
+  <div class="panel span12" id="safety" style="grid-column:span 12">
+    <h2><span class="l-en">Portfolio Safety</span><span class="l-zh">组合安全度</span></h2>
+    <div class="mm-empty"><span class="mm-empty-icon">🛡</span><span class="l-en">Assessing portfolio risk…</span><span class="l-zh">评估组合风险中…</span></div>
+  </div>
+</div>
+
 <!-- ── POSITIONS ──────────────────────────────────────────────────────────── -->
 <div class="mm-section">
   <div class="panel span12" id="positions" style="grid-column:span 12">
@@ -2274,6 +2282,7 @@ window.researchPage = function(d) {
 };
 var _expandedIdx = null;
 var _perf = null, _runs = [], _rejected = [], _macro = null;
+var _risk = null;                 // portfolio safety scorecard (/api/risk) — the risk backtest
 var _papers = [];                 // research papers (the Research page rows)
 var _papersErr = null;            // server-side error from /api/research_papers, surfaced in the empty state
 var _openPaperId = null;          // id of the paper currently shown in the thesis modal (for PDF export)
@@ -3006,6 +3015,187 @@ function renderAllocation() {
   E('lbl-conv').textContent = t('alloc.conviction') + ' ' + conv.toFixed(0) + '%';
   E('lbl-cash').textContent = t('alloc.cash') + ' ' + cash.toFixed(0) + '%';
   E('lbl-gross').textContent = b.gross != null ? pctInt(b.gross) + ' ' + t('alloc.gross') : '';
+}
+
+// ── SAFETY (portfolio risk backtest) ───────────────────────────────────────────
+// Renders the /api/risk scorecard: a static-weight historical risk backtest of the
+// live book — overall safety score + sub-scores + max-drawdown / diversification /
+// correlation / beta metrics + doctrine-firebreak breaches + honesty caveats.
+function renderSafety() {
+  var el = E('safety'); if (!el) return;
+  var d = _risk || null;
+  var isZh = document.documentElement.getAttribute('data-lang') === 'zh';
+  var H = function(en, zh) { return '<span class="l-en">' + en + '</span><span class="l-zh">' + zh + '</span>'; };
+  var head = '<h2>' + H('Portfolio Safety', '组合安全度') + '</h2>';
+
+  if (!d || (d.safety_score == null && (!d.metrics || !Object.keys(d.metrics).length))) {
+    var msg = (d && d.note) ? d.note : (isZh ? '暂无足够数据评估组合安全度。' : 'Not enough data to assess portfolio safety yet.');
+    el.innerHTML = head + '<div class="mm-empty"><span class="mm-empty-icon">🛡</span>' + esc(msg) + '</div>';
+    return;
+  }
+
+  var m = d.metrics || {}, ss = d.subscores || {};
+  var num = function(x, dp) { return (x == null || isNaN(x)) ? '—' : Number(x).toFixed(dp == null ? 2 : dp); };
+  var pc  = function(x, dp) { return (x == null || isNaN(x)) ? '—' : Number(x).toFixed(dp == null ? 1 : dp) + '%'; };
+  var scoreCol = function(v) { return v == null ? 'var(--muted)' : (v >= 70 ? 'var(--up)' : (v >= 55 ? 'var(--warn)' : 'var(--down)')); };
+
+  var score = d.safety_score;
+  var sc = scoreCol(score);
+  var grade = d.grade || '—';
+
+  // ---- header: big score + grade + verdict + meta -------------------------------
+  var meta = [];
+  meta.push((isZh ? '截至 ' : 'as of ') + esc((d.as_of || '—')));
+  if (d.source) meta.push(d.source === 'target' ? (isZh ? '目标权重' : 'target weights') : (isZh ? '实际持仓' : 'held'));
+  if (d.n_positions != null) meta.push(d.n_positions + (isZh ? ' 个持仓' : ' positions'));
+  var cov = d.coverage || {};
+  if (cov.weight_covered != null) meta.push((isZh ? '覆盖 ' : 'coverage ') + Math.round(cov.weight_covered * 100) + '%');
+  if (d.score_confidence) meta.push((isZh ? '置信 ' : 'confidence ') + d.score_confidence);
+
+  var header =
+    '<div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap;margin-bottom:14px">' +
+      '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-width:104px;' +
+        'background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:12px 10px">' +
+        '<div style="font-size:34px;font-weight:800;line-height:1;color:' + sc + ';font-variant-numeric:tabular-nums">' +
+          (score == null ? '—' : Math.round(score)) + '</div>' +
+        '<div style="font-size:11px;color:var(--muted);margin-top:3px">' + H('SAFETY / 100', '安全度 / 100') + '</div>' +
+        '<div style="margin-top:6px;font-size:13px;font-weight:700;color:' + sc + ';border:1px solid ' + sc + ';' +
+          'border-radius:20px;padding:1px 12px">' + esc(grade) + '</div>' +
+      '</div>' +
+      '<div style="flex:1;min-width:220px">' +
+        '<div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:4px">' + esc(d.verdict || '') + '</div>' +
+        '<div style="font-size:12px;color:var(--muted)">' + meta.join(' · ') + '</div>' +
+        '<div style="font-size:11px;color:var(--muted);margin-top:6px">' +
+          H('Static-weight historical risk backtest of the current book — read-only, never an order.',
+            '对当前组合的静态权重历史风险回测 — 仅供参考，绝非交易指令。') + '</div>' +
+      '</div>' +
+    '</div>';
+
+  // ---- metric tiles -------------------------------------------------------------
+  var tile = function(label, value, sub, color) {
+    return '<div style="flex:1 1 130px;min-width:120px;background:var(--panel2);border:1px solid var(--line);' +
+      'border-radius:10px;padding:9px 11px">' +
+      '<div style="font-size:11px;color:var(--muted)">' + label + '</div>' +
+      '<div style="font-size:19px;font-weight:700;font-variant-numeric:tabular-nums;color:' + (color || 'var(--text)') + '">' + value + '</div>' +
+      (sub ? '<div style="font-size:10px;color:var(--muted);margin-top:1px">' + sub + '</div>' : '') + '</div>';
+  };
+  var ddCI = m.max_drawdown_ci_pct;
+  var ddSub = (ddCI && ddCI.length === 3) ? (isZh ? '最坏 ' : 'worst ') + num(ddCI[0], 0) + '%' : '';
+  var betaSub = (m.weighted_name_beta != null) ? (isZh ? '满仓 ' : 'gross ') + num(m.weighted_name_beta, 2) : '';
+  var shSub = (m.sharpe_ci && m.sharpe_ci.length === 3) ? 'CI ' + num(m.sharpe_ci[0], 1) + '–' + num(m.sharpe_ci[2], 1) : '';
+  var tiles =
+    '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px">' +
+      tile(H('Max drawdown', '最大回撤'), pc(m.max_drawdown_pct), ddSub, 'var(--down)') +
+      tile(H('Volatility (ann.)', '年化波动'), pc(m.ann_volatility_pct)) +
+      tile(H('Beta vs SPY', '市场Beta'), num(m.beta_spy), betaSub) +
+      tile(H('Effective names', '有效持仓数'), num(m.effective_n, 1), (m.n_names || 0) + (isZh ? ' 实际' : ' actual')) +
+      tile(H('Mean corr', '平均相关'), num(m.mean_pairwise_corr), H('absorption ', '吸收 ') + num(m.absorption_ratio)) +
+      tile(H('1-day 95% CVaR', '单日95% CVaR'), pc(m.cvar95_1d_pct), 'VaR ' + pc(m.var95_1d_pct), 'var(--down)') +
+      tile(H('Sharpe (hist.)', '历史夏普'), num(m.sharpe, 2), shSub) +
+      tile(H('Cash buffer', '现金缓冲'), pc((d.cash_weight || 0) * 100)) +
+    '</div>';
+
+  // ---- sub-score bars -----------------------------------------------------------
+  var bar = function(label, v) {
+    var w = (v == null) ? 0 : Math.max(0, Math.min(100, v));
+    return '<div style="display:flex;align-items:center;gap:8px;margin:3px 0">' +
+      '<div style="width:118px;font-size:12px;color:var(--muted)">' + label + '</div>' +
+      '<div style="flex:1;height:8px;background:var(--line);border-radius:4px;overflow:hidden">' +
+        '<div style="width:' + w + '%;height:100%;background:' + scoreCol(v) + '"></div></div>' +
+      '<div style="width:30px;text-align:right;font-size:12px;font-variant-numeric:tabular-nums">' +
+        (v == null ? '—' : Math.round(v)) + '</div></div>';
+  };
+  var bars =
+    '<div style="background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:12px">' +
+      '<div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:6px">' + H('Safety sub-scores', '安全度分项') + '</div>' +
+      bar(H('Drawdown', '回撤'), ss.drawdown) +
+      bar(H('Volatility', '波动'), ss.volatility) +
+      bar(H('Diversification', '分散度'), ss.diversification) +
+      bar(H('Concentration', '集中度'), ss.concentration) +
+      bar(H('Beta', '市场敏感'), ss.beta) +
+      bar(H('Tail risk', '尾部风险'), ss.tail) +
+      bar(H('Cash buffer', '现金缓冲'), ss.cash) +
+    '</div>';
+
+  // ---- sectors + top correlated pairs (two columns) -----------------------------
+  var PAL = ['#5b8def', '#43b581', '#e0a955', '#d9646e', '#9b6dd6', '#48b6c2', '#c77dab', '#8a929e'];
+  var secRows = (m.sectors || []);
+  var secBar = '', secLeg = '';
+  secRows.forEach(function(s, i) {
+    var col = PAL[i % PAL.length], w = (s.weight || 0) * 100;
+    if (w >= 0.5) secBar += '<div title="' + esc(s.sector) + ' ' + w.toFixed(0) + '%" style="width:' + w.toFixed(1) + '%;background:' + col + '"></div>';
+    secLeg += '<span style="display:inline-flex;align-items:center;gap:4px;margin-right:10px;font-size:11px;color:var(--muted)">' +
+      '<span style="width:9px;height:9px;border-radius:2px;background:' + col + '"></span>' + esc(s.sector) + ' ' + w.toFixed(0) + '%</span>';
+  });
+  var secBlock =
+    '<div style="flex:1 1 280px;min-width:240px">' +
+      '<div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:6px">' +
+        H('Sector mix', '行业分布') + ' · ' + H('HHI ', 'HHI ') + num(m.sector_hhi) + '</div>' +
+      '<div style="display:flex;height:14px;border-radius:5px;overflow:hidden;border:1px solid var(--line)">' + secBar + '</div>' +
+      '<div style="margin-top:6px;line-height:1.7">' + (secLeg || '<span style="color:var(--muted)">—</span>') + '</div>' +
+    '</div>';
+
+  var pairs = (m.top_correlated_pairs || []);
+  var pairRows = pairs.map(function(p) {
+    var hot = Math.abs(p.corr) >= 0.8;
+    return '<div style="display:flex;justify-content:space-between;font-size:12px;padding:2px 0">' +
+      '<span>' + esc(p.a) + ' ↔ ' + esc(p.b) + '</span>' +
+      '<span style="font-variant-numeric:tabular-nums;color:' + (hot ? 'var(--warn)' : 'var(--muted)') + '">' + num(p.corr, 2) + '</span></div>';
+  }).join('');
+  var pairBlock =
+    '<div style="flex:1 1 220px;min-width:200px">' +
+      '<div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:6px">' + H('Most correlated pairs', '相关性最高的配对') + '</div>' +
+      (pairRows || '<span style="font-size:12px;color:var(--muted)">—</span>') +
+    '</div>';
+
+  var midRow = '<div style="display:flex;flex-wrap:wrap;gap:18px;margin-bottom:12px">' + secBlock + pairBlock + '</div>';
+
+  // ---- breaches -----------------------------------------------------------------
+  var breaches = (d.breaches || []);
+  var brBlock = '';
+  if (breaches.length) {
+    var chips = breaches.map(function(b) {
+      var col = b.severity === 'warn' ? 'var(--down)' : 'var(--warn)';
+      return '<div style="display:flex;gap:7px;align-items:flex-start;font-size:12px;margin:3px 0">' +
+        '<span style="color:' + col + ';font-weight:700">' + (b.severity === 'warn' ? '▲' : '⚑') + '</span>' +
+        '<span style="color:var(--text)">' + esc(b.message) + '</span></div>';
+    }).join('');
+    brBlock = '<div style="background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--down);' +
+      'border-radius:8px;padding:9px 12px;margin-bottom:10px">' +
+      '<div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:4px">' + H('Risk flags', '风险提示') + '</div>' + chips + '</div>';
+  }
+
+  // ---- consumed action: the safety de-gross overlay (this is what makes it NOT just display) --
+  var ov = d.overlay || null;
+  var ovBlock = '';
+  if (ov && typeof ov.gross_mult === 'number' && ov.gross_mult < 1) {
+    var pctInv = Math.round(ov.gross_mult * 100);
+    var addCash = Math.round((ov.cash_added || 0) * 100);
+    var rs = (ov.reasons || []).join(', ');
+    var verb = ov.applied
+      ? H('De-grossed the book to ', '已将组合降仓至 ')
+      : H('Indicated de-gross to ', '建议降仓至 ');
+    ovBlock = '<div style="background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--warn);' +
+      'border-radius:8px;padding:9px 12px;margin-bottom:10px">' +
+      '<div style="font-size:13px;color:var(--text)"><span style="color:var(--warn);font-weight:700">🛡 ' +
+      (ov.applied ? H('Risk overlay applied', '风险叠加已生效') : H('Risk overlay (indicated)', '风险叠加（建议）')) +
+      '</span> — ' + verb + '<b>' + pctInv + '%</b> ' + H('invested', '仓位') +
+      (addCash > 0 ? ' (+' + addCash + '% ' + H('cash', '现金') + ')' : '') + '</div>' +
+      (rs ? '<div style="font-size:11px;color:var(--muted);margin-top:3px">' + H('triggers: ', '触发: ') + esc(rs) + '</div>' : '') +
+      '</div>';
+  }
+
+  // ---- caveats (method + honesty) ----------------------------------------------
+  var caveats = (d.caveats || []);
+  var cavBlock = '';
+  if (caveats.length) {
+    var lis = caveats.map(function(c) { return '<li style="margin:2px 0">' + esc(c) + '</li>'; }).join('');
+    cavBlock = '<details style="margin-top:4px"><summary style="cursor:pointer;font-size:12px;color:var(--muted)">' +
+      H('Method &amp; caveats', '方法与说明') + '</summary>' +
+      '<ul style="margin:6px 0 0 0;padding-left:18px;font-size:11px;color:var(--muted)">' + lis + '</ul></details>';
+  }
+
+  el.innerHTML = head + header + ovBlock + tiles + bars + midRow + brBlock + cavBlock;
 }
 
 // ── POSITIONS ─────────────────────────────────────────────────────────────────
@@ -4389,7 +4579,7 @@ function renderCalibration(cal) {
 function _renderAll() {
   var steps = [
     ['performance', renderPerformance], ['macro', renderMacro], ['equityCurve', renderEquityCurve],
-    ['hero', renderHero], ['allocation', renderAllocation], ['positions', renderPositions],
+    ['hero', renderHero], ['allocation', renderAllocation], ['safety', renderSafety], ['positions', renderPositions],
     ['trades', renderTrades], ['brainLog', renderBrainLog], ['research', renderResearch],
     ['runs', renderRuns], ['rejected', renderRejected], ['competitors', renderCompetitors],
     ['shadowBooks', renderShadowBooks], ['xsec', renderXsec], ['engineBacktest', renderEngineBacktest],
@@ -4407,7 +4597,7 @@ async function fetchAll() {
   // portfolio-scoped endpoints get the active book id; engine-level ones (regime, macro, research
   // feed, competitors, shadow books, predictions, backtests) are shared across portfolios.
   var pf = '?portfolio=' + encodeURIComponent(_portfolio);
-  var [bookRes, tradesRes, actRes, researchRes, compRes, regimeRes, perfRes, runsRes, macroRes, papersRes, calibRes, shadowRes, predRes, ebtRes, fzRes, fundRes, decRes] = await Promise.allSettled([
+  var [bookRes, tradesRes, actRes, researchRes, compRes, regimeRes, perfRes, runsRes, macroRes, papersRes, calibRes, shadowRes, predRes, ebtRes, fzRes, fundRes, decRes, riskRes] = await Promise.allSettled([
     fetch('/api/portfolio' + pf).then(function(r) { return r.ok ? r.json() : null; }).catch(function() { return null; }),
     fetch('/api/trades' + pf).then(function(r)    { return r.ok ? r.json() : null; }).catch(function() { return null; }),
     fetch('/api/activity').then(function(r)  { return r.ok ? r.json() : [];   }).catch(function() { return []; }),
@@ -4425,6 +4615,7 @@ async function fetchAll() {
     fetch('/api/factor_zoo').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
     fetch('/api/fundamentals').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
     fetch('/api/decisions' + pf).then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
+    fetch('/api/risk' + pf).then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
   ]);
   var _decResp = (decRes && decRes.status === 'fulfilled' ? decRes.value : null) || {};
   _decisions = _decResp.decisions || [];
@@ -4441,6 +4632,7 @@ async function fetchAll() {
   _competitors = compRes.status    === 'fulfilled' ? compRes.value    : null;
   _regime      = regimeRes.status  === 'fulfilled' ? regimeRes.value  : null;
   _perf        = perfRes.status    === 'fulfilled' ? perfRes.value    : null;
+  _risk        = riskRes.status    === 'fulfilled' ? riskRes.value    : null;
   _runs        = (runsRes.status   === 'fulfilled' ? runsRes.value    : null) || [];
   _macro       = macroRes.status   === 'fulfilled' ? macroRes.value   : null;
   var _papersResp = (papersRes.status === 'fulfilled' ? papersRes.value : null) || {};

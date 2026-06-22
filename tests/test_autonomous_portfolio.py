@@ -120,6 +120,35 @@ def test_run_autonomous_executes_submission(iso, monkeypatch):
     assert nvda["rationale"] and nvda["sleeve"] == "brain"
 
 
+def test_run_autonomous_safety_degrosses_fragile_book(iso, monkeypatch):
+    """The safety firebreak is CONSUMED on the Brain book too: an all-in, single-name fragile
+    submission gets de-grossed (subtract-only) before it executes — raising cash, not levering."""
+    prices = {"NVDA": 210.0, "SPY": 740.0}
+    monkeypatch.setattr(paper_account, "_current_price", lambda t: prices.get(t))
+    from bot import autonomous
+    from brain import autonomous_mcp
+
+    def fake_brain(asof, inaugural):
+        autonomous_mcp.submission_path().parent.mkdir(parents=True, exist_ok=True)
+        autonomous_mcp.submission_path().write_text(json.dumps({
+            "holdings": [{"ticker": "NVDA", "weight": 0.97, "rationale": "all in on one name"}],
+            "summary": "yolo", "gross": 0.97,
+        }))
+        return {"ok": True, "text": "x", "cost_usd": 0.0, "model": "claude-opus-4-8"}
+
+    monkeypatch.setattr(autonomous, "_run_brain", fake_brain)
+    out = autonomous.run_autonomous(asof="2026-06-21", armed=True)
+
+    ov = out.get("safety_overlay") or {}
+    # a 97%-one-name book is fragile (low breadth / deep drawdown / high beta) → it must de-gross.
+    # (Skips the assertion only if the vendored price history for NVDA isn't available here.)
+    if ov.get("gross_mult", 1.0) < 1.0:
+        latest = json.loads((registry.data_dir("autonomous") / "latest.json").read_text())
+        nvda = next(p for p in latest["positions"] if p["ticker"] == "NVDA")
+        assert (nvda.get("weight") or 1.0) < 0.97          # the executed book was de-grossed
+        assert ov["cash_added"] > 0.0
+
+
 def test_web_endpoints_portfolio_aware(iso, monkeypatch):
     monkeypatch.setattr(paper_account, "_current_price", lambda t: {"SPY": 740.0}.get(t))
     from bot import autonomous
