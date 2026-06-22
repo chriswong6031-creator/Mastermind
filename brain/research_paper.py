@@ -51,8 +51,11 @@ SCHEMA = "research_paper.v1"
 CONFIRM_THRESHOLD = 60            # combined "Conviction Index" needed to confirm a NEW buy
 # hysteresis: a name we ALREADY hold stays confirmed down to a lower bar, so a carried position
 # isn't churned out of the book on a marginal combined-score wobble around the 60 line. A genuine
-# exit (viability='avoid' or, upstream, a hard veto) still drops it immediately.
-_HELD_HYSTERESIS = 8
+# exit (viability='avoid' or, upstream, a hard veto) still drops it immediately. TIGHTENED toward
+# entry parity (8 -> 4, 2026-06-22): the prior 8-pt band (held bar 52) was widened under the
+# AVGO/NVDA override and kept fading names confirmed too long; a 4-pt band (held bar 56) still
+# prevents single-build churn without letting a deteriorating thesis ride on hysteresis alone.
+_HELD_HYSTERESIS = 4
 VIABILITIES = ("compelling", "fair", "rich", "avoid")
 
 # the holistic report's required sections, in render order: (key, display heading)

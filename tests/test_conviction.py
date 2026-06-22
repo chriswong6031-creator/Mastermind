@@ -26,5 +26,18 @@ def test_candidate_pool_includes_open_proposals(monkeypatch):
     monkeypatch.setattr(conviction, "_SHORTLIST", [])
     # an open ledger thesis (Claude's proposal) becomes a conviction candidate
     monkeypatch.setattr("brain.ledger.all_theses",
-                        lambda: [{"subject": "AVGO", "status": "open"}])
-    assert "AVGO" in conviction.candidates()
+                        lambda: [{"subject": "PLTR", "status": "open"}])
+    assert "PLTR" in conviction.candidates()
+
+
+def test_manual_exclude_keeps_reversed_names_out(monkeypatch):
+    # operational hold-out: names manually reversed out of the book (the AVGO/NVDA override
+    # post-mortem) must NOT be auto-re-added as candidates — even via an open proposal OR the
+    # leadership shortlist — so the daily rebalance can't silently re-buy them.
+    monkeypatch.setattr(conviction, "_SHORTLIST", ["NVDA", "AVGO"])
+    monkeypatch.setattr("brain.ledger.all_theses",
+                        lambda: [{"subject": "AVGO", "status": "open"},
+                                 {"subject": "NVDA", "status": "open"}])
+    cands = conviction.candidates()
+    assert "NVDA" not in cands and "AVGO" not in cands
+    assert conviction._MANUAL_EXCLUDE == {"NVDA", "AVGO"}

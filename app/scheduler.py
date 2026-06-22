@@ -38,10 +38,25 @@ def _heavyweight_job():
 
 
 def _china_job():
-    """The free-form all-China Opus-Brain book: researches the China desks + rebalances itself once
-    per Asia trading day, after the mainland A-share close (~07:00 UTC)."""
+    """The free-form China A-share Opus-Brain book: researches the China desks + rebalances itself
+    once per Asia trading day, after the mainland A-share close (~07:00 UTC)."""
     from bot.china import run_china
     run_china()
+
+
+def _hk_job():
+    """The free-form Hong-Kong Opus-Brain book (HK listings only, HKD): researches the China desks +
+    rebalances itself once per Asia trading day, after the HK close (~08:00 UTC)."""
+    from bot.hk import run_hk
+    run_hk()
+
+
+def _snapshot_job():
+    """Publish a static snapshot of the dashboard to the public Macro Dashboard (GitHub Pages).
+    Writes site/mastermind/mastermind_snapshot.json into the macro repo (via the vendor/macro
+    symlink) and pushes it to origin/main. Resilient — never raises into the scheduler."""
+    from scripts.export_macro_snapshot import run as export_snapshot
+    export_snapshot()
 
 
 def start():
@@ -61,6 +76,7 @@ def start():
     # China book fires on Asia's clock: the A-share close is 15:00 CST = 07:00 UTC, so build a bit
     # after (08:00 UTC ≈ 16:00 CST). Separate from the US books' evening cadence.
     cn_hour = int(os.environ.get("CHINA_DAILY_UTC_HOUR", "8"))
+    hk_hour = int(os.environ.get("HK_DAILY_UTC_HOUR", "9"))
     _DB.parent.mkdir(parents=True, exist_ok=True)
     sch = BackgroundScheduler(jobstores={"default": SQLAlchemyJobStore(url=f"sqlite:///{_DB}")},
                               timezone="UTC")
@@ -78,6 +94,22 @@ def start():
     # (data/portfolios/china) and a different feed window from the US books — no state race.
     sch.add_job(_china_job, CronTrigger(day_of_week="mon-fri", hour=cn_hour, minute=0),
                 id="china_daily", replace_existing=True, misfire_grace_time=3600, coalesce=True)
+    # HK book on Asia's clock (Mon–Fri after the HK close, ~09:00 UTC). Disjoint data dir
+    # (data/portfolios/hk) — no state race with the A-share china book.
+    sch.add_job(_hk_job, CronTrigger(day_of_week="mon-fri", hour=hk_hour, minute=0),
+                id="hk_daily", replace_existing=True, misfire_grace_time=3600, coalesce=True)
+    # Publish the dashboard snapshot to the public Macro Dashboard (GitHub Pages) TWICE a day:
+    #   • ~12:25 UTC — a morning refresh that picks up the overnight China book (08:00) and the
+    #     prior night's autonomous/heavyweight Brain books (23:xx).
+    #   • ~22:25 UTC — a post-close push, after the 22:00 flagship book and BEFORE the macro
+    #     daily build (22:40 UTC), so the evening deploy carries a fresh snapshot.
+    # Hours are configurable via MACRO_SNAPSHOT_UTC_HOURS (comma-separated, default "12,22").
+    # Runs every day (the macro site refreshes daily); touches only the macro repo's
+    # site/mastermind/ path and pushes to its origin/main.
+    snap_hours = (os.environ.get("MACRO_SNAPSHOT_UTC_HOURS", "12,22").strip() or "12,22")
+    sch.add_job(_snapshot_job, CronTrigger(hour=snap_hours, minute=25),
+                id="publish_macro_snapshot", replace_existing=True,
+                misfire_grace_time=3600, coalesce=True)
     sch.start()
     _scheduler = sch
     return sch
@@ -187,4 +219,35 @@ def maybe_first_china_run() -> bool:
             pass
 
     threading.Thread(target=_go, name="china-first-run", daemon=True).start()
+    return True
+
+
+def maybe_first_hk_run() -> bool:
+    """On first turn-on, immediately build the HK book so it can buy right away. No-op once it has a
+    NAV track record. Gated on the Claude layer being available + HK_FIRST_RUN != '0'. Daemon thread."""
+    if os.environ.get("HK_FIRST_RUN", "1") == "0":
+        return False
+    try:
+        from portfolio import registry
+        nav_path = registry.data_dir("hk") / "nav_history.jsonl"
+        if nav_path.exists() and nav_path.read_text().strip():
+            return False                       # already has a track record — the cron owns it now
+    except Exception:
+        pass
+    try:
+        from brain import cli_bridge
+        if not cli_bridge.available():
+            return False                       # no subscription/CLI → don't fire a doomed armed run
+    except Exception:
+        return False
+    import threading
+
+    def _go():
+        try:
+            from bot.hk import run_hk
+            run_hk()
+        except Exception:
+            pass
+
+    threading.Thread(target=_go, name="hk-first-run", daemon=True).start()
     return True

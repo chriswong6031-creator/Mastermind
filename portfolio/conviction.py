@@ -43,16 +43,29 @@ def _us_standouts(n: int = TOP_US) -> list[str]:
     return [r.get("ticker") for r in buy[:n] if isinstance(r, dict) and r.get("ticker")]
 
 
-SECTOR_MAX_NAMES = None   # sector-concentration firebreak DISABLED (PM directive 2026-06-21): do NOT
-                          # cap names-per-sector — a single-sector bull market should be free to load
-                          # up, and the per-name + book/theme weight caps still bound position size.
-                          # Set to an int (e.g. 3) to re-enable the top-N-per-sector firebreak.
+# sector-concentration firebreak — PERCENTAGE based (PM directive 2026-06-22, replacing the prior
+# count-based SECTOR_MAX_NAMES which had been disabled). No single sector may hold more than
+# SECTOR_MAX_FRACTION of the conviction-sleeve budget; an over-weight sector is scaled DOWN
+# proportionally (subtract-only — names are down-sized, never churned out) and the freed weight is
+# left in cash. This is the crowding / cohort de-gross control: a book that piles a whole homogeneous
+# cohort (e.g. every AI-semis leader) into one sector is fragile even when each name scores well in
+# isolation. The per-name + book/theme weight caps still bound individual position size on top of it.
+SECTOR_MAX_FRACTION = 0.50
+
+# MANUAL HOLD-OUT (operational, 2026-06-22) — names deliberately reversed out of the book by PM
+# directive after the AVGO/NVDA forced-override post-mortem (see docs/case_studies). This is NOT a
+# scoring penalty or a permanent ban: it is a do-not-AUTO-re-add guard so the daily rebalance does
+# not silently re-buy a name the desk just deliberately exited. Remove a ticker here to let the
+# engine consider it again on its own merits.
+_MANUAL_EXCLUDE = {"NVDA", "AVGO"}
 
 # EXIT HYSTERESIS — to ENTER, a new name must clear the full 'up' gate (confluence > 0.30). To be
 # DROPPED, a name we ALREADY hold has to fall below this LOWER floor (or trip a hard exit). The
 # asymmetric entry/exit bars stop a name being churned in and out across builds when it wobbles
-# around the 0.30 entry line (the NVDA bought-then-immediately-closed problem).
-_EXIT_CONFLUENCE_FLOOR = 0.15
+# around the 0.30 entry line (the NVDA bought-then-immediately-closed problem). RESTORED toward
+# entry parity (0.15 -> 0.25, 2026-06-22): the prior 0.15 floor was loosened under the AVGO/NVDA
+# override and let a deteriorating held name ride too long; a tight 0.05 band still prevents churn.
+_EXIT_CONFLUENCE_FLOOR = 0.25
 
 # CATALYST/CONFIRMATION gates FULL size (doctrine §4.3 "catalyst gates full size" + "own leaders
 # without chasing"). A name that clears the gate but lacks price+leadership confirmation (or a
@@ -112,7 +125,7 @@ def candidates() -> list[str]:
         fed_in = set(intake.tickers(limit=60, min_score=0.4))
     except Exception:
         fed_in = set()
-    return sorted(set(_SHORTLIST) | set(universe()) | proposed | fed_in)
+    return sorted((set(_SHORTLIST) | set(universe()) | proposed | fed_in) - _MANUAL_EXCLUDE)
 
 
 def build(budget: float, name_cap: float = 0.08,
@@ -246,38 +259,10 @@ def build(budget: float, name_cap: float = 0.08,
                 "confluence": round(confluence, 3),
             })
 
-    # ── sector-concentration firebreak (position-sizing discipline) ──
-    # A book that nominates a whole homogeneous cohort is broken by construction even when each
-    # name scores well in isolation. Within any one sector keep only the top SECTOR_MAX_NAMES by
-    # confluence; demote the rest with a clear reason. (The leadership gate has already removed
-    # hard-lagging sectors entirely; this stops the SURVIVING leading sectors from crowding out.)
-    from collections import defaultdict
-    _by_sector: dict[str, list] = defaultdict(list)
-    for p in passed:
-        _by_sector[_sector_of(p["ticker"])].append(p)
-    kept: list[dict] = []
-    # SECTOR_MAX_NAMES is None -> firebreak disabled: an effective cap above any sector's count keeps
-    # every entry-gate passer (no demotions). An int re-enables the top-N-per-sector behaviour.
-    _cap = SECTOR_MAX_NAMES if SECTOR_MAX_NAMES is not None else len(passed) + 1
-    for sec, names in _by_sector.items():
-        # never cap the catch-all 'Unknown' bucket (unrelated names with no sector tag are not a
-        # cohort) — only cap real, same-sector concentration.
-        if sec == "Unknown":
-            kept.extend(names)
-            continue
-        # hysteresis: currently-held names rank ahead of new ones, then by confluence — so a held
-        # position isn't churned out by a marginally-stronger newcomer.
-        names.sort(key=lambda x: (x["ticker"].upper() in held, x["confluence"]), reverse=True)
-        kept.extend(names[:_cap])
-        for extra in names[_cap:]:
-            rejected.append({
-                "ticker": extra["ticker"],
-                "reason": (f"Sector cap: '{sec}' already holds {SECTOR_MAX_NAMES} higher-priority "
-                           f"names (concentration firebreak)"),
-                "vetoes": [], "confluence": round(extra["confluence"], 3),
-                "bear": [f"Crowded cohort — {sec} capped at top {SECTOR_MAX_NAMES}"],
-            })
-    passed = kept
+    # NOTE: the sector-concentration firebreak is now a PERCENTAGE cap applied AFTER sizing (see
+    # _apply_sector_cap, called below). Every entry-gate passer stays in the book; no single sector
+    # may exceed SECTOR_MAX_FRACTION of the budget, so an over-weight cohort is risk-trimmed (scaled
+    # down) rather than demoted — held names are never churned out, just sized down.
 
     # confidence-weighted sizing, then the catalyst/confirmation FULL-vs-INITIAL size gate
     tot = sum(p["confluence"] for p in passed) or 1.0
@@ -301,6 +286,37 @@ def build(budget: float, name_cap: float = 0.08,
         risk_sizing.apply(sized, budget, name_cap)
     except Exception:  # noqa: BLE001 — additive, never breaks book construction
         pass
+    # PERCENTAGE sector-concentration firebreak (applied LAST, after vol-managed sizing, so the
+    # <=SECTOR_MAX_FRACTION-per-sector invariant holds in the FINAL book): scale any over-weight
+    # sector down proportionally, leaving the freed weight in cash. Subtract-only; never churns.
+    _apply_sector_cap(sized, budget)
     # sort rejected worst-confluence first so the most-bearish names surface at top
     rejected.sort(key=lambda x: x["confluence"])
     return sized, rejected
+
+
+def _apply_sector_cap(sized: list[dict], budget: float,
+                      frac: float = SECTOR_MAX_FRACTION) -> None:
+    """Percentage sector-concentration firebreak (subtract-only, in place).
+
+    No single sector may hold more than `frac` of the conviction-sleeve `budget`. Any sector over
+    the cap has every one of its names scaled DOWN by the same factor so the sector lands exactly at
+    the cap; the freed weight is left uninvested (cash), never redistributed (which would just
+    re-concentrate elsewhere). Names are down-sized, never dropped — a held position is risk-trimmed,
+    not churned out. The catch-all 'Unknown' bucket (untagged names — not a real cohort) is exempt."""
+    if not sized or budget <= 0 or frac <= 0:
+        return
+    cap = frac * budget
+    from collections import defaultdict
+    by_sec: dict[str, list[dict]] = defaultdict(list)
+    for p in sized:
+        by_sec[_sector_of(p["ticker"])].append(p)
+    for sec, names in by_sec.items():
+        if sec == "Unknown":
+            continue
+        tot = sum(max(0.0, float(p.get("weight", 0.0))) for p in names)
+        if tot > cap and tot > 0:
+            scale = cap / tot
+            for p in names:
+                p["weight"] = round(float(p.get("weight", 0.0)) * scale, 4)
+                p["sector_capped"] = {"sector": sec, "scaled_to_frac": round(frac, 3)}

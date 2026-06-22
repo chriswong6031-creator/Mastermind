@@ -90,13 +90,18 @@ def test_trend_pullback_in_uptrend_not_bear():
 # ---------------------------------------------------------------------------
 
 def test_sector_cap_holds_in_real_book():
-    """No single sector may exceed SECTOR_MAX_NAMES in the sized conviction book."""
-    sized, _rej = conviction.build(budget=0.40, name_cap=0.08)
-    counts: dict[str, int] = {}
+    """No single sector may exceed SECTOR_MAX_FRACTION of the conviction-sleeve budget (the
+    percentage firebreak that replaced the old count-based SECTOR_MAX_NAMES)."""
+    budget = 0.40
+    sized, _rej = conviction.build(budget=budget, name_cap=0.08)
+    by_sector: dict[str, float] = {}
     for p in sized:
         sec = conviction._sector_of(p["ticker"])
-        counts[sec] = counts.get(sec, 0) + 1
-    assert all(c <= conviction.SECTOR_MAX_NAMES for c in counts.values()), counts
+        by_sector[sec] = by_sector.get(sec, 0.0) + p["weight"]
+    cap = conviction.SECTOR_MAX_FRACTION * budget
+    # the 'Unknown' bucket (untagged names — not a real cohort) is exempt by design
+    over = {s: round(w, 4) for s, w in by_sector.items() if s != "Unknown" and w > cap + 1e-9}
+    assert not over, over
     assert all(p["weight"] <= 0.08 + 1e-9 for p in sized)
 
 
