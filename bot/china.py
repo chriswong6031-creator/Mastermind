@@ -391,7 +391,16 @@ def republish(asof: str | None = None) -> dict:
         build_portfolio.write(payload, portfolio_id=PORTFOLIO_ID)
     except Exception as e:                           # noqa: BLE001
         return {"ok": False, "error": repr(e)[:200]}
-    out["translated"] = _translate_report(submission, {})
+    # republish has no live Brain object, so recover its closing write-up from the decision log
+    # to translate it too (the automated run_china path passes the live brain directly).
+    brain = {}
+    try:
+        decs = load_decisions(1)
+        if decs and decs[0].get("brain_text"):
+            brain = {"text": decs[0]["brain_text"]}
+    except Exception:
+        pass
+    out["translated"] = _translate_report(submission, brain)
     return out
 
 
