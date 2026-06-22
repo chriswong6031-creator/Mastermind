@@ -7,12 +7,13 @@ A-share close), the China Brain:
      OR web search, its choice,
   3. submits a COMPLETE target book, one rationale per holding (no gate, no research paper),
   4. and the deterministic layer rebalances the paper account to those weights at the latest
-     close, marks NAV in USD vs FXI (iShares China Large-Cap), and logs the day's decision.
+     close, marks NAV in CNY vs FXI (iShares China Large-Cap, marked in CNY), and logs the day.
 
 The universe is ALL of Greater China: mainland A-shares (``*.SS`` / ``*.SZ``, quoted CNY), Hong
-Kong (``*.HK``, HKD), and US-listed China ADRs (USD). Every local price is FX-converted to USD
-by ``portfolio.paper_account`` so the single-currency NAV stays honest. Everything is scoped to
-portfolio_id="china" so no other book is touched.
+Kong (``*.HK``, HKD), and US-listed China ADRs (USD). The book's base currency is **CNY**:
+A-shares are native, while HK (HKD) and ADR (USD) prices are converted to CNY at the prevailing
+rate (``portfolio.fx.usd_to_cny`` over the shared price store) so the single-currency NAV stays
+honest. Everything is scoped to portfolio_id="china" so no other book is touched.
 
 Run:  python -m bot.china        (or the APScheduler 'china_daily' job, or POST /api/china/run)
 """
@@ -68,15 +69,19 @@ def run_china(asof: str | None = None, *, force: bool = False, armed: bool = Tru
     decided = bool(submission and submission.get("holdings"))
     out["decided"] = decided
 
-    # 3. price the universe we might trade (targets ∪ held ∪ benchmark) — all in USD
+    # 3. price the universe we might trade (targets ∪ held ∪ benchmark) — all converted to CNY,
+    #    the book's base currency. The shared price store returns USD (A-share/HK already FX'd to
+    #    USD there); we convert that to CNY so A-shares stay native CNY, HK (HKD) and US ADRs (USD)
+    #    are marked at the prevailing rate, and the FXI benchmark is marked in CNY too.
+    from portfolio import fx
     held = list((paper_account._load_account(PORTFOLIO_ID).get("positions") or {}).keys())
     target = {h["ticker"]: float(h.get("weight") or 0.0)
               for h in (submission.get("holdings") if decided else [])}
     prices: dict[str, float] = {}
     for t in set(target) | set(held) | {BENCHMARK}:
-        px = paper_account._current_price(t)
-        if px and px > 0:
-            prices[t] = px
+        cny = fx.usd_to_cny(paper_account._current_price(t))
+        if cny and cny > 0:
+            prices[t] = cny
 
     # 4. EXECUTE — rebalance the paper book to the target at close prices (USD). Free trades: no
     #    gate, no veto, no caps. Names we cannot price are skipped (and surfaced honestly).
@@ -138,15 +143,16 @@ def run_china(asof: str | None = None, *, force: bool = False, armed: bool = Tru
 # ---------------------------------------------------------------------------
 
 _PERSONA = (
-    "You are the CHINA PORTFOLIO MANAGER of a real-money-style $1,000,000 PAPER book, marked in "
-    "USD. You run once per Asia trading day, after the mainland A-share close. You have FULL "
-    "discretion: you decide every buy, sell, trim, and the cash level, and you rebalance the whole "
-    "book daily. There is NO gate, NO committee, NO research-paper requirement, and NO doctrine "
-    "constraining you — only paper cash (you cannot use leverage). \n\n"
+    "You are the CHINA PORTFOLIO MANAGER of a real-money-style ¥1,000,000 PAPER book, marked in "
+    "CNY (renminbi). You run once per Asia trading day, after the mainland A-share close. You have "
+    "FULL discretion: you decide every buy, sell, trim, and the cash level, and you rebalance the "
+    "whole book daily. There is NO gate, NO committee, NO research-paper requirement, and NO "
+    "doctrine constraining you — only paper cash (you cannot use leverage). \n\n"
     "Your universe is ALL of Greater China across three venues, and you may hold any mix: mainland "
     "A-shares (tickers like 600519.SS / 300750.SZ, quoted in CNY), Hong Kong (0700.HK, HKD), and "
-    "US-listed China ADRs (BABA, PDD, JD, in USD). The desk FX-converts A-share and HK prices to "
-    "USD automatically, so size every weight as a fraction of the one USD NAV. \n\n"
+    "US-listed China ADRs (BABA, PDD, JD, quoted in USD). A-shares are already in your base "
+    "currency; the desk converts HK (HKD) and ADR (USD) prices to CNY at the prevailing rate "
+    "automatically, so size every weight as a fraction of the one CNY NAV. \n\n"
     "You have two research channels and may use EITHER or BOTH: (1) the in-house macro China desks "
     "via mcp__china__* tools — get_china_regime (top-down quad + PBoC liquidity), get_china_intake "
     "(the unified, corroborated candidate funnel across the A-share buy board, alpha leaders, "
@@ -154,12 +160,12 @@ _PERSONA = (
     "via WebSearch / WebFetch. Form your own view; you are not obliged to agree with the in-house "
     "engine. \n\n"
     "ALWAYS confirm a name is priceable with mcp__china__get_quote before you rely on it — it "
-    "returns the venue, the local price, and the USD price the book will actually transact at; a "
-    "name with priceable=false will be SKIPPED. When you are done researching, call "
+    "returns the venue, the local-currency price, and the CNY price the book will actually transact "
+    "at; a name with priceable=false will be SKIPPED. When you are done researching, call "
     "mcp__china__submit_book ONCE with your COMPLETE target book for today: every name you want to "
     "hold, its weight (fraction of NAV), and a clear one-paragraph rationale for EACH holding. "
     "Anything you currently hold but omit will be SOLD. Be decisive and concrete; this book is "
-    "graded on its realized USD NAV vs FXI (iShares China Large-Cap)."
+    "graded on its realized CNY NAV vs FXI (iShares China Large-Cap, marked in CNY)."
 )
 
 
@@ -190,15 +196,15 @@ def _build_prompt(asof: str, inaugural: bool) -> str:
         lines += [f"China macro regime (in-house read): {regime}", ""]
     if inaugural:
         lines += [
-            "This is your INAUGURAL run. The book is 100% cash: $1,000,000 (USD). Build the "
+            "This is your INAUGURAL run. The book is 100% cash: ¥1,000,000 (CNY). Build the "
             "all-China portfolio from scratch — buy whatever you are convinced of across A-shares, "
             "Hong Kong, and China ADRs, sized however you see fit (keep some cash if you want).",
             "",
         ]
     else:
-        lines += [f"Your current book: ${cash:,.0f} cash across {len(positions)} holdings "
+        lines += [f"Your current book: ¥{cash:,.0f} cash across {len(positions)} holdings "
                   f"({', '.join(sorted(positions)) or 'none'}). Call mcp__china__get_my_book for the "
-                  "full picture (weights, live USD P&L, and the rationale you last gave each name).", ""]
+                  "full picture (weights, live CNY P&L, and the rationale you last gave each name).", ""]
     lines += [
         "Do your research now (the in-house China desks and/or the web — your call), then submit "
         "your complete target book for today via mcp__china__submit_book, with a one-paragraph "
@@ -260,7 +266,7 @@ def _build_payload(asof: str, submission: dict | None, prices: dict, executed: l
         "portfolio_id": PORTFOLIO_ID,
         "manager": "China Opus Brain",
         "kind": "china_brain",
-        "currency": "USD",
+        "currency": "CNY",
         "benchmark": BENCHMARK,
         "regime": _regime_dict(),
         "gross": gross,

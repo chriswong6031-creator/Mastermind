@@ -72,8 +72,9 @@ PORTFOLIOS: list[dict] = [
         "name": "China Brain",
         "tagline": "All-China (A · HK · ADR) · Opus-managed · daily",
         "kind": "china_brain",    # a free-form Opus Brain over the macro China signal desks; holds
-                                  # mainland A-shares, HK names, and US-listed China ADRs, marked in USD
-                                  # (bot/china.py). Same template as the autonomous book, China universe.
+                                  # mainland A-shares, HK names, and US-listed China ADRs, marked in CNY
+                                  # — HK (HKD) + ADR (USD) FX-converted to CNY (bot/china.py). Same
+                                  # template as the autonomous book, China universe.
         "manager": "brain",
         "starting_nav": 1_000_000.0,
         "benchmark": "FXI",       # iShares China Large-Cap — USD all-China comparison line

@@ -70,20 +70,20 @@ def read_submission():
 # ---------------------------------------------------------------------------
 
 @tool("get_my_book",
-      "Your CURRENT China portfolio: cash, NAV (USD), and every holding with shares, weight, "
-      "average cost, live USD price, unrealized P&L, and the rationale you last gave it. The book "
+      "Your CURRENT China portfolio: cash, NAV (CNY), and every holding with shares, weight, "
+      "average cost, live CNY price, unrealized P&L, and the rationale you last gave it. The book "
       "holds mainland A-shares (*.SS/*.SZ), Hong Kong names (*.HK), and US-listed China ADRs, all "
-      "marked to USD. Call this FIRST to see exactly what you already hold before deciding today.",
+      "marked to CNY. Call this FIRST to see exactly what you already hold before deciding today.",
       {})
 async def get_my_book(args):
-    from portfolio import paper_account, registry
+    from portfolio import fx, paper_account, registry
     state = paper_account._load_account(PORTFOLIO_ID)
     tickers = list((state.get("positions") or {}).keys())
     prices: dict[str, float] = {}
     for t in tickers + [BENCHMARK]:
-        px = paper_account._current_price(t)
-        if px:
-            prices[t] = px
+        cny = fx.usd_to_cny(paper_account._current_price(t))   # shared store is USD → CNY base
+        if cny:
+            prices[t] = cny
     pnl = paper_account.positions_pnl(prices, PORTFOLIO_ID)
     nav = paper_account.nav(prices, PORTFOLIO_ID)
     rationales: dict[str, str] = {}
@@ -109,7 +109,7 @@ async def get_my_book(args):
     pending = paper_account.load_pending(PORTFOLIO_ID)
     return bot_mcp._json({
         "cash": round(float(state.get("cash") or 0.0), 2),
-        "nav": round(nav, 2), "currency": "USD",
+        "nav": round(nav, 2), "currency": "CNY",
         "benchmark": BENCHMARK,
         "starting_nav": state.get("starting_nav"),
         "inception_date": state.get("inception_date"),
@@ -265,25 +265,24 @@ async def get_china_brief(args):
 
 
 @tool("get_quote",
-      "Confirm a Greater-China name is PRICEABLE and see its USD mark before you rely on it. Returns "
-      "the venue (A-share/HK/ADR), quote currency, the local-currency price, and the USD price the "
-      "book will actually transact at (A-share CNY and HK HKD are FX-converted to USD). priceable=false "
-      "means the desk will SKIP this name — pick another.",
+      "Confirm a Greater-China name is PRICEABLE and see its CNY mark before you rely on it. Returns "
+      "the venue (A-share/HK/ADR), quote currency, the local-currency price, and the CNY price the "
+      "book will actually transact at (A-shares are native CNY; HK HKD and US-ADR USD are FX-converted "
+      "to CNY). priceable=false means the desk will SKIP this name — pick another.",
       {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]})
 async def get_quote(args):
     from portfolio import fx, paper_account
     t = (args.get("ticker") or "").upper().strip()
     if not t:
         return bot_mcp._json({"error": "no ticker"})
-    usd = paper_account._current_price(t)
-    cur = fx.currency_of(t)
-    rate = fx.rate_per_usd(cur)
-    local = round(usd * rate, 4) if (usd and cur != "USD") else (round(usd, 4) if usd else None)
+    usd = paper_account._current_price(t)        # shared store returns USD
+    cny = fx.usd_to_cny(usd)                      # the book's base currency
+    cur = fx.currency_of(t)                       # native quote currency
+    local = round(usd * fx.rate_per_usd(cur), 4) if usd else None   # native-currency price
     return bot_mcp._json({
         "ticker": t, "venue": china_intake._venue(t), "currency": cur,
-        "price_local": local, "price_usd": round(usd, 4) if usd else None,
-        "fx_per_usd": round(rate, 4) if cur != "USD" else 1.0,
-        "priceable": bool(usd and usd > 0),
+        "price_local": local, "price_cny": round(cny, 4) if cny else None,
+        "priceable": bool(cny and cny > 0),
     })
 
 

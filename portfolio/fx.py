@@ -123,6 +123,53 @@ def to_usd(price_local: float | None, ticker: str) -> float | None:
     return px / rate if rate and rate > 0 else None
 
 
+def to_cny(price_local: float | None, ticker: str) -> float | None:
+    """Convert a LOCAL-currency price for `ticker` into CNY — the China book's base currency.
+    A-shares are already CNY; HK (HKD) and US-listed ADRs (USD) convert at the prevailing rate
+    (CNY per 1 unit of the local currency = CNY-per-USD ÷ local-per-USD). None passes through."""
+    if price_local is None:
+        return None
+    try:
+        px = float(price_local)
+    except (TypeError, ValueError):
+        return None
+    if px <= 0:
+        return None
+    cur = currency_of(ticker)
+    if cur == "CNY":
+        return px
+    cur_per_usd = rate_per_usd(cur)
+    return px * rate_per_usd("CNY") / cur_per_usd if cur_per_usd and cur_per_usd > 0 else None
+
+
+def usd_to_cny(usd_value: float | None) -> float | None:
+    """Convert a USD amount into CNY at the prevailing USD/CNY (offshore CNH) rate. Used to mark the
+    China book — whose shared price store returns USD — in its CNY base currency. None passes through."""
+    if usd_value is None:
+        return None
+    try:
+        v = float(usd_value)
+    except (TypeError, ValueError):
+        return None
+    if v <= 0:
+        return None
+    return v * rate_per_usd("CNY")
+
+
+def cny_to_local(cny_value: float | None, ticker: str) -> float | None:
+    """Inverse of to_cny: a CNY amount back into the ticker's LOCAL quote currency (for display)."""
+    if cny_value is None:
+        return None
+    try:
+        v = float(cny_value)
+    except (TypeError, ValueError):
+        return None
+    cur = currency_of(ticker)
+    if cur == "CNY":
+        return v
+    return v * rate_per_usd(cur) / rate_per_usd("CNY")
+
+
 def clear_cache() -> None:
     """Drop the per-process rate memo (tests / a fresh FX read)."""
     _RATE_CACHE.clear()

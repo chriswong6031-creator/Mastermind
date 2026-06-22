@@ -91,6 +91,20 @@ def test_fx_to_usd(monkeypatch):
     assert fx.to_usd(0, "600519.SS") is None                      # non-positive → None
 
 
+def test_fx_to_cny(monkeypatch):
+    """The China book's base currency is CNY: A-shares native, HK (HKD) and ADR (USD) converted."""
+    from portfolio import fx
+    monkeypatch.setattr(fx, "rate_per_usd", lambda cur: {"CNY": 7.0, "HKD": 7.8}.get(cur, 1.0))
+    assert fx.to_cny(70.0, "600519.SS") == pytest.approx(70.0)    # A-share: already CNY
+    assert fx.to_cny(78.0, "0700.HK") == pytest.approx(70.0)      # HKD 78 * (7.0/7.8) = CNY 70
+    assert fx.to_cny(10.0, "BABA") == pytest.approx(70.0)         # USD 10 * 7.0 = CNY 70
+    # usd_to_cny: the shared store returns USD → multiply by CNY-per-USD
+    assert fx.usd_to_cny(10.0) == pytest.approx(70.0)
+    assert fx.usd_to_cny(None) is None
+    # round-trip an A-share: native CNY → USD (shared store) → CNY base is loss-free
+    assert fx.usd_to_cny(fx.to_usd(700.0, "600519.SS")) == pytest.approx(700.0)
+
+
 def test_fx_rate_fallback(monkeypatch):
     """With no live source, rate_per_usd falls back to the static peg/recent constants."""
     from portfolio import fx
@@ -198,17 +212,17 @@ def test_submit_book_scales_and_tags_venue(iso):
     assert venues["600519.SS"] == "A-share" and venues["0700.HK"] == "HK"
 
 
-def test_get_quote_reports_usd_and_venue(iso, monkeypatch):
+def test_get_quote_reports_cny_and_venue(iso, monkeypatch):
     from brain import china_mcp
     from portfolio import fx
-    monkeypatch.setattr(paper_account, "_current_price", lambda t: {"0700.HK": 50.0}.get(t))
-    monkeypatch.setattr(fx, "rate_per_usd", lambda cur: {"HKD": 7.8}.get(cur, 1.0))
+    monkeypatch.setattr(paper_account, "_current_price", lambda t: {"0700.HK": 50.0}.get(t))  # USD
+    monkeypatch.setattr(fx, "rate_per_usd", lambda cur: {"CNY": 7.0, "HKD": 7.8}.get(cur, 1.0))
     out = asyncio.run(china_mcp.get_quote.handler({"ticker": "0700.HK"}))
     payload = json.loads(out["content"][0]["text"])
     assert payload["venue"] == "HK" and payload["currency"] == "HKD"
     assert payload["priceable"] is True
-    assert payload["price_usd"] == pytest.approx(50.0)
-    assert payload["price_local"] == pytest.approx(390.0)         # 50 USD * 7.8
+    assert payload["price_local"] == pytest.approx(390.0)         # 50 USD * 7.8 = native HKD
+    assert payload["price_cny"] == pytest.approx(350.0)           # 50 USD * 7.0 = CNY the book pays
     miss = json.loads(asyncio.run(china_mcp.get_quote.handler({"ticker": "9999.HK"}))["content"][0]["text"])
     assert miss["priceable"] is False
 
@@ -224,7 +238,7 @@ def test_run_china_offline_inaugural(iso, monkeypatch):
     assert out["nav"] == 1_000_000.0
     latest = json.loads((registry.data_dir("china") / "latest.json").read_text())
     assert latest["portfolio_id"] == "china" and latest["schema"] == "portfolio.v1"
-    assert latest["benchmark"] == "FXI" and latest["currency"] == "USD"
+    assert latest["benchmark"] == "FXI" and latest["currency"] == "CNY"
 
 
 def test_run_china_executes_multivenue_submission(iso, monkeypatch):
@@ -260,6 +274,30 @@ def test_run_china_executes_multivenue_submission(iso, monkeypatch):
     latest = json.loads((registry.data_dir("china") / "latest.json").read_text())
     venues = {p["ticker"]: p.get("venue") for p in latest["positions"]}
     assert venues.get("600519.SS") == "A-share" and venues.get("0700.HK") == "HK"
+
+
+def test_run_china_marks_in_cny(iso, monkeypatch):
+    """The book is denominated in CNY: a USD ADR is booked at usd * CNY-per-USD, NAV stays ¥1M."""
+    from bot import china
+    from brain import china_mcp
+    from portfolio import fx
+    monkeypatch.setattr(fx, "rate_per_usd", lambda cur: {"CNY": 7.0, "HKD": 7.8}.get(cur, 1.0))
+    monkeypatch.setattr(paper_account, "_current_price", lambda t: {"BABA": 100.0, "FXI": 30.0}.get(t))  # USD
+
+    def fake_brain(asof, inaugural):
+        china_mcp.submission_path().parent.mkdir(parents=True, exist_ok=True)
+        china_mcp.submission_path().write_text(json.dumps({
+            "holdings": [{"ticker": "BABA", "weight": 0.5, "rationale": "adr"}],
+            "summary": "adr", "gross": 0.5}))
+        return {"ok": True, "model": "m"}
+
+    monkeypatch.setattr(china, "_run_brain", fake_brain)
+    out = china.run_china(asof="2026-06-22", armed=True)
+    latest = json.loads((registry.data_dir("china") / "latest.json").read_text())
+    assert latest["currency"] == "CNY"
+    baba = next(p for p in latest["positions"] if p["ticker"] == "BABA")
+    assert baba["cost_basis"] == pytest.approx(700.0)            # USD 100 * 7.0 = CNY 700
+    assert out["nav"] == pytest.approx(1_000_000.0, rel=1e-6)    # ¥1M, self-consistent
 
 
 # --------------------------------------------------------------------------- #
