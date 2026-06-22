@@ -64,3 +64,37 @@ detectors:
   modes: [self, operator]                # self = hard sizing veto; operator = read-only advisory
   operator_holdings_source: "WATCHLIST.md"
   enabled: [D1, D2, D3, D4, D5, D6]
+
+# ---- portfolio safety engine (portfolio/safety.py) ----
+# Read-only risk backtest of the live book: a static-weight historical simulation of the
+# current holdings → max-drawdown / diversification / correlation / beta scorecard.
+# All thresholds are display/scoring anchors, NOT scored alpha. Tune as you calibrate.
+safety:
+  lookback_days: 1825                    # ~5y calendar window for the historical sim
+  min_obs_per_name: 60                   # a name needs >= this many closes to be "covered"
+  min_obs_total: 120                     # the book needs >= this many aligned days to score
+  covered_day_min_frac: 0.70             # keep sim days where >=70% of invested weight is live
+  bootstrap_B: 4000                      # block-bootstrap resamples (CI on Sharpe + maxDD)
+  bootstrap_block: 21                    # ~1 trading month blocks (preserve autocorrelation)
+  # score-mapping anchors: metric value that maps to sub-score 100 (good) / 0 (bad)
+  anchors:
+    drawdown:    { good: 0.0,   bad: 0.45 }   # |max drawdown| fraction (whole book)
+    volatility:  { good: 0.10,  bad: 0.45 }   # annualized volatility
+    beta:        { good: 0.85,  bad: 2.00 }   # whole-book beta vs SPY
+    cvar:        { good: 0.012, bad: 0.060 }  # |1-day 95% CVaR| fraction
+    effective_n: { good: 12.0,  bad: 1.5 }    # 1 / HHI (breadth)
+    mean_corr:   { good: 0.20,  bad: 0.80 }   # mean pairwise correlation
+    absorption:  { good: 0.35,  bad: 0.90 }   # Kritzman-Page absorption ratio (fragility)
+    largest_wt:  { good: 0.08,  bad: 0.30 }   # biggest single-name weight
+    top5_wt:     { good: 0.30,  bad: 0.80 }   # top-5 concentration
+    sector_hhi:  { good: 0.15,  bad: 0.60 }   # sector-weight HHI
+    cash:        { good: 0.20,  bad: 0.00 }   # cash buffer (more = safer, capped at 20%)
+  # composite safety-score weights (sum ~1.0)
+  score_weights:
+    drawdown: 0.22
+    volatility: 0.18
+    diversification: 0.18
+    concentration: 0.14
+    beta: 0.12
+    tail: 0.10
+    cash: 0.06

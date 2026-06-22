@@ -560,6 +560,15 @@ body.page-mm td.l { text-align: left; }
 .mm-th-stat-val { font-size: 18px; font-weight: 800; color: var(--text); font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
 .mm-th-stat-lbl { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin-top: 2px; font-weight: 600; }
 .mm-th-note { font-size: 11px; color: var(--muted); margin-top: 10px; line-height: 1.5; }
+/* PENDING orders — queued while the market is closed, fill at next open */
+.mm-pend-chip { display: inline-block; padding: 1px 7px; border-radius: 5px; font-size: 9.5px; font-weight: 800; letter-spacing: .05em;
+  background: color-mix(in srgb, var(--warn) 16%, var(--panel2)); color: var(--warn); border: 1px solid color-mix(in srgb, var(--warn) 32%, transparent); vertical-align: middle; }
+.mm-pend-block { margin: 6px 0 18px; padding: 12px 14px; background: color-mix(in srgb, var(--warn) 5%, var(--panel)); border: 1px solid color-mix(in srgb, var(--warn) 22%, var(--line)); border-radius: 12px; }
+.mm-pend-head { font-size: 13px; font-weight: 800; color: var(--text); margin-bottom: 10px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.mm-pend-sub { font-size: 11px; font-weight: 400; color: var(--muted); }
+.mm-closed-banner { display: flex; align-items: center; gap: 9px; margin: 2px 0 14px; padding: 9px 13px; font-size: 12px; line-height: 1.45; color: var(--text);
+  background: color-mix(in srgb, var(--warn) 8%, var(--panel)); border: 1px solid color-mix(in srgb, var(--warn) 28%, var(--line)); border-radius: 10px; }
+.mm-closed-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 22%, transparent); }
 /* mobile: hide secondary table columns so Positions / Trade History don't overflow */
 @media (max-width: 640px) { body.page-mm .mm-hide-sm { display: none !important; } }
 /* macro vitals integrated into the top Performance scorecard */
@@ -1445,6 +1454,68 @@ body.page-mm .mm-rd-link:hover { border-color: var(--info); color: var(--info); 
 <body class="page-mm">
 
 <!-- ── TOP NAV (Dashboard / Research view switch) ────────────────────────────── -->
+<style>
+/* ── multi-portfolio switcher ─────────────────────────────────────────────── */
+.mm-pf-switch{display:inline-flex;gap:4px;align-items:stretch;padding:3px;border-radius:11px;
+  background:var(--panel-2,rgba(127,127,127,.10));border:1px solid var(--border,rgba(127,127,127,.22));margin-right:6px}
+.mm-pf-tab{display:flex;flex-direction:column;justify-content:center;gap:1px;cursor:pointer;
+  padding:4px 11px;border-radius:8px;border:1px solid transparent;background:transparent;
+  color:var(--muted,#8a93a6);font:inherit;line-height:1.15;text-align:left;transition:all .14s ease}
+.mm-pf-tab:hover{color:var(--text,#e6e9ef);background:var(--panel,rgba(127,127,127,.10))}
+.mm-pf-tab .mm-pf-name{font-size:12.5px;font-weight:700;letter-spacing:.01em;display:flex;align-items:center;gap:5px}
+.mm-pf-tab .mm-pf-sub{font-size:10.5px;font-weight:600;font-variant-numeric:tabular-nums;opacity:.85}
+.mm-pf-tab.active{color:var(--text,#e6e9ef);background:var(--bg,#0e1117);
+  border-color:var(--border,rgba(127,127,127,.28));box-shadow:0 1px 3px rgba(0,0,0,.18)}
+.mm-pf-dot{width:7px;height:7px;border-radius:50%;flex:0 0 auto}
+.mm-pf-dot.gated{background:#3b82f6}.mm-pf-dot.autonomous{background:#a855f7}
+.mm-pf-sub .up{color:var(--up,#16a34a)}.mm-pf-sub .down{color:var(--down,#dc2626)}
+@media(max-width:760px){.mm-pf-tab .mm-pf-sub{display:none}.mm-pf-tab{padding:6px 10px}}
+
+/* ── autonomous book banner + decision log ────────────────────────────────── */
+.mm-auto-banner{display:flex;flex-wrap:wrap;gap:14px 26px;align-items:center}
+.mm-auto-id{display:flex;align-items:center;gap:9px}
+.mm-auto-badge{font-size:11px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;
+  color:#fff;background:linear-gradient(135deg,#7c5cff,#a855f7);padding:3px 9px;border-radius:999px}
+.mm-auto-sum{flex:1 1 320px;color:var(--text);font-size:13.5px;line-height:1.5}
+.mm-auto-meta{color:var(--muted);font-size:12px;display:flex;gap:16px;flex-wrap:wrap;font-variant-numeric:tabular-nums}
+.mm-dec-list{display:flex;flex-direction:column;gap:12px}
+.mm-dec{border:1px solid var(--border,rgba(127,127,127,.22));border-radius:12px;padding:13px 15px;background:var(--panel,rgba(127,127,127,.05))}
+.mm-dec-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:6px}
+.mm-dec-date{font-weight:800;font-size:13px;font-variant-numeric:tabular-nums}
+.mm-dec-cost{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.mm-dec-sum{color:var(--text);font-size:13px;line-height:1.55;margin-bottom:8px}
+.mm-dec-trades{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0}
+.mm-trade-chip{font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;padding:2px 8px;border-radius:6px;border:1px solid transparent}
+.mm-trade-chip.buy{color:var(--up,#16a34a);background:rgba(22,163,74,.12);border-color:rgba(22,163,74,.30)}
+.mm-trade-chip.sell{color:var(--down,#dc2626);background:rgba(220,38,38,.12);border-color:rgba(220,38,38,.30)}
+.mm-dec-holdings{margin-top:8px;display:flex;flex-direction:column;gap:7px}
+.mm-dec-h{font-size:12.5px;line-height:1.5}
+.mm-dec-h b{font-variant-numeric:tabular-nums}
+.mm-dec-conv{font-size:9.5px;font-weight:800;text-transform:uppercase;letter-spacing:.03em;padding:1px 6px;border-radius:5px;margin-left:6px;vertical-align:1px}
+.mm-dec-conv.high{color:#16a34a;background:rgba(22,163,74,.14)}
+.mm-dec-conv.medium{color:#d97706;background:rgba(217,119,6,.14)}
+.mm-dec-conv.low{color:var(--muted);background:rgba(127,127,127,.14)}
+.mm-dec-sold{font-size:12px;color:var(--muted);margin-top:7px;font-style:italic}
+.mm-dec-skip{font-size:11px;color:var(--down,#dc2626);margin-top:6px}
+.mm-dec-reason{margin-top:10px;border-top:1px dashed var(--border,rgba(127,127,127,.22));padding-top:8px}
+.mm-dec-toggle{background:transparent;border:0;color:var(--muted,#8a93a6);font:inherit;font-size:12px;font-weight:700;
+  cursor:pointer;padding:2px 0;display:inline-flex;align-items:center;gap:5px}
+.mm-dec-toggle:hover{color:var(--text,#e6e9ef)}
+.mm-dec-caret{font-size:10px;width:10px;display:inline-block}
+.mm-dec-reason-body{margin-top:9px}
+.mm-dec-tools{font-size:11px;color:var(--muted);margin-bottom:9px;display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+.mm-tool-chip{font-size:10.5px;font-weight:700;font-variant-numeric:tabular-nums;padding:1px 7px;border-radius:6px;
+  color:#7c5cff;background:rgba(124,92,255,.12);border:1px solid rgba(124,92,255,.25)}
+.mm-dec-think{font-size:12.5px;line-height:1.6;color:var(--text);white-space:pre-wrap;
+  background:var(--panel-2,rgba(127,127,127,.06));border-radius:9px;padding:10px 12px;margin-bottom:9px}
+.mm-trace{display:flex;flex-direction:column;gap:5px;border-left:2px solid rgba(124,92,255,.35);padding-left:11px}
+.mm-trace-think{font-size:12px;line-height:1.55;color:var(--text);white-space:pre-wrap}
+.mm-trace-call{font-size:11.5px;color:var(--text);font-variant-numeric:tabular-nums}
+.mm-trace-call b{color:#7c5cff}
+.mm-trace-res{font-size:11px;color:var(--muted);line-height:1.5;padding-left:14px;
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-word}
+.mm-dec-trace-load{font-size:11px;color:var(--muted);font-style:italic}
+</style>
 <div id="mm-nav">
   <span class="mm-nav-brand" aria-label="Mastermind">
     <svg class="mm-logo-mark" viewBox="0 0 32 32" aria-hidden="true">
@@ -1455,6 +1526,9 @@ body.page-mm .mm-rd-link:hover { border-color: var(--info); color: var(--info); 
     </svg>
     <span class="mm-logo-word">MASTERMIND</span>
   </span>
+  <!-- PORTFOLIO SWITCHER — swaps the whole dashboard between books (flagship | autonomous | …).
+       Populated from /api/portfolios so new portfolio types appear automatically. -->
+  <span class="mm-pf-switch" id="pf-switch" role="group" aria-label="Portfolio"></span>
   <span class="mm-nav-tabs">
     <button class="mm-nav-tab active" id="nav-dashboard" type="button" onclick="showView('dashboard')"><span class="l-en">Dashboard</span><span class="l-zh">仪表盘</span></button>
     <button class="mm-nav-tab" id="nav-research" type="button" onclick="showView('research')"><span class="l-en">Research</span><span class="l-zh">研究</span></button>
@@ -1471,6 +1545,20 @@ body.page-mm .mm-rd-link:hover { border-color: var(--info); color: var(--info); 
       <span class="opt zh-opt" data-l="zh">中文</span>
     </div>
   </span>
+</div>
+
+<!-- ── AUTONOMOUS BOOK BANNER (shown only when the autonomous portfolio is active) ── -->
+<div class="grid mm-section" id="auto-banner-sec" style="margin-top:0;display:none">
+  <div class="panel span12" id="auto-banner">
+    <div class="mm-auto-banner">
+      <div class="mm-auto-id">
+        <span class="mm-auto-badge">Autonomous</span>
+        <span style="font-weight:800;font-size:15px">Opus Brain</span>
+      </div>
+      <div class="mm-auto-sum" id="auto-sum">—</div>
+      <div class="mm-auto-meta" id="auto-meta"></div>
+    </div>
+  </div>
 </div>
 
 <!-- ── COMMAND HERO ─────────────────────────────────────────────────────────── -->
@@ -1527,6 +1615,8 @@ body.page-mm .mm-rd-link:hover { border-color: var(--info); color: var(--info); 
       </div>
 
     </div>
+    <!-- macro regime vitals (rates · dollar · vol), integrated into the regime hero (filled by renderMacro) -->
+    <div class="mm-perf-macro" id="perf-macro"></div>
   </div>
 </div>
 
@@ -1566,8 +1656,6 @@ body.page-mm .mm-rd-link:hover { border-color: var(--info); color: var(--info); 
         <div class="mm-perf-stat-sub" id="perf-cash-lbl"><span class="l-en">cash: —</span><span class="l-zh">现金: —</span></div>
       </div>
     </div>
-    <!-- macro regime vitals, integrated into the top scorecard (filled by renderMacro) -->
-    <div class="mm-perf-macro" id="perf-macro"></div>
   </div>
 </div>
 
@@ -1615,6 +1703,14 @@ body.page-mm .mm-rd-link:hover { border-color: var(--info); color: var(--info); 
   </div>
 </div>
 
+<!-- ── SAFETY (portfolio risk backtest) ───────────────────────────────────── -->
+<div class="mm-section">
+  <div class="panel span12" id="safety" style="grid-column:span 12">
+    <h2><span class="l-en">Portfolio Safety</span><span class="l-zh">组合安全度</span></h2>
+    <div class="mm-empty"><span class="mm-empty-icon">🛡</span><span class="l-en">Assessing portfolio risk…</span><span class="l-zh">评估组合风险中…</span></div>
+  </div>
+</div>
+
 <!-- ── POSITIONS ──────────────────────────────────────────────────────────── -->
 <div class="mm-section">
   <div class="panel span12" id="positions" style="grid-column:span 12">
@@ -1632,6 +1728,18 @@ body.page-mm .mm-rd-link:hover { border-color: var(--info); color: var(--info); 
 </div>
 
 <!-- ── BRAIN LOG + RESEARCH (side-by-side on wide screens) ─────────────────── -->
+<!-- ── AUTONOMOUS DAILY DECISION LOG (shown only when the autonomous portfolio is active) ── -->
+<div class="mm-section" id="decisions-sec" style="display:none">
+  <div class="panel span12" id="decisions">
+    <h2><span class="l-en">Daily Decision Log</span><span class="l-zh">每日决策日志</span></h2>
+    <div class="mm-dec-sub" style="color:var(--muted);font-size:12px;margin:-2px 0 12px">
+      <span class="l-en">What the Opus Brain bought, sold and held each day — and why.</span>
+      <span class="l-zh">Opus 大脑每天买入、卖出与持有的内容及其理由。</span>
+    </div>
+    <div class="mm-dec-list" id="dec-list"></div>
+  </div>
+</div>
+
 <div class="mm-section grid mm-feeds-row">
   <div class="panel span6 mm-collapsible" id="brainlog">
     <h2 class="mm-coll-h2" onclick="toggleCollapse('brainlog')"><span class="mm-coll-chev">&#9654;</span><span class="l-en">Brain Log</span><span class="l-zh">脑波日志</span></h2>
@@ -1667,6 +1775,41 @@ body.page-mm .mm-rd-link:hover { border-color: var(--info); color: var(--info); 
   </div>
 </div>
 
+<!-- ── SHADOW BOOKS (Policy A/B) ──────────────────────────────────────────── -->
+<div class="mm-section">
+  <div class="panel span12 mm-collapsible mm-collapsed" id="shadow-books" style="grid-column:span 12">
+    <div class="mm-empty"><span class="mm-empty-icon">⊙</span><span class="l-en">Loading shadow books…</span><span class="l-zh">加载影子组合中…</span></div>
+  </div>
+</div>
+
+<!-- ── CROSS-SECTIONAL EDGE (universe-wide prediction log) ─────────────────── -->
+<div class="mm-section">
+  <div class="panel span12 mm-collapsible mm-collapsed" id="xsec" style="grid-column:span 12">
+    <div class="mm-empty"><span class="mm-empty-icon">⊙</span><span class="l-en">Loading cross-sectional edge…</span><span class="l-zh">加载横截面边际中…</span></div>
+  </div>
+</div>
+
+<!-- ── ENGINE BACKTEST VERDICT (historical, leakage-free) ─────────────────── -->
+<div class="mm-section">
+  <div class="panel span12 mm-collapsible mm-collapsed" id="engine-bt" style="grid-column:span 12">
+    <div class="mm-empty"><span class="mm-empty-icon">⊙</span><span class="l-en">Loading engine backtest…</span><span class="l-zh">加载引擎回测中…</span></div>
+  </div>
+</div>
+
+<!-- ── FACTOR ALPHA LAB (advanced: factor zoo + composite + IC term-structure) ── -->
+<div class="mm-section">
+  <div class="panel span12 mm-collapsible mm-collapsed" id="factor-zoo" style="grid-column:span 12">
+    <div class="mm-empty"><span class="mm-empty-icon">⊙</span><span class="l-en">Loading factor alpha lab…</span><span class="l-zh">加载因子阿尔法实验室中…</span></div>
+  </div>
+</div>
+
+<!-- ── FUNDAMENTAL FACTORS (PIT value + quality + regime-conditional IC) ─────── -->
+<div class="mm-section">
+  <div class="panel span12 mm-collapsible mm-collapsed" id="fundamentals" style="grid-column:span 12">
+    <div class="mm-empty"><span class="mm-empty-icon">⊙</span><span class="l-en">Loading fundamental factors…</span><span class="l-zh">加载基本面因子中…</span></div>
+  </div>
+</div>
+
 <!-- ── FOOTER ─────────────────────────────────────────────────────────────── -->
 <div id="footer" style="grid-column:span 12">
   <p id="footer-disc">Paper-only / display-only. Accountability, not alpha. Not investment advice.</p>
@@ -1699,7 +1842,7 @@ body.page-mm .mm-rd-link:hover { border-color: var(--info); color: var(--info); 
   </div>
   </div><!-- /#research-sub-theses -->
 
-  <!-- Calibration sub-page (filled by renderCalibration) -->
+  <!-- Calibration sub-page (filled by renderCalibrationPage) -->
   <div id="research-sub-calibration" style="display:none">
     <div class="mm-section">
       <div class="panel span12" style="grid-column:span 12">
@@ -1804,6 +1947,19 @@ var I18N = {
   'trades.closed':        { en: 'Closed', zh: '平仓日期' },
   'trades.exit_reason':   { en: 'Exit Reason', zh: '退出原因' },
   'trades.no_closed':     { en: 'No closed positions yet.', zh: '暂无已平仓记录。' },
+  'trades.no_fills_pending': { en: 'No executed fills yet — the orders above are queued and fill at the next open.', zh: '尚无成交 — 上方订单已挂起，将于下次开盘成交。' },
+  // Pending orders (queued while the market is closed → fill at next open)
+  'pend.title':           { en: 'Pending Orders', zh: '待成交订单' },
+  'pend.sub':             { en: 'Queued while the market is closed — fill at the next open, at the market price', zh: '休市期间挂单 — 下次开盘按市价成交' },
+  'pend.est_px':          { en: 'Est. Price', zh: '预估价格' },
+  'pend.est_val':         { en: 'Est. Value', zh: '预估金额' },
+  'pend.fills':           { en: 'Fills', zh: '成交时点' },
+  'pend.fills_at_lbl':    { en: 'at open', zh: '开盘' },
+  'pend.status':          { en: 'PENDING', zh: '待成交' },
+  'pend.none':            { en: 'No orders queued.', zh: '暂无挂单。' },
+  'pend.est_note':        { en: 'Estimated prices are the previous close — orders fill at the actual market price when the session opens.', zh: '预估价格为上一交易日收盘价 — 开盘后按实际市价成交。' },
+  'pos.closed_banner':    { en: 'Market closed — orders are queued and fill at the next open at the market price. Prices shown are estimates (previous close).', zh: '休市中 — 订单已挂起，将于下次开盘按市价成交。所示价格为预估（上一收盘价）。' },
+  'pos.fills_at':         { en: 'fills', zh: '成交' },
   // Brain log
   'brain.title':          { en: 'Brain Log', zh: '脑波日志' },
   'brain.loading':        { en: 'Loading activity…', zh: '加载动态中…' },
@@ -2058,15 +2214,22 @@ var esc = function(s) {
 var pct = function(v) { return v == null ? '—' : (v * 100).toFixed(1) + '%'; };
 var pctInt = function(v) { return v == null ? '—' : (v * 100).toFixed(0) + '%'; };
 var fmtDate = function(s) { return s ? s.slice(0,10) : '—'; };
+// Parse a date string LOCALLY. A bare YYYY-MM-DD is otherwise read as UTC midnight, which
+// renders as the PREVIOUS day in any negative-offset (US) tz — e.g. a 2026-06-22 fill date
+// showing as 6/21. Date-only strings are parsed as local; full timestamps pass through.
+var _parseLocalDate = function(s) {
+  var m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  return m ? new Date(+m[1], +m[2]-1, +m[3]) : new Date(s);
+};
 var fmtDateShort = function(s) {
   if (!s) return '—';
-  var d = new Date(s);
+  var d = _parseLocalDate(s);
   if (isNaN(d)) return s.slice(0,10);
   return (d.getMonth()+1) + '/' + d.getDate() + '/' + String(d.getFullYear()).slice(2);
 };
 var fmtDateVerbose = function(s) {
   if (!s) return '—';
-  var d = new Date(s);
+  var d = _parseLocalDate(s);
   if (isNaN(d)) return s.slice(0,10);
   var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   return months[d.getMonth()] + ' ' + d.getDate() + ', ' + d.getFullYear();
@@ -2088,6 +2251,11 @@ var fmtTsShort = function(s) {
 // ── state ────────────────────────────────────────────────────────────────────
 var _book = null, _trades = null, _activity = [], _research = [], _competitors = null, _regime = null;
 var _outcomes = null;             // live thesis-outcome labels + Brier track record (/api/outcomes)
+var _shadowBooks = null;          // parallel forward shadow-book leaderboard (/api/shadow_books)
+var _predictions = null;          // universe-wide prediction log coverage + cross-sectional scorecard
+var _engineBacktest = null;       // historical engine-backtest verdict (/api/engine_backtest)
+var _factorZoo = null;            // advanced factor-alpha lab verdict (/api/factor_zoo)
+var _fundamentals = null;         // PIT fundamental (value/quality) factor verdict (/api/fundamentals)
 // paged-feed state (Brain Log + Research Feed) — preserved across re-renders, clamped on reload
 var _brainPage = 0, _researchPage = 0;
 // brain rows are compact, research cards are tall — bias counts so the two columns end ~level
@@ -2114,19 +2282,24 @@ window.researchPage = function(d) {
 };
 var _expandedIdx = null;
 var _perf = null, _runs = [], _rejected = [], _macro = null;
+var _risk = null;                 // portfolio safety scorecard (/api/risk) — the risk backtest
 var _papers = [];                 // research papers (the Research page rows)
 var _papersErr = null;            // server-side error from /api/research_papers, surfaced in the empty state
 var _openPaperId = null;          // id of the paper currently shown in the thesis modal (for PDF export)
 var _calib = null;                // outcome ledger (the Calibration sub-page)
 var _researchSub = 'theses';      // 'theses' | 'calibration'
 var _currentView = 'dashboard';   // 'dashboard' | 'research'
+// ── multi-portfolio switcher state ──────────────────────────────────────────
+var _portfolio = 'flagship';      // active portfolio id (drives every portfolio-scoped fetch)
+var _portfolios = [];             // [{id,name,tagline,kind,manager,status}] from /api/portfolios
+var _decisions = [];              // autonomous Brain daily decision log (/api/decisions)
 // run drilldown cache
 var _runLogCache = {};
 
 // ── collapsible panels (Brain Activity / Evaluated): default collapsed, click to toggle, persisted ──
-var _collapsed = { runs: true, rejected: true, brainlog: false, research: false };
+var _collapsed = { runs: true, rejected: true, brainlog: false, research: false, 'shadow-books': true, 'xsec': true, 'engine-bt': true, 'factor-zoo': true, 'fundamentals': true };
 try {
-  ['runs', 'rejected', 'brainlog', 'research'].forEach(function (id) {
+  ['runs', 'rejected', 'brainlog', 'research', 'shadow-books', 'xsec', 'engine-bt', 'factor-zoo', 'fundamentals'].forEach(function (id) {
     var v = localStorage.getItem('mm_coll_' + id);
     if (v !== null) _collapsed[id] = (v === '1');
   });
@@ -2844,6 +3017,187 @@ function renderAllocation() {
   E('lbl-gross').textContent = b.gross != null ? pctInt(b.gross) + ' ' + t('alloc.gross') : '';
 }
 
+// ── SAFETY (portfolio risk backtest) ───────────────────────────────────────────
+// Renders the /api/risk scorecard: a static-weight historical risk backtest of the
+// live book — overall safety score + sub-scores + max-drawdown / diversification /
+// correlation / beta metrics + doctrine-firebreak breaches + honesty caveats.
+function renderSafety() {
+  var el = E('safety'); if (!el) return;
+  var d = _risk || null;
+  var isZh = document.documentElement.getAttribute('data-lang') === 'zh';
+  var H = function(en, zh) { return '<span class="l-en">' + en + '</span><span class="l-zh">' + zh + '</span>'; };
+  var head = '<h2>' + H('Portfolio Safety', '组合安全度') + '</h2>';
+
+  if (!d || (d.safety_score == null && (!d.metrics || !Object.keys(d.metrics).length))) {
+    var msg = (d && d.note) ? d.note : (isZh ? '暂无足够数据评估组合安全度。' : 'Not enough data to assess portfolio safety yet.');
+    el.innerHTML = head + '<div class="mm-empty"><span class="mm-empty-icon">🛡</span>' + esc(msg) + '</div>';
+    return;
+  }
+
+  var m = d.metrics || {}, ss = d.subscores || {};
+  var num = function(x, dp) { return (x == null || isNaN(x)) ? '—' : Number(x).toFixed(dp == null ? 2 : dp); };
+  var pc  = function(x, dp) { return (x == null || isNaN(x)) ? '—' : Number(x).toFixed(dp == null ? 1 : dp) + '%'; };
+  var scoreCol = function(v) { return v == null ? 'var(--muted)' : (v >= 70 ? 'var(--up)' : (v >= 55 ? 'var(--warn)' : 'var(--down)')); };
+
+  var score = d.safety_score;
+  var sc = scoreCol(score);
+  var grade = d.grade || '—';
+
+  // ---- header: big score + grade + verdict + meta -------------------------------
+  var meta = [];
+  meta.push((isZh ? '截至 ' : 'as of ') + esc((d.as_of || '—')));
+  if (d.source) meta.push(d.source === 'target' ? (isZh ? '目标权重' : 'target weights') : (isZh ? '实际持仓' : 'held'));
+  if (d.n_positions != null) meta.push(d.n_positions + (isZh ? ' 个持仓' : ' positions'));
+  var cov = d.coverage || {};
+  if (cov.weight_covered != null) meta.push((isZh ? '覆盖 ' : 'coverage ') + Math.round(cov.weight_covered * 100) + '%');
+  if (d.score_confidence) meta.push((isZh ? '置信 ' : 'confidence ') + d.score_confidence);
+
+  var header =
+    '<div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap;margin-bottom:14px">' +
+      '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-width:104px;' +
+        'background:var(--panel2);border:1px solid var(--line);border-radius:14px;padding:12px 10px">' +
+        '<div style="font-size:34px;font-weight:800;line-height:1;color:' + sc + ';font-variant-numeric:tabular-nums">' +
+          (score == null ? '—' : Math.round(score)) + '</div>' +
+        '<div style="font-size:11px;color:var(--muted);margin-top:3px">' + H('SAFETY / 100', '安全度 / 100') + '</div>' +
+        '<div style="margin-top:6px;font-size:13px;font-weight:700;color:' + sc + ';border:1px solid ' + sc + ';' +
+          'border-radius:20px;padding:1px 12px">' + esc(grade) + '</div>' +
+      '</div>' +
+      '<div style="flex:1;min-width:220px">' +
+        '<div style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:4px">' + esc(d.verdict || '') + '</div>' +
+        '<div style="font-size:12px;color:var(--muted)">' + meta.join(' · ') + '</div>' +
+        '<div style="font-size:11px;color:var(--muted);margin-top:6px">' +
+          H('Static-weight historical risk backtest of the current book — read-only, never an order.',
+            '对当前组合的静态权重历史风险回测 — 仅供参考，绝非交易指令。') + '</div>' +
+      '</div>' +
+    '</div>';
+
+  // ---- metric tiles -------------------------------------------------------------
+  var tile = function(label, value, sub, color) {
+    return '<div style="flex:1 1 130px;min-width:120px;background:var(--panel2);border:1px solid var(--line);' +
+      'border-radius:10px;padding:9px 11px">' +
+      '<div style="font-size:11px;color:var(--muted)">' + label + '</div>' +
+      '<div style="font-size:19px;font-weight:700;font-variant-numeric:tabular-nums;color:' + (color || 'var(--text)') + '">' + value + '</div>' +
+      (sub ? '<div style="font-size:10px;color:var(--muted);margin-top:1px">' + sub + '</div>' : '') + '</div>';
+  };
+  var ddCI = m.max_drawdown_ci_pct;
+  var ddSub = (ddCI && ddCI.length === 3) ? (isZh ? '最坏 ' : 'worst ') + num(ddCI[0], 0) + '%' : '';
+  var betaSub = (m.weighted_name_beta != null) ? (isZh ? '满仓 ' : 'gross ') + num(m.weighted_name_beta, 2) : '';
+  var shSub = (m.sharpe_ci && m.sharpe_ci.length === 3) ? 'CI ' + num(m.sharpe_ci[0], 1) + '–' + num(m.sharpe_ci[2], 1) : '';
+  var tiles =
+    '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px">' +
+      tile(H('Max drawdown', '最大回撤'), pc(m.max_drawdown_pct), ddSub, 'var(--down)') +
+      tile(H('Volatility (ann.)', '年化波动'), pc(m.ann_volatility_pct)) +
+      tile(H('Beta vs SPY', '市场Beta'), num(m.beta_spy), betaSub) +
+      tile(H('Effective names', '有效持仓数'), num(m.effective_n, 1), (m.n_names || 0) + (isZh ? ' 实际' : ' actual')) +
+      tile(H('Mean corr', '平均相关'), num(m.mean_pairwise_corr), H('absorption ', '吸收 ') + num(m.absorption_ratio)) +
+      tile(H('1-day 95% CVaR', '单日95% CVaR'), pc(m.cvar95_1d_pct), 'VaR ' + pc(m.var95_1d_pct), 'var(--down)') +
+      tile(H('Sharpe (hist.)', '历史夏普'), num(m.sharpe, 2), shSub) +
+      tile(H('Cash buffer', '现金缓冲'), pc((d.cash_weight || 0) * 100)) +
+    '</div>';
+
+  // ---- sub-score bars -----------------------------------------------------------
+  var bar = function(label, v) {
+    var w = (v == null) ? 0 : Math.max(0, Math.min(100, v));
+    return '<div style="display:flex;align-items:center;gap:8px;margin:3px 0">' +
+      '<div style="width:118px;font-size:12px;color:var(--muted)">' + label + '</div>' +
+      '<div style="flex:1;height:8px;background:var(--line);border-radius:4px;overflow:hidden">' +
+        '<div style="width:' + w + '%;height:100%;background:' + scoreCol(v) + '"></div></div>' +
+      '<div style="width:30px;text-align:right;font-size:12px;font-variant-numeric:tabular-nums">' +
+        (v == null ? '—' : Math.round(v)) + '</div></div>';
+  };
+  var bars =
+    '<div style="background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:12px">' +
+      '<div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:6px">' + H('Safety sub-scores', '安全度分项') + '</div>' +
+      bar(H('Drawdown', '回撤'), ss.drawdown) +
+      bar(H('Volatility', '波动'), ss.volatility) +
+      bar(H('Diversification', '分散度'), ss.diversification) +
+      bar(H('Concentration', '集中度'), ss.concentration) +
+      bar(H('Beta', '市场敏感'), ss.beta) +
+      bar(H('Tail risk', '尾部风险'), ss.tail) +
+      bar(H('Cash buffer', '现金缓冲'), ss.cash) +
+    '</div>';
+
+  // ---- sectors + top correlated pairs (two columns) -----------------------------
+  var PAL = ['#5b8def', '#43b581', '#e0a955', '#d9646e', '#9b6dd6', '#48b6c2', '#c77dab', '#8a929e'];
+  var secRows = (m.sectors || []);
+  var secBar = '', secLeg = '';
+  secRows.forEach(function(s, i) {
+    var col = PAL[i % PAL.length], w = (s.weight || 0) * 100;
+    if (w >= 0.5) secBar += '<div title="' + esc(s.sector) + ' ' + w.toFixed(0) + '%" style="width:' + w.toFixed(1) + '%;background:' + col + '"></div>';
+    secLeg += '<span style="display:inline-flex;align-items:center;gap:4px;margin-right:10px;font-size:11px;color:var(--muted)">' +
+      '<span style="width:9px;height:9px;border-radius:2px;background:' + col + '"></span>' + esc(s.sector) + ' ' + w.toFixed(0) + '%</span>';
+  });
+  var secBlock =
+    '<div style="flex:1 1 280px;min-width:240px">' +
+      '<div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:6px">' +
+        H('Sector mix', '行业分布') + ' · ' + H('HHI ', 'HHI ') + num(m.sector_hhi) + '</div>' +
+      '<div style="display:flex;height:14px;border-radius:5px;overflow:hidden;border:1px solid var(--line)">' + secBar + '</div>' +
+      '<div style="margin-top:6px;line-height:1.7">' + (secLeg || '<span style="color:var(--muted)">—</span>') + '</div>' +
+    '</div>';
+
+  var pairs = (m.top_correlated_pairs || []);
+  var pairRows = pairs.map(function(p) {
+    var hot = Math.abs(p.corr) >= 0.8;
+    return '<div style="display:flex;justify-content:space-between;font-size:12px;padding:2px 0">' +
+      '<span>' + esc(p.a) + ' ↔ ' + esc(p.b) + '</span>' +
+      '<span style="font-variant-numeric:tabular-nums;color:' + (hot ? 'var(--warn)' : 'var(--muted)') + '">' + num(p.corr, 2) + '</span></div>';
+  }).join('');
+  var pairBlock =
+    '<div style="flex:1 1 220px;min-width:200px">' +
+      '<div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:6px">' + H('Most correlated pairs', '相关性最高的配对') + '</div>' +
+      (pairRows || '<span style="font-size:12px;color:var(--muted)">—</span>') +
+    '</div>';
+
+  var midRow = '<div style="display:flex;flex-wrap:wrap;gap:18px;margin-bottom:12px">' + secBlock + pairBlock + '</div>';
+
+  // ---- breaches -----------------------------------------------------------------
+  var breaches = (d.breaches || []);
+  var brBlock = '';
+  if (breaches.length) {
+    var chips = breaches.map(function(b) {
+      var col = b.severity === 'warn' ? 'var(--down)' : 'var(--warn)';
+      return '<div style="display:flex;gap:7px;align-items:flex-start;font-size:12px;margin:3px 0">' +
+        '<span style="color:' + col + ';font-weight:700">' + (b.severity === 'warn' ? '▲' : '⚑') + '</span>' +
+        '<span style="color:var(--text)">' + esc(b.message) + '</span></div>';
+    }).join('');
+    brBlock = '<div style="background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--down);' +
+      'border-radius:8px;padding:9px 12px;margin-bottom:10px">' +
+      '<div style="font-size:12px;font-weight:600;color:var(--muted);margin-bottom:4px">' + H('Risk flags', '风险提示') + '</div>' + chips + '</div>';
+  }
+
+  // ---- consumed action: the safety de-gross overlay (this is what makes it NOT just display) --
+  var ov = d.overlay || null;
+  var ovBlock = '';
+  if (ov && typeof ov.gross_mult === 'number' && ov.gross_mult < 1) {
+    var pctInv = Math.round(ov.gross_mult * 100);
+    var addCash = Math.round((ov.cash_added || 0) * 100);
+    var rs = (ov.reasons || []).join(', ');
+    var verb = ov.applied
+      ? H('De-grossed the book to ', '已将组合降仓至 ')
+      : H('Indicated de-gross to ', '建议降仓至 ');
+    ovBlock = '<div style="background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--warn);' +
+      'border-radius:8px;padding:9px 12px;margin-bottom:10px">' +
+      '<div style="font-size:13px;color:var(--text)"><span style="color:var(--warn);font-weight:700">🛡 ' +
+      (ov.applied ? H('Risk overlay applied', '风险叠加已生效') : H('Risk overlay (indicated)', '风险叠加（建议）')) +
+      '</span> — ' + verb + '<b>' + pctInv + '%</b> ' + H('invested', '仓位') +
+      (addCash > 0 ? ' (+' + addCash + '% ' + H('cash', '现金') + ')' : '') + '</div>' +
+      (rs ? '<div style="font-size:11px;color:var(--muted);margin-top:3px">' + H('triggers: ', '触发: ') + esc(rs) + '</div>' : '') +
+      '</div>';
+  }
+
+  // ---- caveats (method + honesty) ----------------------------------------------
+  var caveats = (d.caveats || []);
+  var cavBlock = '';
+  if (caveats.length) {
+    var lis = caveats.map(function(c) { return '<li style="margin:2px 0">' + esc(c) + '</li>'; }).join('');
+    cavBlock = '<details style="margin-top:4px"><summary style="cursor:pointer;font-size:12px;color:var(--muted)">' +
+      H('Method &amp; caveats', '方法与说明') + '</summary>' +
+      '<ul style="margin:6px 0 0 0;padding-left:18px;font-size:11px;color:var(--muted)">' + lis + '</ul></details>';
+  }
+
+  el.innerHTML = head + header + ovBlock + tiles + bars + midRow + brBlock + cavBlock;
+}
+
 // ── POSITIONS ─────────────────────────────────────────────────────────────────
 function renderPositions() {
   var b = _book || {};
@@ -2861,29 +3215,34 @@ function renderPositions() {
   var rows = '';
   positions.forEach(function(p, i) {
     var isConv = p.sleeve === 'conviction';
-    var sleeveClass = isConv ? 'conv' : 'lead';
-    var sleeveName = isConv ? t('alloc.conviction') : t('alloc.leadership');
+    var isBrain = p.sleeve === 'brain';
+    var sleeveClass = (isConv || isBrain) ? 'conv' : 'lead';
+    var sleeveName = isBrain ? (document.documentElement.getAttribute('data-lang') === 'zh' ? '大脑' : 'Brain')
+                   : (isConv ? t('alloc.conviction') : t('alloc.leadership'));
     var verdict = (p.verdict || 'hold').toLowerCase();
     var tf = p.thesis_full || {};
     var heldStr = '';
-    if (p.opened_at) {
+    if (p.pending) {
+      heldStr = '<span class="held-days">' + t('pos.fills_at') + ' ' + (p.fill_after ? fmtDateShort(p.fill_after) : '—') + '</span>';
+    } else if (p.opened_at) {
       heldStr = fmtDateShort(p.opened_at);
       if (p.held_days != null) heldStr += ' <span class="held-days">(' + p.held_days + 'd)</span>';
     }
     var conflStr = tf.confluence != null ? (tf.confluence > 0 ? '+' : '') + tf.confluence.toFixed(2) : (p.confluence != null ? (p.confluence > 0 ? '+' : '') + p.confluence.toFixed(2) : '—');
     var rsStr = p.rs_pctile != null ? p.rs_pctile.toFixed(1) : '—';
 
-    // live marks (Polygon): entry = true avg-cost basis, current price, unrealized P&L
-    var entryPx = (p.cost_basis != null ? p.cost_basis : p.entry_price);
+    // live marks (Polygon): entry = true avg-cost basis, current price, unrealized P&L.
+    // PENDING rows have no fill yet → show the estimated (prev-close) price and a dash for marks.
+    var entryPx = p.pending && p.est_price != null ? p.est_price : (p.cost_basis != null ? p.cost_basis : p.entry_price);
     var entryStr = entryPx != null ? '$' + Number(entryPx).toFixed(2) : '—';
-    var curStr = p.current_price != null ? '$' + Number(p.current_price).toFixed(2) : '—';
-    var u = pnlCell(p.unrealized_pnl, p.unrealized_pct);
+    var curStr = (!p.pending && p.current_price != null) ? '$' + Number(p.current_price).toFixed(2) : '—';
+    var u = p.pending ? { cls: '', txt: '—' } : pnlCell(p.unrealized_pnl, p.unrealized_pct);
     // verdict → gerund (HOLDING / ADDING / TRIMMING …); CSS class stays the raw verdict
     var vKey = { hold: 'pos.v_hold', add: 'pos.v_add', trim: 'pos.v_trim', reduce: 'pos.v_reduce', avoid: 'pos.v_avoid', watch: 'pos.v_watch' }[verdict];
     var vLabel = vKey ? t(vKey) : verdict.toUpperCase();
 
     rows += '<tr class="pos-row" data-idx="' + i + '" onclick="toggleExpand(' + i + ')">' +
-      '<td><span class="pos-ticker">' + esc(p.ticker) + '</span></td>' +
+      '<td><span class="pos-ticker">' + esc(p.ticker) + '</span>' + (p.pending ? ' <span class="mm-pend-chip">' + t('pend.status') + '</span>' : '') + '</td>' +
       '<td class="l mm-hide-sm"><span class="mm-sleeve-chip ' + sleeveClass + '">' + sleeveName + '</span></td>' +
       '<td class="mm-hide-sm">' + (p.stage != null ? p.stage : '—') + '</td>' +
       '<td style="font-variant-numeric:tabular-nums;font-weight:700">' + pct(p.weight) + '</td>' +
@@ -2996,7 +3355,13 @@ function renderPositions() {
     rows += '</div></td></tr>';
   });
 
+  var nPend = positions.filter(function(p) { return p.pending; }).length;
+  var banner = (b.market_status === 'closed' && nPend)
+    ? '<div class="mm-closed-banner"><span class="mm-closed-dot"></span>' + t('pos.closed_banner') + '</div>'
+    : '';
+
   el.innerHTML = '<h2><span class="l-en">Positions</span><span class="l-zh">持仓</span> <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px">' + t('pos.subtitle') + '</span></h2>' +
+    banner +
     '<div class="mm-table-wrap"><table>' +
     '<thead><tr>' +
     '<th>' + t('pos.ticker') + '</th>'
@@ -3032,6 +3397,39 @@ window.toggleExpand = function(idx) {
   if (thisRow) thisRow.style.background = isOpen ? '' : 'color-mix(in srgb, var(--link) 10%, var(--panel))';
 };
 
+// PENDING orders block — queued while the market is closed, fill at the next open.
+function _pendingOrdersHtml() {
+  var pend = (_trades && _trades.pending) || [];
+  if (!pend.length) return '';
+  var head = '<div class="mm-pend-head"><span class="mm-pend-chip">' + t('pend.status') + '</span> ' +
+    '<span class="l-en">Pending Orders</span><span class="l-zh">待成交订单</span> ' +
+    '<span class="mm-pend-sub">· ' + t('pend.sub') + '</span></div>';
+  var rows = '';
+  pend.forEach(function(o) {
+    var shares = o.shares != null ? Number(o.shares).toLocaleString(undefined, { maximumFractionDigits: 1 }) : '—';
+    var estPx = o.est_price != null ? '$' + Number(o.est_price).toFixed(2) : '—';
+    var estVal = o.est_value != null ? '$' + Math.round(o.est_value).toLocaleString() : '—';
+    rows += '<tr>' +
+      '<td><span class="pos-ticker">' + esc(o.ticker || '—') + '</span></td>' +
+      '<td><span class="mm-side-chip buy">' + t('trades.buy') + '</span></td>' +
+      '<td class="mm-hide-sm" style="font-variant-numeric:tabular-nums">' + shares + '</td>' +
+      '<td style="font-variant-numeric:tabular-nums">' + estPx + '</td>' +
+      '<td class="mm-hide-sm" style="font-variant-numeric:tabular-nums">' + estVal + '</td>' +
+      '<td class="l" style="font-variant-numeric:tabular-nums;color:var(--muted)">' + t('pend.fills_at_lbl') + ' ' + (o.fill_after ? fmtDate(o.fill_after) : '—') + '</td>' +
+    '</tr>';
+  });
+  return '<div class="mm-pend-block">' + head +
+    '<div class="mm-table-wrap"><table><thead><tr>' +
+      '<th>' + t('trades.ticker') + '</th>' +
+      '<th>' + t('trades.action') + '</th>' +
+      '<th class="mm-hide-sm">' + t('trades.shares') + '</th>' +
+      '<th>' + t('pend.est_px') + '</th>' +
+      '<th class="mm-hide-sm">' + t('pend.est_val') + '</th>' +
+      '<th class="l">' + t('pend.fills') + '</th>' +
+    '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
+    '<div class="mm-th-note">' + t('pend.est_note') + '</div></div>';
+}
+
 // ── TRADE HISTORY ─ complete per-fill blotter (every individual buy/sell) ──────
 function renderTrades() {
   var el = E('trades');
@@ -3039,9 +3437,12 @@ function renderTrades() {
   var hist = data.history || [];
 
   var h2 = '<h2><span class="l-en">Trade History</span><span class="l-zh">交易历史</span> <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px">' + t('trades.blotter_sub') + '</span></h2>';
+  var pendHtml = _pendingOrdersHtml();
 
   if (!hist.length) {
-    el.innerHTML = h2 + '<div class="mm-empty"><span class="mm-empty-icon">○</span>' + t('trades.no_history') + '</div>';
+    el.innerHTML = h2 + pendHtml +
+      '<div class="mm-empty"><span class="mm-empty-icon">○</span>' +
+      (pendHtml ? t('trades.no_fills_pending') : t('trades.no_history')) + '</div>';
     return;
   }
 
@@ -3066,7 +3467,7 @@ function renderTrades() {
   var start = _tradesPage * TRADES_PAGE_SIZE;
   var pageRows = hist.slice(start, start + TRADES_PAGE_SIZE);
 
-  var html = h2 + summary + '<div class="mm-table-wrap"><table><thead><tr>' +
+  var html = h2 + summary + pendHtml + '<div class="mm-table-wrap"><table><thead><tr>' +
     '<th class="l">' + t('trades.date') + '</th>' +
     '<th>' + t('trades.ticker') + '</th>' +
     '<th>' + t('trades.action') + '</th>' +
@@ -3268,13 +3669,13 @@ window.showResearchSub = function(sub) {
   if (ca) ca.style.display = (_researchSub === 'calibration') ? '' : 'none';
   if (tt) tt.classList.toggle('active', _researchSub === 'theses');
   if (ct) ct.classList.toggle('active', _researchSub === 'calibration');
-  if (_researchSub === 'calibration') renderCalibration();
+  if (_researchSub === 'calibration') renderCalibrationPage();
 };
 
 function _calPct(v) { return (v == null) ? '—' : (v * 100).toFixed(0) + '%'; }
 function _calNum(v, d) { return (v == null) ? '—' : Number(v).toFixed(d == null ? 3 : d); }
 
-function renderCalibration() {
+function renderCalibrationPage() {
   var host = E('calib-host');
   if (!host) return;
   var d = _calib || {};
@@ -3486,9 +3887,197 @@ window.showView = function(view) {
   if (nd) nd.classList.toggle('active', _currentView === 'dashboard');
   if (nr) nr.classList.toggle('active', _currentView === 'research');
   try { history.replaceState(null, '', _currentView === 'research' ? '/research' : '/'); } catch (e) {}
-  if (_currentView === 'research') { renderResearchPapers(); renderCalibration(); }
+  if (_currentView === 'research') { renderResearchPapers(); renderCalibrationPage(); }
   window.scrollTo(0, 0);
 };
+
+// ── MULTI-PORTFOLIO SWITCHER ──────────────────────────────────────────────────
+// Gated-only sections (hidden when the free-form autonomous book is active). 'research' (the feed)
+// shares the feeds-row section with 'brainlog', so hiding brainlog's section hides both.
+var PF_GATED_ONLY = ['hero', 'alloc', 'brainlog', 'runs', 'rejected', 'competitors',
+                     'shadow-books', 'xsec', 'engine-bt', 'factor-zoo', 'fundamentals'];
+var PF_AUTO_ONLY  = ['auto-banner', 'decisions'];
+
+function _fmtPctSigned(v) {
+  if (v == null || isNaN(v)) return '—';
+  return (v > 0 ? '+' : '') + Number(v).toFixed(2) + '%';
+}
+
+function renderPortfolioSwitch() {
+  var host = E('pf-switch');
+  if (!host) return;
+  if (!_portfolios.length) { host.innerHTML = ''; return; }
+  host.innerHTML = _portfolios.map(function(p) {
+    var st = p.status || {};
+    var ret = st.total_return_pct;
+    var cls = ret == null ? '' : (ret > 0 ? 'up' : (ret < 0 ? 'down' : ''));
+    var navStr = st.nav != null ? '$' + (st.nav / 1e6).toFixed(2) + 'M' : '—';
+    var sub = navStr + ' · <span class="' + cls + '">' + _fmtPctSigned(ret) + '</span>';
+    return '<button class="mm-pf-tab' + (p.id === _portfolio ? ' active' : '') + '" type="button" ' +
+      'data-pf="' + esc(p.id) + '" onclick="setPortfolio(\'' + esc(p.id) + '\')" title="' + esc(p.tagline || '') + '">' +
+      '<span class="mm-pf-name"><span class="mm-pf-dot ' + (p.kind === 'autonomous' ? 'autonomous' : 'gated') + '"></span>' + esc(p.name) + '</span>' +
+      '<span class="mm-pf-sub">' + sub + '</span></button>';
+  }).join('');
+}
+
+function applyPortfolioScope() {
+  var auto = _portfolio === 'autonomous';
+  document.documentElement.setAttribute('data-portfolio', _portfolio);
+  PF_GATED_ONLY.forEach(function(id) {
+    var p = E(id); if (!p) return;
+    var s = p.closest('.mm-section'); if (s) s.style.display = auto ? 'none' : '';
+  });
+  PF_AUTO_ONLY.forEach(function(id) {
+    var p = E(id); if (!p) return;
+    var s = p.closest('.mm-section'); if (s) s.style.display = auto ? '' : 'none';
+  });
+  var nr = E('nav-research'); if (nr) nr.style.display = auto ? 'none' : '';
+  if (auto && _currentView === 'research') showView('dashboard');
+}
+
+window.setPortfolio = function(id) {
+  if (!id) return;
+  _portfolio = id;
+  renderPortfolioSwitch();
+  applyPortfolioScope();
+  fetchAll();
+};
+
+async function loadPortfolios() {
+  try {
+    var r = await fetch('/api/portfolios');
+    var d = r.ok ? await r.json() : null;
+    if (d && d.portfolios) { _portfolios = d.portfolios; renderPortfolioSwitch(); }
+  } catch (e) {}
+}
+
+// ── AUTONOMOUS BOOK: banner + daily decision log ──────────────────────────────
+function renderAutoBanner() {
+  if (_portfolio !== 'autonomous') return;
+  var b = _book || {}, p = _perf || {};
+  var isZh = document.documentElement.getAttribute('data-lang') === 'zh';
+  var sumEl = E('auto-sum'), metaEl = E('auto-meta');
+  if (sumEl) sumEl.textContent = b.summary ||
+    (isZh ? '尚无决策——大脑首次运行后出现。' : 'No decision yet — appears after the Brain’s first run.');
+  if (metaEl) {
+    var parts = [];
+    if (p.current_nav != null) parts.push('NAV $' + Number(p.current_nav).toLocaleString(undefined, { maximumFractionDigits: 0 }));
+    if (p.total_return_pct != null) parts.push((isZh ? '回报 ' : 'Return ') + _fmtPctSigned(p.total_return_pct));
+    if (p.vs_spy_pct != null) parts.push('vs SPY ' + _fmtPctSigned(p.vs_spy_pct));
+    if (b.cash != null) parts.push((isZh ? '现金 ' : 'Cash ') + pctInt(b.cash));
+    if (b.as_of) parts.push((isZh ? '截至 ' : 'as of ') + fmtDateShort(b.as_of));
+    metaEl.innerHTML = parts.map(esc).join(' <span style="opacity:.4">·</span> ');
+  }
+}
+
+function renderDecisions() {
+  var host = E('dec-list');
+  if (!host) return;
+  var isZh = document.documentElement.getAttribute('data-lang') === 'zh';
+  if (!_decisions || !_decisions.length) {
+    host.innerHTML = '<div class="mm-empty"><span class="mm-empty-icon">○</span>' +
+      (isZh ? '尚无决策日志——大脑首次运行后出现。' : 'No decisions logged yet — appears after the Brain’s first run.') + '</div>';
+    return;
+  }
+  host.innerHTML = _decisions.map(function(d, i) {
+    var trades = (d.executed || []).map(function(tr) {
+      var v = tr.value != null ? ' $' + Number(tr.value).toLocaleString(undefined, { maximumFractionDigits: 0 }) : '';
+      return '<span class="mm-trade-chip ' + (tr.side === 'buy' ? 'buy' : 'sell') + '">' +
+        (tr.side === 'buy' ? 'BUY' : 'SELL') + ' ' + esc(tr.ticker) + v + '</span>';
+    }).join('');
+    var holds = (d.holdings || []).map(function(h) {
+      var conv = (h.conviction || '').toLowerCase();
+      var chip = conv ? '<span class="mm-dec-conv ' + conv + '">' + esc(conv) + '</span>' : '';
+      return '<div class="mm-dec-h"><b>' + esc(h.ticker) + '</b> ' +
+        (h.weight != null ? pct(h.weight) : '') + chip + ' — ' + esc(h.rationale || '') + '</div>';
+    }).join('');
+    var skip = (d.skipped_unpriceable && d.skipped_unpriceable.length) ?
+      '<div class="mm-dec-skip">' + (isZh ? '无法定价（已跳过）：' : 'Unpriceable (skipped): ') + esc(d.skipped_unpriceable.join(', ')) + '</div>' : '';
+    var sold = d.sold_note ? '<div class="mm-dec-sold">' + esc(d.sold_note) + '</div>' : '';
+    var cost = d.cost_usd != null ? '$' + Number(d.cost_usd).toFixed(2) : '';
+    return '<div class="mm-dec">' +
+      '<div class="mm-dec-head"><span class="mm-dec-date">' + esc(d.asof || '') + '</span><span class="mm-dec-cost">' + cost + '</span></div>' +
+      (d.summary ? '<div class="mm-dec-sum">' + esc(d.summary) + '</div>' : '') +
+      (trades ? '<div class="mm-dec-trades">' + trades + '</div>' : '') +
+      sold +
+      (holds ? '<div class="mm-dec-holdings">' + holds + '</div>' : '') +
+      skip +
+      _decReasoningBlock(d, i) +
+    '</div>';
+  }).join('');
+}
+
+// ── the Brain's thinking trace — closing reasoning + the data/tools it consulted ──
+function _decReasoningBlock(d, i) {
+  var isZh = document.documentElement.getAttribute('data-lang') === 'zh';
+  var hasTrace = !!d.run_id;
+  var hasText = !!(d.brain_text && String(d.brain_text).trim());
+  var tools = _toolSummary(d.tools_used);
+  if (!hasTrace && !hasText && !tools) return '';
+  var label = isZh ? '🧠 推理与数据来源' : '🧠 Reasoning & sources';
+  var toolsLine = tools ? '<div class="mm-dec-tools">' + (isZh ? '调用：' : 'Consulted: ') + tools + '</div>' : '';
+  var body = '';
+  if (hasText) body += '<div class="mm-dec-think">' + esc(d.brain_text) + '</div>';
+  body += '<div class="mm-dec-trace" id="dec-trace-' + i + '">' +
+    (hasTrace ? '<div class="mm-dec-trace-load">' + (isZh ? '加载推理步骤…' : 'Loading reasoning steps…') + '</div>' : '') + '</div>';
+  return '<div class="mm-dec-reason">' +
+    '<button class="mm-dec-toggle" type="button" onclick="toggleDecReason(' + i + ',' + JSON.stringify(d.run_id || '') + ')">' +
+      '<span class="mm-dec-caret" id="dec-caret-' + i + '">▸</span> ' + label + '</button>' +
+    '<div class="mm-dec-reason-body" id="dec-reason-' + i + '" style="display:none">' + toolsLine + body + '</div>' +
+  '</div>';
+}
+
+// de-dupe + count the tool names the Brain called → "get_news ×2 · WebSearch ×1"
+function _toolSummary(tools) {
+  if (!tools || !tools.length) return '';
+  var counts = {};
+  tools.forEach(function(t) {
+    var name = String(t).replace(/^mcp__[a-z]+__/, '');
+    counts[name] = (counts[name] || 0) + 1;
+  });
+  return Object.keys(counts).map(function(n) {
+    return '<span class="mm-tool-chip">' + esc(n) + (counts[n] > 1 ? ' ×' + counts[n] : '') + '</span>';
+  }).join(' ');
+}
+
+window.toggleDecReason = function(i, runId) {
+  var body = E('dec-reason-' + i), caret = E('dec-caret-' + i);
+  if (!body) return;
+  var open = body.style.display === 'none';
+  body.style.display = open ? 'block' : 'none';
+  if (caret) caret.textContent = open ? '▾' : '▸';
+  var traceEl = E('dec-trace-' + i);
+  if (open && runId && traceEl && !traceEl.getAttribute('data-loaded')) {
+    traceEl.setAttribute('data-loaded', '1');
+    fetch('/api/runlog?run_id=' + encodeURIComponent(runId))
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(run) { traceEl.innerHTML = _renderRunTrace(run); })
+      .catch(function() { traceEl.innerHTML = '<div class="mm-dec-trace-load">reasoning trace unavailable</div>'; });
+  }
+};
+
+// render the run-log steps: reasoning text, the tools it called (with args), and what came back
+function _renderRunTrace(run) {
+  var steps = (run && run.steps) || [];
+  if (!steps.length) return '<div class="mm-dec-trace-load">no reasoning steps recorded for this run</div>';
+  return '<div class="mm-trace">' + steps.map(function(s) {
+    var type = s.type || '';
+    if (type === 'reasoning') {
+      var txt = (s.detail || '').trim();
+      return txt ? '<div class="mm-trace-think">💭 ' + esc(txt) + '</div>' : '';
+    }
+    if (type === 'tool_call') {
+      var name = String(s.tool || s.title || 'tool').replace(/^mcp__[a-z]+__/, '').replace(/^call /, '');
+      var args = (s.args && Object.keys(s.args).length) ? ' (' + esc(JSON.stringify(s.args).slice(0, 120)) + ')' : '';
+      return '<div class="mm-trace-call">🔧 <b>' + esc(name) + '</b>' + args + '</div>';
+    }
+    if (type === 'tool_result') {
+      var res = String(s.result || s.detail || '').trim();
+      return res ? '<div class="mm-trace-res">⮑ ' + esc(res.slice(0, 280)) + (res.length > 280 ? '…' : '') + '</div>' : '';
+    }
+    return '';
+  }).join('') + '</div>';
+}
 
 // ── COMPETITORS ───────────────────────────────────────────────────────────────
 function renderCompetitors() {
@@ -3528,6 +4117,394 @@ function renderCompetitors() {
   el.innerHTML = html;
 }
 
+// ── SHADOW BOOKS (Policy A/B) ───────────────────────────────────────────────────
+// Parallel forward shadow books: N decision policies run on the SAME live data, each labeled
+// forward (leakage-free). The leaderboard reads as an attribution — what did the committee /
+// calibration layer actually contribute? Read-only + collapsible; honest while it's still building.
+function renderShadowBooks() {
+  var el = E('shadow-books');
+  if (!el) return;
+  var d = _shadowBooks || {};
+  var lb = d.leaderboard || [];
+  var isZh = document.documentElement.getAttribute('data-lang') === 'zh';
+  var head = collH2('shadow-books', 'Shadow Books — Policy A/B', '影子组合 — 策略 A/B',
+    isZh ? '前瞻式平行组合 · 无泄漏' : 'parallel forward books · leakage-free');
+  if (!lb.length) {
+    el.innerHTML = head + '<div class="mm-empty"><span class="mm-empty-icon">○</span>'
+      + '<span class="l-en">No shadow books yet — they accrue from the next build.</span>'
+      + '<span class="l-zh">暂无影子组合 — 将从下次构建开始累积。</span></div>';
+    return;
+  }
+  var intro = isZh
+    ? '在相同实时数据上并行运行多套决策策略并向前标注 — 衡量每一层（委员会、校准）的真实贡献，无参数泄漏。'
+    : 'Decision policies run in parallel on the same live data and are labeled forward — measuring what each layer (committee, calibration) actually contributes, with no parametric leakage.';
+  var fp = function(v) {
+    if (v == null) return '<span style="color:var(--muted)">—</span>';
+    var c = v > 0 ? 'var(--up)' : (v < 0 ? 'var(--down)' : 'var(--muted)');
+    return '<span style="color:' + c + '">' + (v >= 0 ? '+' : '') + v.toFixed(2) + '%</span>';
+  };
+  var fnum = function(v) { return v == null ? '—' : String(v); };
+  var chips = function(arr, sign) {
+    if (!arr || !arr.length) return '';
+    return arr.map(function(tk) {
+      return '<span class="mm-ticker-chip" style="font-size:10px">' + sign + esc(tk) + '</span>';
+    }).join(' ');
+  };
+  var rows = lb.map(function(b) {
+    var name = isZh ? (b.label_zh || b.label) : b.label;
+    var base = b.is_baseline ? ' style="background:rgba(127,127,127,.07)"' : '';
+    var star = b.is_baseline ? ' ★' : '';
+    var div;
+    if (b.is_baseline) {
+      div = '<span style="color:var(--muted)">' + (isZh ? '基准' : 'baseline') + '</span>';
+    } else {
+      var ex = chips(b.extra_vs_prod, '+'), mi = chips(b.missing_vs_prod, '−');
+      div = (ex || mi) ? (ex + ' ' + mi) : '<span style="color:var(--muted)">—</span>';
+    }
+    return '<tr' + base + ' title="' + esc(b.desc || '') + '">'
+      + '<td style="font-weight:600">' + esc(name) + star + '</td>'
+      + '<td style="text-align:right">' + fp(b.return_pct) + '</td>'
+      + '<td style="text-align:right">' + fp(b.vs_spy_pct) + '</td>'
+      + '<td style="text-align:right">' + fnum(b.n_positions) + '</td>'
+      + '<td style="text-align:right">' + (b.hit_rate == null ? '—' : Math.round(b.hit_rate * 100) + '%') + '</td>'
+      + '<td style="text-align:right">' + (b.brier == null ? '—' : b.brier) + '</td>'
+      + '<td style="text-align:right">' + fnum(b.n_resolved) + '/' + fnum(b.n_theses) + '</td>'
+      + '<td>' + div + '</td></tr>';
+  }).join('');
+  var th = function(en, zh, align) {
+    return '<th style="text-align:' + (align || 'left') + '"><span class="l-en">' + en
+      + '</span><span class="l-zh">' + zh + '</span></th>';
+  };
+  var allCold = lb.every(function(b) { return (b.n_resolved || 0) === 0; });
+  var cold = allCold ? '<div style="font-size:11px;color:var(--muted);margin-top:8px">'
+    + '<span class="l-en">Returns &amp; Brier accrue as positions mature — differences surface once the committee / calibration layers actually diverge.</span>'
+    + '<span class="l-zh">随持仓到期，收益与 Brier 将逐步累积 — 当委员会/校准层真正分化时差异才显现。</span></div>' : '';
+  el.innerHTML = head
+    + '<div style="font-size:12px;color:var(--muted);margin:2px 0 10px">' + esc(intro) + '</div>'
+    + '<div class="mm-table-wrap"><table><thead><tr>'
+    + th('Policy', '策略') + th('Return', '收益', 'right') + th('vs SPY', '对比SPY', 'right')
+    + th('Pos', '持仓', 'right') + th('Hit', '命中', 'right') + th('Brier', 'Brier', 'right')
+    + th('Resolved', '已结', 'right') + th('Divergence vs prod', '与实盘差异')
+    + '</tr></thead><tbody>' + rows + '</tbody></table></div>' + cold;
+}
+
+// ── CROSS-SECTIONAL EDGE (universe-wide prediction log) ─────────────────────────
+// The sample-size unlock: a forward-labeled prediction on EVERY name the engine has an opinion on
+// (~1,600), scored cross-sectionally with date-CLUSTERED confidence intervals — so we measure edge
+// in weeks, not years, and never overclaim on a small or correlated sample.
+function renderXsec() {
+  var el = E('xsec');
+  if (!el) return;
+  var d = _predictions || {};
+  var cov = d.coverage || {}, sc = d.scorecard || {};
+  var isZh = document.documentElement.getAttribute('data-lang') === 'zh';
+  var head = collH2('xsec', 'Cross-Sectional Edge', '横截面边际',
+    isZh ? '全域预测日志 · 日聚类置信区间' : 'universe-wide prediction log · date-clustered CIs');
+  if (!cov.n_total) {
+    el.innerHTML = head + '<div class="mm-empty"><span class="mm-empty-icon">○</span>'
+      + '<span class="l-en">No predictions logged yet — they accrue from the next build.</span>'
+      + '<span class="l-zh">暂无预测记录 — 将从下次构建开始累积。</span></div>';
+    return;
+  }
+  var intro = isZh
+    ? '不必持有即可标注：对引擎有方向判断的每个标的都记录一个可证伪的相对收益预测并向前评分。样本随广度增长，而非换手率。统计按入场日聚类，效力 = 独立日簇数。'
+    : 'A labeled forward prediction needs no position: every name the engine has a directional view on gets a falsifiable rel-return bet, scored forward. Sample grows with breadth, not turnover. Stats are clustered by entry-date; power = # independent date clusters.';
+  // coverage line
+  var covLine = '<div class="mm-xsec-cov" style="display:flex;gap:18px;flex-wrap:wrap;margin:4px 0 12px;font-size:12px">'
+    + '<span><b>' + (cov.n_total||0).toLocaleString() + '</b> ' + (isZh?'预测':'predictions') + '</span>'
+    + '<span><b>' + (cov.n_resolved||0).toLocaleString() + '</b> ' + (isZh?'已结':'resolved') + '</span>'
+    + '<span><b>' + (cov.n_open||0).toLocaleString() + '</b> ' + (isZh?'进行中':'open') + '</span>'
+    + '<span><b>' + (cov.n_resolved_dates||0) + '</b> ' + (isZh?'日簇 (有效n)':'date clusters (eff-n)') + '</span>'
+    + '</div>';
+  // a stat card with a CI: value, CI bar, significance dot
+  function ci(label, labelZh, val, suffix, lo, hi, sig, neutral) {
+    var v = (val == null) ? '—' : (val + (suffix||''));
+    var ciTxt = (lo == null || hi == null) ? (isZh?'区间累积中':'CI building')
+      : ('95% CI [' + lo + (suffix||'') + ', ' + hi + (suffix||'') + ']');
+    var dot = (val == null) ? '' :
+      (sig ? '<span style="color:var(--up)">●</span> ' : '<span style="color:var(--muted)">○</span> ');
+    return '<div class="mm-xcard" style="border:1px solid var(--border,rgba(127,127,127,.2));border-radius:10px;padding:10px 12px;min-width:180px;flex:1">'
+      + '<div style="font-size:11px;color:var(--muted)"><span class="l-en">' + label + '</span><span class="l-zh">' + labelZh + '</span></div>'
+      + '<div style="font-size:20px;font-weight:700;margin:2px 0">' + dot + v + '</div>'
+      + '<div style="font-size:10.5px;color:var(--muted)">' + ciTxt + '</div></div>';
+  }
+  var ic = sc.ic || {}, dir = sc.directional || {}, up = sc.up_edge || {};
+  var icLo = (ic.ci95||[])[0], icHi = (ic.ci95||[])[1];
+  var upLo = (up.ci95||[])[0], upHi = (up.ci95||[])[1];
+  var hitLo = (dir.hit_ci95||[])[0], hitHi = (dir.hit_ci95||[])[1];
+  var cards = '<div style="display:flex;gap:10px;flex-wrap:wrap">'
+    + ci('Signal IC (ladder.score)', '信号IC', ic.mean_ic != null ? ic.mean_ic : null, '',
+         icLo, icHi, ic.significant, false)
+    + ci('Directional hit-rate', '方向命中率', dir.hit_rate != null ? Math.round(dir.hit_rate*100) : null, '%',
+         hitLo!=null?Math.round(hitLo*100):null, hitHi!=null?Math.round(hitHi*100):null, dir.beats_coin, false)
+    + ci('“Up” call edge vs SPY', '“看涨”相对SPY边际', up.mean_rel != null ? (up.mean_rel*100).toFixed(2) : null, '%',
+         upLo!=null?(upLo*100).toFixed(2):null, upHi!=null?(upHi*100).toFixed(2):null, up.significant, false)
+    + '</div>';
+  var brier = (dir.brier != null) ? ('<div style="font-size:11.5px;color:var(--muted);margin-top:10px">'
+    + 'Brier ' + dir.brier + (dir.brier_skill != null ? ' · skill ' + dir.brier_skill : '')
+    + ' · n=' + (dir.n||0) + ' over ' + (dir.n_dates||0) + ' ' + (isZh?'日簇':'date clusters') + '</div>') : '';
+  var building = (sc.status !== 'scoring') ? '<div style="font-size:11px;color:var(--muted);margin-top:8px">'
+    + '<span class="l-en">● = CI excludes the null (real signal). Still building — needs ≥' + (d.min_dates||6) + ' entry-date clusters before the IC is graded.</span>'
+    + '<span class="l-zh">● = 置信区间不含原假设（真实信号）。仍在累积 — IC 需 ≥' + (d.min_dates||6) + ' 个入场日簇才评分。</span></div>' : '';
+  el.innerHTML = head
+    + '<div style="font-size:12px;color:var(--muted);margin:2px 0 10px">' + esc(intro) + '</div>'
+    + covLine + cards + brier + building;
+}
+
+// ── ENGINE BACKTEST VERDICT (historical, leakage-free) ─────────────────────────
+function renderEngineBacktest() {
+  var el = E('engine-bt');
+  if (!el) return;
+  var d = _engineBacktest || {};
+  var isZh = document.documentElement.getAttribute('data-lang') === 'zh';
+  var head = collH2('engine-bt', 'Engine Backtest Verdict', '引擎回测裁定',
+    isZh ? '历史 · 无泄漏 · 高样本量' : 'historical · leakage-free · high-n');
+  if (d.status !== 'ok' || !d.verdict) {
+    el.innerHTML = head + '<div class="mm-empty"><span class="mm-empty-icon">○</span>'
+      + '<span class="l-en">No engine backtest recorded yet — run scripts/run_engine_backtest.py.</span>'
+      + '<span class="l-zh">暂无引擎回测 — 运行 scripts/run_engine_backtest.py。</span></div>';
+    return;
+  }
+  var v = d.verdict, m = d.methodology || {}, pan = d.panel || {};
+  var intro = isZh
+    ? '确定性引擎无参数泄漏，可在 20 年 × ~1500 标的上历史检验（样本量上万）。这是“是否有效”的高效力答案，独立于缓慢的前瞻路径。'
+    : 'The deterministic engine has no parametric leakage, so it can be judged historically over 20y × ~1,500 names (n in the thousands) — the high-power answer to "does it work", independent of the slow forward path.';
+  function kv(label, labelZh, val, good) {
+    var c = good === true ? 'var(--up)' : (good === false ? 'var(--down)' : 'var(--text)');
+    return '<div style="border:1px solid var(--border,rgba(127,127,127,.2));border-radius:10px;padding:10px 12px;min-width:130px;flex:1">'
+      + '<div style="font-size:11px;color:var(--muted)"><span class="l-en">' + label + '</span><span class="l-zh">' + labelZh + '</span></div>'
+      + '<div style="font-size:19px;font-weight:700;color:' + c + '">' + val + '</div></div>';
+  }
+  var cards = '<div style="display:flex;gap:10px;flex-wrap:wrap;margin:4px 0 10px">'
+    + kv('PBO (overfit prob)', 'PBO(过拟合概率)', v.pbo != null ? v.pbo : '—', v.pbo_pass)
+    + kv('Best DSR', '最佳DSR', v.best_dsr != null ? v.best_dsr : '—', v.best_dsr != null ? v.best_dsr >= 0.95 : null)
+    + kv('Best Sharpe', '最佳夏普', v.best_sharpe != null ? v.best_sharpe : '—', null)
+    + kv('FDR survivors', 'FDR存活', (v.fdr_survivors||0) + '/' + (v.n_candidates||0), (v.fdr_survivors||0) > 0)
+    + kv('Holdout confirms', '样本外确认', (v.holdout_confirms||0) + '/' + (v.in_sample_passers||0), (v.holdout_confirms||0) > 0)
+    + kv('Effective-N', '有效N', v.effective_n != null ? v.effective_n : '—', null)
+    + '</div>';
+  var rows = (d.top_candidates || []).slice(0, 8).map(function(c) {
+    var pass = c.in_sample_pass;
+    return '<tr' + (pass ? ' style="background:rgba(127,127,127,.07)"' : '') + '">'
+      + '<td>' + esc(c.name) + (c.holdout_confirms ? ' <span style="color:var(--up)" title="holdout confirmed">✓</span>' : '') + '</td>'
+      + '<td style="text-align:right">' + (c.dsr != null ? c.dsr : '—') + '</td>'
+      + '<td style="text-align:right">' + (c.sharpe != null ? c.sharpe : '—') + '</td>'
+      + '<td style="text-align:right">' + (c.cagr != null ? c.cagr + '%' : '—') + '</td>'
+      + '<td style="text-align:right">' + (c.maxdd != null ? c.maxdd + '%' : '—') + '</td>'
+      + '<td style="text-align:center">' + (c.fdr_reject ? '✓' : '·') + '</td>'
+      + '<td style="text-align:right">' + (c.holdout_sharpe != null ? c.holdout_sharpe : '—') + '</td>'
+      + '</tr>';
+  }).join('');
+  var th = function(en, zh, align) {
+    return '<th style="text-align:' + (align||'left') + '"><span class="l-en">' + en + '</span><span class="l-zh">' + zh + '</span></th>';
+  };
+  var meth = '<div style="font-size:11px;color:var(--muted);margin-top:10px">'
+    + (m.universe||'') + ' · IS ' + (m.in_sample||'?') + ' · holdout ' + (m.holdout||'?')
+    + ' · ' + (pan.n_names||0) + ' names × ' + (pan.span||'') + '</div>';
+  var honest = d.honest_read ? '<div style="font-size:11px;color:var(--muted);margin-top:6px;font-style:italic">' + esc(d.honest_read) + '</div>' : '';
+  el.innerHTML = head
+    + '<div style="font-size:12px;color:var(--muted);margin:2px 0 10px">' + esc(intro) + '</div>'
+    + cards
+    + '<div class="mm-table-wrap"><table><thead><tr>'
+    + th('Factor', '因子') + th('DSR', 'DSR', 'right') + th('Sharpe', '夏普', 'right')
+    + th('CAGR', '年化', 'right') + th('maxDD', '最大回撤', 'right') + th('FDR', 'FDR', 'center')
+    + th('Holdout Shrp', '样本外夏普', 'right')
+    + '</tr></thead><tbody>' + rows + '</tbody></table></div>' + meth + honest;
+}
+
+// ── FACTOR ALPHA LAB (advanced: factor zoo + composite + IC term-structure) ─────
+// Builds on the engine backtest: a broad price-factor library scored under the frozen
+// multiple-testing gauntlet (a wider zoo RAISES the bar via effective-N + PBO + BH-FDR), a
+// composite blended from de-correlated in-sample survivors and judged on the LOCKED holdout, and an
+// IC term-structure showing WHERE each signal's edge lives (return-rank vs risk-adjusted).
+function renderFactorZoo() {
+  var el = E('factor-zoo');
+  if (!el) return;
+  var d = _factorZoo || {};
+  var isZh = document.documentElement.getAttribute('data-lang') === 'zh';
+  var head = collH2('factor-zoo', 'Factor Alpha Lab', '因子阿尔法实验室',
+    isZh ? '因子库 + 复合 + IC 期限结构 · 多重检验诚实' : 'factor zoo + composite + IC term-structure · multiple-testing-honest');
+  if (d.status !== 'ok' || !d.verdict) {
+    el.innerHTML = head + '<div class="mm-empty"><span class="mm-empty-icon">○</span>'
+      + '<span class="l-en">No factor-zoo run recorded yet — run scripts/run_factor_zoo.py.</span>'
+      + '<span class="l-zh">暂无因子库回测 — 运行 scripts/run_factor_zoo.py。</span></div>';
+    return;
+  }
+  var v = d.verdict, m = d.methodology || {}, pan = d.panel || {};
+  var intro = isZh
+    ? '更宽的因子库提升而非降低门槛：DSR 在整池（含复合）的有效N上重新收缩，PBO/CSCV 与 BH-FDR 控制族错误。复合因子仅由样本内幸存者去相关混合，裁定取自锁定的样本外。'
+    : 'A wider zoo RAISES the bar: DSR re-deflated at effective-N over the whole pool (incl. composite), PBO/CSCV + BH-FDR control the family. The composite is blended from de-correlated in-sample survivors and judged only on the locked holdout.';
+  function kv(label, labelZh, val, good) {
+    var c = good === true ? 'var(--up)' : (good === false ? 'var(--down)' : 'var(--text)');
+    return '<div style="border:1px solid var(--border,rgba(127,127,127,.2));border-radius:10px;padding:10px 12px;min-width:120px;flex:1">'
+      + '<div style="font-size:11px;color:var(--muted)"><span class="l-en">' + label + '</span><span class="l-zh">' + labelZh + '</span></div>'
+      + '<div style="font-size:19px;font-weight:700;color:' + c + '">' + val + '</div></div>';
+  }
+  var nConf = (v.holdout_confirmed || []).length;
+  var cards = '<div style="display:flex;gap:10px;flex-wrap:wrap;margin:4px 0 10px">'
+    + kv('Factors tested', '测试因子', v.n_candidates != null ? v.n_candidates : '—', null)
+    + kv('Effective-N', '有效N', v.effective_n != null ? v.effective_n : '—', null)
+    + kv('PBO', 'PBO', v.pbo != null ? v.pbo : '—', v.pbo_pass)
+    + kv('Best DSR', '最佳DSR', v.best_dsr != null ? v.best_dsr : '—', v.best_dsr != null ? v.best_dsr >= 0.95 : null)
+    + kv('FDR survivors', 'FDR存活', (v.fdr_survivors || 0) + '/' + (v.n_candidates || 0), (v.fdr_survivors || 0) > 0)
+    + kv('Holdout-confirmed', '样本外确认', nConf, nConf > 0)
+    + '</div>';
+  // composite callout
+  var comp = v.composite, compHtml = '';
+  if (comp) {
+    var cc = comp.holdout_confirms === true ? 'var(--up)' : (comp.in_sample_pass ? 'var(--text)' : 'var(--muted)');
+    var verdictTxt = comp.holdout_confirms === true ? (isZh ? '样本外确认 ✓' : 'holdout-confirmed ✓')
+      : (comp.in_sample_pass ? (isZh ? '样本内通过，样本外未确认' : 'IS-pass, holdout not confirmed')
+                             : (isZh ? '未通过样本内门槛' : 'did not clear the in-sample gate'));
+    compHtml = '<div style="border:1px solid ' + cc + ';border-radius:10px;padding:10px 12px;margin:0 0 10px">'
+      + '<div style="font-weight:700"><span class="l-en">Composite alpha</span><span class="l-zh">复合阿尔法</span>'
+      + ' <span style="font-weight:400;color:var(--muted);font-size:12px">DSR ' + comp.dsr + ' · Sharpe ' + comp.sharpe
+      + (comp.holdout_sharpe != null ? ' · holdout Sharpe ' + comp.holdout_sharpe : '') + '</span></div>'
+      + '<div style="font-size:12px;color:' + cc + ';margin-top:2px">' + verdictTxt + '</div></div>';
+  }
+  // factor table
+  var fp = function(v2, suf) { return v2 == null ? '—' : (v2 + (suf || '')); };
+  var rows = (d.factors || []).map(function(r) {
+    var hl = r.is_composite ? ' style="background:rgba(80,140,255,.10)"'
+      : (r.holdout_confirms ? ' style="background:rgba(127,127,127,.07)"' : '');
+    var mark = r.is_composite ? ' ★' : (r.holdout_confirms ? ' <span style="color:var(--up)">✓</span>' : '');
+    return '<tr' + hl + '>'
+      + '<td>' + esc(r.name) + mark + '</td>'
+      + '<td style="text-align:right">' + fp(r.dsr) + '</td>'
+      + '<td style="text-align:right">' + fp(r.sharpe) + '</td>'
+      + '<td style="text-align:right">' + fp(r.cagr, '%') + '</td>'
+      + '<td style="text-align:right">' + fp(r.maxdd, '%') + '</td>'
+      + '<td style="text-align:center">' + (r.fdr_reject ? '✓' : '·') + '</td>'
+      + '<td style="text-align:center">' + (r.in_sample_pass ? '✓' : '·') + '</td>'
+      + '<td style="text-align:right">' + fp(r.holdout_sharpe) + '</td>'
+      + '<td style="text-align:center">' + (r.holdout_confirms === true ? '✓' : (r.holdout_confirms === false ? '✗' : '·')) + '</td>'
+      + '</tr>';
+  }).join('');
+  var th = function(en, zh, a) { return '<th style="text-align:' + (a || 'left') + '"><span class="l-en">' + en + '</span><span class="l-zh">' + zh + '</span></th>'; };
+  var ftable = '<div class="mm-table-wrap"><table><thead><tr>'
+    + th('Factor', '因子') + th('DSR', 'DSR', 'right') + th('Sharpe', '夏普', 'right')
+    + th('CAGR', '年化', 'right') + th('maxDD', '回撤', 'right') + th('FDR', 'FDR', 'center')
+    + th('IS✓', '样本内', 'center') + th('Hold Shrp', '样本外夏普', 'right') + th('Confirm', '确认', 'center')
+    + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+  // IC term-structure
+  var ic = d.ic_term_structure || {};
+  var icNames = Object.keys(ic);
+  var icHtml = '';
+  if (icNames.length) {
+    var hs = ['21d', '63d', '126d'];
+    var icRows = icNames.map(function(nm) {
+      var cells = hs.map(function(h) {
+        var o = ic[nm][h] || {};
+        if (o.mean_ic == null) return '<td style="text-align:right;color:var(--muted)">—</td>';
+        var sig = (o.p_hac != null && o.p_hac < 0.05);
+        var c = sig ? (o.mean_ic > 0 ? 'var(--up)' : 'var(--down)') : 'var(--muted)';
+        return '<td style="text-align:right;color:' + c + '">' + (sig ? '●' : '') + o.mean_ic + '</td>';
+      }).join('');
+      return '<tr><td>' + esc(nm) + '</td>' + cells + '</tr>';
+    }).join('');
+    icHtml = '<div style="font-weight:600;margin:14px 0 4px"><span class="l-en">IC term-structure (rank-IC of signal vs forward return, date-clustered)</span>'
+      + '<span class="l-zh">IC 期限结构（信号与前瞻收益的秩相关，日聚类）</span></div>'
+      + '<div style="font-size:11px;color:var(--muted);margin-bottom:6px">'
+      + '<span class="l-en">● = HAC-significant. Note: a low-vol/anti-lottery factor can have ~0 return-IC yet a high Sharpe — its edge is risk-reduction, not return-ranking.</span>'
+      + '<span class="l-zh">● = HAC 显著。注意：低波动/反彩票因子可能 IC≈0 但夏普很高 — 其优势是降低风险而非排序收益。</span></div>'
+      + '<div class="mm-table-wrap"><table><thead><tr>' + th('Factor', '因子')
+      + th('21d', '21日', 'right') + th('63d', '63日', 'right') + th('126d', '126日', 'right')
+      + '</tr></thead><tbody>' + icRows + '</tbody></table></div>';
+  }
+  var meth = '<div style="font-size:11px;color:var(--muted);margin-top:10px">'
+    + (m.universe || '') + ' · IS ' + (m.in_sample || '?') + ' · holdout ' + (m.holdout || '?') + '</div>';
+  var honest = d.honest_read ? '<div style="font-size:11px;color:var(--muted);margin-top:6px;font-style:italic">' + esc(d.honest_read) + '</div>' : '';
+  el.innerHTML = head
+    + '<div style="font-size:12px;color:var(--muted);margin:2px 0 10px">' + esc(intro) + '</div>'
+    + cards + compHtml + ftable + icHtml + meth + honest;
+}
+
+// ── FUNDAMENTAL FACTORS (PIT value + quality + regime-conditional IC) ───────────
+// Deepens the research beyond price: SEC EDGAR value/quality factors, point-in-time (asof_date-gated,
+// no look-ahead), scored through the same gauntlet. The honest finding it surfaces: long-only
+// value/quality is mostly MARKET BETA (collapses to few effective bets, PBO fails); the market-neutral
+// long-short PREMIA were weak in 2010-22; nothing holdout-confirmed. Quality predicts better in risk-off.
+function renderFundamentals() {
+  var el = E('fundamentals');
+  if (!el) return;
+  var d = _fundamentals || {};
+  var isZh = document.documentElement.getAttribute('data-lang') === 'zh';
+  var head = collH2('fundamentals', 'Fundamental Factors — PIT', '基本面因子 — 时点',
+    isZh ? 'EDGAR 价值/质量 · 时点无泄漏 · 含做多做空' : 'EDGAR value/quality · point-in-time · long-only + long-short');
+  if (d.status !== 'ok' || !d.verdict) {
+    el.innerHTML = head + '<div class="mm-empty"><span class="mm-empty-icon">○</span>'
+      + '<span class="l-en">No fundamentals run recorded yet — run scripts/run_fundamentals.py.</span>'
+      + '<span class="l-zh">暂无基本面回测 — 运行 scripts/run_fundamentals.py。</span></div>';
+    return;
+  }
+  var v = d.verdict, m = d.methodology || {};
+  var intro = isZh
+    ? '来自 SEC EDGAR 的价值/质量因子，按 asof_date 时点对齐（无前视）。关键发现：做多组合主要是市场贝塔（坍缩为少数有效押注，PBO 未通过）；市场中性（多空）溢价在 2010-22 偏弱；无样本外确认。'
+    : 'Value/quality factors from SEC EDGAR, aligned point-in-time by asof_date (no look-ahead). Key finding: long-only is mostly market beta (collapses to few effective bets, PBO fails); market-neutral (long-short) premia were weak in 2010-22; nothing holdout-confirmed.';
+  function kv(label, labelZh, val, good) {
+    var c = good === true ? 'var(--up)' : (good === false ? 'var(--down)' : 'var(--text)');
+    return '<div style="border:1px solid var(--border,rgba(127,127,127,.2));border-radius:10px;padding:10px 12px;min-width:120px;flex:1">'
+      + '<div style="font-size:11px;color:var(--muted)"><span class="l-en">' + label + '</span><span class="l-zh">' + labelZh + '</span></div>'
+      + '<div style="font-size:19px;font-weight:700;color:' + c + '">' + val + '</div></div>';
+  }
+  var nConf = (v.holdout_confirmed || []).length;
+  var cards = '<div style="display:flex;gap:10px;flex-wrap:wrap;margin:4px 0 10px">'
+    + kv('Factors tested', '测试因子', v.n_candidates != null ? v.n_candidates : '—', null)
+    + kv('Effective-N', '有效N', v.effective_n != null ? v.effective_n : '—', null)
+    + kv('PBO', 'PBO', v.pbo != null ? v.pbo : '—', v.pbo_pass)
+    + kv('Best DSR', '最佳DSR', v.best_dsr != null ? v.best_dsr : '—', v.best_dsr != null ? v.best_dsr >= 0.95 : null)
+    + kv('FDR survivors', 'FDR存活', (v.fdr_survivors || 0) + '/' + (v.n_candidates || 0), null)
+    + kv('Holdout-confirmed', '样本外确认', nConf, nConf > 0)
+    + '</div>';
+  var fp = function(x, suf) { return x == null ? '—' : (x + (suf || '')); };
+  var rows = (d.factors || []).map(function(r) {
+    var isLs = /_ls$/.test(r.name);
+    return '<tr>'
+      + '<td>' + esc(r.name) + '</td>'
+      + '<td>' + (r.family || '') + (isLs ? ' <span style="color:var(--muted);font-size:10px">L/S</span>' : '') + '</td>'
+      + '<td style="text-align:right">' + fp(r.dsr) + '</td>'
+      + '<td style="text-align:right">' + fp(r.sharpe) + '</td>'
+      + '<td style="text-align:right">' + fp(r.cagr, '%') + '</td>'
+      + '<td style="text-align:center">' + (r.fdr_reject ? '✓' : '·') + '</td>'
+      + '<td style="text-align:center">' + (r.in_sample_pass ? '✓' : '·') + '</td>'
+      + '<td style="text-align:center">' + (r.holdout_confirms === true ? '✓' : (r.holdout_confirms === false ? '✗' : '·')) + '</td>'
+      + '</tr>';
+  }).join('');
+  var th = function(en, zh, a) { return '<th style="text-align:' + (a || 'left') + '"><span class="l-en">' + en + '</span><span class="l-zh">' + zh + '</span></th>'; };
+  var ftable = '<div class="mm-table-wrap"><table><thead><tr>'
+    + th('Factor', '因子') + th('Family', '类别') + th('DSR', 'DSR', 'right') + th('Sharpe', '夏普', 'right')
+    + th('CAGR', '年化', 'right') + th('FDR', 'FDR', 'center') + th('IS✓', '样本内', 'center') + th('Confirm', '确认', 'center')
+    + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+  // regime-conditional IC
+  var reg = d.regime_conditional_ic || {};
+  var regNames = Object.keys(reg);
+  var regHtml = '';
+  if (regNames.length) {
+    var rrows = regNames.map(function(nm) {
+      var o = reg[nm] || {};
+      var on = (o.risk_on || {}).mean_ic, off = (o.risk_off || {}).mean_ic;
+      var col = function(x) { var c = x == null ? 'var(--muted)' : (x > 0 ? 'var(--up)' : 'var(--down)'); return '<td style="text-align:right;color:' + c + '">' + (x == null ? '—' : x) + '</td>'; };
+      return '<tr><td>' + esc(nm) + '</td>' + col(on) + col(off) + '</tr>';
+    }).join('');
+    regHtml = '<div style="font-weight:600;margin:14px 0 4px"><span class="l-en">Regime-conditional IC (63d) — risk-on vs risk-off (SPY vs 200d MA)</span>'
+      + '<span class="l-zh">分体制 IC（63日）— 风险偏好 vs 规避（SPY 对比 200日均线）</span></div>'
+      + '<div style="font-size:11px;color:var(--muted);margin-bottom:6px">'
+      + '<span class="l-en">Quality (ROA/ROE) tends to predict far better in risk-off — a flight-to-quality tell.</span>'
+      + '<span class="l-zh">质量（ROA/ROE）在风险规避期预测力更强 — 资金避险信号。</span></div>'
+      + '<div class="mm-table-wrap"><table><thead><tr>' + th('Factor', '因子') + th('risk-on IC', '风险偏好', 'right') + th('risk-off IC', '风险规避', 'right')
+      + '</tr></thead><tbody>' + rrows + '</tbody></table></div>';
+  }
+  // data gaps (honest)
+  var gaps = (d.data_gaps || []).length ? '<div style="font-size:11px;color:var(--muted);margin-top:12px">'
+    + '<b><span class="l-en">Data gaps:</span><span class="l-zh">数据缺口：</span></b> '
+    + (d.data_gaps || []).map(function(g) { return esc(g); }).join(' · ') + '</div>' : '';
+  var meth = '<div style="font-size:11px;color:var(--muted);margin-top:8px">' + (m.window || '') + ' · ' + (m.regime_proxy || '') + '</div>';
+  var honest = d.honest_read ? '<div style="font-size:11px;color:var(--muted);margin-top:6px;font-style:italic">' + esc(d.honest_read) + '</div>' : '';
+  el.innerHTML = head
+    + '<div style="font-size:12px;color:var(--muted);margin:2px 0 10px">' + esc(intro) + '</div>'
+    + cards + ftable + regHtml + gaps + meth + honest;
+}
+
 // ── FOOTER ────────────────────────────────────────────────────────────────────
 function renderFooter() {
   var b = _book || {};
@@ -3557,7 +4534,42 @@ function loadOutcomes() {
       vEl.className = 'mm-v-chip tone-' + (n >= 5 ? (tr.hit_rate >= 0.6 ? 'up' : 'warn') : 'muted');
     }
     if (hEl && n > 0) hEl.textContent = 'Brier ' + (tr.brier != null ? tr.brier : '—') + ' · n=' + n;
+    renderCalibration(d.calibration);
   }).catch(function() {});
+}
+
+// Surface the empirical calibration loop: each agent's confidence is shrunk toward its realized
+// reliability (de-confidence only, bounded [floor,1]). Honest at cold-start — a tooltip explains
+// "building" until an agent has min_n resolved decisions; once an agent is actively de-confidencing
+// (<1.0) we badge the Track Record vital so it's visible the system is self-correcting.
+function renderCalibration(cal) {
+  var vEl = E('v-tr');
+  if (!vEl || !cal || !cal.agents) return;
+  var ag = cal.agents, lines = [], anyActive = false;
+  ['forge', 'sentinel'].forEach(function(k) {
+    var a = ag[k]; if (!a) return;
+    var name = k.toUpperCase();
+    if (a.status === 'scoring') {
+      lines.push(name + ': conf ×' + a.multiplier + '  (reliability ' +
+                 Math.round((a.reliability || 0) * 100) + '% vs stated ' +
+                 Math.round((a.mean_confidence || 0) * 100) + '%, n=' + a.n + ')');
+      if (a.multiplier < 1.0) anyActive = true;
+    } else {
+      lines.push(name + ': building calibration (n=' + (a.n || 0) + '/' + (cal.min_n || 12) + ')');
+    }
+  });
+  vEl.title = 'Confidence calibration — de-confidence only, floor ' + (cal.floor != null ? cal.floor : 0.5) +
+              '\n' + lines.join('\n');
+  // mark the vital when calibration is actively trimming an agent's overconfidence
+  var prev = vEl.querySelector('.mm-cal-dot');
+  if (prev) prev.remove();
+  if (anyActive) {
+    var dot = document.createElement('span');
+    dot.className = 'mm-cal-dot';
+    dot.textContent = ' ⚖';
+    dot.style.cssText = 'opacity:.8;font-size:.85em';
+    vEl.appendChild(dot);
+  }
 }
 
 // ── FETCH + RENDER ────────────────────────────────────────────────────────────
@@ -3567,10 +4579,13 @@ function loadOutcomes() {
 function _renderAll() {
   var steps = [
     ['performance', renderPerformance], ['macro', renderMacro], ['equityCurve', renderEquityCurve],
-    ['hero', renderHero], ['allocation', renderAllocation], ['positions', renderPositions],
+    ['hero', renderHero], ['allocation', renderAllocation], ['safety', renderSafety], ['positions', renderPositions],
     ['trades', renderTrades], ['brainLog', renderBrainLog], ['research', renderResearch],
     ['runs', renderRuns], ['rejected', renderRejected], ['competitors', renderCompetitors],
-    ['researchPapers', renderResearchPapers], ['calibration', renderCalibration], ['footer', renderFooter],
+    ['shadowBooks', renderShadowBooks], ['xsec', renderXsec], ['engineBacktest', renderEngineBacktest],
+    ['factorZoo', renderFactorZoo], ['fundamentals', renderFundamentals],
+    ['autoBanner', renderAutoBanner], ['decisions', renderDecisions],
+    ['researchPapers', renderResearchPapers], ['calibration', renderCalibrationPage], ['footer', renderFooter],
   ];
   for (var i = 0; i < steps.length; i++) {
     try { steps[i][1](); }
@@ -3579,20 +4594,37 @@ function _renderAll() {
 }
 
 async function fetchAll() {
-  var [bookRes, tradesRes, actRes, researchRes, compRes, regimeRes, perfRes, runsRes, macroRes, papersRes, calibRes] = await Promise.allSettled([
-    fetch('/api/portfolio').then(function(r) { return r.ok ? r.json() : null; }).catch(function() { return null; }),
-    fetch('/api/trades').then(function(r)    { return r.ok ? r.json() : null; }).catch(function() { return null; }),
+  // portfolio-scoped endpoints get the active book id; engine-level ones (regime, macro, research
+  // feed, competitors, shadow books, predictions, backtests) are shared across portfolios.
+  var pf = '?portfolio=' + encodeURIComponent(_portfolio);
+  var [bookRes, tradesRes, actRes, researchRes, compRes, regimeRes, perfRes, runsRes, macroRes, papersRes, calibRes, shadowRes, predRes, ebtRes, fzRes, fundRes, decRes, riskRes] = await Promise.allSettled([
+    fetch('/api/portfolio' + pf).then(function(r) { return r.ok ? r.json() : null; }).catch(function() { return null; }),
+    fetch('/api/trades' + pf).then(function(r)    { return r.ok ? r.json() : null; }).catch(function() { return null; }),
     fetch('/api/activity').then(function(r)  { return r.ok ? r.json() : [];   }).catch(function() { return []; }),
     fetch('/api/research').then(function(r)  { return r.ok ? r.json() : [];   }).catch(function() { return []; }),
     fetch('/api/competitors').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
     fetch('/regime').then(function(r)         { return r.ok ? r.json() : null; }).catch(function() { return null; }),
-    fetch('/api/performance').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
+    fetch('/api/performance' + pf).then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
     fetch('/api/runs').then(function(r)       { return r.ok ? r.json() : [];   }).catch(function() { return []; }),
     fetch('/api/macro').then(function(r)      { return r.ok ? r.json() : null; }).catch(function() { return null; }),
     fetch('/api/research_papers').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
     fetch('/api/outcome_ledger').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
+    fetch('/api/shadow_books').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
+    fetch('/api/predictions').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
+    fetch('/api/engine_backtest').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
+    fetch('/api/factor_zoo').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
+    fetch('/api/fundamentals').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
+    fetch('/api/decisions' + pf).then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
+    fetch('/api/risk' + pf).then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
   ]);
+  var _decResp = (decRes && decRes.status === 'fulfilled' ? decRes.value : null) || {};
+  _decisions = _decResp.decisions || [];
 
+  _shadowBooks    = shadowRes.status === 'fulfilled' ? shadowRes.value : null;
+  _predictions    = predRes.status   === 'fulfilled' ? predRes.value   : null;
+  _engineBacktest = ebtRes.status    === 'fulfilled' ? ebtRes.value    : null;
+  _factorZoo      = fzRes.status     === 'fulfilled' ? fzRes.value     : null;
+  _fundamentals   = fundRes.status   === 'fulfilled' ? fundRes.value   : null;
   _book        = bookRes.status    === 'fulfilled' ? bookRes.value    : null;
   _trades      = tradesRes.status  === 'fulfilled' ? tradesRes.value  : null;
   _activity    = (actRes.status    === 'fulfilled' ? actRes.value     : null) || [];
@@ -3600,6 +4632,7 @@ async function fetchAll() {
   _competitors = compRes.status    === 'fulfilled' ? compRes.value    : null;
   _regime      = regimeRes.status  === 'fulfilled' ? regimeRes.value  : null;
   _perf        = perfRes.status    === 'fulfilled' ? perfRes.value    : null;
+  _risk        = riskRes.status    === 'fulfilled' ? riskRes.value    : null;
   _runs        = (runsRes.status   === 'fulfilled' ? runsRes.value    : null) || [];
   _macro       = macroRes.status   === 'fulfilled' ? macroRes.value   : null;
   var _papersResp = (papersRes.status === 'fulfilled' ? papersRes.value : null) || {};
@@ -3618,6 +4651,11 @@ async function fetchAll() {
   _renderAll();
   applyColl('runs');
   applyColl('rejected');
+  applyColl('shadow-books');
+  applyColl('xsec');
+  applyColl('engine-bt');
+  applyColl('factor-zoo');
+  applyColl('fundamentals');
   loadOutcomes();   // live thesis-outcome track record (decoupled, non-blocking)
 
   var now = new Date();
@@ -3647,8 +4685,11 @@ document.addEventListener('langchange', function() {
 // open the Research view directly when the page is loaded at /research
 if (location.pathname.replace(/\/+$/, '') === '/research') showView('research');
 
+applyPortfolioScope();   // default flagship → no-op visually; sets data-portfolio
+loadPortfolios();        // populate the portfolio switcher (async, non-blocking)
 fetchAll();
 setInterval(fetchAll, 60000);
+setInterval(loadPortfolios, 60000);   // keep the tab NAV/return badges fresh
 </script>
 </body>
 </html>

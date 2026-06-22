@@ -10,10 +10,24 @@
  */
 (function () {
   "use strict";
-  if (window.__brainChat) return;
-  window.__brainChat = true;
-  if (!document.body || !document.body.classList.contains("page-mm")) return;
 
+  function pageReady() {
+    return !!(document.body && document.body.classList.contains("page-mm"));
+  }
+
+  // Mount once. We latch the dedupe flag only AFTER a successful mount (or if a launcher is
+  // already in the DOM) — never before the readiness check. So a run that evaluates during a
+  // mid-edit / --reload gap, when <body class="page-mm"> isn't in place yet, bails *without*
+  // permanently blocking the retry below. Returns true when terminal, false to "try again".
+  function boot() {
+    if (window.__brainChat || document.getElementById("bc-launch")) { window.__brainChat = true; return true; }
+    if (!pageReady()) return false;
+    window.__brainChat = true;
+    mount();
+    return true;
+  }
+
+  function mount() {
   var CONV_KEY = "bc_conversation_id";
   var convId = null;
   try { convId = localStorage.getItem(CONV_KEY) || null; } catch (e) {}
@@ -441,4 +455,19 @@
     convId = null; try { localStorage.removeItem(CONV_KEY); } catch (e) {}
     sheet.classList.remove("open"); greet();
   };
+  }   // end mount()
+
+  // Bootstrap: attempt immediately, then on DOMContentLoaded, then poll briefly. This covers the
+  // windows where index.html is being edited under the --reload dev server and chat.js can
+  // evaluate before <body class="page-mm"> is in place. boot() only latches __brainChat after a
+  // real mount, so a premature bail never permanently strands the widget.
+  if (!boot()) {
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", boot, { once: true });
+    }
+    var __bcTries = 0;
+    var __bcIv = setInterval(function () {
+      if (boot() || ++__bcTries > 40) clearInterval(__bcIv);   // ~40 × 150ms ≈ 6s
+    }, 150);
+  }
 })();

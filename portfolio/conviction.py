@@ -43,7 +43,10 @@ def _us_standouts(n: int = TOP_US) -> list[str]:
     return [r.get("ticker") for r in buy[:n] if isinstance(r, dict) and r.get("ticker")]
 
 
-SECTOR_MAX_NAMES = 3   # concentration firebreak: at most N names from any one sector in the book
+SECTOR_MAX_NAMES = None   # sector-concentration firebreak DISABLED (PM directive 2026-06-21): do NOT
+                          # cap names-per-sector — a single-sector bull market should be free to load
+                          # up, and the per-name + book/theme weight caps still bound position size.
+                          # Set to an int (e.g. 3) to re-enable the top-N-per-sector firebreak.
 
 # EXIT HYSTERESIS — to ENTER, a new name must clear the full 'up' gate (confluence > 0.30). To be
 # DROPPED, a name we ALREADY hold has to fall below this LOWER floor (or trip a hard exit). The
@@ -253,6 +256,9 @@ def build(budget: float, name_cap: float = 0.08,
     for p in passed:
         _by_sector[_sector_of(p["ticker"])].append(p)
     kept: list[dict] = []
+    # SECTOR_MAX_NAMES is None -> firebreak disabled: an effective cap above any sector's count keeps
+    # every entry-gate passer (no demotions). An int re-enables the top-N-per-sector behaviour.
+    _cap = SECTOR_MAX_NAMES if SECTOR_MAX_NAMES is not None else len(passed) + 1
     for sec, names in _by_sector.items():
         # never cap the catch-all 'Unknown' bucket (unrelated names with no sector tag are not a
         # cohort) — only cap real, same-sector concentration.
@@ -262,8 +268,8 @@ def build(budget: float, name_cap: float = 0.08,
         # hysteresis: currently-held names rank ahead of new ones, then by confluence — so a held
         # position isn't churned out by a marginally-stronger newcomer.
         names.sort(key=lambda x: (x["ticker"].upper() in held, x["confluence"]), reverse=True)
-        kept.extend(names[:SECTOR_MAX_NAMES])
-        for extra in names[SECTOR_MAX_NAMES:]:
+        kept.extend(names[:_cap])
+        for extra in names[_cap:]:
             rejected.append({
                 "ticker": extra["ticker"],
                 "reason": (f"Sector cap: '{sec}' already holds {SECTOR_MAX_NAMES} higher-priority "

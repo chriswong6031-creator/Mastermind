@@ -45,11 +45,12 @@ def available() -> bool:
     return _get_client() is not None
 
 
-def daily_closes(ticker: str, start: str, end: str) -> dict:
+def daily_closes(ticker: str, start: str, end: str, cache: bool = True) -> dict:
     """Adjusted daily closes for [start, end] (ISO dates) as {YYYY-MM-DD: close}. Best-effort
-    (returns {} on any failure); disk-cached under data/cache/aggs since historical closes are
-    immutable. Used for deterministic outcome labeling — full coverage for US single names that
-    the macro yahoo store doesn't track."""
+    (returns {} on any failure). Non-positive closes (data errors / halted-trading artifacts) are
+    dropped so they can't fabricate a stop barrier or a -100% return. `cache=True` reads/writes a
+    disk cache under data/cache/aggs — ONLY safe for immutable, fully-elapsed windows; callers pass
+    cache=False for still-live windows so a partial snapshot is never frozen."""
     import json
     import os
     from datetime import datetime, timezone
@@ -60,11 +61,12 @@ def daily_closes(ticker: str, start: str, end: str) -> dict:
         return {}
     cdir = Path(__file__).resolve().parent.parent / "data" / "cache" / "aggs"
     cf = cdir / f"{t}_{start}_{end}.json"
-    try:
-        if cf.exists():
-            return json.loads(cf.read_text())
-    except Exception:  # noqa: BLE001
-        pass
+    if cache:
+        try:
+            if cf.exists():
+                return json.loads(cf.read_text())
+        except Exception:  # noqa: BLE001
+            pass
     out: dict = {}
     try:
         import requests
@@ -78,11 +80,17 @@ def daily_closes(ticker: str, start: str, end: str) -> dict:
                     ts, c = row.get("t"), row.get("c")
                     if ts is None or c is None:
                         continue
+                    try:
+                        cv = float(c)
+                    except (TypeError, ValueError):
+                        continue
+                    if cv <= 0:                 # drop zero/negative closes (data artifacts)
+                        continue
                     d = datetime.fromtimestamp(ts / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
-                    out[d] = float(c)
+                    out[d] = cv
     except Exception:  # noqa: BLE001 — labeling degrades to 'unresolved' on failure, never fatal
         out = {}
-    if out:
+    if out and cache:
         try:
             cdir.mkdir(parents=True, exist_ok=True)
             cf.write_text(json.dumps(out))

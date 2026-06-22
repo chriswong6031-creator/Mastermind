@@ -70,6 +70,7 @@ class DecisionDoc:
     is_context_only: bool = True
     falsifier: dict = field(default_factory=dict)
     check_by: str = ""
+    raw_prob_correct: float | None = None  # model-native confidence pre-calibration (for grading)
 
     def finalize(self) -> "DecisionDoc":
         d0 = date.fromisoformat(self.state_asof)

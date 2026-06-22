@@ -43,6 +43,10 @@ def _isolate_research_papers(tmp_path, monkeypatch):
     redirect the papers/feed-note writes into a tmp dir, so the book build's research gate never
     hits the network nor pollutes the live research feed."""
     monkeypatch.setenv("MASTERMIND_RESEARCH_LLM", "0")
+    # Never let the FastAPI startup hook fire a real (armed) autonomous Brain run during pytest,
+    # even when a test mounts the app via TestClient's context manager on a machine with the
+    # Claude CLI present (which would otherwise spawn a live Opus session + write a real book).
+    monkeypatch.setenv("AUTONOMOUS_FIRST_RUN", "0")
     try:
         import brain.research_paper as rp
         papers = tmp_path / "_papers"
