@@ -130,6 +130,13 @@ def run_china(asof: str | None = None, *, force: bool = False, armed: bool = Tru
     except Exception:
         pass
 
+    # 8. delegate the Chinese translation of today's report to the Haiku tier so the dashboard
+    #    renders zh the moment it's toggled — automatic after every run, never blocks the book.
+    try:
+        out["translated"] = _translate_report(submission, brain)
+    except Exception:
+        out["translated"] = False
+
     try:
         out["nav"] = round(paper_account.nav(prices, PORTFOLIO_ID), 2)
     except Exception:
@@ -236,6 +243,7 @@ def _build_payload(asof: str, submission: dict | None, prices: dict, executed: l
         entry = position_log.get_entry_info(SLEEVE, tk, portfolio_id=PORTFOLIO_ID)
         positions.append({
             "ticker": tk,
+            "name": china_intake.display_name(tk),     # Chinese for A-shares, English for HK/ADR
             "sleeve": SLEEVE,
             "venue": china_intake._venue(tk),
             "weight": round(mv / nav, 4) if (mv and nav) else None,
@@ -287,6 +295,7 @@ def _build_payload(asof: str, submission: dict | None, prices: dict, executed: l
 def _append_decision_log(asof: str, submission: dict | None, executed: list,
                          skipped: list, brain: dict) -> None:
     from portfolio import registry
+    from brain import china_intake as _intake_mod
     p = registry.data_dir(PORTFOLIO_ID) / "decisions.jsonl"
     p.parent.mkdir(parents=True, exist_ok=True)
     entry = {
@@ -294,7 +303,8 @@ def _append_decision_log(asof: str, submission: dict | None, executed: list,
         "ts": datetime.now(timezone.utc).isoformat(),
         "summary": (submission or {}).get("summary"),
         "sold_note": (submission or {}).get("sold_note"),
-        "holdings": [{"ticker": h.get("ticker"), "venue": h.get("venue"), "weight": h.get("weight"),
+        "holdings": [{"ticker": h.get("ticker"), "name": _intake_mod.display_name(h.get("ticker")),
+                      "venue": h.get("venue"), "weight": h.get("weight"),
                       "conviction": h.get("conviction"), "rationale": h.get("rationale")}
                      for h in ((submission or {}).get("holdings") or [])],
         "executed": executed,
@@ -320,6 +330,69 @@ def _append_decision_log(asof: str, submission: dict | None, executed: list,
                 rows.append(r)
     rows.append(entry)
     p.write_text("\n".join(json.dumps(r, default=str, ensure_ascii=False) for r in rows) + "\n")
+
+
+def _translate_report(submission: dict | None, brain: dict | None) -> bool:
+    """Warm the Simplified-Chinese cache for every translatable string in today's report by
+    delegating to the Haiku tier (``brain.translate.translate_and_cache`` → role="scout"). Covers
+    the overall summary, the sold note, the Brain's closing write-up, and EACH holding's rationale
+    — exactly the strings ``/api/decisions`` and the book view re-render in zh via ``cached_zh``.
+    Best-effort: returns True if it ran, False on any miss; never raises, never blocks publishing.
+
+    Display NAMES are intentionally NOT translated — A-share names are already Chinese and HK/ADR
+    names are English proper nouns that should read the same under either toggle."""
+    try:
+        from brain import translate
+    except Exception:
+        return False
+    texts: list[str] = []
+    sub = submission or {}
+    for k in ("summary", "sold_note"):
+        v = sub.get(k)
+        if v and isinstance(v, str):
+            texts.append(v)
+    for h in (sub.get("holdings") or []):
+        r = h.get("rationale")
+        if r and isinstance(r, str):
+            texts.append(r)
+    bt = (brain or {}).get("text")
+    if bt and isinstance(bt, str):
+        texts.append(bt[:6000])
+    if not texts:
+        return False
+    try:
+        translate.translate_and_cache(texts)
+        return True
+    except Exception:
+        return False
+
+
+def republish(asof: str | None = None) -> dict:
+    """Re-emit the CURRENT book's published contract (with display names) + re-warm the zh cache
+    from the LAST submission and today's CNY marks — WITHOUT a new Brain call. Use to refresh the
+    live book after a code change (e.g. names / translation) or an FX move. Idempotent per asof."""
+    from portfolio import fx, paper_account
+    from brain import china_mcp
+    asof = asof or date.today().isoformat()
+    submission = china_mcp.read_submission()
+    if not submission or not submission.get("holdings"):
+        return {"ok": False, "error": "no current submission to republish"}
+    held = list((paper_account._load_account(PORTFOLIO_ID).get("positions") or {}).keys())
+    target = {h["ticker"]: float(h.get("weight") or 0.0) for h in (submission.get("holdings") or [])}
+    prices: dict[str, float] = {}
+    for t in set(target) | set(held) | {BENCHMARK}:
+        cny = fx.usd_to_cny(paper_account._current_price(t))
+        if cny and cny > 0:
+            prices[t] = cny
+    payload = _build_payload(asof, submission, prices, [], [], {})
+    out: dict = {"ok": True, "holdings": len(target)}
+    try:
+        from bridge import build_portfolio
+        build_portfolio.write(payload, portfolio_id=PORTFOLIO_ID)
+    except Exception as e:                           # noqa: BLE001
+        return {"ok": False, "error": repr(e)[:200]}
+    out["translated"] = _translate_report(submission, {})
+    return out
 
 
 def load_decisions(limit: int = 60) -> list[dict]:

@@ -261,6 +261,36 @@ def _venue(ticker: str) -> str:
     return "ADR"
 
 
+def _stock_name(sub: str, ticker: str) -> str | None:
+    """The `name` field from a vendored per-name stockdata file, if present."""
+    raw = _read(f"{sub}/{ticker}.json")
+    if isinstance(raw, dict):
+        n = raw.get("name")
+        return n if isinstance(n, str) and n.strip() else None
+    return None
+
+
+def display_name(ticker: str) -> str:
+    """A human display name for a holding, by venue:
+      * A-shares (`*.SS`/`*.SZ`) → the **Chinese** name (the macro `name` is "English / 中文";
+        we take the 中文 half).
+      * Hong Kong (`*.HK`) and US ADRs → the **English** name (take the English half if combined).
+    Falls back to the ticker when no name is published. Degrade-never-raise."""
+    t = (ticker or "").upper().strip()
+    if not t:
+        return ""
+    if t.endswith(".SS") or t.endswith(".SZ"):
+        raw = _stock_name("chinastockdata", t)
+        if raw and " / " in raw:
+            return raw.split(" / ", 1)[1].strip() or t   # Chinese half
+        return raw or t
+    sub = "hkstockdata" if t.endswith(".HK") else "stockdata"
+    raw = _stock_name(sub, t)
+    if raw and " / " in raw:
+        return raw.split(" / ", 1)[0].strip() or t       # English half
+    return raw or t
+
+
 def queue(limit: int = 40) -> list[dict]:
     """Just the ranked candidate list (provenance kept)."""
     return build(limit)["candidates"]

@@ -98,7 +98,7 @@ async def get_my_book(args):
     for t, rec in pnl.items():
         mv = rec.get("market_value")
         holdings.append({
-            "ticker": t, "venue": china_intake._venue(t),
+            "ticker": t, "name": china_intake.display_name(t), "venue": china_intake._venue(t),
             "shares": rec.get("shares"), "avg_cost": rec.get("avg_cost"),
             "current_price": rec.get("current_price"), "market_value": mv,
             "weight": round(mv / nav, 4) if (mv and nav) else None,
@@ -280,8 +280,8 @@ async def get_quote(args):
     cur = fx.currency_of(t)                       # native quote currency
     local = round(usd * fx.rate_per_usd(cur), 4) if usd else None   # native-currency price
     return bot_mcp._json({
-        "ticker": t, "venue": china_intake._venue(t), "currency": cur,
-        "price_local": local, "price_cny": round(cny, 4) if cny else None,
+        "ticker": t, "name": china_intake.display_name(t), "venue": china_intake._venue(t),
+        "currency": cur, "price_local": local, "price_cny": round(cny, 4) if cny else None,
         "priceable": bool(cny and cny > 0),
     })
 

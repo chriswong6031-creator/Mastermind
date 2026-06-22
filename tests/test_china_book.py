@@ -300,6 +300,47 @@ def test_run_china_marks_in_cny(iso, monkeypatch):
     assert out["nav"] == pytest.approx(1_000_000.0, rel=1e-6)    # ¥1M, self-consistent
 
 
+def test_display_name_by_venue(monkeypatch):
+    """A-shares show the Chinese name; HK and ADRs show the English name; missing → ticker."""
+    from brain import china_intake
+    monkeypatch.setattr(china_intake, "_read", lambda rel: {
+        "chinastockdata/600519.SS.json": {"name": "Kweichow Moutai Co., Ltd. / 贵州茅台"},
+        "hkstockdata/0700.HK.json": {"name": "Tencent"},
+        "stockdata/BABA.json": {"name": "Alibaba Group (ADR)"},
+    }.get(rel))
+    assert china_intake.display_name("600519.SS") == "贵州茅台"          # A-share → Chinese half
+    assert china_intake.display_name("0700.HK") == "Tencent"             # HK → English
+    assert china_intake.display_name("BABA") == "Alibaba Group (ADR)"    # ADR → English
+    assert china_intake.display_name("9999.HK") == "9999.HK"             # no name → ticker fallback
+
+
+def test_run_china_attaches_names_and_delegates_translation(iso, monkeypatch):
+    """Every holding carries a display name, and the report is auto-translated via the Haiku tier."""
+    from bot import china
+    from brain import china_intake, china_mcp, translate
+    monkeypatch.setattr(paper_account, "_current_price", lambda t: {"0700.HK": 50.0, "FXI": 30.0}.get(t))
+    monkeypatch.setattr(china_intake, "display_name", lambda t: {"0700.HK": "Tencent"}.get(t, t))
+    captured: dict = {}
+    monkeypatch.setattr(translate, "translate_and_cache",
+                        lambda texts: (captured.update(texts=list(texts)), {})[1])
+
+    def fake_brain(asof, inaugural):
+        china_mcp.submission_path().parent.mkdir(parents=True, exist_ok=True)
+        china_mcp.submission_path().write_text(json.dumps({
+            "holdings": [{"ticker": "0700.HK", "weight": 0.5, "rationale": "platform leader"}],
+            "summary": "hk barbell", "gross": 0.5}))
+        return {"ok": True, "text": "closing note", "model": "m"}
+
+    monkeypatch.setattr(china, "_run_brain", fake_brain)
+    out = china.run_china(asof="2026-06-22", armed=True)
+    assert out.get("translated") is True
+    latest = json.loads((registry.data_dir("china") / "latest.json").read_text())
+    pos = next(p for p in latest["positions"] if p["ticker"] == "0700.HK")
+    assert pos["name"] == "Tencent"                                      # name on the position
+    # the Haiku translation got the summary + rationale + the Brain's closing note
+    assert {"hk barbell", "platform leader", "closing note"} <= set(captured.get("texts") or [])
+
+
 # --------------------------------------------------------------------------- #
 # regression guards for the adversarial-review findings
 # --------------------------------------------------------------------------- #
