@@ -78,6 +78,18 @@ if FastAPI is not None:
             app.state.autonomous_first_run = scheduler.maybe_first_autonomous_run()
         except Exception:
             app.state.autonomous_first_run = False
+        # Heavyweight presses Flagship's best — kick its first build too (no-op until Flagship has a
+        # non-empty book to constrain against, and once Heavyweight has a track record).
+        try:
+            app.state.heavyweight_first_run = scheduler.maybe_first_heavyweight_run()
+        except Exception:
+            app.state.heavyweight_first_run = False
+        # All-China book — kick its first build too (no-op once it has a track record). Runs on
+        # Asia's clock thereafter via the china_daily cron.
+        try:
+            app.state.china_first_run = scheduler.maybe_first_china_run()
+        except Exception:
+            app.state.china_first_run = False
 
     @app.post("/daily")
     def daily(force: bool = False) -> dict:
@@ -104,6 +116,41 @@ if FastAPI is not None:
         threading.Thread(target=lambda: autonomous.run_autonomous(force=force),
                          name="autonomous-manual-run", daemon=True).start()
         return {"started": True, "note": "Autonomous Brain run started in the background."}
+
+    @app.post("/api/heavyweight/run")
+    async def heavyweight_run(force: bool = False, wait: bool = False) -> dict:
+        """Manually fire the Heavyweight Opus-Brain book (study Flagship → concentrated rebalance).
+
+        Long call; by default starts in the background and returns immediately. ?wait=true blocks."""
+        from bot import heavyweight
+        if wait:
+            import asyncio as _aio
+            out = await _aio.to_thread(heavyweight.run_heavyweight, force=force)
+            return {k: out.get(k) for k in
+                    ("asof", "inaugural", "trading_day", "decided", "holdings", "flagship_universe_size",
+                     "held_prior_book", "enforcement", "executed", "skipped_unpriceable", "nav", "brain")}
+        import threading
+        threading.Thread(target=lambda: heavyweight.run_heavyweight(force=force),
+                         name="heavyweight-manual-run", daemon=True).start()
+        return {"started": True, "note": "Heavyweight Brain run started in the background."}
+
+    @app.post("/api/china/run")
+    async def china_run(force: bool = False, wait: bool = False) -> dict:
+        """Manually fire the all-China Opus-Brain book (research the China desks → free-form,
+        multi-venue, USD-marked rebalance).
+
+        Long call; by default starts in the background and returns immediately. ?wait=true blocks."""
+        from bot import china
+        if wait:
+            import asyncio as _aio
+            out = await _aio.to_thread(china.run_china, force=force)
+            return {k: out.get(k) for k in
+                    ("asof", "inaugural", "trading_day", "decided", "holdings",
+                     "executed", "skipped_unpriceable", "nav", "brain")}
+        import threading
+        threading.Thread(target=lambda: china.run_china(force=force),
+                         name="china-manual-run", daemon=True).start()
+        return {"started": True, "note": "China Brain run started in the background."}
 
     @app.post("/research")
     async def research(req: ResearchReq) -> dict:

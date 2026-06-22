@@ -452,10 +452,15 @@ def api_decisions(portfolio: str = "autonomous", limit: int = 60) -> JSONRespons
     """The autonomous Brain's daily decision log — what it bought / sold / held each day, and
     the rationale for every holding. Empty for the gated flagship (it journals via research papers)."""
     try:
-        if portfolio != "autonomous":
-            return JSONResponse({"decisions": [], "note": "decision log is autonomous-only"})
-        from bot import autonomous
-        decisions = autonomous.load_decisions(limit)
+        if portfolio == "autonomous":
+            from bot import autonomous as _src
+        elif portfolio == "heavyweight":
+            from bot import heavyweight as _src
+        elif portfolio == "china":
+            from bot import china as _src
+        else:
+            return JSONResponse({"decisions": [], "note": "decision log is Brain-book-only (autonomous/heavyweight/china)"})
+        decisions = _src.load_decisions(limit)
         # Attach cached Chinese for the AI write-ups so the Daily Decision Log renders in
         # Chinese when zh is toggled. cached_zh() is a pure cache lookup (None -> client
         # falls back to English) — warmed by brain.translate.translate_decisions() on the

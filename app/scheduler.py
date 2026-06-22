@@ -30,6 +30,20 @@ def _autonomous_job():
     run_autonomous()
 
 
+def _heavyweight_job():
+    """The concentrated Opus-Brain book: studies Flagship's book and presses its best ideas. Runs
+    AFTER flagship + autonomous so it constrains against a fresh Flagship book."""
+    from bot.heavyweight import run_heavyweight
+    run_heavyweight()
+
+
+def _china_job():
+    """The free-form all-China Opus-Brain book: researches the China desks + rebalances itself once
+    per Asia trading day, after the mainland A-share close (~07:00 UTC)."""
+    from bot.china import run_china
+    run_china()
+
+
 def start():
     """Start the daily-loop scheduler (idempotent). Returns the scheduler or None."""
     global _scheduler
@@ -43,6 +57,10 @@ def start():
         return None
     hour = int(os.environ.get("BOT_DAILY_UTC_HOUR", "22"))
     a_hour = int(os.environ.get("AUTONOMOUS_DAILY_UTC_HOUR", "23"))
+    h_hour = int(os.environ.get("HEAVYWEIGHT_DAILY_UTC_HOUR", "23"))
+    # China book fires on Asia's clock: the A-share close is 15:00 CST = 07:00 UTC, so build a bit
+    # after (08:00 UTC ≈ 16:00 CST). Separate from the US books' evening cadence.
+    cn_hour = int(os.environ.get("CHINA_DAILY_UTC_HOUR", "8"))
     _DB.parent.mkdir(parents=True, exist_ok=True)
     sch = BackgroundScheduler(jobstores={"default": SQLAlchemyJobStore(url=f"sqlite:///{_DB}")},
                               timezone="UTC")
@@ -51,6 +69,15 @@ def start():
     # Mon–Fri only (no Sat/Sun) — the autonomous book refreshes once per trading day after close.
     sch.add_job(_autonomous_job, CronTrigger(day_of_week="mon-fri", hour=a_hour, minute=10),
                 id="autonomous_daily", replace_existing=True, misfire_grace_time=3600, coalesce=True)
+    # Heavyweight runs LAST (23:25 by default) — after flagship's 22:40 build (so it constrains
+    # against a fresh Flagship book) and after autonomous's 23:10 (so the two Brain runs don't
+    # hammer the subscription/price feeds at once; they touch disjoint data dirs — no state race).
+    sch.add_job(_heavyweight_job, CronTrigger(day_of_week="mon-fri", hour=h_hour, minute=25),
+                id="heavyweight_daily", replace_existing=True, misfire_grace_time=3600, coalesce=True)
+    # All-China book on Asia's clock (Mon–Fri after the A-share close). Touches a disjoint data dir
+    # (data/portfolios/china) and a different feed window from the US books — no state race.
+    sch.add_job(_china_job, CronTrigger(day_of_week="mon-fri", hour=cn_hour, minute=0),
+                id="china_daily", replace_existing=True, misfire_grace_time=3600, coalesce=True)
     sch.start()
     _scheduler = sch
     return sch
@@ -89,4 +116,75 @@ def maybe_first_autonomous_run() -> bool:
             pass
 
     threading.Thread(target=_go, name="autonomous-first-run", daemon=True).start()
+    return True
+
+
+def maybe_first_heavyweight_run() -> bool:
+    """On first turn-on, build the Heavyweight book right away (instead of waiting for the next
+    close), but ONLY once Flagship has published a non-empty book to constrain against. No-op once
+    Heavyweight has a NAV track record. Gated on the Claude layer being available + the Flagship
+    universe being non-empty + HEAVYWEIGHT_FIRST_RUN != '0'. Runs in a daemon thread."""
+    if os.environ.get("HEAVYWEIGHT_FIRST_RUN", "1") == "0":
+        return False
+    try:
+        from portfolio import registry
+        nav_path = registry.data_dir("heavyweight") / "nav_history.jsonl"
+        if nav_path.exists() and nav_path.read_text().strip():
+            return False                       # already tracking — the cron owns it now
+    except Exception:
+        pass
+    try:
+        from bot.heavyweight import _flagship_universe
+        if not _flagship_universe():
+            return False                       # nothing to constrain against yet — wait for Flagship
+    except Exception:
+        return False
+    try:
+        from brain import cli_bridge
+        if not cli_bridge.available():
+            return False                       # no subscription/CLI → don't fire a doomed armed run
+    except Exception:
+        return False
+    import threading
+
+    def _go():
+        try:
+            from bot.heavyweight import run_heavyweight
+            run_heavyweight()
+        except Exception:
+            pass
+
+    threading.Thread(target=_go, name="heavyweight-first-run", daemon=True).start()
+    return True
+
+
+def maybe_first_china_run() -> bool:
+    """On first turn-on, immediately build the all-China book so it can buy right away — instead of
+    waiting for the next Asia close. No-op once it has a NAV track record. Gated on the Claude layer
+    being available + CHINA_FIRST_RUN != '0'. Runs in a daemon thread (never blocks startup)."""
+    if os.environ.get("CHINA_FIRST_RUN", "1") == "0":
+        return False
+    try:
+        from portfolio import registry
+        nav_path = registry.data_dir("china") / "nav_history.jsonl"
+        if nav_path.exists() and nav_path.read_text().strip():
+            return False                       # already has a track record — the cron owns it now
+    except Exception:
+        pass
+    try:
+        from brain import cli_bridge
+        if not cli_bridge.available():
+            return False                       # no subscription/CLI → don't fire a doomed armed run
+    except Exception:
+        return False
+    import threading
+
+    def _go():
+        try:
+            from bot.china import run_china
+            run_china()
+        except Exception:
+            pass
+
+    threading.Thread(target=_go, name="china-first-run", daemon=True).start()
     return True

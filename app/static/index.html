@@ -1300,8 +1300,8 @@ body.page-mm .mm-macro-tag.neu  { background: color-mix(in srgb, var(--muted) 16
 
 /* ── top nav (Dashboard / Research view switch) ──────────────────────────── */
 body.page-mm #mm-nav { position: sticky; top: 0; z-index: 60; display: flex; align-items: center; gap: 14px;
-  flex-wrap: wrap; padding: 9px 4px; margin-bottom: 4px; background: color-mix(in srgb, var(--bg) 88%, transparent);
-  backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); }
+  flex-wrap: wrap; padding: 9px 4px; margin-bottom: 4px;
+  border-bottom: 1px solid var(--line); }
 body.page-mm .mm-nav-brand { display: flex; align-items: center; gap: 8px; }
 body.page-mm .mm-logo-mark { width: 24px; height: 24px; display: block; flex: none; border-radius: 7px; box-shadow: 0 1px 5px rgba(20,30,80,.28); }
 body.page-mm .mm-logo-word { font-size: 13.5px; font-weight: 800; letter-spacing: .13em; color: var(--text); white-space: nowrap; }
@@ -1568,7 +1568,7 @@ body.page-mm.view-self #view-self .mm-section { display: block !important; }
 .mm-pf-tab.active{color:var(--text,#e6e9ef);background:var(--bg,#0e1117);
   border-color:var(--border,rgba(127,127,127,.28));box-shadow:0 1px 3px rgba(0,0,0,.18)}
 .mm-pf-dot{width:7px;height:7px;border-radius:50%;flex:0 0 auto}
-.mm-pf-dot.gated{background:#3b82f6}.mm-pf-dot.autonomous{background:#a855f7}
+.mm-pf-dot.gated{background:#3b82f6}.mm-pf-dot.autonomous{background:#a855f7}.mm-pf-dot.heavyweight{background:#f59e0b}.mm-pf-dot.china{background:#ef4444}
 .mm-pf-sub .up{color:var(--up,#16a34a)}.mm-pf-sub .down{color:var(--down,#dc2626)}
 @media(max-width:760px){.mm-pf-tab .mm-pf-sub{display:none}.mm-pf-tab{padding:6px 10px}}
 
@@ -4374,13 +4374,26 @@ function renderPortfolioSwitch() {
     var sub = navStr + ' · <span class="' + cls + '">' + _fmtPctSigned(ret) + '</span>';
     return '<button class="mm-pf-tab' + (p.id === _portfolio ? ' active' : '') + '" type="button" ' +
       'data-pf="' + esc(p.id) + '" onclick="setPortfolio(\'' + esc(p.id) + '\')" title="' + esc(p.tagline || '') + '">' +
-      '<span class="mm-pf-name"><span class="mm-pf-dot ' + (p.kind === 'autonomous' ? 'autonomous' : 'gated') + '"></span>' + esc(p.name) + '</span>' +
+      '<span class="mm-pf-name"><span class="mm-pf-dot ' + (p.kind === 'autonomous' ? 'autonomous' : (p.kind === 'heavyweight' ? 'heavyweight' : (p.kind === 'china_brain' ? 'china' : 'gated'))) + '"></span>' + esc(p.name) + '</span>' +
       '<span class="mm-pf-sub">' + sub + '</span></button>';
   }).join('');
 }
 
+// A "Brain book" (autonomous OR heavyweight) is the decision-log style: no engine panels,
+// shows the daily decision log. Keyed off the registry kind so new Brain books work automatically.
+function _pfKind(id) {
+  var m = (_portfolios || []).find(function(p) { return p.id === id; });
+  return m ? m.kind : (id === 'autonomous' ? 'autonomous'
+                       : (id === 'heavyweight' ? 'heavyweight'
+                       : (id === 'self_directed' ? 'self_directed' : 'gated')));
+}
+function _isBrainBook(id) {
+  var k = _pfKind(id);
+  return k === 'autonomous' || k === 'heavyweight' || k === 'china_brain';
+}
+
 function applyPortfolioScope() {
-  var auto = _portfolio === 'autonomous';
+  var auto = _isBrainBook(_portfolio);
   var self = _portfolio === 'self_directed';
   // The self-directed book reuses the dedicated #view-self layout: body.view-self hides every
   // dashboard .mm-section and shows #view-self (its order ticket / scorecard / blotter). The
@@ -4423,7 +4436,7 @@ async function loadPortfolios() {
 
 // ── AUTONOMOUS BOOK: banner + daily decision log ──────────────────────────────
 function renderAutoBanner() {
-  if (_portfolio !== 'autonomous') return;
+  if (!_isBrainBook(_portfolio)) return;
   var b = _book || {}, p = _perf || {};
   var isZh = document.documentElement.getAttribute('data-lang') === 'zh';
   var sumEl = E('auto-sum'), metaEl = E('auto-meta');

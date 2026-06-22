@@ -28,6 +28,12 @@ _V = _ROOT / "vendor" / "macro"
 _RESEARCH = _ROOT / "data" / "research"
 _PROPOSALS = _ROOT / "data" / "brain" / "proposals.jsonl"
 _READ_ROOTS = [_V / "site", _V / "data", _ROOT / "data"]
+# Portfolio BOOK state is not "published signal" data — block cross-book reads through this
+# generic path reader. A Brain reads its OWN book via a dedicated tool (get_portfolio / the
+# desk's get_my_book); reading ANOTHER book's positions / ledger / research via read_signal was
+# the latent autonomous→flagship peek path (data/portfolio/* lives under the _ROOT/data root).
+_DENY_ROOTS = [(_ROOT / "data" / "portfolio").resolve(), (_ROOT / "data" / "portfolios").resolve()]
+_LEAK_AUDIT = _ROOT / "data" / "brain" / "read_signal_denied.jsonl"
 
 
 def _ok(text: str) -> dict:
@@ -415,8 +421,23 @@ async def read_signal(args):
     p = (Path(args["path"]) if Path(args["path"]).is_absolute() else _ROOT / args["path"]).resolve()
     if not any(str(p).startswith(str(r.resolve())) for r in _READ_ROOTS):
         return _ok("DENIED: path outside the allowed data roots.")
+    if any(p == r or r in p.parents for r in _DENY_ROOTS):
+        _audit_denied_book_read(p)
+        return _ok("DENIED: portfolio book state (positions/ledger/research) is not readable "
+                   "via read_signal — read your OWN book through your desk tool.")
     d = _read_json(p)
     return _json(d) if d is not None else _ok(f"not found: {p}")
+
+
+def _audit_denied_book_read(p: Path) -> None:
+    """Best-effort: record any attempt to read a portfolio book through read_signal, so a
+    cross-book peek attempt is visible after the fact even though it was blocked."""
+    try:
+        _LEAK_AUDIT.parent.mkdir(parents=True, exist_ok=True)
+        with _LEAK_AUDIT.open("a") as fh:
+            fh.write(json.dumps({"ts": _now(), "denied_path": str(p)}) + "\n")
+    except Exception:
+        pass
 
 
 # ---------------- ACTION tools (write back to the app's review queue) ----------------
