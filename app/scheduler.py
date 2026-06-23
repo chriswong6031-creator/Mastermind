@@ -66,6 +66,32 @@ def _snapshot_job():
     export_snapshot()
 
 
+def _settle_pending_job():
+    """Fill the gated flagship book's queued PENDING orders at the OPEN, during market hours.
+
+    The flagship build runs once a day AFTER the US close (22:40 UTC) — so it only ever *queues*
+    overnight buy orders (queue_orders, market-closed branch) and never reaches fill_pending. Without
+    this job those queued orders are re-queued every evening and never execute (the paper book stays
+    all-cash). This morning sweep settles them at the real session open, then clears the PENDING tags
+    on latest.json so the dashboard renders the names as HOLDING with live unrealized P&L. Brain books
+    fill immediately and never queue, so flagship is the only book that needs it. Never raises."""
+    try:
+        from scripts.fill_pending_now import settle
+        settle("flagship", require_open=True)
+    except Exception:  # noqa: BLE001 — a settle miss must never kill the scheduler
+        pass
+
+
+def _macro_refresh_job():
+    """Keep the vendored macro analyzer data fresh (origin/main == the live site) + run the
+    staleness tripwire. The book once bought NVDA off a days-stale read; never raises."""
+    try:
+        from data_layer import macro_refresh
+        macro_refresh.refresh_and_check()
+    except Exception:  # noqa: BLE001 — a refresh miss must never kill the scheduler
+        pass
+
+
 def start():
     """Start the daily-loop scheduler (idempotent). Returns the scheduler or None."""
     global _scheduler
@@ -84,9 +110,19 @@ def start():
     # after (08:00 UTC ≈ 16:00 CST). Separate from the US books' evening cadence.
     cn_hour = int(os.environ.get("CHINA_DAILY_UTC_HOUR", "8"))
     hk_hour = int(os.environ.get("HK_DAILY_UTC_HOUR", "9"))
+    # Settle flagship's overnight-queued orders the morning AFTER they were queued — during the US
+    # session so they fill at the real open. 15:00 UTC is safely post-open year-round (9:30 ET =
+    # 13:30 UTC under EDT / 14:30 UTC under EST); the job itself re-checks market_calendar.is_open().
+    settle_hour = int(os.environ.get("SETTLE_PENDING_UTC_HOUR", "15"))
     _DB.parent.mkdir(parents=True, exist_ok=True)
     sch = BackgroundScheduler(jobstores={"default": SQLAlchemyJobStore(url=f"sqlite:///{_DB}")},
                               timezone="UTC")
+    # FRESHNESS FOUNDATION: pull the vendored macro analyzer data (origin/main == the live site)
+    # every 3h so no book ever decides on a stale read (the NVDA stale-"Constructive"-vs-live-"avoid"
+    # bug). The staleness tripwire warns, or refuses to trade via MACRO_STALE_BLOCK=1. run_daily also
+    # refreshes inline as a belt-and-suspenders guard right before the flagship build reads.
+    sch.add_job(_macro_refresh_job, CronTrigger(hour="*/3", minute=30), id="macro_refresh",
+                replace_existing=True, misfire_grace_time=3600, coalesce=True)
     sch.add_job(_job, CronTrigger(hour=hour, minute=40), id="daily_loop",
                 replace_existing=True, misfire_grace_time=3600, coalesce=True)
     # Mon–Fri only (no Sat/Sun) — the autonomous book refreshes once per trading day after close.
@@ -110,6 +146,16 @@ def start():
     # disjoint data dir (data/portfolios/etf) — no state race.
     sch.add_job(_etf_job, CronTrigger(day_of_week="mon-fri", hour=a_hour, minute=15),
                 id="etf_daily", replace_existing=True, misfire_grace_time=3600, coalesce=True)
+    # Settle flagship's queued PENDING orders at the open (Mon–Fri, 15:00 UTC ≈ 10–11am ET — mid US
+    # session year-round). Closes the gap left by the post-close-only build, which queues overnight
+    # buys but never reaches fill_pending — so without this the gated book never actually trades.
+    # NOTE: timezone is pinned to UTC explicitly. A bare CronTrigger(hour=…) inherits the MACHINE's
+    # local tz (APScheduler ignores the scheduler's timezone for an already-tz'd trigger), which
+    # would drift this off the US session on a non-UTC host — fatal here, since the is_open() guard
+    # would then skip every run. Cheap + idempotent (no-op when nothing's queued or the market's shut).
+    sch.add_job(_settle_pending_job,
+                CronTrigger(day_of_week="mon-fri", hour=settle_hour, minute=0, timezone="UTC"),
+                id="settle_pending", replace_existing=True, misfire_grace_time=7200, coalesce=True)
     # Publish the dashboard snapshot to the public Macro Dashboard (GitHub Pages) TWICE a day:
     #   • ~12:25 UTC — a morning refresh that picks up the overnight China book (08:00) and the
     #     prior night's autonomous/heavyweight Brain books (23:xx).

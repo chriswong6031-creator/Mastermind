@@ -21,3 +21,6 @@ jobs/
 data/quiver/
 data/*.sqlite
 .env.local
+
+# dedicated build-managed macro data checkout (kept fresh by data_layer/macro_refresh)
+vendor/macro_src/
