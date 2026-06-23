@@ -85,6 +85,25 @@ def test_trend_pullback_in_uptrend_not_bear():
     assert lenses._trend_row(d)["direction"] != "bear"
 
 
+def test_conviction_lens_respects_analyzer_verdict(monkeypatch):
+    # The conviction lens must NOT cast a BULL vote off the analyzer's percentile-RANK band when the
+    # analyzer's OWN verdict blocks the buy (size bucket 'avoid' / cycle-blocked / 0% size). A
+    # top-ranked name the analyzer says "wait for a base" must vote NEUTRAL, not bull (the NVDA leak).
+    monkeypatch.setattr(lenses, "_altdata_row", lambda t: None)
+
+    def _conv_dir(bucket, blocked):
+        d = {"sector": "Technology",
+             "conviction": {"band": "high", "score": 97, "verdict": "x", "cycle_blocked": blocked,
+                            "size": {"bucket": bucket, "pct": (0 if bucket == "avoid" else 50)}}}
+        monkeypatch.setattr(lenses, "_load", lambda rel: d if rel == "site/stockdata/NVDA.json" else None)
+        rows = lenses._name_rows("NVDA")
+        return next(r for r in rows if r.get("lens") == "conviction")["direction"]
+
+    assert _conv_dir("half", False) == "bull"       # high band, analyzer allows the buy -> bull (unchanged)
+    assert _conv_dir("avoid", True) == "neutral"    # high band but analyzer blocks (wait) -> NEUTRAL (the fix)
+    assert _conv_dir("avoid", False) == "neutral"   # avoid bucket alone suppresses the rank-bull vote
+
+
 # ---------------------------------------------------------------------------
 # sector-concentration cap (position sizing discipline)
 # ---------------------------------------------------------------------------
