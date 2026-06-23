@@ -137,6 +137,83 @@ def test_live_price_dispatch_and_fx(tmp_path, monkeypatch):
     assert paper_account._live_price("UNKNOWN.SS") is None
 
 
+def test_tushare_ticker_mapping():
+    from data_layer import tushare_feed
+    assert tushare_feed._to_ts_code("600519.SS") == "600519.SH"   # Shanghai .SS → .SH
+    assert tushare_feed._to_ts_code("000001.SZ") == "000001.SZ"   # Shenzhen unchanged
+    assert tushare_feed._to_ts_code("0700.HK") is None            # HK marks via Yahoo, not Tushare
+    assert tushare_feed._to_ts_code("BABA") is None               # ADR not covered
+
+
+def test_tushare_price_local_and_degrade(monkeypatch):
+    from data_layer import tushare_feed
+    tushare_feed.clear_cache()
+    monkeypatch.setattr(tushare_feed, "_token", lambda: "tok")
+    monkeypatch.setattr(tushare_feed, "_call", lambda api, params, fields:
+                        {"items": [["688411.SH", 286.98], ["000001.SZ", 12.3]]}
+                        if params.get("trade_date") == "20260622" else {"items": []})
+    assert tushare_feed.price_local("688411.SS", asof="2026-06-22") == pytest.approx(286.98)
+    assert tushare_feed.price_local("000001.SZ", asof="2026-06-22") == pytest.approx(12.3)
+    assert tushare_feed.price_local("0700.HK", asof="2026-06-22") is None    # HK is not an A-share (marks via Yahoo)
+    # no token → degrade to None (paper_account falls back to the snapshot)
+    tushare_feed.clear_cache()
+    monkeypatch.setattr(tushare_feed, "_token", lambda: None)
+    assert tushare_feed.price_local("688411.SS", asof="2026-06-22") is None
+    tushare_feed.clear_cache()
+
+
+def test_yahoo_feed_hk_warm_and_cache(monkeypatch):
+    """The Yahoo HK feed batches the whole basket into ONE yf.download and serves the latest close
+    per symbol from cache (Yahoo's HK symbol == the book's, no code mapping)."""
+    import sys, types
+    import pandas as pd
+    from data_layer import yahoo_feed
+    yahoo_feed.clear_cache()
+    calls = {"n": 0}
+
+    def fake_download(tickers, **kw):
+        calls["n"] += 1
+        idx = pd.to_datetime(["2026-06-18", "2026-06-22"])
+        cols = pd.MultiIndex.from_product([["Close"], list(tickers)])
+        data = {("Close", t): [1.0, {"0700.HK": 433.0, "3988.HK": 5.1}.get(t, 9.0)] for t in tickers}
+        return pd.DataFrame(data, index=idx, columns=cols)
+
+    fake_yf = types.ModuleType("yfinance")
+    fake_yf.download = fake_download
+    monkeypatch.setitem(sys.modules, "yfinance", fake_yf)
+    yahoo_feed.warm(["0700.HK", "3988.HK"])
+    assert yahoo_feed.price_local("0700.HK") == pytest.approx(433.0)   # latest (06-22) close
+    assert yahoo_feed.price_local("3988.HK") == pytest.approx(5.1)
+    assert calls["n"] == 1                                             # one batched call for both names
+    yahoo_feed.clear_cache()
+
+
+def test_live_price_prefers_tushare_else_snapshot(tmp_path, monkeypatch):
+    """A-shares mark to the live Tushare CNY close; HK marks via Yahoo and falls back to the
+    vendored snapshot when Yahoo returns nothing (here: yfinance is stubbed off in tests)."""
+    from data_layer import tushare_feed
+    from portfolio import fx
+    monkeypatch.setattr(fx, "rate_per_usd", lambda cur: {"CNY": 7.0, "HKD": 7.8}.get(cur, 1.0))
+    monkeypatch.setattr(tushare_feed, "price_local",
+                        lambda t, asof=None: 700.0 if t == "600519.SS" else None)
+    # seed a vendored HK snapshot fixture for the fallback path
+    site = tmp_path / "vendor" / "macro" / "site" / "hkstockdata"
+    site.mkdir(parents=True, exist_ok=True)
+    (site / "0700.HK.json").write_text(json.dumps({"tech": {"price": 390.0}}))
+    monkeypatch.setattr(paper_account, "_ROOT", tmp_path, raising=False)
+    assert paper_account._live_price("600519.SS") == pytest.approx(100.0)   # Tushare 700 CNY / 7.0
+    assert paper_account._live_price("0700.HK") == pytest.approx(50.0)      # snapshot 390 HKD / 7.8
+
+
+def test_live_price_hk_prefers_yahoo(monkeypatch):
+    """An HK name marks to the live Yahoo HKD close (converted to USD via portfolio.fx)."""
+    from data_layer import yahoo_feed
+    from portfolio import fx
+    monkeypatch.setattr(fx, "rate_per_usd", lambda cur: {"HKD": 7.8}.get(cur, 1.0))
+    monkeypatch.setattr(yahoo_feed, "price_local", lambda t, asof=None: 433.0 if t == "0700.HK" else None)
+    assert paper_account._live_price("0700.HK") == pytest.approx(433.0 / 7.8)   # live Yahoo 433 HKD / 7.8
+
+
 def test_mark_uses_per_book_benchmark(iso, monkeypatch):
     """A china mark initialises the benchmark shares from FXI (not SPY); spy_nav tracks FXI."""
     monkeypatch.setattr(paper_account, "_current_price", lambda t: {"FXI": 30.0}.get(t))
@@ -199,17 +276,23 @@ def test_submit_book_scales_and_tags_venue(iso):
     res = asyncio.run(china_submit({
         "holdings": [
             {"ticker": "600519.SS", "weight": 0.7, "rationale": "moat"},
-            {"ticker": "0700.HK", "weight": 0.7, "rationale": "platform"},
-            {"ticker": "BABA", "weight": 0.2, "rationale": ""},      # dropped: no rationale
+            {"ticker": "300750.SZ", "weight": 0.7, "rationale": "battery leader"},
+            {"ticker": "0700.HK", "weight": 0.3, "rationale": "off-venue HK"},   # REJECTED: A-share book only
+            {"ticker": "BABA", "weight": 0.2, "rationale": ""},                  # dropped: no rationale
         ],
-        "summary": "all-China barbell",
+        "summary": "A-share barbell",
     }))
     from brain import china_mcp
     sub = china_mcp.read_submission()
-    assert {h["ticker"] for h in sub["holdings"]} == {"600519.SS", "0700.HK"}
+    # only the two A-shares survive — HK is off-venue, BABA has no rationale
+    assert {h["ticker"] for h in sub["holdings"]} == {"600519.SS", "300750.SZ"}
+    # gross 1.4 > 1 → scaled back to no-leverage (1.0)
     assert sub["scaled_to_no_leverage"] is True and sub["gross"] == pytest.approx(1.0)
     venues = {h["ticker"]: h["venue"] for h in sub["holdings"]}
-    assert venues["600519.SS"] == "A-share" and venues["0700.HK"] == "HK"
+    assert venues["600519.SS"] == "A-share" and venues["300750.SZ"] == "A-share"
+    # the off-venue name is reported as rejected in the tool result
+    note = res["content"][0]["text"]
+    assert "0700.HK" in note and "REJECTED" in note
 
 
 def test_get_quote_reports_cny_and_venue(iso, monkeypatch):
@@ -222,7 +305,8 @@ def test_get_quote_reports_cny_and_venue(iso, monkeypatch):
     assert payload["venue"] == "HK" and payload["currency"] == "HKD"
     assert payload["priceable"] is True
     assert payload["price_local"] == pytest.approx(390.0)         # 50 USD * 7.8 = native HKD
-    assert payload["price_cny"] == pytest.approx(350.0)           # 50 USD * 7.0 = CNY the book pays
+    assert payload["base_currency"] == "CNY"
+    assert payload["price_base"] == pytest.approx(350.0)          # 50 USD * 7.0 = CNY the book marks at
     miss = json.loads(asyncio.run(china_mcp.get_quote.handler({"ticker": "9999.HK"}))["content"][0]["text"])
     assert miss["priceable"] is False
 
@@ -241,9 +325,9 @@ def test_run_china_offline_inaugural(iso, monkeypatch):
     assert latest["benchmark"] == "FXI" and latest["currency"] == "CNY"
 
 
-def test_run_china_executes_multivenue_submission(iso, monkeypatch):
-    # an A-share, an HK name, an ADR (all priceable, in USD) + an unpriceable HK name
-    prices = {"600519.SS": 100.0, "0700.HK": 50.0, "BABA": 105.0, "FXI": 30.0}
+def test_run_china_rejects_offvenue_and_executes_a_shares(iso, monkeypatch):
+    # two A-shares (one priceable, one not) + an off-venue HK name the A-share book must reject
+    prices = {"600519.SS": 100.0, "300750.SZ": 200.0, "FXI": 30.0}   # 688981.SS deliberately unpriceable
     monkeypatch.setattr(paper_account, "_current_price", lambda t: prices.get(t))
     from bot import china
     from brain import china_mcp
@@ -253,50 +337,58 @@ def test_run_china_executes_multivenue_submission(iso, monkeypatch):
         china_mcp.submission_path().write_text(json.dumps({
             "holdings": [
                 {"ticker": "600519.SS", "weight": 0.4, "rationale": "A-share moat", "venue": "A-share"},
-                {"ticker": "0700.HK", "weight": 0.3, "rationale": "HK platform", "venue": "HK"},
-                {"ticker": "BABA", "weight": 0.2, "rationale": "ADR value", "venue": "ADR"},
-                {"ticker": "9999.HK", "weight": 0.1, "rationale": "unpriceable", "venue": "HK"},
+                {"ticker": "300750.SZ", "weight": 0.3, "rationale": "battery leader", "venue": "A-share"},
+                {"ticker": "0700.HK", "weight": 0.2, "rationale": "off-venue HK", "venue": "HK"},
+                {"ticker": "688981.SS", "weight": 0.1, "rationale": "unpriceable A-share", "venue": "A-share"},
             ],
-            "summary": "all-China barbell", "gross": 1.0,
+            "summary": "A-share barbell", "gross": 1.0,
         }))
         return {"ok": True, "text": "x", "cost_usd": 0.0, "model": "claude-opus-4-8"}
 
     monkeypatch.setattr(china, "_run_brain", fake_brain)
     out = china.run_china(asof="2026-06-22", armed=True)
     assert out["decided"] is True
-    assert "9999.HK" in out["skipped_unpriceable"]
+    # the HK name is rejected in the trusted layer (off-venue) — NOT merely unpriceable
+    assert "0700.HK" in out.get("rejected_offvenue", [])
+    assert "0700.HK" not in out["skipped_unpriceable"]
+    # the A-share with no live price is honestly skipped
+    assert "688981.SS" in out["skipped_unpriceable"]
     sides = {(t["ticker"], t["side"]) for t in out["executed"]}
-    assert {("600519.SS", "buy"), ("0700.HK", "buy"), ("BABA", "buy")} <= sides
-    # NAV stays ~$1M (USD), invested across the three priceable venues
+    assert {("600519.SS", "buy"), ("300750.SZ", "buy")} <= sides
+    assert not any(tk == "0700.HK" for tk, _ in sides)          # off-venue never entered the book
+    # NAV stays ~¥1M, invested across the two priceable A-shares
     assert out["nav"] == pytest.approx(1_000_000.0, rel=1e-6)
     decs = china.load_decisions()
-    assert decs and decs[0]["summary"] == "all-China barbell"
+    assert decs and decs[0]["summary"] == "A-share barbell"
     latest = json.loads((registry.data_dir("china") / "latest.json").read_text())
     venues = {p["ticker"]: p.get("venue") for p in latest["positions"]}
-    assert venues.get("600519.SS") == "A-share" and venues.get("0700.HK") == "HK"
+    assert venues.get("600519.SS") == "A-share" and venues.get("300750.SZ") == "A-share"
+    assert "0700.HK" not in venues
 
 
 def test_run_china_marks_in_cny(iso, monkeypatch):
-    """The book is denominated in CNY: a USD ADR is booked at usd * CNY-per-USD, NAV stays ¥1M."""
+    """The book is denominated in CNY: the USD-normalised shared-store mark is booked at
+    usd * CNY-per-USD, NAV stays ¥1M. (A-shares quote CNY natively, but the shared price store
+    returns USD — so the book still runs every mark through the usd→CNY conversion.)"""
     from bot import china
     from brain import china_mcp
     from portfolio import fx
     monkeypatch.setattr(fx, "rate_per_usd", lambda cur: {"CNY": 7.0, "HKD": 7.8}.get(cur, 1.0))
-    monkeypatch.setattr(paper_account, "_current_price", lambda t: {"BABA": 100.0, "FXI": 30.0}.get(t))  # USD
+    monkeypatch.setattr(paper_account, "_current_price", lambda t: {"600519.SS": 100.0, "FXI": 30.0}.get(t))  # USD
 
     def fake_brain(asof, inaugural):
         china_mcp.submission_path().parent.mkdir(parents=True, exist_ok=True)
         china_mcp.submission_path().write_text(json.dumps({
-            "holdings": [{"ticker": "BABA", "weight": 0.5, "rationale": "adr"}],
-            "summary": "adr", "gross": 0.5}))
+            "holdings": [{"ticker": "600519.SS", "weight": 0.5, "rationale": "a-share moat"}],
+            "summary": "a-share core", "gross": 0.5}))
         return {"ok": True, "model": "m"}
 
     monkeypatch.setattr(china, "_run_brain", fake_brain)
     out = china.run_china(asof="2026-06-22", armed=True)
     latest = json.loads((registry.data_dir("china") / "latest.json").read_text())
     assert latest["currency"] == "CNY"
-    baba = next(p for p in latest["positions"] if p["ticker"] == "BABA")
-    assert baba["cost_basis"] == pytest.approx(700.0)            # USD 100 * 7.0 = CNY 700
+    pos = next(p for p in latest["positions"] if p["ticker"] == "600519.SS")
+    assert pos["cost_basis"] == pytest.approx(700.0)            # USD 100 * 7.0 = CNY 700
     assert out["nav"] == pytest.approx(1_000_000.0, rel=1e-6)    # ¥1M, self-consistent
 
 
@@ -314,12 +406,36 @@ def test_display_name_by_venue(monkeypatch):
     assert china_intake.display_name("9999.HK") == "9999.HK"             # no name → ticker fallback
 
 
+def test_display_name_falls_back_to_board(monkeypatch):
+    """A freshly surfaced name with NO per-name `chinastockdata/<T>.json` snapshot still resolves via
+    the desk boards (every buy-board / alpha-leader row carries a `name`). Regression for 603301
+    Zhende Medical showing as a bare '603301.SS' on the book after the 2026-06-22 feed-recovery rerun."""
+    from brain import china_intake
+    china_intake.clear_name_cache()
+
+    def fake_read(rel):
+        # no per-name snapshot for either name; the name lives only on the boards
+        if rel == "factordata/china_standouts.json":
+            return {"buy": [{"ticker": "603301.SS", "name": "Zhende Medical Co., Ltd. / 振德医疗"}]}
+        if rel == "factordata/china_alpha.json":
+            return {"top": [{"ticker": "603301.SS", "name": "Zhende Medical Co., Ltd. / 振德医疗"}]}
+        if rel == "factordata/hk_standouts.json":
+            return {"buy": [{"ticker": "9999.HK", "name": "Acme Holdings"}]}
+        return None
+
+    monkeypatch.setattr(china_intake, "_read", fake_read)
+    assert china_intake.display_name("603301.SS") == "振德医疗"      # A-share → 中文 half from the board
+    assert china_intake.display_name("9999.HK") == "Acme Holdings"   # HK → English from the board
+    assert china_intake.display_name("000001.SZ") == "000001.SZ"     # on no board → ticker fallback
+    china_intake.clear_name_cache()
+
+
 def test_run_china_attaches_names_and_delegates_translation(iso, monkeypatch):
     """Every holding carries a display name, and the report is auto-translated via the Haiku tier."""
     from bot import china
     from brain import china_intake, china_mcp, translate
-    monkeypatch.setattr(paper_account, "_current_price", lambda t: {"0700.HK": 50.0, "FXI": 30.0}.get(t))
-    monkeypatch.setattr(china_intake, "display_name", lambda t: {"0700.HK": "Tencent"}.get(t, t))
+    monkeypatch.setattr(paper_account, "_current_price", lambda t: {"600519.SS": 100.0, "FXI": 30.0}.get(t))
+    monkeypatch.setattr(china_intake, "display_name", lambda t: {"600519.SS": "贵州茅台"}.get(t, t))
     captured: dict = {}
     monkeypatch.setattr(translate, "translate_and_cache",
                         lambda texts: (captured.update(texts=list(texts)), {})[1])
@@ -327,18 +443,47 @@ def test_run_china_attaches_names_and_delegates_translation(iso, monkeypatch):
     def fake_brain(asof, inaugural):
         china_mcp.submission_path().parent.mkdir(parents=True, exist_ok=True)
         china_mcp.submission_path().write_text(json.dumps({
-            "holdings": [{"ticker": "0700.HK", "weight": 0.5, "rationale": "platform leader"}],
-            "summary": "hk barbell", "gross": 0.5}))
+            "holdings": [{"ticker": "600519.SS", "weight": 0.5, "rationale": "A-share moat"}],
+            "summary": "a-share core", "gross": 0.5}))
         return {"ok": True, "text": "closing note", "model": "m"}
 
     monkeypatch.setattr(china, "_run_brain", fake_brain)
     out = china.run_china(asof="2026-06-22", armed=True)
     assert out.get("translated") is True
     latest = json.loads((registry.data_dir("china") / "latest.json").read_text())
-    pos = next(p for p in latest["positions"] if p["ticker"] == "0700.HK")
-    assert pos["name"] == "Tencent"                                      # name on the position
+    pos = next(p for p in latest["positions"] if p["ticker"] == "600519.SS")
+    assert pos["name"] == "贵州茅台"                                      # name on the position
     # the Haiku translation got the summary + rationale + the Brain's closing note
-    assert {"hk barbell", "platform leader", "closing note"} <= set(captured.get("texts") or [])
+    assert {"a-share core", "A-share moat", "closing note"} <= set(captured.get("texts") or [])
+
+
+def test_api_trades_attaches_region_display_names(iso, monkeypatch):
+    """Trade History rows for the venue books (China A-shares, HK) carry the same display
+    name the Positions panel shows — A-share Chinese, HK English — so the blotter isn't just
+    opaque numeric / HK codes. US books stay code-only (no venues → no attachment)."""
+    from app import web
+    from brain import china_intake
+    monkeypatch.setattr(china_intake, "display_name",
+                        lambda t: {"600519.SS": "贵州茅台", "0700.HK": "Tencent"}.get(t, t))
+
+    for pid, ticker, want in (("china", "600519.SS", "贵州茅台"), ("hk", "0700.HK", "Tencent")):
+        cdir = registry.data_dir(pid)
+        cdir.mkdir(parents=True, exist_ok=True)
+        (cdir / "fills.jsonl").write_text(
+            json.dumps({"date": "2026-06-20", "ticker": ticker, "side": "buy",
+                        "shares": 10, "price": 100.0, "value": 1000.0}) + "\n")
+        data = json.loads(web.api_trades(portfolio=pid).body)
+        assert data["history"], f"{pid}: expected a blotter row"
+        assert data["history"][0]["name"] == want                       # name on the blotter row
+
+    # a US book has no venue restriction → no name attachment (codes are self-describing).
+    # flagship's blotter resolves through the (conftest-isolated) legacy _FILLS_PATH.
+    import portfolio.trade_history as th
+    th._FILLS_PATH.write_text(
+        json.dumps({"date": "2026-06-20", "ticker": "AAPL", "side": "buy",
+                    "shares": 10, "price": 100.0, "value": 1000.0}) + "\n")
+    us = json.loads(web.api_trades(portfolio="flagship").body)
+    assert us["history"] and "name" not in us["history"][0]
 
 
 # --------------------------------------------------------------------------- #
@@ -355,26 +500,26 @@ def test_run_china_carries_unpriceable_held_position(iso, monkeypatch):
         china_mcp.submission_path().write_text(json.dumps({"holdings": holdings, "summary": summary}))
 
     book = [{"ticker": "600519.SS", "weight": 0.4, "rationale": "a"},
-            {"ticker": "0700.HK", "weight": 0.3, "rationale": "b"},
-            {"ticker": "BABA", "weight": 0.2, "rationale": "c"}]
+            {"ticker": "300750.SZ", "weight": 0.3, "rationale": "b"},
+            {"ticker": "601318.SS", "weight": 0.2, "rationale": "c"}]
     # Day 1 — everything priceable, book gets built
     monkeypatch.setattr(paper_account, "_current_price",
-                        lambda t: {"600519.SS": 100.0, "0700.HK": 50.0, "BABA": 105.0, "FXI": 30.0}.get(t))
+                        lambda t: {"600519.SS": 100.0, "300750.SZ": 50.0, "601318.SS": 105.0, "FXI": 30.0}.get(t))
     monkeypatch.setattr(china, "_run_brain",
                         lambda a, i: (_submit(book, "init"), {"ok": True, "model": "m"})[1])
     china.run_china(asof="2026-06-22", armed=True)
-    assert "0700.HK" in json.loads((registry.data_dir("china") / "account.json").read_text())["positions"]
+    assert "300750.SZ" in json.loads((registry.data_dir("china") / "account.json").read_text())["positions"]
 
-    # Day 2 — 0700.HK is UNPRICEABLE this run but STILL in the submission → must be carried
+    # Day 2 — 300750.SZ is UNPRICEABLE this run but STILL in the submission → must be carried
     monkeypatch.setattr(paper_account, "_current_price",
-                        lambda t: {"600519.SS": 100.0, "BABA": 105.0, "FXI": 30.0}.get(t))   # no 0700.HK
+                        lambda t: {"600519.SS": 100.0, "601318.SS": 105.0, "FXI": 30.0}.get(t))   # no 300750.SZ
     monkeypatch.setattr(china, "_run_brain",
                         lambda a, i: (_submit(book, "hold"), {"ok": True, "model": "m"})[1])
     out = china.run_china(asof="2026-06-23", armed=True)
     acct = json.loads((registry.data_dir("china") / "account.json").read_text())
-    assert "0700.HK" in acct["positions"], "unpriceable-but-resubmitted name was wrongly liquidated"
-    assert "0700.HK" in out["skipped_unpriceable"]
-    assert not any(t["ticker"] == "0700.HK" and t["side"] == "sell" for t in out["executed"])
+    assert "300750.SZ" in acct["positions"], "unpriceable-but-resubmitted name was wrongly liquidated"
+    assert "300750.SZ" in out["skipped_unpriceable"]
+    assert not any(t["ticker"] == "300750.SZ" and t["side"] == "sell" for t in out["executed"])
 
 
 def test_china_research_tools_return_valid_json_at_default():
@@ -448,6 +593,110 @@ def test_intake_entry_gate_demotes_avoid(monkeypatch):
     assert by["BBB.SS"]["lean"] == 0                            # blocked entry → no buy lean
     assert by["AAA.SS"]["score"] > by["BBB.SS"]["score"]        # clean setup outranks it
     assert r["candidates"][0]["ticker"] == "AAA.SS"
+
+
+def test_tushare_feed_healthy_tristate(monkeypatch):
+    """The A-share feed-health probe is TRI-STATE: up (bulk market non-empty), down (token present
+    but every walked-back day empty → an outage), None (no token → live feed not deployed; the
+    book runs on the snapshot by design, not an outage — and it must NOT hit the network)."""
+    from data_layer import tushare_feed
+    tushare_feed.clear_cache()
+    monkeypatch.setattr(tushare_feed, "_token", lambda: "tok")
+    # a non-empty whole-market response for the trade date → feed is UP
+    monkeypatch.setattr(tushare_feed, "_call", lambda api, params, fields:
+                        {"items": [["600519.SH", 1500.0]]} if params.get("trade_date") == "20260622"
+                        else {"items": []})
+    assert tushare_feed.feed_healthy("2026-06-22") is True
+    # token present but every bulk call comes back empty → OUTAGE (False), never a per-name gap
+    tushare_feed.clear_cache()
+    monkeypatch.setattr(tushare_feed, "_call", lambda api, params, fields: {"items": []})
+    assert tushare_feed.feed_healthy("2026-06-22") is False
+    # no token → not deployed (None) and the probe must short-circuit WITHOUT calling the API
+    tushare_feed.clear_cache()
+    monkeypatch.setattr(tushare_feed, "_token", lambda: None)
+    monkeypatch.setattr(tushare_feed, "_call",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not call _call")))
+    assert tushare_feed.feed_healthy("2026-06-22") is None
+    tushare_feed.clear_cache()
+
+
+def test_feed_health_status_dispatch(monkeypatch):
+    """The venue dispatcher maps A-share→tushare, HK→yahoo, and treats an unrestricted (US) book
+    as 'snapshot' (no fresh-feed asymmetry to gate)."""
+    from data_layer import feed_health, tushare_feed, yahoo_feed
+    monkeypatch.setattr(tushare_feed, "feed_healthy", lambda asof=None: False)
+    monkeypatch.setattr(yahoo_feed, "feed_healthy", lambda *a, **k: True)
+    assert feed_health.status("A-share", "2026-06-22") == {
+        "venue": "A-share", "feed": "tushare", "status": "down", "asof": "2026-06-22"}
+    assert feed_health.status("HK")["status"] == "up"
+    assert feed_health.status(None)["status"] == "snapshot"       # US / unrestricted → no gate
+    assert feed_health.is_down("A-share") is True and feed_health.is_down("HK") is False
+
+
+def test_run_china_aborts_on_tushare_feed_outage(iso, monkeypatch):
+    """CRITICAL guard: when the live A-share feed (Tushare ``daily``) is DOWN — a token is
+    configured but the bulk call returns an empty market — the turn must ABORT rather than let the
+    Brain transact on an ASYMMETRIC priceable map (held names price off the stale snapshot while
+    fresh candidates return priceable=false). Regression for the 2026-06-22 corruption where the
+    Brain parked ~48% cash citing a (false) 'no investable candidates' constraint."""
+    from bot import china
+    from brain import china_mcp
+    from data_layer import tushare_feed
+
+    tushare_feed.clear_cache()
+    monkeypatch.setattr(tushare_feed, "_token", lambda: "tok")
+    monkeypatch.setattr(tushare_feed, "_call", lambda api, params, fields: {"items": []})  # OUTAGE
+    monkeypatch.setattr(paper_account, "_current_price", lambda t: {"FXI": 30.0}.get(t))
+
+    ran = {"brain": False}
+
+    def fake_brain(asof, inaugural):
+        ran["brain"] = True                                       # must NOT be reached on an outage
+        china_mcp.submission_path().parent.mkdir(parents=True, exist_ok=True)
+        china_mcp.submission_path().write_text(json.dumps({
+            "holdings": [{"ticker": "600519.SS", "weight": 0.5, "rationale": "should not run"}],
+            "summary": "should not run"}))
+        return {"ok": True, "model": "m"}
+
+    monkeypatch.setattr(china, "_run_brain", fake_brain)
+    out = china.run_china(asof="2026-06-22", armed=True)
+
+    assert out["feed_health"]["status"] == "down" and out["feed_health"]["feed"] == "tushare"
+    assert out.get("feed_aborted") is True
+    assert ran["brain"] is False, "the Brain must not run while the A-share feed is down"
+    assert out["decided"] is False
+    assert not out["executed"]                                    # nothing traded
+    # the outage is recorded in the decision log so the dashboard can show WHY nothing happened
+    decs = china.load_decisions()
+    assert decs and decs[0]["feed_health"]["status"] == "down"
+    tushare_feed.clear_cache()
+
+
+def test_run_china_force_overrides_feed_gate(iso, monkeypatch):
+    """``force=True`` is the operator escape hatch: it bypasses the feed gate and runs the turn even
+    when the A-share feed is down (e.g. to mark/carry on a known-degraded feed)."""
+    from bot import china
+    from brain import china_mcp
+    from data_layer import tushare_feed
+    tushare_feed.clear_cache()
+    monkeypatch.setattr(tushare_feed, "_token", lambda: "tok")
+    monkeypatch.setattr(tushare_feed, "_call", lambda api, params, fields: {"items": []})  # down
+    monkeypatch.setattr(paper_account, "_current_price",
+                        lambda t: {"600519.SS": 100.0, "FXI": 30.0}.get(t))
+
+    def fake_brain(asof, inaugural):
+        china_mcp.submission_path().parent.mkdir(parents=True, exist_ok=True)
+        china_mcp.submission_path().write_text(json.dumps({
+            "holdings": [{"ticker": "600519.SS", "weight": 0.5, "rationale": "moat"}],
+            "summary": "forced"}))
+        return {"ok": True, "model": "m"}
+
+    monkeypatch.setattr(china, "_run_brain", fake_brain)
+    out = china.run_china(asof="2026-06-22", armed=True, force=True)
+    assert out["feed_health"]["status"] == "down"
+    assert out.get("feed_aborted") is None                        # gate bypassed
+    assert out["decided"] is True
+    tushare_feed.clear_cache()
 
 
 def test_china_calendar_next_open_lunch_break():

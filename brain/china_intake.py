@@ -270,6 +270,46 @@ def _stock_name(sub: str, ticker: str) -> str | None:
     return None
 
 
+_BOARD_NAMES: dict | None = None
+
+
+def _board_names() -> dict:
+    """``{TICKER: 'English / 中文'}`` harvested from the desk boards — the fallback name source for a
+    name NOT in the per-name snapshot. Only ~839 names get a ``chinastockdata/<T>.json`` file, but
+    EVERY buy-board / alpha-leader row carries a ``name``, so a freshly surfaced candidate (e.g. a
+    new intake pick) still resolves instead of showing a bare stock code. Memoized per process
+    (clear via ``clear_name_cache``); degrade-never-raise."""
+    global _BOARD_NAMES
+    if _BOARD_NAMES is not None:
+        return _BOARD_NAMES
+    names: dict[str, str] = {}
+    for rel, keys in (("factordata/china_standouts.json", ("buy", "standouts")),
+                      ("factordata/china_alpha.json", ("top",)),
+                      ("factordata/hk_standouts.json", ("buy", "standouts"))):
+        raw = _read(rel)
+        if not isinstance(raw, dict):
+            continue
+        rows = next((raw[k] for k in keys if isinstance(raw.get(k), list)), [])
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            tk, nm = _u(r.get("ticker")), r.get("name")
+            if tk and tk not in names and isinstance(nm, str) and nm.strip():
+                names[tk] = nm.strip()
+    _BOARD_NAMES = names
+    return names
+
+
+def _board_name(ticker: str) -> str | None:
+    return _board_names().get(_u(ticker))
+
+
+def clear_name_cache() -> None:
+    """Drop the memoized board-name map (tests / a forced refresh after a board rebuild)."""
+    global _BOARD_NAMES
+    _BOARD_NAMES = None
+
+
 def display_name(ticker: str) -> str:
     """A human display name for a holding, by venue:
       * A-shares (`*.SS`/`*.SZ`) → the **Chinese** name (the macro `name` is "English / 中文";
@@ -280,12 +320,12 @@ def display_name(ticker: str) -> str:
     if not t:
         return ""
     if t.endswith(".SS") or t.endswith(".SZ"):
-        raw = _stock_name("chinastockdata", t)
+        raw = _stock_name("chinastockdata", t) or _board_name(t)   # snapshot first, then the boards
         if raw and " / " in raw:
             return raw.split(" / ", 1)[1].strip() or t   # Chinese half
         return raw or t
     sub = "hkstockdata" if t.endswith(".HK") else "stockdata"
-    raw = _stock_name(sub, t)
+    raw = _stock_name(sub, t) or _board_name(t)
     if raw and " / " in raw:
         return raw.split(" / ", 1)[0].strip() or t       # English half
     return raw or t
