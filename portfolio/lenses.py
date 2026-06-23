@@ -611,13 +611,31 @@ def _name_rows(t: str) -> list[dict]:
     else:
         rows.append(_row("rate_inflation", None, "missing", None))
 
-    # conviction composite (the net per-name read)
+    # conviction composite (the net per-name read). VERDICT-GATED (2026-06-22): the analyzer's
+    # `band`/`score` are a within-board PERCENTILE RANK, so a top-ranked mega-cap reads band='high'
+    # even when the analyzer's OWN decision is "wait/avoid" — cycle/extension blocked, size bucket
+    # 'avoid', 0% allocation (e.g. NVDA "Strong name · wrong tape — wait for a base"). Casting that
+    # RANK as a flat BULL vote let a name the analyzer itself refuses leak a bull vote into the
+    # confluence gate. So a high/strong band only votes BULL when the analyzer is NOT blocking the
+    # buy; if it blocks (avoid bucket / cycle-blocked / entry-blocked / 0% size), the rank is
+    # downgraded to NEUTRAL — the name ranks well but the tape doesn't confirm, so it casts no vote.
     band = _g(d, "conviction.band")
     sz = _g(d, "conviction.size.pct")
+    cv_bucket = _g(d, "conviction.size.bucket")
+    cv_blocked = (bool(_g(d, "conviction.cycle_blocked"))
+                  or cv_bucket == "avoid"
+                  or bool(_g(d, "conviction.axes.entry.blocked"))
+                  or (sz is not None and sz <= 0))
+    if band in ("strong", "high"):
+        dirc = "neutral" if cv_blocked else "bull"
+    elif band == "avoid":
+        dirc = "bear"
+    else:
+        dirc = "neutral"
     rows.append(_row("conviction", {"band": band, "score": _g(d, "conviction.score"), "size_pct": sz,
-                                    "verdict": _g(d, "conviction.verdict"),
+                                    "verdict": _g(d, "conviction.verdict"), "blocked": cv_blocked,
                                     "cycle_blocked": bool(_g(d, "conviction.cycle_blocked"))},
-                     "partial", "bull" if band in ("strong", "high") else "bear" if band == "avoid" else "neutral"))
+                     "partial", dirc))
 
     # alt-data political/insider/contract flow (context)
     if ad:

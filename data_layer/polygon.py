@@ -134,6 +134,103 @@ def ticker_details(ticker: str) -> Optional[dict]:
     return out
 
 
+_search_cache: dict[str, tuple[float, list]] = {}
+
+
+def search_tickers(query: str, limit: int = 12) -> list[dict]:
+    """Live US-stock search via Polygon /v3/reference/tickers (`search` matches ticker OR
+    name). Returns [{ticker, name, type, exchange}], active common stocks/ETFs first.
+    Best-effort: [] when unkeyed / offline. Cached `_TTL` seconds per (query, limit)."""
+    import os
+    q = (query or "").strip()
+    if not q:
+        return []
+    ckey = f"{q.lower()}|{limit}"
+    now = time.time()
+    hit = _search_cache.get(ckey)
+    if hit and (now - hit[0]) < _TTL:
+        return hit[1]
+    out: list[dict] = []
+    try:
+        import requests
+        key = (os.environ.get("POLYGON_API_KEY") or os.environ.get("MASSIVE_API_KEY") or "").strip()
+        if key:
+            r = requests.get(
+                "https://api.polygon.io/v3/reference/tickers",
+                params={"search": q, "market": "stocks", "active": "true",
+                        "limit": max(1, min(int(limit), 50)), "apiKey": key},
+                timeout=6)
+            if r.ok:
+                for res in (r.json() or {}).get("results") or []:
+                    tk = (res.get("ticker") or "").upper()
+                    if not tk:
+                        continue
+                    out.append({
+                        "ticker": tk,
+                        "name": res.get("name") or "",
+                        "type": res.get("type") or "",
+                        "exchange": res.get("primary_exchange") or "",
+                    })
+    except Exception:  # noqa: BLE001 — search is best-effort, never fatal
+        out = []
+    _search_cache[ckey] = (now, out)
+    return out
+
+
+_snapshot_cache: dict[str, tuple[float, Optional[dict]]] = {}
+
+
+def _snapshot(ticker: str) -> Optional[dict]:
+    """Raw Polygon snapshot `ticker` object for one symbol (cached `_TTL` s).
+    None when unkeyed / offline / paywalled."""
+    import os
+    t = (ticker or "").upper().strip()
+    if not t:
+        return None
+    now = time.time()
+    hit = _snapshot_cache.get(t)
+    if hit and (now - hit[0]) < _TTL:
+        return hit[1]
+    out = None
+    try:
+        import requests
+        key = (os.environ.get("POLYGON_API_KEY") or os.environ.get("MASSIVE_API_KEY") or "").strip()
+        if key:
+            r = requests.get(
+                f"https://api.polygon.io/v2/snapshot/locale/us/markets/stocks/tickers/{t}",
+                params={"apiKey": key}, timeout=6)
+            if r.ok:
+                out = (r.json() or {}).get("ticker") or None
+    except Exception:  # noqa: BLE001
+        out = None
+    _snapshot_cache[t] = (now, out)
+    return out
+
+
+def day_open(ticker: str) -> Optional[float]:
+    """Today's regular-session OPEN price (`snapshot.day.o`) — used to fill orders queued
+    while the market was closed at the *open* of the session they release into. None pre-open
+    / unkeyed so callers fall back to last price."""
+    snap = _snapshot(ticker) or {}
+    o = (snap.get("day") or {}).get("o")
+    return float(o) if (o and float(o) > 0) else None
+
+
+def snapshot_price(ticker: str) -> Optional[float]:
+    """Best available price from the Polygon snapshot, robust on DELAYED / EOD-tier keys
+    (where `lastTrade` and the intraday `day` block are empty outside market hours): tries
+    last trade → last-minute close → today's close → prior-day close. Paper marks are
+    EOD-grade, so prior-day close is an honest fallback when nothing live is published."""
+    snap = _snapshot(ticker)
+    if not snap:
+        return None
+    for grp, fld in (("lastTrade", "p"), ("min", "c"), ("day", "c"), ("prevDay", "c")):
+        v = (snap.get(grp) or {}).get(fld)
+        if v and float(v) > 0:
+            return float(v)
+    return None
+
+
 def quote(ticker: str) -> Optional[float]:
     """Live (delayed) last/close for one ticker, or None. Cached `_TTL` seconds."""
     t = (ticker or "").upper().strip()

@@ -63,6 +63,8 @@ def run_daily(asof: str | None = None, *, force: bool = False, armed: bool = Tru
                 _translate.translate_book(json.loads(latest_p.read_text(encoding="utf-8")))
             _translate.translate_notes(_root / "data" / "research" / "notes")
             _translate.translate_papers(_root / "data" / "research" / "papers")
+            _translate.translate_decisions()   # Daily Decision Log write-ups (summary / rationale / brain_text)
+            _translate.translate_runs()        # Brain Activity log titles + summaries (the run write-ups)
             out["translate"] = {"ok": True}
         except Exception as e:
             out["translate"] = {"error": str(e)[:200]}

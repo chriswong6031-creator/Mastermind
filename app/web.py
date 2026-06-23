@@ -10,6 +10,7 @@ from typing import Any
 
 from fastapi import APIRouter
 from fastapi.responses import FileResponse, JSONResponse, Response
+from pydantic import BaseModel
 
 # Lazy import so the module loads even if brain/ isn't fully initialised yet
 def _cached_zh(text: str):
@@ -141,6 +142,12 @@ def dashboard() -> FileResponse:
 @router.get("/research", include_in_schema=False)
 def research_page() -> FileResponse:
     """The Research page — same SPA; the client opens the Research view from this path."""
+    return FileResponse(_STATIC / "index.html", media_type="text/html", headers=_NOCACHE)
+
+
+@router.get("/self", include_in_schema=False)
+def self_directed_page() -> FileResponse:
+    """The Self-Directed book — same SPA; the client opens that view from this path."""
     return FileResponse(_STATIC / "index.html", media_type="text/html", headers=_NOCACHE)
 
 
@@ -424,6 +431,24 @@ def api_portfolios() -> JSONResponse:
         pid = meta["id"]
         status: dict[str, Any] = {"nav": None, "total_return_pct": None, "vs_spy_pct": None,
                                   "day_change_pct": None, "holdings": 0, "cash_pct": None, "as_of": None}
+        # the self-directed book has its own engine (not paper_account) — read its NAV/return directly
+        if pid == "self_directed":
+            try:
+                from portfolio import self_directed
+                bk = self_directed.book()
+                alloc = bk.get("allocation") or {}
+                status.update({
+                    "nav": bk.get("nav"),
+                    "total_return_pct": alloc.get("total_return_pct"),
+                    "cash_pct": round((alloc.get("cash_pct") or 0) * 100, 1),
+                    "holdings": alloc.get("n_positions") or 0,
+                    "as_of": bk.get("inception_date"),
+                })
+            except Exception:
+                pass
+            out.append({**{k: meta.get(k) for k in ("id", "name", "tagline", "kind", "manager", "benchmark")},
+                        "status": status})
+            continue
         try:
             perf = paper_account.performance(portfolio_id=pid)
             nav = perf.get("current_nav") or 0
@@ -455,12 +480,47 @@ def api_decisions(portfolio: str = "autonomous", limit: int = 60) -> JSONRespons
     """The autonomous Brain's daily decision log — what it bought / sold / held each day, and
     the rationale for every holding. Empty for the gated flagship (it journals via research papers)."""
     try:
-        if portfolio != "autonomous":
-            return JSONResponse({"decisions": [], "note": "decision log is autonomous-only"})
-        from bot import autonomous
-        return JSONResponse({"decisions": autonomous.load_decisions(limit)})
+        if portfolio == "autonomous":
+            from bot import autonomous as _src
+        elif portfolio == "heavyweight":
+            from bot import heavyweight as _src
+        elif portfolio == "china":
+            from bot import china as _src
+        else:
+            return JSONResponse({"decisions": [], "note": "decision log is Brain-book-only (autonomous/heavyweight/china)"})
+        decisions = _src.load_decisions(limit)
+        # Attach cached Chinese for the AI write-ups so the Daily Decision Log renders in
+        # Chinese when zh is toggled. cached_zh() is a pure cache lookup (None -> client
+        # falls back to English) — warmed by brain.translate.translate_decisions() on the
+        # daily run; English never regresses if the cache is cold.
+        for d in decisions:
+            for fld in ("summary", "sold_note", "brain_text"):
+                v = d.get(fld)
+                if v:
+                    zh = _cached_zh(v)
+                    if zh:
+                        d[fld + "_zh"] = zh
+            for h in (d.get("holdings") or []):
+                r = h.get("rationale")
+                if r:
+                    zh = _cached_zh(r)
+                    if zh:
+                        h["rationale_zh"] = zh
+        return JSONResponse({"decisions": decisions})
     except Exception as exc:  # noqa: BLE001
         return JSONResponse({"decisions": [], "error": str(exc)})
+
+
+@router.get("/api/etf/outcomes")
+def api_etf_outcomes() -> JSONResponse:
+    """The ETF book's accountability scorecard — every past pick forward-graded vs SPY (21d
+    rel-return), with hit-rate, per-conviction calibration, weight-IC, and the book-edge (Newey-West
+    t over independent windows). 'building' until enough resolves. Backs the ETF track-record panel."""
+    try:
+        from portfolio import etf_outcomes
+        return JSONResponse(etf_outcomes.summary())
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"scorecard": {"status": "building"}, "error": str(exc)})
 
 
 @router.get("/api/research")
@@ -627,6 +687,110 @@ def api_trades(portfolio: str = "flagship") -> JSONResponse:
                              "pending": [], "market": {}, "error": str(exc)})
 
 
+# ---------------------------------------------------------------------------
+# Self-Directed book (the third portfolio) — user-driven manual paper trading.
+# Read-only marks come from the same delayed Polygon feed as the rest of the dashboard;
+# orders/theses are written by the user. PAPER ONLY — long-only, no leverage.
+# ---------------------------------------------------------------------------
+
+class _OrderReq(BaseModel):
+    ticker: str
+    side: str                          # "buy" | "sell"
+    shares: float | None = None        # share-sized order
+    notional: float | None = None      # OR dollar-sized order ($ → shares at the fill price)
+
+
+class _ThesisReq(BaseModel):
+    ticker: str
+    note: str = ""
+
+
+@router.get("/api/self_directed")
+def api_self_directed() -> JSONResponse:
+    """The Self-Directed book: positions (live marks + weights), allocation scorecard,
+    market state, pending orders. Settles any due pending orders on read."""
+    try:
+        from portfolio import self_directed
+        # one batched live-price fetch for all held + pending names, then build the book
+        held = list((self_directed._load_account().get("positions") or {}).keys())
+        pend = [o.get("ticker") for o in self_directed._load_pending()]
+        prices = _live_prices(sorted({*held, *[t for t in pend if t]}))
+        return JSONResponse(self_directed.book(prices=prices))
+    except Exception as exc:  # noqa: BLE001 — never 500 the dashboard
+        return JSONResponse({"nav": 1_000_000.0, "cash": 1_000_000.0, "invested": 0.0,
+                             "positions": [], "pending": [],
+                             "allocation": {"cash_pct": 1.0, "gross": 0.0, "n_positions": 0,
+                                            "largest_weight": 0.0, "total_unrealized_pnl": 0.0,
+                                            "total_return_pct": 0.0},
+                             "market": {"is_open": False, "session": "closed"},
+                             "error": str(exc)})
+
+
+@router.get("/api/self_directed/history")
+def api_self_directed_history() -> JSONResponse:
+    """Trade History blotter for the Self-Directed book (every fill + the pending queue)."""
+    try:
+        from portfolio import self_directed
+        held = list((self_directed._load_account().get("positions") or {}).keys())
+        prices = _live_prices(held)
+        return JSONResponse(self_directed.history(prices=prices))
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"history": [], "pending": [], "realized_total": 0.0,
+                             "n_closed": 0, "n_buys": 0, "win_rate": None, "error": str(exc)})
+
+
+@router.get("/api/self_directed/search")
+def api_self_directed_search(q: str = "") -> JSONResponse:
+    """Live US-stock search (ticker or company name) for the order ticket."""
+    try:
+        from data_layer import polygon
+        return JSONResponse({"results": polygon.search_tickers(q)})
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"results": [], "error": str(exc)})
+
+
+@router.get("/api/self_directed/quote")
+def api_self_directed_quote(ticker: str = "") -> JSONResponse:
+    """Live price + company name + market state for one ticker (order-ticket display)."""
+    try:
+        from portfolio import self_directed
+        return JSONResponse(self_directed.quote_info(ticker))
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"ticker": (ticker or "").upper(), "price": None, "error": str(exc)})
+
+
+@router.post("/api/self_directed/order")
+def api_self_directed_order(req: _OrderReq) -> JSONResponse:
+    """Place a buy/sell. Fills now at market if open; otherwise queues to the next open."""
+    try:
+        from portfolio import self_directed
+        return JSONResponse(self_directed.place_order(
+            req.ticker, req.side, req.shares, notional=req.notional))
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+@router.post("/api/self_directed/thesis")
+def api_self_directed_thesis(req: _ThesisReq) -> JSONResponse:
+    """Save (or clear) the user's conviction thesis note for a position."""
+    try:
+        from portfolio import self_directed
+        saved = self_directed.set_thesis(req.ticker, req.note)
+        return JSONResponse({"ok": True, "ticker": (req.ticker or "").upper(), "thesis": saved})
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+@router.post("/api/self_directed/cancel")
+def api_self_directed_cancel(order_id: str = "") -> JSONResponse:
+    """Cancel a still-pending (unfilled) order."""
+    try:
+        from portfolio import self_directed
+        return JSONResponse({"ok": self_directed.cancel_order(order_id)})
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
 @router.get("/api/outcomes")
 def api_outcomes() -> JSONResponse:
     """Realized thesis outcomes — triple-barrier + rel-return vs SPY (the learning signal that
@@ -733,6 +897,19 @@ def api_fundamentals() -> JSONResponse:
         return JSONResponse(fundamentals.load())
     except Exception as exc:  # noqa: BLE001
         return JSONResponse({"status": "unavailable", "error": str(exc)})
+
+
+@router.get("/api/readiness")
+def api_readiness() -> JSONResponse:
+    """Forward-proof readiness — which thresholds have crossed (calibration left cold-start,
+    cross-sectional IC now statistically honest, shadow books first resolved) + the persistent
+    alerts the daily build records. Drives the dashboard's 'go look now' banner."""
+    try:
+        import bot  # noqa: F401
+        from portfolio import readiness
+        return JSONResponse({"status": readiness.status(), "alerts": readiness.alerts()})
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"status": {}, "alerts": [], "error": str(exc)})
 
 
 @router.get("/api/macro")
@@ -969,10 +1146,24 @@ def api_activity() -> JSONResponse:
 @router.get("/api/runs")
 def api_runs() -> JSONResponse:
     """List all run-log entries, newest first.
-    Each entry: {run_id, ts, kind, title, n_steps, cost_usd, summary}."""
+    Each entry: {run_id, ts, kind, title, n_steps, cost_usd, summary}.
+
+    title_zh / summary_zh carry the cached Chinese translation of the run's AI write-up so
+    the Brain Activity ("Full Trace") log renders in Chinese when zh is toggled. cached_zh()
+    is a pure cache lookup (returns None -> client falls back to English) until
+    brain.translate.translate_runs() warms the cache on the daily run; English never regresses.
+    """
     try:
         from brain import runlog
-        return JSONResponse(runlog.list_runs())
+        runs = runlog.list_runs()
+        for r in runs:
+            tz = _cached_zh(r.get("title") or "")
+            if tz:
+                r["title_zh"] = tz
+            sz = _cached_zh(r.get("summary") or "")
+            if sz:
+                r["summary_zh"] = sz
+        return JSONResponse(runs)
     except Exception as exc:
         return JSONResponse({"error": str(exc)}, status_code=500)
 

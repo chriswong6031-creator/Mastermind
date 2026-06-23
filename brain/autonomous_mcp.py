@@ -187,8 +187,15 @@ def build_servers() -> dict:
 
 
 def allowed_tools() -> list[str]:
-    """Macro READ tools + the desk's own tools + web + read-only files. NO gated execute_trade /
-    research-paper tools — this book is free-form."""
+    """Macro READ tools + the desk's own tools + web. NO gated execute_trade / research-paper
+    tools — this book is free-form.
+
+    Deliberately NO raw Read/Grep/Glob: with the session cwd at the repo root those reached ANY
+    file — including the OTHER books' state (data/portfolio/latest.json) — with no allowlist,
+    which was a latent path for the autonomous Brain to peek at Flagship. The Brain researches
+    only through the typed mcp__bot__* read tools + the web; it reads its OWN book via the desk.
+    The path-controlled mcp__bot__read_signal is still available but now denies portfolio-book
+    dirs (see bot_mcp._DENY_ROOTS)."""
     read = [f"mcp__{bot_mcp.SERVER_NAME}__{t.name}" for t in _READ_TOOLS]
     desk = [f"mcp__{SERVER_NAME}__{t.name}" for t in _DESK_TOOLS]
-    return read + desk + bot_mcp.WEB_TOOLS + ["Read", "Grep", "Glob"]
+    return read + desk + bot_mcp.WEB_TOOLS

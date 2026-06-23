@@ -159,17 +159,58 @@ def _fetch_price_series(ticker: str) -> "pd.Series | None":
 
 
 def _live_price(ticker: str) -> float | None:
-    """Read the live price from vendor/macro/site/stockdata/<TICKER>.json."""
-    try:
-        p = _ROOT / "vendor" / "macro" / "site" / "stockdata" / f"{ticker}.json"
-        if p.exists():
-            raw = json.loads(p.read_text())
-            v = (raw.get("tech") or {}).get("price")
-            if v is not None:
-                return float(v)
-    except Exception:
-        pass
-    return None
+    """Best live mark for a ticker, in USD.
+
+    Dispatches by venue suffix:
+      * ``*.SS`` / ``*.SZ`` → the LIVE Tushare A-share close (CNY) when available, else the vendored
+                              ``chinastockdata/`` snapshot → USD
+      * ``*.HK``            → the LIVE Yahoo close (HKD) when available, else the vendored
+                              ``hkstockdata/`` snapshot → USD
+      * else                → ``stockdata/``     (USD, incl. US-listed China ADRs)
+    The China/HK legs convert their LOCAL quote to USD via ``portfolio.fx`` so the paper account's
+    single-currency NAV stays honest (it holds all three venues at once). Live marks come from
+    Tushare for A-shares (``daily``) and Yahoo for Hong Kong; both degrade to the snapshot on any
+    miss (Tushare's ``hk_daily`` is too rate-limited to mark a multi-name HK book)."""
+    t = (ticker or "").upper().strip()
+    if t.endswith(".SS") or t.endswith(".SZ"):
+        sub, convert = "chinastockdata", True
+    elif t.endswith(".HK"):
+        sub, convert = "hkstockdata", True
+    else:
+        sub, convert = "stockdata", False
+
+    local: float | None = None
+    # A-shares: the fresh Tushare CNY close (``daily``, bulk + cached). Hong Kong: the fresh Yahoo
+    # HKD close (Tushare's ``hk_daily`` is throttled to ~1 call/hr — see data_layer.yahoo_feed).
+    # Both lag-correct the vendored snapshot; US ADRs have no live leg and use the snapshot below.
+    if t.endswith((".SS", ".SZ")):
+        try:
+            from data_layer import tushare_feed
+            local = tushare_feed.price_local(t)
+        except Exception:
+            local = None
+    elif t.endswith(".HK"):
+        try:
+            from data_layer import yahoo_feed
+            local = yahoo_feed.price_local(t)
+        except Exception:
+            local = None
+    # Fallback (and the only path for US ADRs): the vendored per-name snapshot.
+    if local is None:
+        try:
+            p = _ROOT / "vendor" / "macro" / "site" / sub / f"{t}.json"
+            if p.exists():
+                v = (json.loads(p.read_text()).get("tech") or {}).get("price")
+                if v is not None:
+                    local = float(v)
+        except Exception:
+            local = None
+    if local is None:
+        return None
+    if convert:
+        from portfolio import fx
+        return fx.to_usd(local, t)
+    return local
 
 
 def _current_price(ticker: str) -> float | None:
@@ -181,10 +222,25 @@ def _current_price(ticker: str) -> float | None:
     s = _fetch_price_series(ticker)
     try:
         if s is not None and len(s) > 0:
-            return float(s.iloc[-1])
+            v = float(s.iloc[-1])
+            # The series stores (yahoo / breadth cache) quote in LOCAL currency; convert a China/HK
+            # name to USD so the fallback can't leak a raw CNY/HKD mark into NAV (bare US tickers pass
+            # through unchanged). Mirrors the conversion _live_price already does for the live mark.
+            from portfolio import fx
+            return fx.to_usd(v, ticker)
     except Exception:
         pass
     return None
+
+
+def _benchmark_for(portfolio_id: str | None) -> str:
+    """The equity-curve comparison symbol for a book (registry-resolved; 'SPY' fallback for
+    the US books, 'FXI' for the all-China book)."""
+    try:
+        from portfolio import registry
+        return registry.benchmark(portfolio_id)
+    except Exception:
+        return "SPY"
 
 
 def reset_cost_basis_to_market(prices: dict[str, float] | None = None,
@@ -512,16 +568,18 @@ def queue_orders(
             continue                                   # can't estimate without a prior close
         target_shares = (weight * nav_base) / px
         held = state["positions"].get(ticker, {}).get("shares", 0.0)
-        delta = target_shares - held
-        if delta <= 1e-9:
-            continue                                   # already at/above target — nothing to buy
+        shares = round(target_shares - held, 6)            # match the stored/displayed precision
+        value = round(shares * px, 2)
+        if shares <= 0.0 or value <= 0.0:
+            continue                                   # already at/above target, or a sub-rounding
+                                                       # residue that would render as "BUY 0 / $0"
         orders.append({
             "id": f"{asof}-{ticker}-buy",
             "ticker": ticker,
             "side": "buy",
-            "shares": round(delta, 6),
+            "shares": shares,
             "est_price": round(px, 4),
-            "est_value": round(delta * px, 2),
+            "est_value": value,
             "weight": round(float(weight), 4),
             "placed_asof": asof,
             "fill_after": fill_after,
@@ -579,14 +637,20 @@ def fill_pending(prices: dict[str, float], asof: str, portfolio_id: str | None =
     return fills
 
 
-def mark(prices: dict[str, float], asof: str, portfolio_id: str | None = None) -> None:
-    """Snapshot NAV to nav_history.jsonl. Also initialises SPY shares on first call."""
+def mark(prices: dict[str, float], asof: str, portfolio_id: str | None = None,
+         benchmark: str | None = None) -> None:
+    """Snapshot NAV to nav_history.jsonl. Also initialises the benchmark shares on first call.
+
+    The benchmark symbol is registry-resolved per book ('SPY' for the US books, 'FXI' for the
+    all-China book); its inception shares are stored in the back-compat ``spy_shares`` slot, so
+    ``spy_nav`` in the history is the comparison line for whichever benchmark the book uses."""
     state = _load_account(portfolio_id)
+    bench = benchmark or _benchmark_for(portfolio_id)
 
     nav_path = _paths(portfolio_id)["nav"]
 
-    # initialise SPY benchmark on first mark
-    spy_px = prices.get("SPY")
+    # initialise the benchmark on first mark
+    spy_px = prices.get(bench)
     if state.get("spy_shares") is None and spy_px and spy_px > 0:
         state["spy_shares"] = _STARTING_NAV / spy_px
         state["spy_inception_price"] = spy_px
@@ -632,13 +696,13 @@ def mark(prices: dict[str, float], asof: str, portfolio_id: str | None = None) -
 # SPY history loader (used by performance() for the comparison line only)
 # ---------------------------------------------------------------------------
 
-def _load_spy_history(window: int = 91) -> "list[tuple[str, float]] | list":
-    """Return [(date_str, close), ...] for SPY over the last `window` sessions.
+def _load_spy_history(window: int = 91, symbol: str = "SPY") -> "list[tuple[str, float]] | list":
+    """Return [(date_str, close), ...] for the benchmark `symbol` over the last `window` sessions.
 
     Uses the same store loader as _fetch_price_series so it works offline as
     long as the engine price cache is populated.  Returns [] if unavailable.
     """
-    s = _fetch_price_series("SPY")
+    s = _fetch_price_series(symbol)
     if s is None or len(s) == 0:
         return []
     try:
@@ -652,7 +716,8 @@ def _load_spy_history(window: int = 91) -> "list[tuple[str, float]] | list":
 # /api/performance payload
 # ---------------------------------------------------------------------------
 
-def performance(portfolio_id: str | None = None) -> dict:
+def performance(portfolio_id: str | None = None,
+                prices: dict[str, float] | None = None) -> dict:
     """Assemble the /api/performance contract.
 
     Series is HONEST:
@@ -662,6 +727,12 @@ def performance(portfolio_id: str | None = None) -> dict:
         inception_date; from inception onward it uses the real marked NAV from
         nav_history.jsonl.  No hypothetical repricing of our allocation ever.
       - kind = "pre_inception" for the flat prefix, "realized" from inception.
+
+    `prices` (TICKER → price in the book's BASE currency, e.g. live delayed quotes for the US
+    books, snapshot/FX marks for HK/China) makes `current_nav` LIVE: the CURRENT account holdings
+    are valued now (cash + live market value — realized P&L is already booked into cash) instead of
+    freezing on the last once-daily nav_history snapshot. Without it the function degrades to the
+    last realized row (back-compat). This is what makes the dashboard NAV move intraday.
 
     Returns a safe minimal payload on error.
     """
@@ -683,11 +754,32 @@ def performance(portfolio_id: str | None = None) -> dict:
     try:
         state = _load_account(portfolio_id)
         realized_rows = _load_jsonl(_paths(portfolio_id)["nav"])
+        bench = _benchmark_for(portfolio_id)
 
         inception_date = state.get("inception_date", _INCEPTION_DATE)
 
-        # current values (fall back to starting NAV if no realized rows yet)
-        if realized_rows:
+        try:
+            today_iso = date.today().isoformat()
+        except Exception:
+            today_iso = ""
+
+        # LIVE current values: when the caller passes today's marks (base ccy), value the CURRENT
+        # account holdings now (cash + live market value) instead of freezing on the last daily
+        # nav_history snapshot — this is what moves the NAV intraday. Fall back to the last realized
+        # row, then to starting NAV.
+        live_nav: float | None = None
+        if prices:
+            try:
+                live_nav = nav(prices, portfolio_id)
+            except Exception:
+                live_nav = None
+
+        if live_nav is not None:
+            current_nav = live_nav
+            cash = float(state.get("cash", _STARTING_NAV))
+            invested = current_nav - cash
+            spy_nav_latest = realized_rows[-1].get("spy_nav") if realized_rows else None
+        elif realized_rows:
             latest = realized_rows[-1]
             current_nav = float(latest["nav"])
             cash = float(latest["cash"])
@@ -707,9 +799,16 @@ def performance(portfolio_id: str | None = None) -> dict:
             spy_return = (float(spy_nav_latest) - _STARTING_NAV) / _STARTING_NAV * 100
             vs_spy_pct = round(total_return_pct - spy_return, 4)
 
-        # day-over-day change
+        # day-over-day change. With a live mark, compare to the last daily close STRICTLY before
+        # today (so we don't divide by today's own frozen snapshot); otherwise the prior row.
         day_change_pct: float = 0.0
-        if len(realized_rows) >= 2:
+        if live_nav is not None:
+            prior = [r for r in realized_rows if (r.get("date") or "") < today_iso]
+            if prior:
+                prev_nav = float(prior[-1]["nav"])
+                if prev_nav > 0:
+                    day_change_pct = round((current_nav - prev_nav) / prev_nav * 100, 4)
+        elif len(realized_rows) >= 2:
             prev_nav = float(realized_rows[-2]["nav"])
             if prev_nav > 0:
                 day_change_pct = round((current_nav - prev_nav) / prev_nav * 100, 4)
@@ -724,8 +823,8 @@ def performance(portfolio_id: str | None = None) -> dict:
             max_drawdown_pct = round(float(drawdowns.min()), 4)
 
         # ---- build series ----
-        # Load SPY history for the chart window (the benchmark line).
-        spy_history = _load_spy_history(91)  # list of (date_str, close)
+        # Load the benchmark history for the chart window (the comparison line).
+        spy_history = _load_spy_history(91, bench)  # list of (date_str, close)
 
         series: list[dict] = []
 
@@ -738,6 +837,9 @@ def performance(portfolio_id: str | None = None) -> dict:
             realized_by_date: dict[str, float] = {
                 r["date"]: float(r["nav"]) for r in realized_rows
             }
+            # keep the chart endpoint in step with the live header NAV
+            if live_nav is not None and today_iso:
+                realized_by_date[today_iso] = current_nav
 
             for date_str, spy_close in spy_history:
                 spy_nav_val = round(spy_close * spy_scale, 2)
@@ -763,9 +865,12 @@ def performance(portfolio_id: str | None = None) -> dict:
         else:
             # No SPY data (fully offline / price store empty): emit realized rows only
             for r in realized_rows:
+                nav_val = float(r["nav"])
+                if live_nav is not None and today_iso and r.get("date") == today_iso:
+                    nav_val = current_nav      # live-mark today's point
                 series.append({
                     "date": r["date"],
-                    "nav": float(r["nav"]),
+                    "nav": nav_val,
                     "spy_nav": float(r["spy_nav"]) if r.get("spy_nav") is not None else None,
                     "kind": "realized",
                 })
@@ -773,7 +878,7 @@ def performance(portfolio_id: str | None = None) -> dict:
         note = (
             f"Portfolio starts at ${_STARTING_NAV:,.0f} on {inception_date}; "
             "flat until the live daily track accrues. "
-            "S&P 500 shown over the same window for comparison (real history)."
+            f"{bench} shown over the same window for comparison (real history)."
         )
 
         return {
@@ -784,6 +889,7 @@ def performance(portfolio_id: str | None = None) -> dict:
             "invested": round(invested, 2),
             "total_return_pct": round(total_return_pct, 4),
             "vs_spy_pct": vs_spy_pct,
+            "benchmark": bench,
             "day_change_pct": day_change_pct,
             "max_drawdown_pct": max_drawdown_pct,
             "realized_since": inception_date,

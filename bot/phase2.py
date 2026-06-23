@@ -761,6 +761,17 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
     except Exception as _e:
         _rl_log(_run_id, "decision", "prediction log error", f"{_e!r}"[:160])
 
+    # ———— forward-proof READINESS watcher — pings (persistent dashboard alert) the moment a
+    #      forward threshold crosses (calibration n≥min, cross-sectional IC ≥ enough clusters, shadow
+    #      books first resolved). Rides this daily heartbeat; once-per-crossing. Best-effort. ————
+    try:
+        from portfolio import readiness as _readiness
+        _rr = _readiness.check_and_record(asof)
+        if _rr.get("new"):
+            _rl_log(_run_id, "decision", "READINESS crossed", f"newly_ready={_rr['new']}")
+    except Exception as _e:
+        _rl_log(_run_id, "decision", "readiness check error", f"{_e!r}"[:160])
+
     store.record_run(con, asof, True, decision["triggers"], sig, datetime.now(timezone.utc).isoformat())
 
     payload = {

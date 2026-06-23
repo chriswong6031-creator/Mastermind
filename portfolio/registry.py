@@ -32,6 +32,7 @@ PORTFOLIOS: list[dict] = [
         "kind": "gated",          # the deterministic, research-gated, sleeve-structured book
         "manager": "engine",
         "starting_nav": 1_000_000.0,
+        "benchmark": "SPY",       # equity-curve comparison line
         "legacy": True,           # state lives in data/portfolio/ (not data/portfolios/flagship)
     },
     {
@@ -41,9 +42,48 @@ PORTFOLIOS: list[dict] = [
         "kind": "autonomous",     # an Opus Brain trades freely; no gate, no research paper
         "manager": "brain",
         "starting_nav": 1_000_000.0,
+        "benchmark": "SPY",
+        "legacy": False,
+    },
+    {
+        "id": "self_directed",
+        "name": "Self-Directed",
+        "tagline": "Your book · you place the trades",
+        "kind": "self_directed",  # YOU trade it by hand; served by portfolio.self_directed (its own
+                                  # engine + state under data/portfolio/self_directed/, not paper_account)
+        "manager": "you",
+        "starting_nav": 1_000_000.0,
+        "benchmark": "SPY",
+        "legacy": False,
+    },
+    {
+        "id": "heavyweight",
+        "name": "Heavyweight",
+        "tagline": "Concentrated · presses Flagship's best",
+        "kind": "heavyweight",    # an Opus Brain that may ONLY hold names Flagship currently holds and
+                                  # concentrates them into high-conviction 5–50% bets (bot/heavyweight.py)
+        "manager": "brain",
+        "starting_nav": 1_000_000.0,
+        "benchmark": "SPY",
+        "legacy": False,
+    },
+    {
+        "id": "china",
+        "name": "China Brain",
+        "tagline": "All-China (A · HK · ADR) · Opus-managed · daily",
+        "kind": "china_brain",    # a free-form Opus Brain over the macro China signal desks; holds
+                                  # mainland A-shares, HK names, and US-listed China ADRs, marked in CNY
+                                  # — HK (HKD) + ADR (USD) FX-converted to CNY (bot/china.py). Same
+                                  # template as the autonomous book, China universe.
+        "manager": "brain",
+        "starting_nav": 1_000_000.0,
+        "benchmark": "FXI",       # iShares China Large-Cap — USD all-China comparison line
         "legacy": False,
     },
 ]
+
+# Benchmark fallback for any portfolio missing an explicit one (back-compat: the US books).
+_DEFAULT_BENCHMARK = "SPY"
 
 _BY_ID = {p["id"]: p for p in PORTFOLIOS}
 
@@ -81,3 +121,8 @@ def data_dir(portfolio_id: str | None = None) -> Path:
 
 def starting_nav(portfolio_id: str | None = None) -> float:
     return float(get(portfolio_id).get("starting_nav", 1_000_000.0))
+
+
+def benchmark(portfolio_id: str | None = None) -> str:
+    """The equity-curve comparison symbol for a book (default 'SPY' for the US books)."""
+    return str(get(portfolio_id).get("benchmark") or _DEFAULT_BENCHMARK)

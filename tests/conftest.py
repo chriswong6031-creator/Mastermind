@@ -43,10 +43,12 @@ def _isolate_research_papers(tmp_path, monkeypatch):
     redirect the papers/feed-note writes into a tmp dir, so the book build's research gate never
     hits the network nor pollutes the live research feed."""
     monkeypatch.setenv("MASTERMIND_RESEARCH_LLM", "0")
-    # Never let the FastAPI startup hook fire a real (armed) autonomous Brain run during pytest,
-    # even when a test mounts the app via TestClient's context manager on a machine with the
-    # Claude CLI present (which would otherwise spawn a live Opus session + write a real book).
+    # Never let the FastAPI startup hook fire a real (armed) Brain run during pytest, even when a
+    # test mounts the app via TestClient on a machine with the Claude CLI present (which would
+    # otherwise spawn a live Opus session + write a real book). Covers every Brain book.
     monkeypatch.setenv("AUTONOMOUS_FIRST_RUN", "0")
+    monkeypatch.setenv("CHINA_FIRST_RUN", "0")
+    monkeypatch.setenv("ETF_FIRST_RUN", "0")
     try:
         import brain.research_paper as rp
         papers = tmp_path / "_papers"
@@ -58,3 +60,17 @@ def _isolate_research_papers(tmp_path, monkeypatch):
         monkeypatch.setattr(rp, "_NOTES", notes, raising=False)
     except Exception:
         pass
+
+
+@pytest.fixture(autouse=True)
+def _clear_fx_cache():
+    """The China book's FX rate memo (portfolio.fx) is a process-global; clear it around every
+    test so an FX-dependent test is order-independent (a real rate read in one test can't leak a
+    non-fallback rate into another)."""
+    try:
+        from portfolio import fx
+        fx.clear_cache()
+        yield
+        fx.clear_cache()
+    except Exception:
+        yield
