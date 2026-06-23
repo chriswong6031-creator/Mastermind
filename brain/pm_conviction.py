@@ -212,7 +212,15 @@ def build_book(sized: list[dict], rejected: list[dict], *, regime: dict | None, 
             max_turns=int(os.environ.get("FLAGSHIP_PM_MAX_TURNS", "30")),
         )
         # cli_bridge.reason is a coroutine; run it on a fresh loop (or a thread if one is live).
-        _run_coro(coro)
+        _res = _run_coro(coro)
+        # record the armed PM seat's known cost against the nightly per-book ledger under
+        # "flagship" (the seat builds the Flagship judgment book). No-op when cost is unknown
+        # or the cap is OFF; never raises.
+        try:
+            from brain import cost_guard
+            cost_guard.record("flagship", (_res or {}).get("cost_usd"), asof)
+        except Exception:  # noqa: BLE001 — additive; never break the build
+            pass
     except Exception:  # noqa: BLE001 — the seat is additive; never break the build
         return stub
 

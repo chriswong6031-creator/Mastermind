@@ -218,3 +218,65 @@ def test_gate_officer_veto_all_degrades_to_sized(monkeypatch):
     sized = [{"ticker": "ENGINE", "weight": 0.05}]
     out = J.build(sized, [], regime={}, asof="2026-06-22", gate_info={}, shadow_inputs=[])
     assert out is sized
+
+
+# ───────────────────── WATCHLIST re-review re-entry wiring ─────────────────────
+def test_promoted_watchlist_name_reenters_candidate_pool(monkeypatch):
+    """A name PROMOTED by the daily watchlist re-review is fed back into the PM's candidate pool
+    (the `rejected` seed) so the desk reconsiders it this cycle. We capture the `rejected` list the
+    PM seat actually receives. Dual-patched (package attr + sys.modules) per the P1 lesson so the
+    real watchlist / PM seat / LLM is never touched."""
+    monkeypatch.setenv("MASTERMIND_FLAGSHIP_JUDGMENT", "1")
+    import sys
+    import types
+
+    captured = {}
+
+    # PM seat that records the rejected pool it is seeded with, then proposes the engine name only.
+    pmc = types.ModuleType("brain.pm_conviction")
+
+    def _build_book(sized, rejected, **k):
+        captured["rejected"] = list(rejected or [])
+        return {"holdings": [{"ticker": "NVDA", "weight": 0.06, "thesis": "AI infra",
+                              "conviction": "high"}],
+                "cash": 0.1, "summary": "s", "sold_note": "", "ran": True}
+    pmc.build_book = _build_book
+
+    strat = types.ModuleType("brain.strategist")
+    strat.run = lambda asof, regime: {"agent": "strategist", "confirmed_themes": []}
+    comm = types.ModuleType("brain.committee")
+    comm.assess = _confirm
+    lenses = types.ModuleType("portfolio.lenses")
+    lenses.full = lambda t, kind="name": {"synthesis": {"confluence": 0.25, "divergences": []},
+                                          "rows": []}
+    lenses._load = lambda rel: {}
+    lenses._g = lambda d, path: None
+
+    # watchlist seat: review() is a no-op, promote_candidates() returns one cleared name.
+    wl = types.ModuleType("portfolio.watchlist")
+    wl.review = lambda asof, *, still_withheld: {"promote": [], "expired": [], "active": []}
+    wl.promote_candidates = lambda asof: [{"ticker": "PROMO", "combined": 64.0,
+                                           "thesis": "armed off watch", "reason": "cleared",
+                                           "asof": "2026-06-01"}]
+    wl.timing_withhold = lambda tech: None
+
+    import brain as _brain_pkg
+    import portfolio as _pf_pkg
+    monkeypatch.setattr(_brain_pkg, "strategist", strat, raising=False)
+    monkeypatch.setattr(_brain_pkg, "pm_conviction", pmc, raising=False)
+    monkeypatch.setattr(_brain_pkg, "committee", comm, raising=False)
+    monkeypatch.setattr(_pf_pkg, "lenses", lenses, raising=False)
+    monkeypatch.setattr(_pf_pkg, "watchlist", wl, raising=False)
+    monkeypatch.setitem(sys.modules, "brain.strategist", strat)
+    monkeypatch.setitem(sys.modules, "brain.pm_conviction", pmc)
+    monkeypatch.setitem(sys.modules, "brain.committee", comm)
+    monkeypatch.setitem(sys.modules, "portfolio.lenses", lenses)
+    monkeypatch.setitem(sys.modules, "portfolio.watchlist", wl)
+
+    out = J.build([], [], regime={}, asof="2026-06-23", gate_info={}, shadow_inputs=[],
+                  name_cap=0.08)
+    # the promoted name was injected into the candidate pool the PM saw …
+    assert any(r.get("ticker") == "PROMO" and r.get("source") == "watchlist_promote"
+               for r in captured.get("rejected", []))
+    # … and the desk still produced its book (re-entry never breaks the build).
+    assert {r["ticker"] for r in out} == {"NVDA"}

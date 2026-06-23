@@ -100,12 +100,69 @@ def build(sized: list[dict], rejected: list[dict], *, regime: dict | None, asof:
 
     gate_info = gate_info or {}
     portfolio_ctx = portfolio_ctx or {}
+    rejected = list(rejected or [])
     cap = float(name_cap) if name_cap is not None else _DEFAULT_NAME_CAP
 
     try:
         from brain import strategist, pm_conviction, committee
         from portfolio import lenses as lenses_mod
     except Exception:  # noqa: BLE001
+        return sized
+
+    # ── WATCHLIST RE-REVIEW (additive, never-raises) ───────────────────────────────────────────
+    # Before the desk runs, re-review every parked name: promote the ones whose withhold reason has
+    # CLEARED back into the candidate pool the PM/Strategist see (so the desk reconsiders them this
+    # cycle), age the rest, and expire the stale ones (those just drop). The predicate re-runs the
+    # EXACT L3 timing check (watchlist.timing_withhold on the name's entry-tech fields) so a name is
+    # promoted iff its entry technicals are no longer poor. Best-effort: any failure leaves the
+    # candidate pool untouched, so the byte-identical guarantee (desk OFF ⇒ no review) is preserved
+    # — this whole block is inside `_enabled()`.
+    try:
+        from portfolio import watchlist as _wl
+
+        def _still_withheld(ticker: str):
+            try:
+                from bot.phase2 import _entry_tech_fields
+                return _wl.timing_withhold(_entry_tech_fields(ticker))
+            except Exception:  # noqa: BLE001 — a predicate failure ages the name (keeps it parked)
+                return "re-check unavailable"
+
+        _rev = _wl.review(asof, still_withheld=_still_withheld)
+        _existing = {str(c.get("ticker") or "").upper().strip()
+                     for c in (sized or [])} | {str(r.get("ticker") or "").upper().strip()
+                                                 for r in rejected}
+        for _pc in _wl.promote_candidates(asof):
+            t = str(_pc.get("ticker") or "").upper().strip()
+            if not t or t in _existing:
+                continue
+            # re-surface as a candidate the PM may champion (it re-enters at the Strategist/candidacy
+            # stage, skipping re-sourcing — the thesis is already research-confirmed, §3.6). We feed
+            # it through the `rejected` pool (the PM's "names you MAY champion" seed) so the desk
+            # reconsiders it WITHOUT us self-authorizing a buy.
+            rejected.append({
+                "ticker": t,
+                "confluence": (float(_pc["combined"]) / 100.0
+                               if isinstance(_pc.get("combined"), (int, float)) else None),
+                "combined": _pc.get("combined"),
+                "vetoes": [],
+                "bear": [],
+                "source": "watchlist_promote",
+                "thesis": _pc.get("thesis"),
+            })
+            _existing.add(t)
+    except Exception:  # noqa: BLE001 — the re-review is additive; never break the build
+        pass
+
+    # NIGHTLY COST TRIPWIRE — the Flagship judgment path is the desk's most expensive (the armed
+    # Opus PM + a per-name committee loop). If this book has already hit the configured per-night
+    # USD cap, SKIP the whole judgment path and fall back to the engine ``sized`` book. OFF by
+    # default (cap <= 0 → over_budget always False) so this is a no-op and the engine path is
+    # byte-identical to today.
+    try:
+        from brain import cost_guard
+    except Exception:  # noqa: BLE001
+        cost_guard = None
+    if cost_guard is not None and cost_guard.over_budget("flagship", asof):
         return sized
 
     # (A) MACRO STRATEGIST — top-down confirmed-leadership themes (best-effort; None on failure)
@@ -123,6 +180,13 @@ def build(sized: list[dict], rejected: list[dict], *, regime: dict | None, asof:
         book = None
     if not book or not book.get("ran") or not book.get("holdings"):
         # PM did not produce a usable book → degrade to the engine path untouched.
+        return sized
+
+    # NIGHTLY COST TRIPWIRE (re-check) — the armed PM seat above just recorded its cost, so the
+    # book may now be over budget. The per-name committee loop below is the next expensive Opus
+    # block; if we're over, fall back to the engine ``sized`` path rather than spend it. No-op when
+    # the cap is OFF (default) → byte-identical.
+    if cost_guard is not None and cost_guard.over_budget("flagship", asof):
         return sized
 
     # (C) per-name SENTINEL + subtract-only NEXUS check, then name_cap clamp.

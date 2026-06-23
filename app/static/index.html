@@ -2090,6 +2090,20 @@ body.page-mm.view-self #view-self .mm-section { display: block !important; }
     </div>
   </div>
 
+  <!-- Firm exposure: read-only cross-book concentration monitor -->
+  <div class="mm-section">
+    <div class="panel span12" style="grid-column:span 12">
+      <h2><span class="l-en">Firm exposure &mdash; cross-book concentration</span><span class="l-zh">全firm敞口 &mdash; 跨组合集中度</span></h2>
+      <div class="mm-rp-intro" style="margin-top:-4px">
+        <span class="l-en">Read-only monitor across every paper book. When independent books pile into the same name or sector, the firm is concentrated even if no single book broke its mandate. This surfaces those pile-ups &mdash; it never changes any allocation.</span>
+        <span class="l-zh">对所有模拟组合的只读监控。当各自独立的组合扎堆同一标的或板块时，即使没有单一组合越界，整体仍是集中的。本面板揭示这些扎堆 &mdash; 但绝不更改任何配置。</span>
+      </div>
+      <div id="desk-firm">
+        <div class="mm-empty"><span class="mm-empty-icon">⊙</span><span class="l-en">Loading firm exposure…</span><span class="l-zh">加载全firm敞口…</span></div>
+      </div>
+    </div>
+  </div>
+
   <!-- CIO weekly note -->
   <div class="mm-section">
     <div class="panel span12" style="grid-column:span 12">
@@ -2543,6 +2557,16 @@ var I18N = {
   'desk.col_bps':         { en: 'Attr. bps', zh: '归因 bps' },
   'desk.cio_week':        { en: 'Week', zh: '周次' },
   'desk.cio_empty':       { en: 'No CIO note yet.', zh: '暂无首席投资官复盘。' },
+  'desk.firm_building':   { en: 'No firm exposure yet — run the book builds to populate.', zh: '暂无全firm敞口 —— 运行组合构建以填充。' },
+  'desk.firm_clean':      { en: 'No cross-book pile-ups flagged. No name is held by enough books, or above the firm weight cap.', zh: '未发现跨组合扎堆。无标的被足够多组合持有或超过全firm权重上限。' },
+  'desk.firm_flags':      { en: 'Flagged pile-ups', zh: '已标记的扎堆' },
+  'desk.firm_top':        { en: 'Top firm-wide concentrations', zh: '全firm最大集中度' },
+  'desk.firm_sectors':    { en: 'By sector', zh: '按板块' },
+  'desk.col_books':       { en: 'Books', zh: '组合数' },
+  'desk.col_in':          { en: 'Held by', zh: '持有方' },
+  'desk.col_fw':          { en: 'Firm wt', zh: '全firm权重' },
+  'desk.col_usd':         { en: 'USD', zh: '美元' },
+  'desk.col_sector':      { en: 'Sector', zh: '板块' },
 };
 
 function t(key) {
@@ -4086,7 +4110,7 @@ function renderCalibrationPage() {
 // Lazy-loaded observability over the multi-seat Flagship desk. Fetches the four /api/desk/*
 // endpoints in parallel, then renders four sections. Every fetch degrades to null on any error
 // (the renderers then show a graceful "building" / empty state); nothing here can break the page.
-var _deskData = { strategist: null, decisions: null, watchlist: null, scorecard: null };
+var _deskData = { strategist: null, decisions: null, watchlist: null, scorecard: null, firm: null };
 
 function _deskBuilding(msgKey) {
   return '<div class="mm-desk-building"><span class="ic">⊙</span><span class="tx">' + t(msgKey) + '</span></div>';
@@ -4104,11 +4128,13 @@ window.loadDesk = function() {
     g('/api/desk/decisions'),
     g('/api/desk/watchlist?book=flagship'),
     g('/api/desk/scorecard'),
+    g('/api/desk/firm-exposure'),
   ]).then(function(res) {
     _deskData.strategist = res[0];
     _deskData.decisions  = res[1];
     _deskData.watchlist  = res[2];
     _deskData.scorecard  = res[3];
+    _deskData.firm       = res[4];
     renderDeskPage();
   }).catch(function(){ renderDeskPage(); });
 };
@@ -4118,6 +4144,7 @@ function renderDeskPage() {
   renderDeskDecisions();
   renderDeskWatchlist();
   renderDeskScorecard();
+  renderDeskFirm();
 }
 
 function renderDeskStrategist() {
@@ -4288,6 +4315,96 @@ function renderDeskScorecard() {
   } else {
     cioHost.innerHTML = _deskEmpty('desk.cio_empty');
   }
+}
+
+// Firm exposure — read-only cross-book concentration monitor. Renders the flagged pile-ups
+// (ticker · #books · books · firm weight), the top firm-wide concentrations, and an optional
+// sector rollup. Graceful when empty / no flags. Pure render — never triggers any action.
+function _firmBooksStr(ids) {
+  return (ids || []).map(function(id) {
+    var lbl = (typeof _PF_LABELS === 'object' && _PF_LABELS && _PF_LABELS[id]) ? _PF_LABELS[id] : id;
+    // _PF_LABELS may carry {en,zh}; fall back to the id otherwise
+    if (lbl && typeof lbl === 'object') {
+      var isZh = document.documentElement.getAttribute('data-lang') === 'zh';
+      lbl = (isZh && lbl.zh) ? lbl.zh : (lbl.en || id);
+    }
+    return esc(String(lbl));
+  }).join(', ');
+}
+
+function renderDeskFirm() {
+  var host = E('desk-firm'); if (!host) return;
+  var d = _deskData.firm;
+  if (!d || !(d.books || []).length) { host.innerHTML = _deskBuilding('desk.firm_building'); return; }
+  var html = '';
+
+  // flagged pile-ups (the headline). When none, show an explicit "clean" line.
+  var flags = (d.flags || []).filter(function(f){ return f.kind === 'name'; });
+  if (!flags.length) {
+    html += '<div class="mm-desk-why" style="margin-top:0">' + t('desk.firm_clean') + '</div>';
+  } else {
+    html += '<div class="mm-cal-sec-h" style="margin-bottom:4px">' + t('desk.firm_flags') + '</div>';
+    html += '<div class="mm-rp-wrap"><table class="mm-rp-table"><thead><tr>' +
+      '<th class="l">' + t('desk.col_ticker') + '</th>' +
+      '<th>' + t('desk.col_books') + '</th>' +
+      '<th class="l">' + t('desk.col_in') + '</th>' +
+      '<th>' + t('desk.col_fw') + '</th>' +
+      '</tr></thead><tbody>';
+    flags.forEach(function(f) {
+      html += '<tr>' +
+        '<td class="l"><span class="mm-rp-ticker" style="font-size:12.5px">' + esc(f.ticker) + '</span></td>' +
+        '<td><span class="mm-desk-act trim">' + (f.n_books != null ? f.n_books : '—') + '</span></td>' +
+        '<td class="l" style="white-space:normal;font-size:11.5px;color:var(--muted)">' + _firmBooksStr(f.books_holding) + '</td>' +
+        '<td><strong>' + (f.firm_weight_pct != null ? Number(f.firm_weight_pct).toFixed(1) + '%' : '—') + '</strong></td>' +
+      '</tr>';
+    });
+    html += '</tbody></table></div>';
+  }
+
+  // top firm-wide concentrations
+  var top = d.top_exposures || [];
+  if (top.length) {
+    var hasUsd = top.some(function(e){ return e.firm_usd != null; });
+    html += '<div class="mm-cal-sec-h" style="margin:14px 0 4px">' + t('desk.firm_top') + '</div>';
+    html += '<div class="mm-rp-wrap"><table class="mm-rp-table"><thead><tr>' +
+      '<th class="l">' + t('desk.col_ticker') + '</th>' +
+      '<th>' + t('desk.col_books') + '</th>' +
+      '<th>' + t('desk.col_fw') + '</th>' +
+      (hasUsd ? '<th>' + t('desk.col_usd') + '</th>' : '') +
+      '<th class="l">' + t('desk.col_sector') + '</th>' +
+      '</tr></thead><tbody>';
+    top.forEach(function(e) {
+      var fwCls = e.flagged ? ' style="color:var(--warn);font-weight:800"' : '';
+      html += '<tr>' +
+        '<td class="l"><span class="mm-rp-ticker" style="font-size:12px">' + esc(e.ticker) + '</span></td>' +
+        '<td>' + (e.n_books != null ? e.n_books : '—') + '</td>' +
+        '<td><span' + fwCls + '>' + (e.firm_weight_pct != null ? Number(e.firm_weight_pct).toFixed(1) + '%' : '—') + '</span></td>' +
+        (hasUsd ? '<td>' + (e.firm_usd != null ? fmtNav(e.firm_usd) : '—') + '</td>' : '') +
+        '<td class="l" style="font-size:11px;color:var(--muted)">' + esc(e.sector || '—') + '</td>' +
+      '</tr>';
+    });
+    html += '</tbody></table></div>';
+  }
+
+  // sector rollup (best-effort; omitted when no sector data resolved)
+  var secs = d.by_sector || {};
+  var secKeys = Object.keys(secs).sort(function(a, b){ return (secs[b].firm_weight || 0) - (secs[a].firm_weight || 0); });
+  if (secKeys.length) {
+    html += '<div class="mm-cal-sec-h" style="margin:14px 0 4px">' + t('desk.firm_sectors') + '</div>';
+    html += '<div class="mm-desk-chips">';
+    secKeys.forEach(function(k) {
+      var s = secs[k];
+      var cls = s.flagged ? ' style="color:var(--warn)"' : '';
+      html += '<span class="mm-desk-theme" title="' + esc((s.tickers || []).join(', ')) + '">' +
+        '<span class="nm"' + cls + '>' + esc(k) + '</span>' +
+        '<span class="ld">' + (s.firm_weight_pct != null ? Number(s.firm_weight_pct).toFixed(1) + '%' : '—') + '</span>' +
+        '</span>';
+    });
+    html += '</div>';
+  }
+
+  if (d.note) html += '<div class="mm-desk-why">' + esc(d.note) + '</div>';
+  host.innerHTML = html;
 }
 
 window.openThesis = function(id) {

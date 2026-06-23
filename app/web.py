@@ -1538,12 +1538,38 @@ def api_desk_watchlist(book: str = "flagship") -> JSONResponse:
     module is flagship-scoped today; `book` is accepted for forward-compatibility."""
     try:
         from portfolio import watchlist
+        # the re-review state machine (state + days-in-state) is the source of truth when present;
+        # fall back to the append-log latest() for any parked name not yet in the snapshot so the
+        # surface is never thinner than before (back-compatible).
+        state_by_ticker = {}
+        try:
+            for s in (watchlist.state_rows() or []):
+                t = (s.get("ticker") or "").upper()
+                if t:
+                    state_by_ticker[t] = s
+        except Exception:  # noqa: BLE001
+            state_by_ticker = {}
         rows = []
         for r in (watchlist.latest() or []):
-            rows.append({"ticker": (r.get("ticker") or "").upper(),
+            t = (r.get("ticker") or "").upper()
+            s = state_by_ticker.get(t) or {}
+            rows.append({"ticker": t,
                          "asof": str(r.get("asof") or "")[:10],
-                         "reason": (r.get("reason") or "")[:400],
-                         "combined": r.get("combined")})
+                         "reason": (s.get("reason") or r.get("reason") or "")[:400],
+                         "combined": r.get("combined"),
+                         "state": s.get("state") or "watch",
+                         "days_in_state": s.get("days_in_state"),
+                         "last_review": str(s.get("last_review") or "")[:10] or None})
+        # surface EXPIRED names from the snapshot too (they've left the append-log's active view).
+        for t, s in state_by_ticker.items():
+            if s.get("state") == "expired" and not any(x["ticker"] == t for x in rows):
+                rows.append({"ticker": t,
+                             "asof": str(s.get("asof") or "")[:10],
+                             "reason": (s.get("expire_reason") or s.get("reason") or "")[:400],
+                             "combined": s.get("combined"),
+                             "state": "expired",
+                             "days_in_state": s.get("days_in_state"),
+                             "last_review": str(s.get("last_review") or "")[:10] or None})
         return JSONResponse({"book": book, "watchlist": rows[:120]})
     except Exception as exc:  # noqa: BLE001
         return JSONResponse({"book": book, "watchlist": [], "error": str(exc)})
@@ -1629,4 +1655,25 @@ def api_desk_scorecard() -> JSONResponse:
     out["seats"] = seats
     out["cio"] = cio_block
     out["status"] = "scoring" if seats else "building"
+    # --- nightly per-book Opus-cost spend vs the tripwire cap (OFF/unlimited by default) ---
+    try:
+        from brain import cost_guard
+        out["cost"] = cost_guard.summary()
+    except Exception:  # noqa: BLE001 — additive; never break the scorecard
+        out["cost"] = None
     return JSONResponse(out)
+
+
+@router.get("/api/desk/firm-exposure")
+def api_desk_firm_exposure() -> JSONResponse:
+    """READ-ONLY firm-level cross-book exposure monitor — where the independent books (flagship,
+    heavyweight, US/CN/HK/ETF Brains) have piled into the SAME names / sectors. Surfaces the flagged
+    concentrations + the top firm-wide exposures + a sector rollup. A MONITOR only: it never changes
+    any allocation or trades. Degrades to an honest empty payload; never 500s."""
+    try:
+        from portfolio import firm_exposure
+        return JSONResponse(firm_exposure.summary())
+    except Exception as exc:  # noqa: BLE001 — never raise; degrade to an honest stub
+        return JSONResponse({"as_of": None, "books": [], "n_books": 0, "top_exposures": [],
+                             "flags": [], "by_sector": {}, "thresholds": {}, "currency_clean": False,
+                             "note": f"Firm exposure unavailable: {exc}"})

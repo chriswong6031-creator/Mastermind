@@ -329,6 +329,16 @@ def review(asof: date | None = None) -> dict:
     except Exception:  # noqa: BLE001
         leaderboard = {}
 
+    # READ-ONLY firm-level cross-book exposure flag — purely observational (it never trades or
+    # resizes a book). Surface the top name-level pile-ups as a single line so the weekly note also
+    # answers "where are the books concentrated together?". Degrades to None on any failure.
+    try:
+        from portfolio import firm_exposure
+        firm = firm_exposure.summary()
+    except Exception:  # noqa: BLE001
+        firm = None
+    firm_flags = [f for f in ((firm or {}).get("flags") or []) if f.get("kind") == "name"]
+
     whats_working = [s["label"] for s in per_seat
                      if s["reputation"] == "well_calibrated" and (s["kpis"] or {}).get("significant")]
     whats_broken = [s["label"] for s in per_seat if s["reputation"] == "overconfident"]
@@ -340,10 +350,12 @@ def review(asof: date | None = None) -> dict:
         "per_seat": per_seat,
         "book_summary": book_summary,
         "leaderboard": leaderboard,
+        "firm_exposure": firm,
         "whats_working": whats_working,
         "whats_broken": whats_broken,
         "tuning_recommendations": tuning,
-        "note_md": _fallback_note(asof, per_seat, book_summary, whats_working, whats_broken, tuning),
+        "note_md": _fallback_note(asof, per_seat, book_summary, whats_working, whats_broken,
+                                  tuning, firm_flags),
     }
     return rep
 
@@ -353,7 +365,7 @@ def _isoweek(d: date) -> str:
     return f"{y}-W{w:02d}"
 
 
-def _fallback_note(asof, per_seat, book_summary, working, broken, tuning) -> str:
+def _fallback_note(asof, per_seat, book_summary, working, broken, tuning, firm_flags=None) -> str:
     """A deterministic human note used when no LLM is available (write() upgrades it to Opus prose)."""
     L = [f"# CIO / Meta-PM weekly review — {_isoweek(asof)} (as of {asof.isoformat()})", "",
          "_Accountability review of the Flagship desk seats. This note recommends only — it does not "
@@ -372,6 +384,15 @@ def _fallback_note(asof, per_seat, book_summary, working, broken, tuning) -> str
                      f"(excess {b['excess_pct']}%, {b['n_points']} pts)")
     else:
         L.append("- (no NAV history yet)")
+    # READ-ONLY firm-level cross-book concentration — observational only (never resizes a book).
+    L += ["", "## Firm exposure — cross-book concentration (monitor only)"]
+    if firm_flags:
+        for f in firm_flags[:6]:
+            books = ", ".join(f.get("books_holding") or [])
+            L.append(f"- **{f.get('ticker')}** — {f.get('n_books')} book(s) "
+                     f"({books}) · firm wt {f.get('firm_weight_pct')}% · {f.get('reason')}")
+    else:
+        L.append("- (no cross-book pile-ups flagged)")
     L += ["", "## What is working"]
     L += [f"- {w}" for w in working] or ["- (nothing has cleared the significance bar yet)"]
     L += ["", "## Who is miscalibrated"]

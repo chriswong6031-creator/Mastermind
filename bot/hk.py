@@ -81,6 +81,18 @@ def run_hk(asof: str | None = None, *, force: bool = False, armed: bool = True,
         armed = False
         out["feed_aborted"] = True
 
+    # 0b. NIGHTLY COST TRIPWIRE (before the Brain). The armed Opus seat below is the dominant cost
+    #    (~$1+). If this book has already hit the configured per-night USD cap, SKIP the seat and
+    #    carry the book unchanged — same posture as the feed-health abort above. OFF by default
+    #    (cap <= 0 → over_budget always False) so this is a no-op and the run is byte-identical.
+    from brain import cost_guard
+    if armed and cost_guard.over_budget(PORTFOLIO_ID, asof):
+        log.warning("HK turn %s — nightly cost cap hit ($%.2f / $%.2f); skipping the Brain and "
+                    "carrying the book unchanged.", asof,
+                    cost_guard.spent(PORTFOLIO_ID, asof), cost_guard.cap())
+        armed = False
+        out["cost_capped"] = True
+
     # 1. run the Brain (armed) → it researches and submits a target book with rationales
     from brain import hk_mcp as china_mcp
     china_mcp.clear_submission()                 # never replay yesterday's decision
@@ -91,6 +103,8 @@ def run_hk(asof: str | None = None, *, force: bool = False, armed: bool = True,
             brain = _run_brain(asof, inaugural, directive=directive) if directive else _run_brain(asof, inaugural)
         except Exception as e:                   # noqa: BLE001
             brain = {"ok": False, "error": repr(e)[:300]}
+        # record this seat's known cost against the nightly per-book ledger (no-op when unknown).
+        cost_guard.record(PORTFOLIO_ID, brain.get("cost_usd"), asof)
     out["brain"] = {k: brain.get(k) for k in ("ok", "cost_usd", "tools_used", "error", "run_id", "model")}
 
     # 2. read the submitted book — then ENFORCE the venue restriction in the trusted layer: drop any
