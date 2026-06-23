@@ -458,6 +458,8 @@ def api_decisions(portfolio: str = "autonomous", limit: int = 60) -> JSONRespons
             from bot import heavyweight as _src
         elif portfolio == "china":
             from bot import china as _src
+        elif portfolio == "etf":
+            from bot import etf as _src
         else:
             return JSONResponse({"decisions": [], "note": "decision log is Brain-book-only (autonomous/heavyweight/china)"})
         decisions = _src.load_decisions(limit)

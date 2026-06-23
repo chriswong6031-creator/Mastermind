@@ -80,6 +80,19 @@ PORTFOLIOS: list[dict] = [
         "benchmark": "FXI",       # iShares China Large-Cap — USD all-China comparison line
         "legacy": False,
     },
+    {
+        "id": "etf",
+        "name": "ETF Brain",
+        "tagline": "US-listed ETFs only · Opus-managed · daily · doctrine + guardrails",
+        "kind": "etf_brain",      # an Opus Brain rotates across US ETFs (index/sector/factor/duration/
+                                  # cash) under an ETF-adapted doctrine + hard risk guardrails (bot/etf.py).
+                                  # The ETF-only allowlist is enforced in the trusted layer via
+                                  # portfolio.etf_universe (not registry.venues — that gates market venue).
+        "manager": "brain",
+        "starting_nav": 1_000_000.0,
+        "benchmark": "SPY",
+        "legacy": False,
+    },
 ]
 
 # Benchmark fallback for any portfolio missing an explicit one (back-compat: the US books).
