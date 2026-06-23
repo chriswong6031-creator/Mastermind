@@ -261,7 +261,16 @@ def _live_price(ticker: str) -> float | None:
             local = yahoo_feed.price_local(t)
         except Exception:
             local = None
-    # Fallback (and the only path for US ADRs): the vendored per-name snapshot.
+    else:
+        # US (bare tickers + ETFs): the LIVE Yahoo quote (USD) via yfinance — reflects TODAY's tape.
+        # The vendored stockdata snapshot is CI/EOD-lagging, so on a fast day (e.g. SMH -7%) it marks a
+        # stale price and the book NAV is wrong; the live leg fixes that. Degrades to the snapshot below.
+        try:
+            from data_layer import yahoo_feed
+            local = yahoo_feed.price_local(t)
+        except Exception:
+            local = None
+    # Fallback (and the only path when the live leg misses): the vendored per-name snapshot.
     if local is None:
         try:
             p = _ROOT / "vendor" / "macro" / "site" / sub / f"{t}.json"

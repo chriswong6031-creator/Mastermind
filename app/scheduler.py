@@ -174,6 +174,13 @@ def _daily_mark_job():
             state = paper_account._load_account(pid)
             bench = paper_account._benchmark_for(pid)
             tickers = set(state.get("positions", {}).keys()) | {bench}
+            # batch-warm the US live quotes in ONE request so the per-name loop below hits a warm
+            # cache instead of firing a separate yfinance download per holding.
+            try:
+                from data_layer import yahoo_feed
+                yahoo_feed.warm([t for t in tickers if t and "." not in t])
+            except Exception:  # noqa: BLE001
+                pass
             prices: dict = {}
             for t in tickers:
                 px = paper_account._current_price(t)

@@ -65,18 +65,26 @@ def _account_tickers(portfolio_id: str | None = None) -> list[str]:
 
 
 def _live_prices(tickers: list[str]) -> dict[str, float]:
-    """Live (delayed) quotes for `tickers`; {} if the Polygon layer is unavailable.
+    """Live (intraday, TTL-cached) US quotes for `tickers` via Yahoo (yfinance), in USD; {} when
+    unavailable.
 
-    Polygon only carries US listings, so venue-suffixed tickers (``*.HK`` Hong Kong, ``*.SS`` / ``*.SZ``
-    mainland A-shares) have no quote AND the request can HANG with no timeout — which is what made the
-    HK / China books' /api/portfolio block indefinitely. We pass ONLY US symbols (no venue suffix);
-    non-US books fall back to the shared store marks the builder already wrote (no live overlay)."""
+    Yahoo reflects TODAY's tape. This REPLACED the Polygon path, whose key is an EOD/delayed tier
+    that returned a stale prevDay close — so on a fast day (SMH -7%) US books mis-marked to yesterday.
+    Only bare US symbols (no venue suffix) route here; venue-suffixed names (``*.HK`` / ``*.SS`` /
+    ``*.SZ``) are marked off their own live/snapshot path (and a Yahoo HK/CN fetch would need the
+    suffix anyway). One batched ``warm`` keeps the whole book to a single request."""
     us = [t for t in (tickers or []) if t and "." not in t]
     if not us:
         return {}
     try:
-        from data_layer import polygon
-        return {k: v for k, v in polygon.quotes(us).items() if v is not None}
+        from data_layer import yahoo_feed
+        yahoo_feed.warm(us)                          # ONE batched request; TTL-cached for liveness
+        out: dict[str, float] = {}
+        for t in us:
+            v = yahoo_feed.price_local(t)
+            if v and v > 0:
+                out[t] = float(v)
+        return out
     except Exception:
         return {}
 
