@@ -350,6 +350,39 @@ def test_queue_orders_when_closed_does_not_fill(tmp_account: None) -> None:
     assert paper_account.load_pending() == pending       # persisted
 
 
+def test_queue_orders_skips_phantom_zero_share_buy(tmp_account: None) -> None:
+    """A book already AT its target weight must not queue a 'BUY 0 / $0' phantom.
+
+    Regression: when held ≈ target, the residual ``target_shares - held`` can be a
+    sub-rounding float (> the 1e-9 guard but < 0.5e-6), so it slipped past the guard
+    yet ``round(.., 6)`` collapsed it to 0 shares / $0 — an inert order that cluttered
+    the dashboard (e.g. "IWM BUY 0 $295.59 $0 at open")."""
+    from portfolio import paper_account
+
+    px = 295.59
+    nav = paper_account._STARTING_NAV
+    target = 0.125 * nav / px
+    held = target - 2e-7                          # sub-rounding residue: > 1e-9, < 0.5e-6
+    state = paper_account._load_account()
+    state["positions"]["IWM"] = {"shares": held, "avg_cost": px}
+    paper_account._save_account(state)
+
+    pending = paper_account.queue_orders(
+        {"IWM": 0.125}, {"IWM": px}, "2026-06-22",
+        nav_base=nav, fill_after="2026-06-23",
+    )
+    assert pending == []                          # already at target — no phantom queued
+    assert paper_account.load_pending() == []
+    # and a real top-up (held well below target) is still queued, with non-zero shares/value
+    state["positions"]["IWM"]["shares"] = target / 2
+    paper_account._save_account(state)
+    pending = paper_account.queue_orders(
+        {"IWM": 0.125}, {"IWM": px}, "2026-06-22", nav_base=nav, fill_after="2026-06-23",
+    )
+    assert len(pending) == 1
+    assert pending[0]["shares"] > 0 and pending[0]["est_value"] > 0
+
+
 def test_fill_pending_executes_at_market_price(tmp_account: None) -> None:
     """At the open, pending orders fill for their queued share count at the REAL
     market price (here +10% vs the prev-close estimate), then the queue clears."""
