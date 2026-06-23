@@ -1,0 +1,59 @@
+# ETF Brain — the rotation strategy, externalized as an editable spec.
+#
+# bot/etf.py + portfolio/etf_universe.py load this at runtime, so you can RETUNE the book here —
+# the universe, the hard risk limits, the doctrine the Brain reasons with, the grading horizon —
+# WITHOUT touching Python. A missing or malformed file degrades to the in-code defaults, so a bad
+# edit never breaks the book (it just falls back).
+#
+# Scope of a live edit: guardrails + doctrine + horizon are re-read each daily run (no restart);
+# the universe is read at import, so a universe change takes effect on the next process start
+# (a server restart, or the next `python -m bot.etf`). Env vars still override the guardrails
+# (ETF_MAX_SINGLE_WEIGHT / ETF_MIN_TRADE / ETF_OFFENSIVE_CAP_STRESSED / ETF_OFFENSIVE_CAP_ELEVATED).
+
+# --- the tradeable universe (US-listed ETFs only), grouped ------------------
+universe:
+  core_index:  [SPY, QQQ, IWM, DIA, VTI, RSP]              # broad market building blocks
+  sectors:     [XLK, XLF, XLE, XLV, XLU, XLI, XLP, XLY, XLB, XLC, XLRE, SMH, IGV, XBI, XOP]
+  factors:     [MTUM, QUAL, USMV, VLUE, SIZE]              # momentum / quality / min-vol / value / size
+  duration:    [TLT, IEF]                                  # rate-sensitive ballast
+  cash:        [SGOV, BIL, SHV, SHY]                       # T-bill ETFs = cash with yield
+  diversifier: [GLD]                                       # gold (optional safe haven)
+  # v2: add a `vix: [VIXY]` group here (and a CBOE feed) for a tactical crisis hedge.
+
+# Names that count as the crisis-floor DEFENSIVE bucket on top of all of duration + cash +
+# diversifier (which are always defensive). Everything else in the universe is OFFENSIVE and is
+# what the crisis floor caps when the tape reads stressed.
+defensive_extra: [USMV, XLP, XLU]
+
+# --- hard risk guardrails (enforced in the trusted layer, bot/etf.py) -------
+guardrails:
+  max_single_weight: 0.35      # cap on any one ETF (excess falls to cash)
+  min_trade: 0.015             # turnover throttle: a change smaller than this is NOT traded
+  offensive_cap:               # cap on OFFENSIVE gross by risk_state (calm = uncapped)
+    stressed: 0.55
+    elevated: 0.80
+
+# --- accountability ----------------------------------------------------------
+accountability:
+  horizon_days: 21             # forward window each daily pick is graded over, vs SPY (business days)
+
+# --- the doctrine the Brain reasons with (injected into its persona) --------
+# Free text. This is the STRATEGY content; the persona scaffolding (identity, the tool process,
+# the live guardrail numbers) is generated in code from the sections above, so they never drift.
+doctrine: |
+  1. CONFIRMATION OVER PREDICTION. You cannot time ignition. Prefer ETFs that are ALREADY ranked
+  high in the board's sector_rs table AND above their 200d trend; do not buy a falling knife on a
+  narrative. Early-following the confirmed leader beats prophesying the next one.
+  2. REGIME->TILT, conditioned on the tape. Use the board's quad: Q1 Goldilocks -> lean
+  growth/tech/momentum (XLK QQQ SMH MTUM QUAL); Q2 Reflation -> cyclicals/value/energy/materials
+  (XLE XLF XLB VLUE IWM); Q3 Stagflation -> energy/defensives/short-duration (XLE XLU XLP + SGOV/SHY);
+  Q4 Growth-scare -> defensives/duration/min-vol (XLU XLP XLV TLT USMV + cash). This is a PRIOR —
+  defer to sector_rs and trend when the tape disagrees.
+  3. CASH IS A POSITION. Hold T-bill ETFs (SGOV/BIL) deliberately as the option premium that funds
+  rotation; do not be reflexively fully invested.
+  4. CRISIS LADDER. When the board's risk_state is ELEVATED or STRESSED, de-gross: rotate out of
+  offensive equity into duration (TLT/IEF), T-bill cash (SGOV/BIL) and optionally gold (GLD). The
+  desk caps offensive gross in a stressed read regardless — get there first, deliberately.
+  5. THREE EXIT STOPS per holding, set on entry: a trend break (falls below its 200d), a thesis
+  invalidation (the regime/leadership that justified it flips), and a time stop (dead capital
+  lagging the leader gets rotated). Never average down into a name diverging from a rotating tape.

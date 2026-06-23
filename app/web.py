@@ -483,6 +483,18 @@ def api_decisions(portfolio: str = "autonomous", limit: int = 60) -> JSONRespons
         return JSONResponse({"decisions": [], "error": str(exc)})
 
 
+@router.get("/api/etf/outcomes")
+def api_etf_outcomes() -> JSONResponse:
+    """The ETF book's accountability scorecard — every past pick forward-graded vs SPY (21d
+    rel-return), with hit-rate, per-conviction calibration, weight-IC, and the book-edge (Newey-West
+    t over independent windows). 'building' until enough resolves. Backs the ETF track-record panel."""
+    try:
+        from portfolio import etf_outcomes
+        return JSONResponse(etf_outcomes.summary())
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"scorecard": {"status": "building"}, "error": str(exc)})
+
+
 @router.get("/api/research")
 def api_research() -> JSONResponse:
     notes_dir = _data() / "research" / "notes"

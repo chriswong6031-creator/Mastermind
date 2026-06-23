@@ -90,6 +90,12 @@ if FastAPI is not None:
             app.state.china_first_run = scheduler.maybe_first_china_run()
         except Exception:
             app.state.china_first_run = False
+        # ETF rotation book (US-listed ETFs, doctrine + guardrails) — kick its first build too
+        # (no-op once it has a track record). Runs on the US evening cadence thereafter.
+        try:
+            app.state.etf_first_run = scheduler.maybe_first_etf_run()
+        except Exception:
+            app.state.etf_first_run = False
 
     @app.post("/daily")
     def daily(force: bool = False) -> dict:
@@ -151,6 +157,24 @@ if FastAPI is not None:
         threading.Thread(target=lambda: china.run_china(force=force),
                          name="china-manual-run", daemon=True).start()
         return {"started": True, "note": "China Brain run started in the background."}
+
+    @app.post("/api/etf/run")
+    async def etf_run(force: bool = False, wait: bool = False) -> dict:
+        """Manually fire the ETF Opus-Brain book (rotate across US-listed ETFs under doctrine +
+        risk guardrails).
+
+        Long call; by default starts in the background and returns immediately. ?wait=true blocks."""
+        from bot import etf
+        if wait:
+            import asyncio as _aio
+            out = await _aio.to_thread(etf.run_etf, force=force)
+            return {k: out.get(k) for k in
+                    ("asof", "inaugural", "trading_day", "decided", "holdings", "risk_state",
+                     "guardrails", "executed", "skipped_unpriceable", "nav", "brain")}
+        import threading
+        threading.Thread(target=lambda: etf.run_etf(force=force),
+                         name="etf-manual-run", daemon=True).start()
+        return {"started": True, "note": "ETF Brain run started in the background."}
 
     @app.post("/research")
     async def research(req: ResearchReq) -> dict:

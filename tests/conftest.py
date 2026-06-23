@@ -48,6 +48,7 @@ def _isolate_research_papers(tmp_path, monkeypatch):
     # otherwise spawn a live Opus session + write a real book). Covers every Brain book.
     monkeypatch.setenv("AUTONOMOUS_FIRST_RUN", "0")
     monkeypatch.setenv("CHINA_FIRST_RUN", "0")
+    monkeypatch.setenv("ETF_FIRST_RUN", "0")
     try:
         import brain.research_paper as rp
         papers = tmp_path / "_papers"

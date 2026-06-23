@@ -51,6 +51,13 @@ def _hk_job():
     run_hk()
 
 
+def _etf_job():
+    """The free-form ETF Opus-Brain book: rotates across US-listed ETFs (index/sector/factor/duration/
+    cash) under an ETF-adapted doctrine + risk guardrails, once per US trading day after the close."""
+    from bot.etf import run_etf
+    run_etf()
+
+
 def _snapshot_job():
     """Publish a static snapshot of the dashboard to the public Macro Dashboard (GitHub Pages).
     Writes site/mastermind/mastermind_snapshot.json into the macro repo (via the vendor/macro
@@ -98,6 +105,11 @@ def start():
     # (data/portfolios/hk) — no state race with the A-share china book.
     sch.add_job(_hk_job, CronTrigger(day_of_week="mon-fri", hour=hk_hour, minute=0),
                 id="hk_daily", replace_existing=True, misfire_grace_time=3600, coalesce=True)
+    # ETF book on the US evening cadence (Mon–Fri after the close), staggered 5 min after the
+    # autonomous book so the two US Brain runs don't hammer the subscription/price feeds at once;
+    # disjoint data dir (data/portfolios/etf) — no state race.
+    sch.add_job(_etf_job, CronTrigger(day_of_week="mon-fri", hour=a_hour, minute=15),
+                id="etf_daily", replace_existing=True, misfire_grace_time=3600, coalesce=True)
     # Publish the dashboard snapshot to the public Macro Dashboard (GitHub Pages) TWICE a day:
     #   • ~12:25 UTC — a morning refresh that picks up the overnight China book (08:00) and the
     #     prior night's autonomous/heavyweight Brain books (23:xx).
@@ -250,4 +262,36 @@ def maybe_first_hk_run() -> bool:
             pass
 
     threading.Thread(target=_go, name="hk-first-run", daemon=True).start()
+    return True
+
+
+def maybe_first_etf_run() -> bool:
+    """On first turn-on, immediately build the ETF book so it can rotate right away — instead of
+    waiting for the next US close. No-op once it has a NAV track record. Gated on the Claude layer
+    being available + ETF_FIRST_RUN != '0'. Runs in a daemon thread (never blocks startup)."""
+    if os.environ.get("ETF_FIRST_RUN", "1") == "0":
+        return False
+    try:
+        from portfolio import registry
+        nav_path = registry.data_dir("etf") / "nav_history.jsonl"
+        if nav_path.exists() and nav_path.read_text().strip():
+            return False                       # already has a track record — the cron owns it now
+    except Exception:
+        pass
+    try:
+        from brain import cli_bridge
+        if not cli_bridge.available():
+            return False                       # no subscription/CLI → don't fire a doomed armed run
+    except Exception:
+        return False
+    import threading
+
+    def _go():
+        try:
+            from bot.etf import run_etf
+            run_etf()
+        except Exception:
+            pass
+
+    threading.Thread(target=_go, name="etf-first-run", daemon=True).start()
     return True
