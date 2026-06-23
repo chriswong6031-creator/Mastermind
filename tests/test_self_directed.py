@@ -39,6 +39,39 @@ def test_buy_fills_when_market_open(sd) -> None:
     assert abs(acct["cash"] - (sd._STARTING_NAV - 100_000.0)) < 1e-6
 
 
+def test_buy_by_dollar_amount(sd) -> None:
+    # $25,000 of a $125 stock -> 200 shares, cash down $25k
+    r = sd.place_order("AAPL", "buy", notional=25_000.0, price=125.0, market_open=True)
+    assert r["ok"] and r["status"] == "filled"
+    assert abs(r["fill"]["shares"] - 200.0) < 1e-6
+    acct = sd._load_account()
+    assert abs(acct["positions"]["AAPL"]["shares"] - 200.0) < 1e-6
+    assert abs(acct["cash"] - (sd._STARTING_NAV - 25_000.0)) < 1e-6
+
+
+def test_sell_by_dollar_amount(sd) -> None:
+    sd.place_order("AAPL", "buy", 100, price=100.0, market_open=True)
+    # sell $3,000 worth at $150 -> 20 shares
+    r = sd.place_order("AAPL", "sell", notional=3_000.0, price=150.0, market_open=True)
+    assert r["ok"] and r["status"] == "filled"
+    assert abs(r["fill"]["shares"] - 20.0) < 1e-6
+    assert abs(sd._load_account()["positions"]["AAPL"]["shares"] - 80.0) < 1e-6
+
+
+def test_pending_dollar_order_settles_to_shares_at_open(sd) -> None:
+    r = sd.place_order("AAPL", "buy", notional=5_000.0, market_open=False)
+    assert r["ok"] and r["status"] == "pending"
+    assert sd._load_pending()[0].get("notional") == 5_000.0
+    settled = sd.settle_pending(market_open=True, prices={"AAPL": 100.0})
+    assert len(settled) == 1 and settled[0]["status"] == "filled"
+    assert abs(sd._load_account()["positions"]["AAPL"]["shares"] - 50.0) < 1e-6   # $5k / $100
+
+
+def test_order_requires_shares_or_notional(sd) -> None:
+    r = sd.place_order("AAPL", "buy", market_open=True, price=100.0)
+    assert r["ok"] is False and ("shares" in r["error"].lower() or "amount" in r["error"].lower())
+
+
 def test_buy_clamped_to_cash_no_leverage(sd) -> None:
     # ask for $10M of stock with $1M cash -> clamp to cash/px shares, cash floored at 0
     r = sd.place_order("AAPL", "buy", 100_000, price=100.0, market_open=True)
@@ -113,11 +146,12 @@ def test_pending_does_not_settle_while_closed(sd) -> None:
 
 
 def test_pending_sell_with_no_shares_cancelled_on_settle(sd) -> None:
-    # queue a sell while we hold the name, then exit it before the open so the queued
-    # sell has nothing to fill -> it is dropped as cancelled, not errored.
+    # a queued sell whose position is gone by the open has nothing to fill -> it is dropped as
+    # 'cancelled', not errored. (Simulate the lot being gone by popping it directly, so the test
+    # is deterministic regardless of whether ambient price lookups succeed.)
     sd.place_order("AAPL", "buy", 10, price=100.0, market_open=True)
-    sd.place_order("AAPL", "sell", 10, market_open=False)     # queued
-    sd.place_order("AAPL", "sell", 10, price=105.0, market_open=True)  # exit now
+    sd.place_order("AAPL", "sell", 10, market_open=False)     # queued sell of the 10 held
+    state = sd._load_account(); state["positions"].pop("AAPL", None); sd._save_account(state)
     settled = sd.settle_pending(market_open=True, prices={"AAPL": 110.0})
     assert len(settled) == 1 and settled[0]["status"] == "cancelled"
 

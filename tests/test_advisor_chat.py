@@ -92,6 +92,65 @@ def test_chat_stream_maps_messages_to_events(monkeypatch):
     assert done["tools_used"] == ["mcp__bot__get_regime"]
 
 
+# Doubles that mimic the REAL claude_agent_sdk content blocks: dataclass-like objects
+# whose KIND is carried by the class NAME, with NO `.type` field. The legacy `.type`-based
+# dispatch dropped these silently -> the live-chat "(no response)" regression. _block_kind
+# must key off the class name; these guard it.
+class TextBlock:
+    def __init__(self, text):
+        self.text = text
+
+
+class ToolUseBlock:
+    def __init__(self, name, input=None, id="t1"):
+        self.id, self.name, self.input = id, name, input or {}
+
+
+class ToolResultBlock:
+    def __init__(self, content, tool_use_id="t1"):
+        self.tool_use_id, self.content, self.is_error = tool_use_id, content, False
+
+
+def test_chat_stream_handles_typeless_sdk_blocks(monkeypatch):
+    """Regression: real SDK blocks have no `.type` — text must still stream."""
+    async def fake_query(*, prompt, options):
+        yield _Assistant([
+            TextBlock("Regime is Goldilocks."),
+            ToolUseBlock("mcp__bot__get_regime", {}),
+        ])
+        yield _Result("Regime is Goldilocks.", "sess-xyz", 0.012)
+
+    monkeypatch.setattr(cli_bridge, "_SDK", True)
+    monkeypatch.setattr(cli_bridge, "_sdk_query", fake_query)
+    monkeypatch.setattr(cli_bridge, "cli_path", lambda: "/usr/bin/claude")
+
+    evs = _drain(cli_bridge.chat_stream("hi"))
+    texts = [e["text"] for e in evs if e["type"] == "text"]
+    assert texts == ["Regime is Goldilocks."]          # streamed once (not also via fallback)
+    assert next(e for e in evs if e["type"] == "tool")["name"] == "mcp__bot__get_regime"
+    assert evs[-1]["type"] == "done" and evs[-1]["tools_used"] == ["mcp__bot__get_regime"]
+
+
+def test_chat_stream_falls_back_to_result_text(monkeypatch):
+    """Backstop: if no text block is recognised but the ResultMessage carries the final
+    text, surface it so the chat is never silently empty."""
+    class _Mystery:                                    # an unrecognised content shape
+        def __init__(self):
+            self.content = [object()]                  # neither text/tool/tool_result
+
+    async def fake_query(*, prompt, options):
+        yield _Mystery()
+        yield _Result("Here is the answer.", "sess-1", 0.01)
+
+    monkeypatch.setattr(cli_bridge, "_SDK", True)
+    monkeypatch.setattr(cli_bridge, "_sdk_query", fake_query)
+    monkeypatch.setattr(cli_bridge, "cli_path", lambda: "/usr/bin/claude")
+
+    evs = _drain(cli_bridge.chat_stream("hi"))
+    assert [e["text"] for e in evs if e["type"] == "text"] == ["Here is the answer."]
+    assert evs[-1]["type"] == "done"
+
+
 def test_chat_stream_surfaces_sdk_exception(monkeypatch):
     async def boom(*, prompt, options):
         if False:

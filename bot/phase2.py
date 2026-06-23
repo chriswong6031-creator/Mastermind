@@ -12,6 +12,7 @@ in the conviction sleeve until breadth/flow/volume/catalyst confirm).
 from __future__ import annotations
 
 import json
+import os
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -63,6 +64,58 @@ def _conv_theme_id(t: str) -> str:
     except Exception:
         pass
     return f"name:{t.upper()}"
+
+
+def _entry_tech_fields(ticker: str) -> dict:
+    """The entry-technical fields the L3 timing lever needs, pulled defensively from the name's
+    published stockdata JSON (the same accessors the D1/D2/D4 block uses). Every field is nullable —
+    None whenever the read fails or the field is absent — so a missing snapshot never breaks the
+    shadow input. Paths verified against the live schema:
+      * tech.pct_vs_200dma                       — extension vs the 200dma (entry stretch)
+      * conviction.ext.grade / .extension.grade  — the entry-quality grade (eq_grade)
+      * conviction.ext.parabolic / .extension…   — the parabolic flag
+      * momentum.alpha.rs                         — the name's relative-strength score
+      * entry_signal.urgency                      — entry urgency (now/soon/later)"""
+    try:
+        _sd = lenses_mod._load(f"site/stockdata/{ticker}.json") or {}
+    except Exception:  # noqa: BLE001
+        _sd = {}
+    _g = lenses_mod._g
+    return {
+        "pct_vs_200dma": _g(_sd, "tech.pct_vs_200dma"),
+        "rs": _g(_sd, "momentum.alpha.rs"),
+        "urgency": _g(_sd, "entry_signal.urgency"),
+        "eq_grade": (_g(_sd, "conviction.ext.grade")
+                     or _g(_sd, "conviction.extension.grade")),
+        "parabolic": bool(_g(_sd, "conviction.ext.parabolic")
+                          or _g(_sd, "conviction.extension.parabolic")),
+    }
+
+
+def _timing_gate_enabled() -> bool:
+    """The L3 entry-timing gate (subtract-only WITHHOLD on poor entry technicals) runs ONLY when
+    explicitly enabled. Default OFF — so the live buy path is BYTE-IDENTICAL to today until the user
+    opts in. Enable with env MASTERMIND_TIMING_GATE in {1, true, yes, on}; anything else is OFF.
+    (Mirrors the MASTERMIND_COMMITTEE env-flag pattern, but defaults OFF, not on.)"""
+    return os.environ.get("MASTERMIND_TIMING_GATE", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _judgment_enabled() -> bool:
+    """The Flagship deep-reasoning JUDGMENT layer (MACRO STRATEGIST + PM-CONVICTION seats that
+    reshape the engine's confirmed list into the PM's target book) runs ONLY when explicitly
+    enabled. Default OFF — so the live Flagship build is BYTE-IDENTICAL to today until the user
+    opts in. Enable with env MASTERMIND_FLAGSHIP_JUDGMENT in {1, true, yes, on}; anything else
+    is OFF. (Mirrors the MASTERMIND_TIMING_GATE / MASTERMIND_COMMITTEE env-flag pattern.)"""
+    return os.environ.get("MASTERMIND_FLAGSHIP_JUDGMENT", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _risk_officer_enabled() -> bool:
+    """The judgment-exit RISK OFFICER over HELD conviction positions (layered ON TOP of the
+    mechanical detectors — D5 dead-capital, hard-veto sweep, hysteresis) runs ONLY when explicitly
+    enabled. Default OFF — so the live exit path is BYTE-IDENTICAL to today until the user opts in.
+    Enable with env MASTERMIND_RISK_OFFICER in {1, true, yes, on}; anything else is OFF.
+    (Mirrors the MASTERMIND_FLAGSHIP_JUDGMENT / MASTERMIND_COMMITTEE env-flag pattern.)"""
+    return os.environ.get("MASTERMIND_RISK_OFFICER", "0").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _is_hard_exit(syn: dict) -> bool:
@@ -264,6 +317,7 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
                      committee_block, sentinel, price, is_new):
         sm = breakdown.get("size_mult") or 1.0
         wf = round(min(name_cap, (c.get("weight") or 0.0) * sm), 4) if forge_confirmed else 0.0
+        _tech = _entry_tech_fields(ticker)
         _shadow_inputs.append({
             "ticker": ticker, "confluence": c.get("confluence"),
             "is_new": bool(is_new), "retained": bool(c.get("retained")),
@@ -277,6 +331,10 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
             "committee": committee_block, "sentinel": sentinel, "price": price,
             "raw_prob_correct": round(0.55 + min(0.15, (c.get("confluence") or 0.0) * 0.4), 2),
             "horizon_d": 21, "thesis_id": f"{asof}-{ticker}-conv",
+            # entry-technical fields for the L3 timing lever (all nullable / defensive)
+            "extension": _tech["pct_vs_200dma"], "pct_vs_200dma": _tech["pct_vs_200dma"],
+            "rs": _tech["rs"], "urgency": _tech["urgency"],
+            "eq_grade": _tech["eq_grade"], "parabolic": _tech["parabolic"],
         })
 
     for c in sized:
@@ -311,6 +369,29 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
         gate_info[t] = {"full": _full, "paper": paper, "breakdown": breakdown,
                         "research_block": research_block}
         if breakdown["confirmed"]:
+            # ── L3 ENTRY-TIMING GATE (subtract-only, flag-gated, default OFF) ──
+            # A NEW name that has cleared the gate + conviction + research confirm and would be BOUGHT
+            # is WITHHELD when its entry technicals are poor (extended / weak-RS / 'avoid' / weak eq),
+            # parked on the Flagship watchlist for daily re-review instead of being chased at a bad
+            # entry. The predicate is IDENTICAL to the shadow lever (portfolio.watchlist.timing_withhold
+            # mirrors portfolio.desk_ab.apply_timing_gated). Subtract-only: it can only DROP a would-be
+            # buy (never add, never resize up) and ONLY a fresh add (a carried/held name is untouched).
+            # When the flag is OFF this branch is inert → behavior is byte-identical to before.
+            if is_new and _timing_gate_enabled():
+                from portfolio import watchlist as _watchlist
+                _twreason = _watchlist.timing_withhold(_entry_tech_fields(t))
+                if _twreason:
+                    research_held.append({"ticker": t, "reason": "timing withhold: " + _twreason,
+                                          **research_block})
+                    _emit_shadow(t, c, breakdown, forge_confirmed=True, weight_prod=0.0,
+                                 committee_block=None, sentinel=None, price=px, is_new=is_new)
+                    try:
+                        _watchlist.append(t, asof, _twreason, tech=_entry_tech_fields(t),
+                                          combined=breakdown.get("combined"))
+                    except Exception:  # noqa: BLE001 — watchlist logging never blocks the gate
+                        pass
+                    _rl_log(_run_id, "decision", f"TIMING WITHHOLD {t}", _twreason, ticker=t)
+                    continue
             scaled = round(min(name_cap, c["weight"] * breakdown["size_mult"]), 4)
             # ── blind adversarial committee (SENTINEL → NEXUS): a NEW buy FORGE confirmed gets an
             #    independent bear case; the committee can only DE-ESCALATE (trim/drop), never escalate.
@@ -362,6 +443,23 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
                     f"viab={breakdown['viability']}",
                     ticker=t, **research_block)
     sized = confirmed_sized
+    # ── FLAGSHIP DEEP-REASONING JUDGMENT LAYER (flag-gated, default OFF) ───────────────────
+    # When MASTERMIND_FLAGSHIP_JUDGMENT is OFF this branch is inert → the engine path below is
+    # BYTE-IDENTICAL. When ON, the MACRO STRATEGIST + PM-CONVICTION seats reshape the engine's
+    # confirmed list into the PM's Flagship target book (the PM may add high-conviction thematic
+    # names + drop engine names lacking a live thesis), each name checked by the existing blind
+    # SENTINEL + subtract-only NEXUS + name_cap clamp. The return keeps the EXACT schema
+    # conviction.build emits, so the unchanged downstream loop rebalances/marks/publishes/grades
+    # the judgment book identically to the engine book. Additive; never breaks the engine build.
+    if _judgment_enabled():
+        try:
+            from brain import judgment_book as _jb
+            _pctx = {"held_conviction": sorted(_open_conv), "n_held": len(_open_conv)}
+            sized = _jb.build(sized, _rejected, regime=regime, asof=asof, gate_info=gate_info,
+                              shadow_inputs=_shadow_inputs, portfolio_ctx=_pctx, name_cap=name_cap)
+        except Exception:  # noqa: BLE001 — additive; a judgment-layer failure never breaks the build
+            pass
+    # ──────────────────────────────────────────────────────────────────────────────────────
     _rl_log(_run_id, "book_step", "research gate evaluated",
             f"confirmed={len(sized)} research_held={len(research_held)} "
             f"rejected={len(_rejected)} armed={_armed_ok}")
@@ -521,6 +619,51 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
                        + detectors.d4_avg_down_into_divergence(_held_lots, "self"))
     except Exception as _e:
         _rl_log(_run_id, "decision", "d1/d2/d4 wiring error", f"{_e!r}"[:160])
+
+    # ———— RISK OFFICER — judgment exits over HELD conviction (layered ON TOP of the mechanical
+    # detectors above: D5 dead-capital, hard-veto sweep, hysteresis). Subtract-only — trim/exit
+    # only, never adds, never averages down; the never-blow-to-cash guard is enforced inside
+    # risk_assess (the returned `decisions` are already guard-honoured). Exits reuse the SAME
+    # close/trim recording the detectors use (position_log.close_position + ledger.close) so they
+    # are gradable. Flag-gated (MASTERMIND_RISK_OFFICER, default OFF) → byte-identical until armed.
+    # Additive + reversible: any failure leaves `book` untouched. ————
+    if _risk_officer_enabled():
+        try:
+            from brain import risk_officer as _ro
+            _ro_held = [hp for hp in position_log.open_positions()
+                        if hp.get("sleeve") == "conviction"]
+            _ro_res = _ro.risk_assess(book, asof, regime=regime, held_positions=_ro_held)
+            _ro_exits: list[str] = []
+            _ro_trims: list[str] = []
+            for _d in _ro_res.get("decisions", []):
+                _t = _d.get("ticker")
+                if _d.get("action") == "exit":
+                    book = [p for p in book
+                            if not (p.get("sleeve") == "conviction" and p["ticker"] == _t)]
+                    try:
+                        position_log.close_position("conviction", _t, asof,
+                                                    reason="risk_officer_exit")
+                    except Exception:
+                        pass
+                    try:
+                        ledger.close(_t, f"exited (Risk Officer: {_d.get('reason', 'thesis_broken')})")
+                    except Exception:
+                        pass
+                    _ro_exits.append(_t)
+                elif _d.get("action") == "trim":
+                    for _p in book:
+                        if _p["ticker"] == _t and _p.get("sleeve") == "conviction":
+                            try:
+                                _p["weight"] = round(float(_p.get("weight") or 0.0)
+                                                     * float(_d.get("scale", 1.0)), 4)
+                            except (TypeError, ValueError):
+                                pass
+                            _ro_trims.append(_t)
+            _rl_log(_run_id, "decision", "risk officer pass",
+                    f"exits={_ro_exits} trims={_ro_trims}",
+                    exited=_ro_exits)
+        except Exception as _e:
+            _rl_log(_run_id, "decision", "risk officer wiring error", f"{_e!r}"[:160])
 
     # ———— cash (sized after all exits) ————
     gross = round(sum(p["weight"] for p in book), 4)
@@ -712,6 +855,19 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
                 f"policies={len(_sb.get('books', {}))}")
     except Exception as _e:
         _rl_log(_run_id, "decision", "shadow books error", f"{_e!r}"[:160])
+
+    # ———— desk-lever A/B (Arm B) — forward shadow of the proposed desk levers ————
+    # Re-derive the L1/L2/L3/L4/desk_proxy books from the SAME stored decision inputs + daily prices,
+    # each isolated under data/shadow/desk_ab/ (reuses the shadow_books paper-account + grader so the
+    # books get a daily NAV row and the ~168-day forward clock ticks). Best-effort + fully isolated;
+    # a failure here can NEVER affect prod. Runs right after shadow_books so Arm B accrues each build.
+    try:
+        from portfolio import desk_ab as _desk_ab
+        _da = _desk_ab.run(asof, prices=_prices, inputs=_shadow_inputs)
+        _rl_log(_run_id, "book_step", "desk A/B marked",
+                f"policies={len(_da.get('books', {}))}")
+    except Exception as _e:
+        _rl_log(_run_id, "decision", "desk A/B error", f"{_e!r}"[:160])
 
     # ———— universe-wide forward PREDICTION LOG — the statistical-power unlock ————
     # Log + forward-label a falsifiable rel-return thesis for EVERY name the engine has a directional

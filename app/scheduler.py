@@ -67,18 +67,55 @@ def _snapshot_job():
 
 
 def _settle_pending_job():
-    """Fill the gated flagship book's queued PENDING orders at the OPEN, during market hours.
+    """Settle the US books' queued orders at the OPEN, during market hours.
 
-    The flagship build runs once a day AFTER the US close (22:40 UTC) — so it only ever *queues*
-    overnight buy orders (queue_orders, market-closed branch) and never reaches fill_pending. Without
-    this job those queued orders are re-queued every evening and never execute (the paper book stays
-    all-cash). This morning sweep settles them at the real session open, then clears the PENDING tags
-    on latest.json so the dashboard renders the names as HOLDING with live unrealized P&L. Brain books
-    fill immediately and never queue, so flagship is the only book that needs it. Never raises."""
+    All books DECIDE after their close (the flagship at 22:40 UTC; the US Brain books at 23:10/23:15)
+    and, while the market is shut, only QUEUE their target — they never book an off-hours fill. This
+    morning sweep settles them at the real session open: the flagship's queued buy orders
+    (queue_orders → fill_pending) and the US Brain books' queued target (autonomous + etf →
+    paper_account.settle_target, a full rebalance to the decided book at the open mark), then
+    republishes so the dashboard renders the freshly-filled positions. Idempotent + never raises."""
     try:
         from scripts.fill_pending_now import settle
         settle("flagship", require_open=True)
     except Exception:  # noqa: BLE001 — a settle miss must never kill the scheduler
+        pass
+    try:
+        from bot import settle as _settle
+        _settle.settle_us()                      # autonomous + etf: settle the queued target at the US open
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _settle_brain_asia_job():
+    """Settle the Greater-China Brain books' queued targets at the A-share OPEN (~01:30 UTC). The
+    china/hk books decide after their close and queue; this fills the queued target at the next open
+    via a full rebalance, then republishes. No-op when the market is shut or nothing is queued."""
+    try:
+        from bot import settle as _settle
+        _settle.settle_asia()                    # china + hk
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _watch_us_job():
+    """Overnight watch for the US Brain books: between the US close and the next open, re-read the live
+    overnight tape; on a MATERIAL move (deterministic tripwire — free, no LLM) re-prompt the Brain to
+    revise its queued target (which settles at the open). Cheap on a calm tape; never raises."""
+    try:
+        from bot import overnight
+        overnight.watch_us()
+    except Exception:  # noqa: BLE001 — a watch miss must never kill the scheduler
+        pass
+
+
+def _watch_asia_job():
+    """Overnight watch for the Greater-China Brain books (china + hk) between their close and the next
+    A-share open. Same tripwire→refine discipline as the US watch. Never raises."""
+    try:
+        from bot import overnight
+        overnight.watch_asia()
+    except Exception:  # noqa: BLE001
         pass
 
 
@@ -90,6 +127,67 @@ def _macro_refresh_job():
         macro_refresh.refresh_and_check()
     except Exception:  # noqa: BLE001 — a refresh miss must never kill the scheduler
         pass
+
+
+def _cio_weekly_job():
+    """CIO / Meta-PM weekly accountability review: reads per-role calibration multipliers + each seat's
+    graded KPIs + book NAV-vs-benchmark + the shadow leaderboard, and WRITES a 'what is working / who is
+    miscalibrated' note + non-binding tuning recommendations to data/brain/cio/<isoweek>.{json,md}.
+    It RECOMMENDS ONLY — it never trades, never flips a flag, never changes a seat's behavior. Lazy
+    import + try/except so a review miss never kills the scheduler."""
+    try:
+        from scripts.run_cio import run as run_cio
+        run_cio()
+    except Exception:  # noqa: BLE001 — a CIO miss must never kill the scheduler
+        pass
+
+
+# The books that the deterministic/Brain builders mark only on their OWN run day. flagship marks
+# on its build (and on its carried-forward sweep), each Brain book on its run — but a book that
+# does NOT rebuild on a given day never advances its nav_history, so it can't be graded forward.
+# self_directed is excluded: it is NOT a paper_account book (its own engine owns its NAV).
+_MARK_BOOK_IDS = ["flagship", "autonomous", "heavyweight", "china", "hk", "etf"]
+
+
+def _daily_mark_job():
+    """Mark EVERY paper book to market once per trading day, regardless of whether it rebuilt.
+
+    The blocker this closes: a book built once is never re-marked on non-rebuild days (flagship's
+    own mark only fires when phase2.run executes; each Brain book marks only on its own run), so
+    nav_history never advances and held positions are never re-priced — nothing can be graded
+    forward. This read-only sweep loads each book, gathers a live mark for every held ticker plus
+    that book's benchmark, and appends an idempotent-per-date nav_history row. It NEVER trades, never
+    touches cash/positions, and is best-effort per book — one book failing cannot abort the others.
+
+    Runs Mon–Fri shortly BEFORE the flagship build (22:35 UTC) so a fresh daily mark is in place
+    before the evening builds; mark() is idempotent per date, so a later same-day build just
+    replaces the row. Never raises into the scheduler."""
+    try:
+        from portfolio import paper_account, registry
+    except Exception:  # noqa: BLE001
+        return
+    for pid in _MARK_BOOK_IDS:
+        try:
+            # cash sweep first: idle cash earns ~4%/yr (money-market), idempotent per date, so the
+            # NAV we mark below already reflects today's accrued cash. Best-effort (never raises).
+            paper_account.accrue_cash_yield(_today_iso(), portfolio_id=pid)
+            state = paper_account._load_account(pid)
+            bench = paper_account._benchmark_for(pid)
+            tickers = set(state.get("positions", {}).keys()) | {bench}
+            prices: dict = {}
+            for t in tickers:
+                px = paper_account._current_price(t)
+                if px and px > 0:
+                    prices[t] = px
+            if prices:
+                paper_account.mark(prices, _today_iso(), portfolio_id=pid, benchmark=bench)
+        except Exception:  # noqa: BLE001 — one book's mark miss must never kill the sweep
+            continue
+
+
+def _today_iso() -> str:
+    from datetime import date
+    return date.today().isoformat()
 
 
 def start():
@@ -123,6 +221,14 @@ def start():
     # refreshes inline as a belt-and-suspenders guard right before the flagship build reads.
     sch.add_job(_macro_refresh_job, CronTrigger(hour="*/3", minute=30), id="macro_refresh",
                 replace_existing=True, misfire_grace_time=3600, coalesce=True)
+    # DAILY MARK-TO-MARKET: re-price EVERY paper book once per trading day, even when it does not
+    # rebuild — otherwise a book built once never advances its nav_history and can't be graded
+    # forward. Fires Mon–Fri at <flagship hour>:35, just BEFORE the 22:40 flagship build, so a fresh
+    # daily mark is in place before the evening builds (mark() is idempotent per date, so a later
+    # same-day build merely replaces the row). UTC pinned for the same reason as settle_pending below.
+    sch.add_job(_daily_mark_job,
+                CronTrigger(day_of_week="mon-fri", hour=hour, minute=35, timezone="UTC"),
+                id="daily_mark", replace_existing=True, misfire_grace_time=3600, coalesce=True)
     sch.add_job(_job, CronTrigger(hour=hour, minute=40), id="daily_loop",
                 replace_existing=True, misfire_grace_time=3600, coalesce=True)
     # Mon–Fri only (no Sat/Sun) — the autonomous book refreshes once per trading day after close.
@@ -156,6 +262,25 @@ def start():
     sch.add_job(_settle_pending_job,
                 CronTrigger(day_of_week="mon-fri", hour=settle_hour, minute=0, timezone="UTC"),
                 id="settle_pending", replace_existing=True, misfire_grace_time=7200, coalesce=True)
+    # Settle the Greater-China Brain books' queued targets at the A-share OPEN (09:30 CST = 01:30
+    # UTC). The china/hk builds run after their close (08:00/09:00 UTC) and only QUEUE; this fills
+    # the queued target at the next open. UTC-pinned (same reason as settle_pending). Idempotent +
+    # no-op when the market's shut — the settle re-checks china_calendar.is_open() per book.
+    asia_settle_hour = int(os.environ.get("ASIA_SETTLE_UTC_HOUR", "1"))
+    sch.add_job(_settle_brain_asia_job,
+                CronTrigger(day_of_week="mon-fri", hour=asia_settle_hour, minute=35, timezone="UTC"),
+                id="settle_brain_asia", replace_existing=True, misfire_grace_time=7200, coalesce=True)
+    # OVERNIGHT WATCH — let the Brain books re-decide on the LIVE overnight tape before the open. A
+    # deterministic tripwire (data_layer.overnight: futures/intl/vol risk read) gates the Opus refine,
+    # so most ticks are free; the Brain only re-prompts on a material overnight move, revising its
+    # queued target (which settles at the open). US books: a few ticks between the US close and open
+    # (~02/06/11 UTC). Asia books: between their close and the next A-share open (~14/20/00 UTC).
+    us_watch_hours = (os.environ.get("US_WATCH_UTC_HOURS", "2,6,11").strip() or "2,6,11")
+    asia_watch_hours = (os.environ.get("ASIA_WATCH_UTC_HOURS", "14,20,0").strip() or "14,20,0")
+    sch.add_job(_watch_us_job, CronTrigger(day_of_week="mon-fri", hour=us_watch_hours, minute=20, timezone="UTC"),
+                id="watch_us_overnight", replace_existing=True, misfire_grace_time=3600, coalesce=True)
+    sch.add_job(_watch_asia_job, CronTrigger(day_of_week="mon-fri", hour=asia_watch_hours, minute=20, timezone="UTC"),
+                id="watch_asia_overnight", replace_existing=True, misfire_grace_time=3600, coalesce=True)
     # Publish the dashboard snapshot to the public Macro Dashboard (GitHub Pages) TWICE a day:
     #   • ~12:25 UTC — a morning refresh that picks up the overnight China book (08:00) and the
     #     prior night's autonomous/heavyweight Brain books (23:xx).
@@ -168,6 +293,14 @@ def start():
     sch.add_job(_snapshot_job, CronTrigger(hour=snap_hours, minute=25),
                 id="publish_macro_snapshot", replace_existing=True,
                 misfire_grace_time=3600, coalesce=True)
+
+    # CIO / Meta-PM weekly accountability review (additive, read-only — recommends, never trades).
+    # Default Sunday 10:00 UTC; configurable via CIO_WEEKLY_DAY / CIO_WEEKLY_UTC_HOUR.
+    cio_dow = os.environ.get("CIO_WEEKLY_DAY", "sun")
+    cio_hour = int(os.environ.get("CIO_WEEKLY_UTC_HOUR", "10"))
+    sch.add_job(_cio_weekly_job,
+                CronTrigger(day_of_week=cio_dow, hour=cio_hour, minute=0, timezone="UTC"),
+                id="cio_weekly", replace_existing=True, misfire_grace_time=7200, coalesce=True)
     sch.start()
     _scheduler = sch
     return sch

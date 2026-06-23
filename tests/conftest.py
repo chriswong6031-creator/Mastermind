@@ -63,6 +63,37 @@ def _isolate_research_papers(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_tushare_network(monkeypatch):
+    """Default the Tushare feed OFF in tests so the suite never makes a live network call (and
+    _live_price falls back to the vendored snapshot); the tushare-specific tests re-enable it
+    with a mocked _call."""
+    try:
+        from data_layer import tushare_feed
+        tushare_feed.clear_cache()
+        monkeypatch.setattr(tushare_feed, "_token", lambda: None)
+        yield
+        tushare_feed.clear_cache()
+    except Exception:
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _no_yahoo_network(monkeypatch):
+    """Default the Yahoo HK feed OFF in tests: stub the yfinance import so the real warm() degrades
+    to a no-op and _live_price falls back to the vendored snapshot. HK-specific tests install a fake
+    yfinance via sys.modules to exercise the parse path without a live call."""
+    try:
+        import sys
+        from data_layer import yahoo_feed
+        yahoo_feed.clear_cache()
+        monkeypatch.setitem(sys.modules, "yfinance", None)
+        yield
+        yahoo_feed.clear_cache()
+    except Exception:
+        yield
+
+
+@pytest.fixture(autouse=True)
 def _clear_fx_cache():
     """The China book's FX rate memo (portfolio.fx) is a process-global; clear it around every
     test so an FX-dependent test is order-independent (a real rate read in one test can't leak a
@@ -72,5 +103,19 @@ def _clear_fx_cache():
         fx.clear_cache()
         yield
         fx.clear_cache()
+    except Exception:
+        yield
+
+
+@pytest.fixture(autouse=True)
+def _clear_portfolios_cache():
+    """/api/portfolios memoises its assembled status payload for a short TTL (a process-global);
+    clear it around every test so a payload built in one test can't leak stale NAV/return chips
+    into a later test that seeds a different book."""
+    try:
+        from app import web
+        web._portfolios_cache.clear()
+        yield
+        web._portfolios_cache.clear()
     except Exception:
         yield

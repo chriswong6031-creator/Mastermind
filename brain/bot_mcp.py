@@ -87,6 +87,21 @@ async def get_regime(args):
     return _json({k: d.get(k) for k in keys} | {"sector_rs_top": (d.get("sector_rs") or [])[:6]})
 
 
+@tool("get_overnight_tape",
+      "The LIVE overnight cross-asset tape — what's moving RIGHT NOW while the US cash market is shut, "
+      "which the EOD macro dashboard CANNOT see. US index futures (ES/NQ/YM/RTY), international indices "
+      "(Nikkei, Hang Seng, Shanghai, KOSPI, Euro Stoxx, DAX, FTSE), USD/JPY/DXY, the 10Y yield, VIX, oil, "
+      "gold and BTC — each with its overnight % change — plus a distilled risk read (calm / elevated / "
+      "stressed). Use this to position for the open the way a human trader watches the overnight tape; do "
+      "NOT rely on the stale dashboard for the current risk.", {})
+async def get_overnight_tape(args):
+    try:
+        from data_layer import overnight
+        return _json(overnight.tape())
+    except Exception as e:  # noqa: BLE001
+        return _json({"error": repr(e)[:200], "note": "overnight tape unavailable"})
+
+
 @tool("get_themes", "Narrative baskets with recent relative performance (the theme universe).",
       {"type": "object", "properties": {"region": {"type": "string"}}})
 async def get_themes(args):
@@ -622,7 +637,7 @@ async def execute_trade(args):
     return _ok(res["note"] + " (paper trade — shows in Trades + live P&L.)")
 
 
-_READ = [get_regime, get_themes, get_standouts, get_portfolio, get_decision_matrix, get_divergences,
+_READ = [get_regime, get_overnight_tape, get_themes, get_standouts, get_portfolio, get_decision_matrix, get_divergences,
          get_altdata, get_news, get_intelligence, get_intel_hub, get_daily_briefing, get_intake_candidates,
          get_ticker_package, get_fundamentals, get_options, get_anticipation, get_quote,
          get_quiver_strategy, get_quiver_compare, evaluate_gate, read_signal]

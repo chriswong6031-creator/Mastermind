@@ -36,27 +36,6 @@ PORTFOLIOS: list[dict] = [
         "legacy": True,           # state lives in data/portfolio/ (not data/portfolios/flagship)
     },
     {
-        "id": "autonomous",
-        "name": "Autonomous Brain",
-        "tagline": "Free-form · Opus-managed · daily",
-        "kind": "autonomous",     # an Opus Brain trades freely; no gate, no research paper
-        "manager": "brain",
-        "starting_nav": 1_000_000.0,
-        "benchmark": "SPY",
-        "legacy": False,
-    },
-    {
-        "id": "self_directed",
-        "name": "Self-Directed",
-        "tagline": "Your book · you place the trades",
-        "kind": "self_directed",  # YOU trade it by hand; served by portfolio.self_directed (its own
-                                  # engine + state under data/portfolio/self_directed/, not paper_account)
-        "manager": "you",
-        "starting_nav": 1_000_000.0,
-        "benchmark": "SPY",
-        "legacy": False,
-    },
-    {
         "id": "heavyweight",
         "name": "Heavyweight",
         "tagline": "Concentrated · presses Flagship's best",
@@ -68,16 +47,13 @@ PORTFOLIOS: list[dict] = [
         "legacy": False,
     },
     {
-        "id": "china",
-        "name": "China Brain",
-        "tagline": "All-China (A · HK · ADR) · Opus-managed · daily",
-        "kind": "china_brain",    # a free-form Opus Brain over the macro China signal desks; holds
-                                  # mainland A-shares, HK names, and US-listed China ADRs, marked in CNY
-                                  # — HK (HKD) + ADR (USD) FX-converted to CNY (bot/china.py). Same
-                                  # template as the autonomous book, China universe.
+        "id": "autonomous",
+        "name": "US Brain",
+        "tagline": "Free-form · Opus-managed · daily",
+        "kind": "autonomous",     # an Opus Brain trades freely; no gate, no research paper
         "manager": "brain",
         "starting_nav": 1_000_000.0,
-        "benchmark": "FXI",       # iShares China Large-Cap — USD all-China comparison line
+        "benchmark": "SPY",
         "legacy": False,
     },
     {
@@ -89,6 +65,43 @@ PORTFOLIOS: list[dict] = [
                                   # The ETF-only allowlist is enforced in the trusted layer via
                                   # portfolio.etf_universe (not registry.venues — that gates market venue).
         "manager": "brain",
+        "starting_nav": 1_000_000.0,
+        "benchmark": "SPY",
+        "legacy": False,
+    },
+    {
+        "id": "china",
+        "name": "CN Brain",
+        "tagline": "Mainland A-shares only · Opus-managed · daily",
+        "kind": "china_brain",    # a free-form Opus Brain over the macro China A-share desks; holds
+                                  # ONLY mainland A-shares (*.SS / *.SZ), marked natively in CNY (bot/china.py).
+        "manager": "brain",
+        "starting_nav": 1_000_000.0,
+        "benchmark": "FXI",       # iShares China Large-Cap — comparison line (marked in the book ccy)
+        "currency": "CNY",        # base currency — A-shares quote CNY
+        "venues": ["A-share"],    # tradeable universe: mainland A-shares (Shanghai / Shenzhen) only
+        "legacy": False,
+    },
+    {
+        "id": "hk",
+        "name": "HK Brain",
+        "tagline": "Hong Kong only · Opus-managed · daily",
+        "kind": "hk_brain",       # a free-form Opus Brain over the HK buy board; holds ONLY Hong-Kong
+                                  # listed names (*.HK), marked natively in HKD (no cross-FX — bot/hk.py).
+        "manager": "brain",
+        "starting_nav": 1_000_000.0,
+        "benchmark": "FXI",       # iShares China Large-Cap — comparison line (marked in the book ccy)
+        "currency": "HKD",        # base currency — HK names quote HKD, so no cross-currency conversion
+        "venues": ["HK"],         # tradeable universe: Hong Kong listings only
+        "legacy": False,
+    },
+    {
+        "id": "self_directed",
+        "name": "Self-Directed",
+        "tagline": "Your book · you place the trades",
+        "kind": "self_directed",  # YOU trade it by hand; served by portfolio.self_directed (its own
+                                  # engine + state under data/portfolio/self_directed/, not paper_account)
+        "manager": "you",
         "starting_nav": 1_000_000.0,
         "benchmark": "SPY",
         "legacy": False,
@@ -139,3 +152,13 @@ def starting_nav(portfolio_id: str | None = None) -> float:
 def benchmark(portfolio_id: str | None = None) -> str:
     """The equity-curve comparison symbol for a book (default 'SPY' for the US books)."""
     return str(get(portfolio_id).get("benchmark") or _DEFAULT_BENCHMARK)
+
+
+def currency(portfolio_id: str | None = None) -> str:
+    """The book's base/display currency ('USD' default; 'HKD' for hk, 'CNY' for china)."""
+    return str(get(portfolio_id).get("currency") or "USD")
+
+
+def venues(portfolio_id: str | None = None) -> list[str]:
+    """The venues a book may trade — e.g. ['HK'] or ['A-share']. Empty = unrestricted (US books)."""
+    return list(get(portfolio_id).get("venues") or [])

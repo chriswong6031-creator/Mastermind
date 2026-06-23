@@ -64,9 +64,15 @@ def _guardrails() -> dict:
 # the daily entrypoint
 # ---------------------------------------------------------------------------
 
-def run_etf(asof: str | None = None, *, force: bool = False, armed: bool = True) -> dict:
+def run_etf(asof: str | None = None, *, force: bool = False, armed: bool = True,
+            directive: str | None = None) -> dict:
     """Run one ETF turn end-to-end. Best-effort: every step degrades gracefully so a missing
-    credential / price never leaves the book in a half-traded state."""
+    credential / price never leaves the book in a half-traded state.
+
+    `directive` injects an ad-hoc instruction at the TOP of the Brain's prompt for this run only
+    (e.g. an urgent reconsideration: "the dashboard is stale, check live overnight futures yourself
+    and de-risk to SGOV if warranted"). The market-hours gate still applies — off-hours the decided
+    book is QUEUED for the next open, never filled on the spot."""
     from portfolio import etf_universe, market_calendar, paper_account, position_log
 
     asof = asof or date.today().isoformat()
@@ -85,7 +91,8 @@ def run_etf(asof: str | None = None, *, force: bool = False, armed: bool = True)
     brain: dict = {"ok": False, "skipped": not armed}
     if armed:
         try:
-            brain = _run_brain(asof, inaugural)
+            # directive is an optional ad-hoc override (overnight reviews) — pass it through only when set
+            brain = _run_brain(asof, inaugural, directive=directive) if directive else _run_brain(asof, inaugural)
         except Exception as e:                       # noqa: BLE001
             brain = {"ok": False, "error": repr(e)[:300]}
     out["brain"] = {k: brain.get(k) for k in ("ok", "cost_usd", "tools_used", "error", "run_id", "model")}
@@ -125,30 +132,32 @@ def run_etf(asof: str | None = None, *, force: bool = False, armed: bool = True)
         target, guardrail_notes = _apply_guardrails(target, prices, risk)
     out["guardrails"] = guardrail_notes
 
-    # 4. EXECUTE — rebalance the paper book to the (guardrailed) target at close prices. Names we
-    #    cannot price are skipped (and surfaced honestly).
+    # 4. EXECUTE — market-hours-aware. When the US session is OPEN, rebalance to the (guardrailed)
+    #    target at the live mark. When CLOSED (the normal post-close run, or any off-hours manual
+    #    run), QUEUE the target to settle at the next open — book NO fills now, so the book never
+    #    trades off-hours and re-running a closed session can't churn it. Names we cannot price are
+    #    skipped (and surfaced). See bot/settle.py + the scheduler's open settle.
+    from bot import settle as _settle
     executed: list[dict] = []
     skipped: list[str] = []
+    queued = False
     if decided:
-        priceable = {t: w for t, w in target.items() if t in prices}
         skipped = sorted(t for t in target if t not in prices)
-        before = dict((paper_account._load_account(PORTFOLIO_ID).get("positions") or {}))
-        try:
-            # Pass the FULL target (not just the priceable subset) so rebalance can distinguish a
-            # name the Brain DROPPED (→ sell) from one merely unpriceable THIS run (→ carry).
-            paper_account.rebalance(target, prices, asof, portfolio_id=PORTFOLIO_ID)
-        except Exception as e:                       # noqa: BLE001
-            out["rebalance_error"] = repr(e)[:200]
-        after = dict((paper_account._load_account(PORTFOLIO_ID).get("positions") or {}))
-        executed = _diff_trades(before, after, prices)
-        ledger_positions = [{"ticker": t, "sleeve": SLEEVE, "weight": w,
-                             "entry_price": prices.get(t)}
-                            for t, w in priceable.items()]
-        try:
-            position_log.update(ledger_positions, asof, portfolio_id=PORTFOLIO_ID)
-        except Exception:
-            pass
+        res = _settle.execute_or_queue(PORTFOLIO_ID, target, prices, asof)
+        executed = res.get("executed") or []
+        queued = bool(res.get("queued"))
+        if res.get("error"):
+            out["rebalance_error"] = res["error"]
+        if executed:   # only reconcile the rationale ledger when fills actually happened
+            ledger_positions = [{"ticker": t, "sleeve": SLEEVE, "weight": w, "entry_price": prices.get(t)}
+                                for t, w in target.items() if t in prices]
+            try:
+                position_log.update(ledger_positions, asof, portfolio_id=PORTFOLIO_ID)
+            except Exception:
+                pass
     out["executed"] = executed
+    out["queued_for_open"] = queued
+    out["market_open"] = _settle.is_open(PORTFOLIO_ID)
     out["skipped_unpriceable"] = skipped
 
     # 5. mark NAV vs SPY (idempotent per date)
@@ -311,9 +320,9 @@ def _build_persona() -> str:
     )
 
 
-def _run_brain(asof: str, inaugural: bool) -> dict:
+def _run_brain(asof: str, inaugural: bool, directive: str | None = None) -> dict:
     from brain import etf_mcp, cli_bridge
-    prompt = _build_prompt(asof, inaugural)
+    prompt = _build_prompt(asof, inaugural, directive=directive)
     coro = cli_bridge.reason(
         prompt,
         role="deep",                 # opus, per config/agents.yml
@@ -326,7 +335,7 @@ def _run_brain(asof: str, inaugural: bool) -> dict:
     return _run_coro(coro)
 
 
-def _build_prompt(asof: str, inaugural: bool) -> str:
+def _build_prompt(asof: str, inaugural: bool, directive: str | None = None) -> str:
     from portfolio import paper_account
     from brain import etf_board
     state = paper_account._load_account(PORTFOLIO_ID)
@@ -336,6 +345,9 @@ def _build_prompt(asof: str, inaugural: bool) -> str:
     risk = etf_board.risk_state()
 
     lines = [f"# ETF book — daily decision for {asof}", ""]
+    if directive:
+        # an ad-hoc instruction for THIS run only, pinned at the top so it frames the whole session.
+        lines += ["## ⚠ PRIORITY DIRECTIVE FOR THIS RUN", directive.strip(), ""]
     if regime:
         lines += [f"Macro regime (in-house read): {regime}", ""]
     lines += [f"Risk state (drives your duration/cash): {risk.get('state')} — {', '.join(risk.get('reasons') or [])}", ""]
@@ -504,6 +516,32 @@ def load_decisions(limit: int = 60) -> list[dict]:
                 pass
     rows.sort(key=lambda r: (r.get("asof") or "", r.get("ts") or ""), reverse=True)
     return rows[:limit]
+
+
+def republish(asof: str | None = None) -> dict:
+    """Re-emit the ETF book's published contract from the LAST submission + current marks — no Brain
+    call. Used by the open settle (bot/settle.py) so the dashboard reflects the freshly-filled
+    positions, and to refresh the book after a code change. Idempotent per asof."""
+    from portfolio import etf_universe, paper_account
+    from brain import etf_board, etf_mcp
+    asof = asof or date.today().isoformat()
+    submission = etf_mcp.read_submission()
+    held = list((paper_account._load_account(PORTFOLIO_ID).get("positions") or {}).keys())
+    target = {h["ticker"]: float(h.get("weight") or 0.0) for h in ((submission or {}).get("holdings") or [])}
+    etf_universe.warm(set(target) | set(held) | {BENCHMARK})
+    prices: dict[str, float] = {}
+    for t in set(target) | set(held) | {BENCHMARK}:
+        px = etf_universe.price(t)
+        if px and px > 0:
+            prices[t] = px
+    risk = etf_board.risk_state()
+    payload = _build_payload(asof, submission, prices, [], [], {}, risk, [])
+    try:
+        from bridge import build_portfolio
+        build_portfolio.write(payload, portfolio_id=PORTFOLIO_ID)
+        return {"ok": True, "holdings": len(target)}
+    except Exception as e:                               # noqa: BLE001
+        return {"ok": False, "error": repr(e)[:200]}
 
 
 # ---------------------------------------------------------------------------

@@ -7,9 +7,17 @@
 # Bias toward delegating whole non-Opus subtasks to Sonnet/Haiku subagents
 # (quality first, then token efficiency).
 
+# Flag-gated seats (env, default OFF — live build is byte-identical until enabled):
+#   MASTERMIND_FLAGSHIP_JUDGMENT=1  arms the Flagship deep-reasoning BUY layer:
+#       MACRO STRATEGIST (brain/strategist.py, headless, role="deep")
+#       PM-CONVICTION   (brain/pm_conviction.py, armed Opus PM on the autonomous tool surface, role="deep")
+#     Both resolve role="deep" -> opus below; SENTINEL+NEXUS (brain/committee.py) still check every PM name.
+#     FLAGSHIP_PM_MAX_TURNS (default 30) caps the PM's armed research loop.
+#   MASTERMIND_COMMITTEE (default ON) / MASTERMIND_TIMING_GATE (default OFF): the existing engine-path seats.
+
 roles:
   pm: opus          # portfolio-manager / final synthesis / accountable decisions
-  deep: opus        # deep narrative reasoning, hardest synthesis
+  deep: opus        # deep narrative reasoning, hardest synthesis (Strategist + PM-Conviction seats use this tier)
   analyst: sonnet   # medium reasoning, structured analysis, code
   scout: haiku      # search, extraction, labeling, high-volume fan-out
   fable: fable      # gated: most demanding long-horizon synthesis

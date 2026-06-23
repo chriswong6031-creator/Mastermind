@@ -249,6 +249,8 @@ _PERSONA = (
     "8 names, each 5% to 50% of NAV. Sub-5% nibbles are DROPPED and only your top ~8 by size are kept, "
     "so submit a short, decisive list. Hold cash when you lack conviction; do not dilute the book with "
     "marginal names.\n\n"
+    "Idle cash earns ~4% annualized (a money-market sweep) — holding it when you lack a "
+    "high-conviction asymmetric bet is a REWARDED choice, not dead money. \n\n"
     "You also have the macro dashboard (mcp__bot__*) and the open web for context, but your universe is "
     "Flagship's holdings. When done, call mcp__heavydesk__submit_book ONCE with your complete "
     "concentrated target book, a one-paragraph conviction rationale per holding, and a summary of how "
@@ -259,12 +261,14 @@ _PERSONA = (
 
 def _run_brain(asof: str, inaugural: bool) -> dict:
     from brain import heavyweight_mcp, cli_bridge
+    from brain import self_mirror              # lazy (package-attr lesson); flag-gated, byte-identical OFF
     prompt = _build_prompt(asof, inaugural)
+    persona = self_mirror.inject(_PERSONA, "heavyweight", _safe_date(asof))
     coro = cli_bridge.reason(
         prompt,
         role="deep",                 # opus, per config/agents.yml
         arm=True,
-        append_system=_PERSONA,
+        append_system=persona,
         mcp_servers=heavyweight_mcp.build_servers(),
         allowed_tools=heavyweight_mcp.allowed_tools(),
         max_turns=_MAX_TURNS,
