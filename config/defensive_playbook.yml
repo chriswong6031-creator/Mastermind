@@ -1,0 +1,69 @@
+# Driver-aware defensive playbook — WHERE defense lives depends on WHAT is cracking.
+#
+# A fixed "go to staples + bonds" rule is wrong: a liquidity/AI-capex unwind and an inflation shock
+# want OPPOSITE bond exposure, and rate-sensitive banks/REITs flip from hurt→helped depending on
+# whether the driver is rates-UP or a growth-scare. portfolio/defensive_playbook.py selects the
+# archetype from the Macro Risk Officer's read (the cracking driver + the regime growth/inflation
+# sign) and returns the tilt.
+#
+# Externalized + tunable (like config/etf_strategy.yml); the module falls back to an in-code default
+# if this file is missing/malformed. Re-read fresh each call.
+#
+# HONESTY ABOUT THE SUBTRACT-ONLY INVARIANT: the desk's Risk Officer can only DE-RISK, so the only
+# ENFORCED teeth from this playbook are `cash_floor` (= the gross cap → a hard cash floor) and the
+# `avoid` add-block. The `favor` list is ADVISORY — fed to the additive PM seat as context for its
+# NEXT decision, surfaced on the dashboard, and logged as recommendations. The desk NEVER auto-buys
+# a defensive (that would break subtract-only).
+#
+# Each archetype:
+#   favor      — where defense lives for THIS driver (advisory tilt)
+#   avoid      — what to NOT add into / what to trim first (enforced as an add-block)
+#   cash_floor — the minimum cash (= 1 - gross cap) this driver argues for at full risk-off
+#   rationale  — one-line economic logic
+#   caveats    — the conditional nuance (esp. rate-sensitive banks/REITs)
+
+archetypes:
+  ai_capex_unwind:
+    favor: ["XLP", "XLV", "USMV", "QUAL", "SGOV", "GLD"]
+    avoid: ["SMH", "SOXX", "ARKK"]
+    cash_floor: 0.30
+    rationale: "A crowded AI-buildout/semis blow-off into contracting liquidity breaks the most-extended momentum first; rotate to quality/low-vol/staples/healthcare + cash; gold/duration only help if it's a growth-scare (see caveats)."
+    caveats:
+      - "Duration (TLT) HELPS only if the unwind is a growth-scare (inflation_score < 0); if rates are still rising, duration adds risk, not safety."
+      - "Banks (XLF) are NOT a clean hedge — a liquidity event stresses credit; favor them only on a steepening-with-stable-credit read."
+      - "REITs (XLRE) are rate-sensitive — avoid while real yields are rising."
+
+  liquidity_tightening:
+    favor: ["XLP", "XLV", "USMV", "QUAL", "SGOV"]
+    avoid: ["IWM", "ARKK", "KRE"]
+    cash_floor: 0.30
+    rationale: "Contracting liquidity de-rates the highest-beta, lowest-quality, most-leveraged cohorts first; up-in-quality + cash; small-caps/credit-sensitive last."
+    caveats:
+      - "Duration is a coin-flip until the growth-vs-inflation driver is clear — prefer T-bills (SGOV) over long duration (TLT)."
+      - "Avoid adding leverage/small-caps (IWM) into a tightening tape."
+
+  inflation_shock:
+    favor: ["XLE", "XLB", "GLD", "SGOV", "VLUE"]
+    avoid: ["TLT", "IEF", "ARKK", "QQQ"]
+    cash_floor: 0.25
+    rationale: "An inflation impulse lifts real-asset cyclicals (energy/materials/gold) and CRUSHES long-duration bonds and high-multiple growth; tilt to value + short duration."
+    caveats:
+      - "This is the ONE driver where duration is the wrong hedge — AVOID TLT/IEF."
+      - "Energy/materials are pro-cyclical — they crack too if the shock tips into a hard global growth-scare."
+
+  credit_event:
+    favor: ["XLV", "XLP", "USMV", "TLT", "SGOV"]
+    avoid: ["HYG", "KRE", "IWM", "XLF"]
+    cash_floor: 0.35
+    rationale: "A credit/funding event is a flight to quality and Treasuries; AVOID high-yield, leverage, small-caps and banks (loan-loss + funding risk); Treasuries HELP here."
+    caveats:
+      - "Banks (XLF/KRE) are the epicenter of a credit event — avoid, do not 'buy the dip'."
+      - "Duration HELPS in a credit/growth-scare event (the one place TLT is a real hedge)."
+
+  broad_derisk:
+    favor: ["XLP", "XLV", "USMV", "SGOV"]
+    avoid: ["ARKK", "IWM"]
+    cash_floor: 0.25
+    rationale: "Default risk-off with no single dominant driver: up-in-quality, low-vol, staples/healthcare, raise cash; stay driver-agnostic until the tell is clear."
+    caveats:
+      - "No clear driver yet — keep the defensive tilt shallow and cash-led until the Macro Risk Officer names the driver."

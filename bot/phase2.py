@@ -118,6 +118,15 @@ def _risk_officer_enabled() -> bool:
     return os.environ.get("MASTERMIND_RISK_OFFICER", "0").strip().lower() in ("1", "true", "yes", "on")
 
 
+def _macro_risk_enabled() -> bool:
+    """The top-down MACRO RISK OFFICER gross cap (subtract-only de-risking of the FINAL book down to the
+    risk-off gross cap + cracking-chain trim, bound to the deterministic risk state) runs ONLY when
+    explicitly enabled. Default OFF — so the live build is BYTE-IDENTICAL until the user opts in. This
+    catches the engine path even when the Flagship judgment layer is off. Enable with env
+    MASTERMIND_MACRO_RISK in {1, true, yes, on}. (Mirrors the MASTERMIND_RISK_OFFICER pattern.)"""
+    return os.environ.get("MASTERMIND_MACRO_RISK", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _is_hard_exit(syn: dict) -> bool:
     """A held name must be EXITED immediately (no hysteresis) on a hard veto (parabolic / Altman /
     cycle-blocked), a confirmed STRUCTURAL downtrend, or size_authority 'blocked'. (A fresh
@@ -664,6 +673,39 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
                     exited=_ro_exits)
         except Exception as _e:
             _rl_log(_run_id, "decision", "risk officer wiring error", f"{_e!r}"[:160])
+
+    # ———— MACRO RISK OFFICER cap — the top-down DEFENSE the desk lacked on 2026-06-23. Subtract-only,
+    # bound to the deterministic risk state (no LLM dependence): in caution/risk-off it scales the
+    # conviction book's gross down to the (driver-tightened) gross cap and trims an over-concentrated
+    # CRACKING fragility chain. This catches the ENGINE path even when the Flagship judgment layer is
+    # off. Names trimmed to zero are realized as exits via the SAME close path the detectors use (so
+    # they are gradable). Flag-gated (MASTERMIND_MACRO_RISK, default OFF) → byte-identical; never raises. ——
+    if _macro_risk_enabled():
+        try:
+            from brain import macro_risk as _mr
+            _mrs = _mr.run(asof, regime)
+            if _mrs.get("state") != "risk_on":
+                _conv = [p for p in book if p.get("sleeve") == "conviction"]
+                _other = [p for p in book if p.get("sleeve") != "conviction"]
+                _capped = _mr.apply_risk_state(_conv, _mrs)
+                _kept_tk = {p["ticker"] for p in _capped}
+                for _p in _conv:
+                    if _p["ticker"] not in _kept_tk:
+                        try:
+                            position_log.close_position("conviction", _p["ticker"], asof,
+                                                        reason="macro_risk_cap")
+                        except Exception:
+                            pass
+                        try:
+                            ledger.close(_p["ticker"], "exited (macro risk cap)")
+                        except Exception:
+                            pass
+                book = _other + _capped
+                _rl_log(_run_id, "decision", "macro risk cap",
+                        f"state={_mrs.get('state')} gross_cap={_mrs.get('gross_cap')} "
+                        f"kept={sorted(_kept_tk)}")
+        except Exception as _e:
+            _rl_log(_run_id, "decision", "macro risk wiring error", f"{_e!r}"[:160])
 
     # ———— cash (sized after all exits) ————
     gross = round(sum(p["weight"] for p in book), 4)

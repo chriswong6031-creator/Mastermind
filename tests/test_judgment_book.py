@@ -280,3 +280,66 @@ def test_promoted_watchlist_name_reenters_candidate_pool(monkeypatch):
                for r in captured.get("rejected", []))
     # … and the desk still produced its book (re-entry never breaks the build).
     assert {r["ticker"] for r in out} == {"NVDA"}
+
+
+# ───────────────────── MACRO RISK OFFICER teeth wiring (E) ─────────────────────
+def _patch_macro_risk(monkeypatch, *, state):
+    """Patch the MACRO RISK OFFICER seat (lazy-imported in build() as `from brain import macro_risk`).
+    The fake `run` returns a canned risk-state dict; `apply_risk_state` is the REAL pure reshaper so we
+    exercise the actual subtract-only teeth. portfolio.fragility_chain stays real (pure, YAML-backed).
+    Dual-patched (package attr + sys.modules) per the P1 lesson."""
+    import sys
+    import types
+    from brain import macro_risk as _real_mr
+    mr = types.ModuleType("brain.macro_risk")
+    mr.run = lambda asof, regime: dict(state)
+    mr.apply_risk_state = _real_mr.apply_risk_state   # exercise the real subtract-only teeth
+    import brain as _brain_pkg
+    monkeypatch.setattr(_brain_pkg, "macro_risk", mr, raising=False)
+    monkeypatch.setitem(sys.modules, "brain.macro_risk", mr)
+
+
+def test_macro_risk_off_byte_identical(monkeypatch):
+    """MASTERMIND_MACRO_RISK unset → the (A2)+(E) macro blocks are no-ops; output == P1 (both names
+    kept, no risk_state tag). The seat is NOT patched, so any touch with the flag off would error."""
+    monkeypatch.delenv("MASTERMIND_MACRO_RISK", raising=False)
+    _patch_seats(monkeypatch, holdings=[
+        {"ticker": "NVDA", "weight": 0.06, "thesis": "AI infra", "conviction": "high"},
+        {"ticker": "AME", "weight": 0.05, "thesis": "onshoring", "conviction": "medium"}],
+        committee_fn=_confirm)
+    out = J.build([], [], regime={}, asof="2026-06-23", gate_info={}, shadow_inputs=[], name_cap=0.08)
+    assert {r["ticker"] for r in out} == {"NVDA", "AME"}
+    assert all("risk_state" not in r for r in out)     # no macro tagging when the seat is OFF
+
+
+def test_macro_risk_on_caps_and_trims_cracking_chain(monkeypatch):
+    """MASTERMIND_MACRO_RISK on + a CAUTION state naming the ai_buildout chain → the over-concentrated
+    cracking chain is trimmed subtract-only and the rows are tagged. name_cap raised so the engine
+    weights survive to the macro block."""
+    monkeypatch.setenv("MASTERMIND_MACRO_RISK", "1")
+    _patch_seats(monkeypatch, holdings=[
+        {"ticker": "NVDA", "weight": 0.30, "thesis": "AI infra", "conviction": "high"},
+        {"ticker": "AVGO", "weight": 0.30, "thesis": "AI infra", "conviction": "high"}],
+        committee_fn=_confirm)
+    _patch_macro_risk(monkeypatch, state={"state": "caution", "gross_cap": 0.55,
+                                          "drivers": [{"id": "ai_buildout"}], "allow_adds": True})
+    out = J.build([], [], regime={}, asof="2026-06-23", gate_info={}, shadow_inputs=[], name_cap=0.5)
+    by = {r["ticker"]: r["weight"] for r in out}
+    assert by.get("NVDA", 0) < 0.30 and by.get("AVGO", 0) < 0.30   # cracking chain trimmed
+    assert all("risk_state" in r for r in out)                     # macro-risk tagging applied
+    from portfolio import fragility_chain as FC
+    assert FC.book_chain_exposure(out)["ai_buildout"]["weight"] <= 0.35 + 1e-6
+
+
+def test_macro_risk_riskoff_blocks_adds_degrades_to_sized(monkeypatch):
+    """A RISK-OFF state hard-stops net-new adds into the cracking chain. With every PM name a net-new
+    add into ai_buildout, the proposed book empties → build returns the engine `sized` unchanged."""
+    monkeypatch.setenv("MASTERMIND_MACRO_RISK", "1")
+    _patch_seats(monkeypatch, holdings=[
+        {"ticker": "NVDA", "weight": 0.06, "thesis": "AI infra", "conviction": "high"}],
+        committee_fn=_confirm)
+    _patch_macro_risk(monkeypatch, state={"state": "risk_off", "gross_cap": 0.55,
+                                          "drivers": [{"id": "ai_buildout"}], "allow_adds": False})
+    sized = [{"ticker": "ENGINE", "weight": 0.05}]
+    out = J.build(sized, [], regime={}, asof="2026-06-23", gate_info={}, shadow_inputs=[])
+    assert out is sized                                # add-block emptied the book → engine path stands

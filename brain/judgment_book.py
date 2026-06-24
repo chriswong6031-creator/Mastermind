@@ -44,6 +44,15 @@ def _gate_officer_enabled() -> bool:
         in ("1", "true", "yes", "on")
 
 
+def _macro_risk_enabled() -> bool:
+    """The top-down MACRO RISK OFFICER teeth (subtract-only gross cap + cracking-chain trim + add-block
+    on the proposed book, bound to the deterministic risk state) run ONLY when explicitly enabled.
+    Default OFF — so the judgment book is BYTE-IDENTICAL until the user opts in. Enable with env
+    MASTERMIND_MACRO_RISK in {1, true, yes, on}. (Mirrors the MASTERMIND_GATE_OFFICER pattern.)"""
+    return os.environ.get("MASTERMIND_MACRO_RISK", "0").strip().lower() \
+        in ("1", "true", "yes", "on")
+
+
 def _shadow_entry(asof: str, ticker: str, weight: float, conviction, thesis: str,
                   confluence: float) -> dict:
     """A self-contained shadow-book decision record for a PM name, mirroring the schema
@@ -171,6 +180,20 @@ def build(sized: list[dict], rejected: list[dict], *, regime: dict | None, asof:
     except Exception:  # noqa: BLE001
         strat = None
 
+    # (A2) MACRO RISK OFFICER — the top-down DEFENSE state. Computed ONCE here (flag-gated) so the PM
+    # sees it as context (the advisory defensive tilt + the hard gross cap / add-block) AND the SAME
+    # deterministic state binds the subtract-only teeth applied to the proposed book below. Best-effort.
+    macro_rs = None
+    if _macro_risk_enabled():
+        try:
+            from brain import macro_risk as _mr
+            macro_rs = _mr.run(asof, regime)
+            portfolio_ctx = {**portfolio_ctx, "macro_risk": {
+                k: macro_rs.get(k) for k in ("state", "fragility", "gross_cap", "allow_adds",
+                                             "drivers", "defensive_tilt")}}
+        except Exception:  # noqa: BLE001 — additive; never break the build
+            macro_rs = None
+
     # (B) PM-CONVICTION — the armed Opus PM builds the Flagship target book
     try:
         book = pm_conviction.build_book(sized, rejected, regime=regime, asof=asof,
@@ -258,6 +281,27 @@ def build(sized: list[dict], rejected: list[dict], *, regime: dict | None, asof:
                 out = _kept
             else:
                 # the Gate Officer vetoed every PM name → degrade to the engine path untouched.
+                return sized
+        except Exception:  # noqa: BLE001 — additive; never break the build
+            pass
+
+    # (E) MACRO RISK OFFICER teeth — the DEFENSE the desk lacked on 2026-06-23. Subtract-only, bound to
+    # the deterministic risk state (no LLM dependence): in caution/risk-off it caps the proposed book's
+    # gross to the (driver-tightened) gross cap, trims an over-concentrated CRACKING fragility chain back
+    # under cap, and HARD-STOPS net-new adds into a cracking chain (regardless of conviction). Flag-gated
+    # (MASTERMIND_MACRO_RISK, default OFF) → no-op when off. apply_risk_state walks `out`, never the
+    # decisions, so it can only de-risk — never inject. Any failure leaves `out` untouched.
+    if _macro_risk_enabled() and macro_rs and macro_rs.get("state") != "risk_on":
+        try:
+            from brain import macro_risk as _mr
+            from portfolio import fragility_chain as _fc
+            _frag = _fc.assess_book(out, macro_rs)
+            _held = set(portfolio_ctx.get("held_conviction") or [])
+            _capped = _mr.apply_risk_state(out, macro_rs, fragility=_frag, held=_held)
+            if _capped:
+                out = _capped
+            else:
+                # the macro cap emptied the proposed book → don't publish empty; engine path stands.
                 return sized
         except Exception:  # noqa: BLE001 — additive; never break the build
             pass

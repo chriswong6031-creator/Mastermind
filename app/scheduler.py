@@ -119,6 +119,19 @@ def _watch_asia_job():
         pass
 
 
+def _derisk_us_job():
+    """FAST DE-RISK sweep for the US books DURING the session — the reflex the desk lacked on
+    2026-06-23. A deterministic tripwire (macro RISK-OFF state / SPY gamma flip / credit gap / −X% theme
+    day — free, no LLM) auto-cuts the held Flagship book to the gross cap and revises the US Brain books'
+    queued targets. Flag-gated (MASTERMIND_FAST_DERISK); a no-op when disarmed or no unwind is confirmed.
+    Never raises."""
+    try:
+        from bot import derisk
+        derisk.sweep_us()
+    except Exception:  # noqa: BLE001 — a de-risk miss must never kill the scheduler
+        pass
+
+
 def _macro_refresh_job():
     """Keep the vendored macro analyzer data fresh (origin/main == the live site) + run the
     staleness tripwire. The book once bought NVDA off a days-stale read; never raises."""
@@ -288,6 +301,14 @@ def start():
                 id="watch_us_overnight", replace_existing=True, misfire_grace_time=3600, coalesce=True)
     sch.add_job(_watch_asia_job, CronTrigger(day_of_week="mon-fri", hour=asia_watch_hours, minute=20, timezone="UTC"),
                 id="watch_asia_overnight", replace_existing=True, misfire_grace_time=3600, coalesce=True)
+    # FAST DE-RISK — an INTRADAY US-session sweep so a confirmed unwind is cut off-schedule, not at the
+    # once-daily post-close run (the 2026-06-23 gap). Every ~30 min through the US cash session; the job
+    # itself is free + a no-op unless MASTERMIND_FAST_DERISK is armed AND the deterministic tripwire
+    # fires. UTC-pinned. The overnight watch jobs already carry the Brain pending-target de-risk.
+    derisk_hours = (os.environ.get("DERISK_US_UTC_HOURS", "14-20").strip() or "14-20")
+    sch.add_job(_derisk_us_job,
+                CronTrigger(day_of_week="mon-fri", hour=derisk_hours, minute="0,30", timezone="UTC"),
+                id="derisk_us_intraday", replace_existing=True, misfire_grace_time=1800, coalesce=True)
     # Publish the dashboard snapshot to the public Macro Dashboard (GitHub Pages) TWICE a day:
     #   • ~12:25 UTC — a morning refresh that picks up the overnight China book (08:00) and the
     #     prior night's autonomous/heavyweight Brain books (23:xx).

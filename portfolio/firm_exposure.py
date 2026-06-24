@@ -235,6 +235,7 @@ def _empty(as_of: str, note: str) -> dict:
         "top_exposures": [],
         "flags": [],
         "by_sector": {},
+        "by_chain": {},
         "thresholds": _thresholds(),
         "currency_clean": False,
         "note": note,
@@ -396,6 +397,39 @@ def summary(asof: str | None = None) -> dict:
                 "reason": f"firm sector weight {fw * 100:.1f}% >= {th['sector_max'] * 100:.1f}%",
             })
 
+    # ---- per-fragility-chain rollup (additive, read-only) — the FIRM-wide view of how exposed every
+    # book together is to each leading-edge fragile theme-chain (memory→capex→buildout→power, …). A
+    # ticker in two chains counts in both (honest: the firm carries both). Degrades to {} when the
+    # chain map is unavailable. NEVER changes an allocation. ----
+    by_chain: dict[str, dict] = {}
+    try:
+        from portfolio import fragility_chain
+        chain_agg: dict[str, dict] = {}
+        for e in exposures:
+            for c in fragility_chain.classify(e["ticker"]):
+                cid = c["chain"]
+                agg = chain_agg.setdefault(cid, {"name": c["name"], "driver": c["driver"],
+                                                 "firm_weight": 0.0, "tickers": [],
+                                                 "leading_tickers": [], "books": set()})
+                agg["firm_weight"] += e["firm_weight"]
+                agg["tickers"].append(e["ticker"])
+                if c["position"] == "leading_edge":
+                    agg["leading_tickers"].append(e["ticker"])
+                agg["books"].update(e["books_holding"])
+        for cid, agg in chain_agg.items():
+            fw = round(agg["firm_weight"], 6)
+            by_chain[cid] = {
+                "name": agg["name"], "driver": agg["driver"],
+                "firm_weight": fw, "firm_weight_pct": round(fw * 100, 2),
+                "tickers": sorted(agg["tickers"]),
+                "leading_tickers": sorted(agg["leading_tickers"]),
+                "n_books": len(agg["books"]),
+                "flagged": fw >= th["sector_max"],
+            }
+        by_chain = dict(sorted(by_chain.items(), key=lambda kv: kv[1]["firm_weight"], reverse=True))
+    except Exception:  # noqa: BLE001 — the chain rollup is additive; never break the monitor
+        by_chain = {}
+
     # ---- honest note about the aggregation actually used ----
     if currency_clean:
         method = ("Firm weight = USD-NAV-weighted mean book weight; firm_usd is the USD-equivalent "
@@ -418,6 +452,7 @@ def summary(asof: str | None = None) -> dict:
         "top_exposures": top_exposures,
         "flags": flags,
         "by_sector": by_sector_out,
+        "by_chain": by_chain,
         "thresholds": th,
         "currency_clean": currency_clean,
         "note": note,

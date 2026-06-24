@@ -36,16 +36,33 @@ def _overnight_directive(pid: str, t: dict) -> str:
         return ", ".join(f"{r['name']} {r['change_pct']:+.2f}%"
                          for r in groups.get(g, []) if r.get("change_pct") is not None) or "n/a"
 
+    # MACRO RISK OFFICER brief (best-effort) — the top-down DEFENSE read + driver-aware defensive tilt,
+    # so the Brain's overnight reconsideration knows the risk state, the hard gross cap, and WHERE
+    # defense lives for the driver that's cracking. Degrades silently if the seat is unavailable.
+    macro_line = ""
+    try:
+        from brain import macro_risk
+        from portfolio import defensive_playbook
+        rs = macro_risk.risk_state(date.today().isoformat(), None)
+        if rs.get("state") != "risk_on":
+            macro_line = (f" MACRO RISK OFFICER: state {str(rs.get('state')).upper()} "
+                          f"(fragility {rs.get('fragility')}); hard gross cap {rs.get('gross_cap')} "
+                          f"(adds {'BLOCKED' if rs.get('allow_adds') is False else 'allowed'}). "
+                          + defensive_playbook.brief(rs.get('defensive_tilt')) + " ")
+    except Exception:  # noqa: BLE001
+        macro_line = ""
+
     return (
         "OVERNIGHT REVIEW — the LIVE overnight tape has moved materially since you last decided, and the "
         f"in-house dashboard is STALE and can't see it. Live tape now — risk_state {risk.get('state')}: "
         f"US index futures [{_fmt('us_futures')}]; international [{_fmt('international')}]; "
-        f"vol [{_fmt('vol')}]; FX/rates [{_fmt('fx_rates')}]. "
+        f"vol [{_fmt('vol')}]; FX/rates [{_fmt('fx_rates')}].{macro_line}"
         "You currently have a target QUEUED to settle at the next open. Review your current book (get_my_book) "
         "and this live tape (US books can also call get_overnight_tape for the full picture), then reconsider "
         "that queued target with fresh eyes: HOLD it as-is, or REVISE it — de-risk toward cash / safer assets "
-        "if the overnight tape is selling off, or lean back in if it has stabilized. Submit your updated book "
-        "via submit_book; it settles at the OPEN, not now. Cite what the live overnight tape is actually doing."
+        "if the overnight tape is selling off, or lean back in if it has stabilized. Respect the macro gross "
+        "cap and the defensive tilt above if present. Submit your updated book via submit_book; it settles at "
+        "the OPEN, not now. Cite what the live overnight tape is actually doing."
     )
 
 
@@ -63,6 +80,15 @@ def watch(pid: str, asof: str | None = None, *, force: bool = False) -> dict:
             return {**out, "skipped": "market_open"}        # in-session: the normal daily run handles it
         if not paper_account.load_pending_target(pid):
             return {**out, "skipped": "nothing_queued"}     # no queued decision to refine
+        # FAST DE-RISK (deterministic, free, no LLM) — on a CONFIRMED unwind, revise the queued target
+        # down to the gross cap + away from the cracking chains BEFORE the Opus refine, so the book
+        # de-risks even if the model is down. Flag-gated (MASTERMIND_FAST_DERISK); no-op otherwise.
+        try:
+            from bot import derisk
+            if derisk.enabled():
+                out["derisk"] = derisk.derisk_brain(pid, asof)
+        except Exception:  # noqa: BLE001 — additive; the deterministic de-risk never blocks the watch
+            pass
         t = overnight.tape(force=force)
         out["overnight_risk"] = (t.get("risk") or {}).get("state")
         out["tape_brief"] = overnight.brief(t)
