@@ -89,7 +89,8 @@ def test_run_autonomous_offline_inaugural(iso, monkeypatch):
 def test_run_autonomous_executes_submission(iso, monkeypatch):
     prices = {"NVDA": 210.0, "MSFT": 380.0, "SPY": 740.0}   # GLD deliberately unpriceable
     monkeypatch.setattr(paper_account, "_current_price", lambda t: prices.get(t))
-    from bot import autonomous
+    from bot import autonomous, settle
+    monkeypatch.setattr(settle, "is_open", lambda pid: True)   # force OPEN so it fills (not queues)
     from brain import autonomous_mcp
 
     def fake_brain(asof, inaugural):
@@ -125,7 +126,8 @@ def test_run_autonomous_safety_degrosses_fragile_book(iso, monkeypatch):
     submission gets de-grossed (subtract-only) before it executes — raising cash, not levering."""
     prices = {"NVDA": 210.0, "SPY": 740.0}
     monkeypatch.setattr(paper_account, "_current_price", lambda t: prices.get(t))
-    from bot import autonomous
+    from bot import autonomous, settle
+    monkeypatch.setattr(settle, "is_open", lambda pid: True)   # force OPEN so it fills (not queues)
     from brain import autonomous_mcp
 
     def fake_brain(asof, inaugural):

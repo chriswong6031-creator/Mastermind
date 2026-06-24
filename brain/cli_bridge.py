@@ -34,6 +34,28 @@ except Exception:                       # SDK not installed -> subprocess fallba
     _SDK = False
 
 
+def _block_kind(b) -> str:
+    """The kind of an SDK content block: 'text' | 'tool_use' | 'tool_result' | 'thinking'.
+
+    Newer claude_agent_sdk content blocks are dataclasses (TextBlock / ToolUseBlock /
+    ToolResultBlock / ThinkingBlock) with NO `.type` field — so a `b.type == "text"` check
+    silently fails and every block is dropped (the live-chat '(no response)' bug). Key off
+    the class name, falling back to the legacy `.type` string for older SDKs / raw dicts."""
+    cls = type(b).__name__
+    if cls == "TextBlock":
+        return "text"
+    if cls == "ToolUseBlock":
+        return "tool_use"
+    if cls == "ToolResultBlock":
+        return "tool_result"
+    if cls == "ThinkingBlock":
+        return "thinking"
+    legacy = getattr(b, "type", "")
+    if not legacy and isinstance(b, dict):
+        legacy = b.get("type", "")
+    return legacy or ""
+
+
 @functools.lru_cache(maxsize=1)
 def _cfg() -> dict:
     return yaml.safe_load(_CFG.read_text())
@@ -202,7 +224,7 @@ async def _via_sdk(prompt, mdl, role, system, append_system, tools, dirs, turns,
             usage = getattr(msg, "usage", None)
         elif hasattr(msg, "content"):                      # AssistantMessage: collect text + tool calls
             for b in (getattr(msg, "content", []) or []):
-                bt = getattr(b, "type", "")
+                bt = _block_kind(b)
                 if bt == "text" and getattr(b, "text", ""):
                     chunk = b.text
                     text = (text or "") + chunk if text is None else chunk
@@ -341,17 +363,26 @@ async def chat_stream(prompt: str, *, resume: str | None = None,
                 pass
         return {"type": "tool_result"}
 
+    emitted_text = False
     try:
         async for msg in _sdk_query(prompt=prompt, options=opts):
             if hasattr(msg, "result"):                         # ResultMessage (end of turn)
                 sid = getattr(msg, "session_id", None) or sid
                 cost = getattr(msg, "total_cost_usd", None)
+                # Fallback: if the per-block text events never fired (e.g. a future SDK shape
+                # we don't recognise), surface the buffered final text so the chat is never
+                # silently empty — this is the '(no response)' backstop.
+                final = getattr(msg, "result", None)
+                if not emitted_text and final:
+                    emitted_text = True
+                    yield {"type": "text", "text": final}
                 continue
             blocks = getattr(msg, "content", None)
             if isinstance(blocks, (list, tuple)):              # Assistant/User message: content blocks
                 for b in blocks:
-                    bt = getattr(b, "type", "")
+                    bt = _block_kind(b)
                     if bt == "text" and getattr(b, "text", ""):
+                        emitted_text = True
                         yield {"type": "text", "text": b.text}
                     elif bt == "tool_use":
                         name = getattr(b, "name", "?")
@@ -362,6 +393,7 @@ async def chat_stream(prompt: str, *, resume: str | None = None,
             elif hasattr(msg, "tool_use_id") or getattr(msg, "type", "") == "tool_result":
                 yield _result_event(getattr(msg, "content", "") or "")
             elif isinstance(blocks, str) and blocks:           # bare-string assistant text
+                emitted_text = True
                 yield {"type": "text", "text": blocks}
     except Exception as e:                                      # surface, don't crash the stream
         yield {"type": "error", "error": repr(e)[:300]}

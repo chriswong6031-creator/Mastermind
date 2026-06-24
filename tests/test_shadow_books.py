@@ -137,7 +137,7 @@ def test_run_isolates_to_sandbox_and_builds_all_books(sandbox, monkeypatch):
     ]
     res = S.run("2026-06-01", prices={"AAA": 100.0, "BBB": 50.0, "SPY": 400.0}, inputs=inputs)
     ids = {b["id"] for b in res["leaderboard"]}
-    assert ids == {"prod", "no_committee", "no_calibration", "engine_only"}
+    assert ids == {"prod", "no_committee", "no_calibration", "engine_only", "risk_tilt"}
     books = res["books"]
     assert books["prod"]["holdings"] == ["AAA"]                 # committee dropped BBB
     assert books["no_committee"]["holdings"] == ["AAA", "BBB"]  # committee off → keeps BBB
@@ -184,6 +184,24 @@ def test_hit_rate_uses_falsifier_predicate_not_positive_return():
     assert s["n_resolved"] == 3
     assert s["hit_rate"] == round(2 / 3, 3)         # -0.02 (in-tolerance) + +0.10 are hits; -0.08 miss
     assert s["hit_rate"] != round(1 / 3, 3)         # guard against regressing to positive-return logic
+
+
+def test_risk_mult_haircuts_high_vol_and_is_leakage_free():
+    # the risk-tilt overlay: subtract-only, haircuts high-vol/lottery names, leakage-free (≤ asof).
+    import numpy as np
+    import pandas as pd
+    idx = pd.bdate_range("2026-01-02", periods=120)
+    calm = pd.Series(np.linspace(100, 110, 120), index=idx)          # smooth → low vol
+    wr = np.zeros(120); wr[1::2] = 0.05; wr[2::2] = -0.045
+    wild = pd.Series(100 * np.cumprod(1 + wr), index=idx)            # ±5%/day → high vol
+    panel = {"CALM": calm, "WILD": wild}
+    asof = idx[-1].strftime("%Y-%m-%d")
+    assert S._risk_mult(panel, "CALM", asof) == 1.0                  # low-risk → full size
+    assert S._risk_mult(panel, "WILD", asof) < 1.0                   # high-risk → haircut
+    assert S._risk_mult(panel, "WILD", asof) >= S._RT_FLOOR          # never below the floor
+    assert S._risk_mult(panel, "ZZZ", asof) == 1.0                   # absent from panel → full size
+    early = idx[10].strftime("%Y-%m-%d")                             # only ~10 returns ≤ asof
+    assert S._risk_mult(panel, "WILD", early) == 1.0                 # <20 obs → no haircut, no peek
 
 
 def test_leaderboard_sorted_by_return_with_baseline_flag(sandbox):

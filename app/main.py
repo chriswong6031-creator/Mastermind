@@ -47,6 +47,12 @@ if FastAPI is not None:
 
     app.include_router(web.router)
 
+    # App-level auth gate — protects the UI + every /api route + the SSE stream.
+    # Opt-in via MASTERMIND_PASSWORD; a no-op (auth disabled) when it's unset, so
+    # local dev is unchanged. MUST be installed before the server handles requests.
+    from app import auth
+    auth.install(app)
+
     @app.get("/health")
     def health() -> dict:
         return {"status": "ok", "engine_root": engine_root(),
@@ -90,6 +96,10 @@ if FastAPI is not None:
             app.state.china_first_run = scheduler.maybe_first_china_run()
         except Exception:
             app.state.china_first_run = False
+        try:
+            app.state.hk_first_run = scheduler.maybe_first_hk_run()
+        except Exception:
+            app.state.hk_first_run = False
         # ETF rotation book (US-listed ETFs, doctrine + guardrails) — kick its first build too
         # (no-op once it has a track record). Runs on the US evening cadence thereafter.
         try:
@@ -157,6 +167,23 @@ if FastAPI is not None:
         threading.Thread(target=lambda: china.run_china(force=force),
                          name="china-manual-run", daemon=True).start()
         return {"started": True, "note": "China Brain run started in the background."}
+
+    @app.post("/api/hk/run")
+    async def hk_run(force: bool = False, wait: bool = False) -> dict:
+        """Manually fire the Hong-Kong Opus-Brain book (HK listings only, HKD-marked rebalance).
+
+        Long call; by default starts in the background and returns immediately. ?wait=true blocks."""
+        from bot import hk
+        if wait:
+            import asyncio as _aio
+            out = await _aio.to_thread(hk.run_hk, force=force)
+            return {k: out.get(k) for k in
+                    ("asof", "inaugural", "trading_day", "decided", "holdings",
+                     "executed", "skipped_unpriceable", "nav", "brain")}
+        import threading
+        threading.Thread(target=lambda: hk.run_hk(force=force),
+                         name="hk-manual-run", daemon=True).start()
+        return {"started": True, "note": "HK Brain run started in the background."}
 
     @app.post("/api/etf/run")
     async def etf_run(force: bool = False, wait: bool = False) -> dict:

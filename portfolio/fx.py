@@ -156,6 +156,26 @@ def usd_to_cny(usd_value: float | None) -> float | None:
     return v * rate_per_usd("CNY")
 
 
+def usd_to(usd_value: float | None, currency: str) -> float | None:
+    """Convert a USD amount into `currency` (CNY / HKD / USD) at the prevailing rate. Generic form of
+    usd_to_cny — used to mark a single-currency book (e.g. the HKD HK book or the CNY A-share book)
+    whose shared price store returns USD. None / non-positive passes through as None."""
+    if usd_value is None:
+        return None
+    try:
+        v = float(usd_value)
+    except (TypeError, ValueError):
+        return None
+    if v <= 0:
+        return None
+    return v * rate_per_usd((currency or "USD").upper())
+
+
+def usd_to_hkd(usd_value: float | None) -> float | None:
+    """Convert a USD amount into HKD — used to mark the HK book (HKD base) from the USD price store."""
+    return usd_to(usd_value, "HKD")
+
+
 def cny_to_local(cny_value: float | None, ticker: str) -> float | None:
     """Inverse of to_cny: a CNY amount back into the ticker's LOCAL quote currency (for display)."""
     if cny_value is None:

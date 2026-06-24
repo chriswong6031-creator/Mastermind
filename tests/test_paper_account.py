@@ -100,6 +100,64 @@ def test_sell_reduces_shares(tmp_account: None) -> None:
     assert abs(shares_after - shares_before / 2) < 0.1  # roughly halved
 
 
+# ---------------------------------------------------------------------------
+# no-trade band: don't manufacture de-minimis rebalancing trims/adds
+# ---------------------------------------------------------------------------
+
+def test_no_trade_band_suppresses_tiny_drift(tmp_account: None) -> None:
+    """Re-stating the SAME weight against a slightly drifted price must NOT produce a
+    fractional trim/add — the Brain held the name; the band leaves it alone."""
+    from portfolio import paper_account
+
+    paper_account.rebalance({"AAPL": 0.5}, _PRICES_1, "2026-01-02")
+    shares_before = paper_account._load_account()["positions"]["AAPL"]["shares"]
+    fills_before = len(paper_account._load_jsonl(paper_account._FILLS_PATH))
+
+    # AAPL ticks +0.5% (200 -> 201); the Brain re-states the SAME 0.5 weight. The implied
+    # snap-to-target is well under 1% of NAV, so nothing should trade.
+    paper_account.rebalance({"AAPL": 0.5}, {"AAPL": 201.0}, "2026-01-03")
+
+    shares_after = paper_account._load_account()["positions"]["AAPL"]["shares"]
+    fills_after = len(paper_account._load_jsonl(paper_account._FILLS_PATH))
+    assert shares_after == shares_before          # untouched
+    assert fills_after == fills_before            # no new fill recorded
+
+
+def test_no_trade_band_allows_meaningful_trim(tmp_account: None) -> None:
+    """A trim large enough to clear the band still executes — the band only kills noise."""
+    from portfolio import paper_account
+
+    paper_account.rebalance({"AAPL": 0.5}, _PRICES_1, "2026-01-02")
+    shares_before = paper_account._load_account()["positions"]["AAPL"]["shares"]
+
+    # 0.5 -> 0.4 is a 10%-of-NAV move, far above the 1% band -> trades.
+    paper_account.rebalance({"AAPL": 0.4}, _PRICES_1, "2026-01-03")
+    shares_after = paper_account._load_account()["positions"]["AAPL"]["shares"]
+    assert shares_after < shares_before
+    assert abs(shares_after - 0.8 * shares_before) < 0.1
+
+
+def test_no_trade_band_does_not_block_new_entry(tmp_account: None) -> None:
+    """A brand-new position below the band is a deliberate open, not noise -> always executes."""
+    from portfolio import paper_account
+
+    # MSFT is a fresh 0.5%-of-NAV starter (under the 1% band) opened alongside the AAPL anchor.
+    paper_account.rebalance({"AAPL": 0.5, "MSFT": 0.005}, _PRICES_1, "2026-01-02")
+    assert "MSFT" in paper_account._load_account()["positions"]
+
+
+def test_no_trade_band_does_not_block_full_exit(tmp_account: None) -> None:
+    """Dropping a name from the target fully exits it regardless of size — never banded."""
+    from portfolio import paper_account
+
+    paper_account.rebalance({"AAPL": 0.5, "MSFT": 0.005}, _PRICES_1, "2026-01-02")
+    assert "MSFT" in paper_account._load_account()["positions"]
+
+    # MSFT (~0.5% of NAV, under the band) is dropped from the target -> must fully exit.
+    paper_account.rebalance({"AAPL": 0.5}, _PRICES_1, "2026-01-03")
+    assert "MSFT" not in paper_account._load_account()["positions"]
+
+
 def test_fills_recorded(tmp_account: None, tmp_path: Path) -> None:
     from portfolio import paper_account
 

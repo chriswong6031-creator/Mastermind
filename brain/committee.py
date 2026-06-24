@@ -154,12 +154,36 @@ def nexus(breakdown: dict, sentinel: dict | None) -> dict:
     conf = float(sentinel.get("confidence", 0.5) or 0.5)
     bear = sentinel.get("strongest_bear", "")
 
-    if stance == "OPPOSE" and conf >= 0.6:
+    # REWARD / INFLUENCE (task #5) — a well-calibrated adversary (in THIS regime) earns the right to
+    # de-risk HARDER. Its influence weight w ∈ [W_FLOOR, W_CEIL] (1.0 = best-calibrated) does two
+    # subtract-only things: (a) LOWERS the OPPOSE→drop bar (a trusted adversary can veto on slightly
+    # less stated confidence), and (b) DEEPENS the OPPOSE trim toward zero. It can do NEITHER additive
+    # thing — it never raises a scale, never lifts the bar, never confirms a name FORGE didn't.
+    # The drop bar is capped so no seat can drop on trivial confidence: bar ∈ [DROP_BAR_FLOOR, 0.6].
+    # Flag-gated + cold-start inert → BYTE-IDENTICAL when OFF: w == 1.0, so bar == 0.6 and trim == 0.5,
+    # reproducing the original branches exactly.
+    drop_bar, trim_scale = 0.6, 0.5
+    try:
+        from brain import reputation as _rep
+        # influence_active is True ONLY when the flag is ON AND SENTINEL is regime-scoring; a perfectly
+        # calibrated seat earns w == 1.0 (== nominal), so we must gate on activeness, not on w != 1.0.
+        if _rep.influence_active("sentinel"):
+            w = _rep.influence_weight("sentinel")       # in [W_FLOOR, W_CEIL], 1.0 = best-calibrated
+            # higher influence → lower bar (down to a floor) and deeper trim. cap_influence guarantees
+            # the seat's effective vote can't exceed MAX_QUORUM_SHARE of the quorum (no domination).
+            capped = _rep.cap_influence(w, conf)        # in [0, MAX_QUORUM_SHARE]
+            lean_in = max(0.0, min(1.0, capped / _rep.MAX_QUORUM_SHARE))  # 0..1 "trust" this name
+            drop_bar = round(max(0.45, 0.6 - 0.15 * lean_in), 4)          # ≤ 0.6, floored at 0.45
+            trim_scale = round(0.5 * w, 4)                                # ≤ 0.5, deeper for trusted
+    except Exception:  # noqa: BLE001 — influence is additive-safe; never break the synthesis
+        drop_bar, trim_scale = 0.6, 0.5
+
+    if stance == "OPPOSE" and conf >= drop_bar:
         return {"action": "drop", "scale": 0.0, "lean": "watch",
                 "rationale": f"SENTINEL opposes with high conviction ({conf:.2f}): {bear}",
                 "sentinel_stance": stance}
     if stance == "OPPOSE":
-        return {"action": "trim", "scale": 0.5, "lean": "hold",
+        return {"action": "trim", "scale": trim_scale, "lean": "hold",
                 "rationale": f"SENTINEL opposes ({conf:.2f}) — size halved pending confirmation: {bear}",
                 "sentinel_stance": stance}
     if stance == "CONDITIONAL":

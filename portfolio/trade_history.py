@@ -129,3 +129,52 @@ def history(live_prices: Optional[dict[str, float]] = None,
 def realized_total(portfolio_id: str | None = None) -> float:
     """Sum of realized P&L across all closed (matched) shares — paper lifetime."""
     return round(sum((r.get("realized_pnl") or 0.0) for r in history(portfolio_id=portfolio_id)), 2)
+
+
+def sell_realized(portfolio_id: str | None = None) -> dict[tuple[str, str], dict]:
+    """Per-SELL realized P&L + the fraction of the position trimmed, keyed by ``(date, TICKER)``.
+
+    Uses the SAME FIFO lot accounting as ``history()`` so the Daily Decision Log's sell chips
+    agree to the cent with the Trade History blotter, and adds ``pct_of_position`` = shares sold /
+    shares held immediately before the sell (1.0 = full exit). A rebalance writes at most one
+    net buy or sell per name per day, so ``(date, ticker)`` is a stable key. Each value:
+
+        {shares_sold, pct_of_position, realized_pnl, realized_pct}  # P&L/pct omitted if unmatched
+    """
+    fills = _load_fills(portfolio_id)
+    lots: dict[str, deque] = defaultdict(deque)   # FIFO open lots, mirrors history()
+    net: dict[str, float] = defaultdict(float)    # running net shares (for the trim fraction)
+    out: dict[tuple[str, str], dict] = {}
+    for f in fills:
+        tk = (f.get("ticker") or "").upper()
+        side = f.get("side")
+        shares = float(f.get("shares") or 0.0)
+        price = float(f.get("price") or 0.0)
+        if side == "buy":
+            lots[tk].append([shares, price])
+            net[tk] += shares
+            continue
+        if side != "sell":
+            continue
+        held_before = net[tk]
+        remaining, cost_basis, matched = shares, 0.0, 0.0
+        q = lots[tk]
+        while remaining > 1e-9 and q:
+            lot = q[0]
+            take = min(lot[0], remaining)
+            cost_basis += take * lot[1]
+            matched += take
+            lot[0] -= take
+            remaining -= take
+            if lot[0] <= 1e-9:
+                q.popleft()
+        net[tk] -= shares
+        rec: dict = {"shares_sold": round(shares, 6)}
+        if held_before > 1e-9:
+            rec["pct_of_position"] = round(min(shares / held_before, 1.0), 4)
+        if matched > 1e-9:
+            avg_cost = cost_basis / matched
+            rec["realized_pnl"] = round((price - avg_cost) * matched, 2) + 0.0   # +0.0 → no -0.0
+            rec["realized_pct"] = (round((price / avg_cost - 1) * 100, 2) + 0.0) if avg_cost else None
+        out[(f.get("date"), tk)] = rec
+    return out

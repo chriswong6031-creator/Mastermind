@@ -35,7 +35,8 @@ _MAX_TURNS = int(os.environ.get("AUTONOMOUS_MAX_TURNS", "30"))
 # the daily entrypoint
 # ---------------------------------------------------------------------------
 
-def run_autonomous(asof: str | None = None, *, force: bool = False, armed: bool = True) -> dict:
+def run_autonomous(asof: str | None = None, *, force: bool = False, armed: bool = True,
+                   directive: str | None = None) -> dict:
     """Run one autonomous turn end-to-end. Best-effort: every step degrades gracefully so a
     missing credential / price never leaves the book in a half-traded state."""
     from portfolio import market_calendar, paper_account, position_log, registry
@@ -50,15 +51,30 @@ def run_autonomous(asof: str | None = None, *, force: bool = False, armed: bool 
     inaugural = not _has_history() and not (state0.get("positions") or {})
     out["inaugural"] = inaugural
 
+    # 0. NIGHTLY COST TRIPWIRE (before the Brain). The armed Opus seat below is the dominant
+    #    cost (~$1+). If this book has already hit the configured per-night USD cap, SKIP the seat
+    #    and carry the book unchanged — same shape as the feed-health abort. OFF by default (cap
+    #    <= 0 → over_budget always False) so this is a no-op and the run is byte-identical.
+    from brain import cost_guard
+    if armed and cost_guard.over_budget(PORTFOLIO_ID, asof):
+        print(f"autonomous turn {asof} — nightly cost cap hit "
+              f"(${cost_guard.spent(PORTFOLIO_ID, asof):.2f} / ${cost_guard.cap():.2f}); "
+              "skipping the Brain and carrying the book unchanged.")
+        armed = False
+        out["cost_capped"] = True
+
     # 1. run the Brain (armed) → it researches and submits a target book with rationales
     from brain import autonomous_mcp
     autonomous_mcp.clear_submission(PORTFOLIO_ID)   # never replay yesterday's decision
     brain: dict = {"ok": False, "skipped": not armed}
     if armed:
         try:
-            brain = _run_brain(asof, inaugural)
+            # directive is an optional ad-hoc override (overnight reviews) — pass it through only when set
+            brain = _run_brain(asof, inaugural, directive=directive) if directive else _run_brain(asof, inaugural)
         except Exception as e:                       # noqa: BLE001
             brain = {"ok": False, "error": repr(e)[:300]}
+        # record this seat's known cost against the nightly per-book ledger (no-op when unknown).
+        cost_guard.record(PORTFOLIO_ID, brain.get("cost_usd"), asof)
     out["brain"] = {k: brain.get(k) for k in ("ok", "cost_usd", "tools_used", "error", "run_id", "model")}
 
     # 2. read the submitted book
@@ -76,14 +92,20 @@ def run_autonomous(asof: str | None = None, *, force: bool = False, armed: bool 
         if px and px > 0:
             prices[t] = px
 
-    # 4. EXECUTE — rebalance the paper book to the target at close prices. Free trades: no
-    #    gate, no veto, no caps. Names we cannot price are skipped (and surfaced honestly).
-    #    The ONE risk firebreak over the free-form Brain: a SUBTRACT-ONLY safety de-gross — if
+    # 4. EXECUTE — market-hours-aware, with the safety de-gross firebreak applied to the target.
+    #    First the ONE risk firebreak over the free-form Brain: a SUBTRACT-ONLY safety de-gross — if
     #    the Brain's target book measures fragile (deep drawdown / high beta / one-factor
-    #    concentration / low score), scale it down and let the freed weight stay cash. Never
-    #    levers up, never changes which names — risk control, not a second opinion on selection.
+    #    concentration / low score), scale it down and let the freed weight stay cash. Never levers
+    #    up, never changes which names — risk control, not a second opinion on selection.
+    #    Then route the (possibly de-grossed) target through the market-hours-aware settle: OPEN →
+    #    rebalance to the target at the live mark; CLOSED (the normal post-close run, or any off-hours
+    #    run) → QUEUE the target to settle at the next open, booking NO fills now. So the book never
+    #    trades off-hours and re-running a closed session can't churn it (bot/settle.py + the
+    #    scheduler's open settle). Unpriceable names are skipped (and surfaced honestly).
+    from bot import settle as _settle
     executed: list[dict] = []
     skipped: list[str] = []
+    queued = False
     _safety = None
     _safety_overlay = {"gross_mult": 1.0}
     if decided:
@@ -107,22 +129,21 @@ def run_autonomous(asof: str | None = None, *, force: bool = False, armed: bool 
                     pass
         except Exception as e:                           # noqa: BLE001 — never block the book
             out["safety_error"] = repr(e)[:200]
-        before = dict((paper_account._load_account(PORTFOLIO_ID).get("positions") or {}))
-        try:
-            paper_account.rebalance(priceable, prices, asof, portfolio_id=PORTFOLIO_ID)
-        except Exception as e:                       # noqa: BLE001
-            out["rebalance_error"] = repr(e)[:200]
-        after = dict((paper_account._load_account(PORTFOLIO_ID).get("positions") or {}))
-        executed = _diff_trades(before, after, prices)
-        # reconcile the held-position ledger (rationale-bearing) for the trades view
-        ledger_positions = [{"ticker": t, "sleeve": SLEEVE, "weight": w,
-                             "entry_price": prices.get(t)}
-                            for t, w in priceable.items()]
-        try:
-            position_log.update(ledger_positions, asof, portfolio_id=PORTFOLIO_ID)
-        except Exception:
-            pass
+        res = _settle.execute_or_queue(PORTFOLIO_ID, priceable, prices, asof)
+        executed = res.get("executed") or []
+        queued = bool(res.get("queued"))
+        if res.get("error"):
+            out["rebalance_error"] = res["error"]
+        if executed:   # reconcile the rationale-bearing ledger only when fills actually happened
+            ledger_positions = [{"ticker": t, "sleeve": SLEEVE, "weight": w, "entry_price": prices.get(t)}
+                                for t, w in priceable.items()]
+            try:
+                position_log.update(ledger_positions, asof, portfolio_id=PORTFOLIO_ID)
+            except Exception:
+                pass
     out["executed"] = executed
+    out["queued_for_open"] = queued
+    out["market_open"] = _settle.is_open(PORTFOLIO_ID)
     out["skipped_unpriceable"] = skipped
 
     # 5. mark NAV vs SPY (idempotent per date)
@@ -164,6 +185,9 @@ _PERSONA = (
     "buy, sell, trim, and the cash level, and you rebalance the whole book daily. There is NO gate, "
     "NO committee, NO research-paper requirement, and NO doctrine constraining you — only paper cash "
     "(you cannot use leverage). \n\n"
+    "Idle cash earns ~4% annualized (a money-market sweep), so holding cash when you lack "
+    "high-conviction ideas is a REWARDED choice, not dead money — do not force marginal names just "
+    "to stay invested. \n\n"
     "You have two research channels and may use EITHER or BOTH, your choice: (1) our in-house macro "
     "dashboard via the mcp__bot__* tools (regime, themes, the single-name decision matrix, divergences, "
     "alt-data, news, intel hub, fundamentals, options, anticipation, quotes) and (2) the open web via "
@@ -178,14 +202,16 @@ _PERSONA = (
 )
 
 
-def _run_brain(asof: str, inaugural: bool) -> dict:
+def _run_brain(asof: str, inaugural: bool, directive: str | None = None) -> dict:
     from brain import autonomous_mcp, cli_bridge
-    prompt = _build_prompt(asof, inaugural)
+    from brain import self_mirror              # lazy (package-attr lesson); flag-gated, byte-identical OFF
+    prompt = _build_prompt(asof, inaugural, directive=directive)
+    persona = self_mirror.inject(_PERSONA, "autonomous", _safe_date(asof))
     coro = cli_bridge.reason(
         prompt,
         role="deep",                 # opus, per config/agents.yml
         arm=True,
-        append_system=_PERSONA,
+        append_system=persona,
         mcp_servers=autonomous_mcp.build_servers(),
         allowed_tools=autonomous_mcp.allowed_tools(),
         max_turns=_MAX_TURNS,
@@ -193,7 +219,7 @@ def _run_brain(asof: str, inaugural: bool) -> dict:
     return _run_coro(coro)
 
 
-def _build_prompt(asof: str, inaugural: bool) -> str:
+def _build_prompt(asof: str, inaugural: bool, directive: str | None = None) -> str:
     from portfolio import paper_account
     state = paper_account._load_account(PORTFOLIO_ID)
     cash = float(state.get("cash") or 0.0)
@@ -201,6 +227,8 @@ def _build_prompt(asof: str, inaugural: bool) -> str:
     regime = _regime_brief()
 
     lines = [f"# Autonomous book — daily decision for {asof}", ""]
+    if directive:
+        lines += ["## ⚠ PRIORITY DIRECTIVE FOR THIS RUN", directive.strip(), ""]
     if regime:
         lines += [f"Macro regime (in-house read): {regime}", ""]
     if inaugural:
@@ -346,6 +374,30 @@ def load_decisions(limit: int = 60) -> list[dict]:
                 pass
     rows.sort(key=lambda r: (r.get("asof") or "", r.get("ts") or ""), reverse=True)
     return rows[:limit]
+
+
+def republish(asof: str | None = None) -> dict:
+    """Re-emit the autonomous book's published contract from the LAST submission + current marks —
+    no Brain call. Used by the open settle (bot/settle.py) so the dashboard reflects freshly-filled
+    positions. Idempotent per asof."""
+    from portfolio import paper_account
+    from brain import autonomous_mcp
+    asof = asof or date.today().isoformat()
+    submission = autonomous_mcp.read_submission(PORTFOLIO_ID)
+    held = list((paper_account._load_account(PORTFOLIO_ID).get("positions") or {}).keys())
+    target = {h["ticker"]: float(h.get("weight") or 0.0) for h in ((submission or {}).get("holdings") or [])}
+    prices: dict[str, float] = {}
+    for t in set(target) | set(held) | {"SPY"}:
+        px = paper_account._current_price(t)
+        if px and px > 0:
+            prices[t] = px
+    payload = _build_payload(asof, submission, prices, [], [], {})
+    try:
+        from bridge import build_portfolio
+        build_portfolio.write(payload, portfolio_id=PORTFOLIO_ID)
+        return {"ok": True, "holdings": len(target)}
+    except Exception as e:                               # noqa: BLE001
+        return {"ok": False, "error": repr(e)[:200]}
 
 
 # ---------------------------------------------------------------------------

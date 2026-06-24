@@ -276,7 +276,11 @@ def settle_pending(*, now: datetime | None = None, market_open: bool | None = No
         if not px or px <= 0:
             still_pending.append(o)          # unpriceable this sweep — keep queued
             continue
-        fill = _apply_fill(state, ticker, o.get("side"), float(o.get("shares") or 0), px, asof)
+        if o.get("shares") is not None:
+            req = float(o.get("shares") or 0)
+        else:
+            req = float(o.get("notional") or 0) / px   # dollars → shares at the open price
+        fill = _apply_fill(state, ticker, o.get("side"), req, px, asof)
         if fill:
             fill["order_id"] = o.get("order_id")
             fill["queued"] = True
@@ -296,25 +300,33 @@ def settle_pending(*, now: datetime | None = None, market_open: bool | None = No
 # the public order API
 # ---------------------------------------------------------------------------
 
-def place_order(ticker: str, side: str, shares: float, *, price: float | None = None,
+def place_order(ticker: str, side: str, shares: float | None = None, *,
+                notional: float | None = None, price: float | None = None,
                 now: datetime | None = None, market_open: bool | None = None) -> dict:
-    """Place a single buy/sell. Returns one of:
+    """Place a single buy/sell, sized by SHARES or by a DOLLAR amount (`notional` → shares
+    at the fill price). Pass exactly one. Returns one of:
       {ok:True, status:'filled', fill:{...}, cash_after}     — executed at market now
       {ok:True, status:'pending', order:{...}}               — queued for the next open
       {ok:False, error:'...'}                                — rejected (bad input / no price / nothing to do)
     """
     ticker = (ticker or "").upper().strip()
     side = (side or "").lower().strip()
-    try:
-        shares = float(shares)
-    except (TypeError, ValueError):
-        return {"ok": False, "error": "shares must be a number"}
+
+    def _pos(v):
+        try:
+            v = float(v)
+            return v if v > 0 else None
+        except (TypeError, ValueError):
+            return None
+    sh = _pos(shares)
+    nt = _pos(notional)
+
     if not ticker:
         return {"ok": False, "error": "ticker required"}
     if side not in ("buy", "sell"):
         return {"ok": False, "error": "side must be 'buy' or 'sell'"}
-    if shares <= 0:
-        return {"ok": False, "error": "shares must be positive"}
+    if sh is None and nt is None:
+        return {"ok": False, "error": "shares or dollar amount must be positive"}
 
     if market_open is None:
         market_open = _market_open(now)
@@ -327,13 +339,14 @@ def place_order(ticker: str, side: str, shares: float, *, price: float | None = 
         if not px or px <= 0:
             return {"ok": False, "error": f"no live price available for {ticker}"}
         # pre-flight long-only guards (so the user gets a clear message, not a silent no-op)
-        if side == "buy" and state["cash"] < px:
+        if side == "buy" and state["cash"] <= 0:
             return {"ok": False, "error": "insufficient cash"}
         if side == "sell":
             held = (state.get("positions", {}).get(ticker) or {}).get("shares", 0.0)
             if held <= 1e-9:
                 return {"ok": False, "error": f"no {ticker} position to sell"}
-        fill = _apply_fill(state, ticker, side, shares, px, _today())
+        req_shares = sh if sh is not None else (nt / px)   # dollars → shares at the fill price
+        fill = _apply_fill(state, ticker, side, req_shares, px, _today())
         if not fill:
             return {"ok": False, "error": "order could not be filled"}
         _save_account(state)
@@ -350,10 +363,13 @@ def place_order(ticker: str, side: str, shares: float, *, price: float | None = 
         "order_id": _gen_order_id(ticker),
         "ticker": ticker,
         "side": side,
-        "shares": round(shares, 6),
         "placed_at": _now_iso(),
         "status": "pending",
     }
+    if sh is not None:                       # share-sized order
+        order["shares"] = round(sh, 6)
+    else:                                    # dollar-sized order — converts at the open price
+        order["notional"] = round(nt, 2)
     pending = _load_pending()
     pending.append(order)
     _save_pending(pending)
@@ -497,20 +513,32 @@ def book(*, prices: dict[str, float] | None = None, now: datetime | None = None,
 
 
 def _mark_pending(pending: list[dict], prices: dict[str, float]) -> list[dict]:
-    """Attach an indicative current price + est. value to each queued order for display."""
+    """Attach an indicative current price + est. shares/value to each queued order for display.
+    A share-sized order carries `shares`; a dollar-sized order carries `notional` (with the
+    estimated shares it would buy at the indicative price)."""
     out = []
     for o in pending:
         ticker = (o.get("ticker") or "").upper()
         px = prices.get(ticker) or _current_price(ticker)
-        shares = float(o.get("shares") or 0.0)
+        has_sh = o.get("shares") is not None
+        shares = float(o.get("shares") or 0.0) if has_sh else None
+        notional = None if has_sh else float(o.get("notional") or 0.0)
+        if has_sh:
+            est_shares = shares
+            est_value = round(shares * px, 2) if px else None
+        else:
+            est_shares = round(notional / px, 4) if px else None
+            est_value = round(notional, 2)
         out.append({
             "order_id": o.get("order_id"),
             "ticker": ticker,
             "side": o.get("side"),
-            "shares": round(shares, 6),
+            "shares": round(shares, 6) if shares is not None else None,
+            "notional": round(notional, 2) if notional is not None else None,
+            "est_shares": est_shares,
             "placed_at": o.get("placed_at"),
             "est_price": round(px, 4) if px else None,
-            "est_value": round(shares * px, 2) if px else None,
+            "est_value": est_value,
         })
     # newest first
     out.sort(key=lambda o: o.get("placed_at") or "", reverse=True)

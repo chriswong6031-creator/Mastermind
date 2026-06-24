@@ -534,10 +534,26 @@ def _name_rows(t: str) -> list[dict]:
     dirg = "bull" if (g or 0) > 10 else "bear" if (g is not None and g < 0) else "neutral"
     rows.append(_row("growth", {"rev_cagr": rc, "eps_cagr": ec}, "partial" if g is not None else "missing", dirg))
 
-    # solvency (Altman / Piotroski) — feeds the distress veto
+    # solvency (Altman / Piotroski) — feeds the distress veto, but only when the Altman read is
+    # ACTUALLY a valid, complete distress signal. The classic Altman Z is structurally invalid for
+    # high-leverage non-manufacturers (utilities, financials, REITs — levered by design), so for
+    # those its "distress" is CONTEXT, never a hard veto (mirrors the China engine, which already
+    # demotes Altman to context). And a score baked with approx=True was computed WITHOUT the X4
+    # leverage leg (missing/un-reconstructable liabilities) — too incomplete to size a name to 0 on.
+    # Only a complete distress score in a sector where Z is valid escalates to the unoverridable
+    # veto; otherwise the distress still shows (and votes bear) but does not hard-block.
     az = _g(d, "financials.multiyear.altman.zone")
-    rows.append(_row("solvency", {"altman_zone": az, "piotroski": _g(d, "financials.multiyear.piotroski.score")},
-                     "partial" if az else "missing", "bear" if az == "distress" else "neutral"))
+    az_approx = bool(_g(d, "financials.multiyear.altman.approx"))
+    az_exempt = _altman_sector_exempt(d.get("sector"))
+    az_distress = (az == "distress")
+    az_veto = az_distress and not az_exempt and not az_approx
+    az_context = ("sector-invalid" if (az_distress and az_exempt)
+                  else "approx-data" if (az_distress and az_approx) else None)
+    rows.append(_row("solvency",
+                     {"altman_zone": az, "piotroski": _g(d, "financials.multiyear.piotroski.score"),
+                      "altman_veto": az_veto, "altman_context": az_context},
+                     "partial" if az else "missing",
+                     "bear" if (az_distress and not az_approx) else "neutral"))
 
     # potential / asymmetry (upside vs downside cone) — derived
     mfe = _g(d, "anticipation.horizons.medium.mfe_med")
@@ -836,13 +852,26 @@ def decision_matrix(subject: str, kind: str = "name") -> dict:
     return {"subject": subject, "kind": kind, "rows": rows}
 
 
+# Sectors where the classic Altman Z-score is structurally invalid: high leverage by design /
+# a fundamentally different capital structure (Altman himself excluded financials). For these the
+# Altman "distress" zone is CONTEXT only — it never escalates to the unoverridable hard veto.
+# (Telecom is genuinely levered too but lives under the mixed GICS "Communication Services" sector
+# alongside net-cash names like GOOGL/META, so it is NOT blanket-exempted here.)
+_ALTMAN_EXEMPT_SECTORS = ("utilit", "financ", "real estate", "bank", "insur")
+
+
+def _altman_sector_exempt(sector: str | None) -> bool:
+    s = (sector or "").lower()
+    return any(tok in s for tok in _ALTMAN_EXEMPT_SECTORS)
+
+
 def _hard_vetoes(rows: list[dict]) -> list[str]:
     v = []
     for r in rows:
         val = r.get("value") or {}
         if r["lens"] == "extension" and val.get("parabolic"):
             v.append("parabolic")
-        if r["lens"] == "solvency" and val.get("altman_zone") == "distress":
+        if r["lens"] == "solvency" and val.get("altman_veto"):
             v.append("altman_distress")
         if r["lens"] == "conviction" and (val.get("cycle_blocked") or val.get("band") == "avoid" or val.get("size_pct") == 0):
             v.append("cycle_blocked")

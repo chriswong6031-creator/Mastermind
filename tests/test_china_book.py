@@ -486,6 +486,68 @@ def test_api_trades_attaches_region_display_names(iso, monkeypatch):
     assert us["history"] and "name" not in us["history"][0]
 
 
+def test_api_decisions_attaches_region_display_names(iso, monkeypatch):
+    """Daily Decision Log buy/sell chips AND holding rows for the venue books (China A-shares,
+    HK) carry the display name, resolved server-side on every read — so even historical entries
+    logged before names were captured (no `name` baked in) backfill. US brain books stay
+    code-only (no venues → no attachment)."""
+    from app import web
+    from brain import china_intake
+    monkeypatch.setattr(china_intake, "display_name",
+                        lambda t: {"600519.SS": "贵州茅台", "0700.HK": "Tencent"}.get(t, t))
+
+    for pid, ticker, want in (("china", "600519.SS", "贵州茅台"), ("hk", "0700.HK", "Tencent")):
+        cdir = registry.data_dir(pid)
+        cdir.mkdir(parents=True, exist_ok=True)
+        # the historical shape: NO name baked into the executed trade or the holding
+        (cdir / "decisions.jsonl").write_text(json.dumps({
+            "asof": "2026-06-22", "ts": "2026-06-22T00:00:00+00:00",
+            "executed": [{"ticker": ticker, "side": "buy", "shares": 10, "value": 1000.0}],
+            "holdings": [{"ticker": ticker, "weight": 0.5, "rationale": "core"}]}) + "\n")
+        d = json.loads(web.api_decisions(portfolio=pid).body)["decisions"][0]
+        assert d["executed"][0]["name"] == want                          # name on the buy/sell chip
+        assert d["holdings"][0]["name"] == want                          # name on the holding row
+
+    # a US brain book has no venue restriction → no name attachment (codes are self-describing).
+    adir = registry.data_dir("autonomous")
+    adir.mkdir(parents=True, exist_ok=True)
+    (adir / "decisions.jsonl").write_text(json.dumps({
+        "asof": "2026-06-22", "ts": "2026-06-22T00:00:00+00:00",
+        "executed": [{"ticker": "AAPL", "side": "buy", "shares": 10, "value": 1000.0}],
+        "holdings": [{"ticker": "AAPL", "weight": 0.5, "rationale": "core"}]}) + "\n")
+    ud = json.loads(web.api_decisions(portfolio="autonomous").body)["decisions"][0]
+    assert "name" not in ud["executed"][0] and "name" not in ud["holdings"][0]
+
+
+def test_api_decisions_sell_chips_show_pct_and_realized_pnl(iso, monkeypatch):
+    """A SELL chip in the Daily Decision Log carries the fraction of the position trimmed AND
+    the realized P&L (+%), derived from the FIFO blotter so it agrees with Trade History. A
+    historical entry that stored only ticker/side/value backfills on read; BUYs stay bare."""
+    from app import web
+    from portfolio import trade_history
+    cdir = registry.data_dir("hk")
+    cdir.mkdir(parents=True, exist_ok=True)
+    # bought 100 @ HK$100 on day 1, trimmed 40 @ HK$110 on day 2 → sold 40% for +HK$400 (+10%)
+    (cdir / "fills.jsonl").write_text(
+        json.dumps({"date": "2026-06-21", "ticker": "0700.HK", "side": "buy",
+                    "shares": 100, "price": 100.0, "value": 10000.0}) + "\n" +
+        json.dumps({"date": "2026-06-22", "ticker": "0700.HK", "side": "sell",
+                    "shares": 40, "price": 110.0, "value": 4400.0}) + "\n")
+    (cdir / "decisions.jsonl").write_text(json.dumps({
+        "asof": "2026-06-22", "ts": "2026-06-22T00:00:00+00:00",
+        "executed": [{"ticker": "0700.HK", "side": "sell", "shares": 40, "value": 4400.0}],
+        "holdings": []}) + "\n")
+
+    sell = json.loads(web.api_decisions(portfolio="hk").body)["decisions"][0]["executed"][0]
+    assert sell["pct_of_position"] == 0.4                                 # trimmed 40% of the line
+    assert sell["realized_pnl"] == 400.0                                  # 40 · (110 − 100)
+    assert sell["realized_pct"] == 10.0
+    # agrees with the Trade History blotter to the cent (same FIFO source)
+    blot = next(r for r in trade_history.history(portfolio_id="hk")
+                if r["ticker"] == "0700.HK" and r["action"] == "sell")
+    assert sell["realized_pnl"] == blot["realized_pnl"]
+
+
 # --------------------------------------------------------------------------- #
 # regression guards for the adversarial-review findings
 # --------------------------------------------------------------------------- #

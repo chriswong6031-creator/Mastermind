@@ -18,6 +18,16 @@ def run_daily(asof: str | None = None, *, force: bool = False, armed: bool = Tru
     asof = asof or date.today().isoformat()
     out = {"asof": asof, "ran_at": datetime.now(timezone.utc).isoformat()}
 
+    # 0. FRESHEN the vendored macro analyzer data BEFORE the engine reads it. A stale vendored tree
+    #    is how the book once bought NVDA off a days-old "Constructive" read after the live analyzer
+    #    had already flipped it to "avoid / wait for a base". Pulls origin/main (== the live site);
+    #    the staleness tripwire warns (or refuses via MACRO_STALE_BLOCK=1). Never raises.
+    try:
+        from data_layer import macro_refresh
+        out["macro_data"] = macro_refresh.refresh_and_check()
+    except Exception as e:  # noqa: BLE001 — freshness must never kill the build
+        out["macro_data"] = {"error": str(e)[:200]}
+
     # 1. the gated paper book (deterministic; always runs)
     try:
         from bot import phase2

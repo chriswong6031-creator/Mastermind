@@ -5,6 +5,9 @@ from __future__ import annotations
 
 import json
 import re
+import time
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -62,12 +65,78 @@ def _account_tickers(portfolio_id: str | None = None) -> list[str]:
 
 
 def _live_prices(tickers: list[str]) -> dict[str, float]:
-    """Live (delayed) quotes for `tickers`; {} if the Polygon layer is unavailable."""
+    """Live (intraday, TTL-cached) US quotes for `tickers` via Yahoo (yfinance), in USD; {} when
+    unavailable.
+
+    Yahoo reflects TODAY's tape. This REPLACED the Polygon path, whose key is an EOD/delayed tier
+    that returned a stale prevDay close — so on a fast day (SMH -7%) US books mis-marked to yesterday.
+    Only bare US symbols (no venue suffix) route here; venue-suffixed names (``*.HK`` / ``*.SS`` /
+    ``*.SZ``) are marked off their own live/snapshot path (and a Yahoo HK/CN fetch would need the
+    suffix anyway). One batched ``warm`` keeps the whole book to a single request."""
+    us = [t for t in (tickers or []) if t and "." not in t]
+    if not us:
+        return {}
     try:
-        from data_layer import polygon
-        return {k: v for k, v in polygon.quotes(tickers).items() if v is not None}
+        from data_layer import yahoo_feed
+        yahoo_feed.warm(us)                          # ONE batched request; TTL-cached for liveness
+        out: dict[str, float] = {}
+        for t in us:
+            v = yahoo_feed.price_local(t)
+            if v and v > 0:
+                out[t] = float(v)
+        return out
     except Exception:
         return {}
+
+
+def _book_marks(portfolio_id: str | None = None) -> dict[str, float]:
+    """Current marks for a book's held names, in the book's BASE currency — the live valuation
+    input for NAV / per-position P&L.
+
+      * USD books (flagship / autonomous / heavyweight)  → batched live Polygon delayed quotes.
+      * HKD / CNY books (hk / china)                      → the vendored snapshot price converted
+        to the base currency via ``portfolio.fx`` (Polygon carries no HK / A-share listings — and
+        a venue-suffixed request can HANG — so we never route them through ``_live_prices``).
+
+    Returns {} when nothing is priceable, so callers degrade to the avg-cost mark (no movement)
+    rather than mis-marking. Network-light: USD is one batched call; the non-US path is file reads.
+    """
+    tickers = _account_tickers(portfolio_id)
+    if not tickers:
+        return {}
+    try:
+        from portfolio import registry
+        ccy = registry.currency(portfolio_id)
+    except Exception:
+        ccy = "USD"
+    if ccy == "USD":
+        return _live_prices(tickers)
+    # single-currency non-US book: mark each name in its base currency off the shared snapshot.
+    try:
+        from portfolio import fx, paper_account
+    except Exception:
+        return {}
+    # Pre-warm the per-venue live caches in ONE batched request so the per-name loop below hits a
+    # warm cache instead of firing a separate fetch per holding. Hong Kong needs this most: without
+    # it, yahoo_feed fires one yf.download PER NAME (8 names ≈ 8 sequential downloads, ~5-12s); a
+    # single warm() pulls the whole book in one call. (A-shares already bulk-cache on first touch via
+    # tushare's _load_day, so they need no explicit warm.)
+    hk = [t for t in tickers if (t or "").upper().endswith(".HK")]
+    if hk:
+        try:
+            from data_layer import yahoo_feed
+            yahoo_feed.warm(hk)
+        except Exception:
+            pass
+    out: dict[str, float] = {}
+    for t in tickers:
+        try:
+            base = fx.usd_to(paper_account._current_price(t), ccy)
+        except Exception:
+            base = None
+        if base and base > 0:
+            out[t] = float(base)
+    return out
 
 
 def _latest_quiver(strategy_dir: Path) -> dict[str, Any] | None:
@@ -148,6 +217,12 @@ def research_page() -> FileResponse:
 @router.get("/self", include_in_schema=False)
 def self_directed_page() -> FileResponse:
     """The Self-Directed book — same SPA; the client opens that view from this path."""
+    return FileResponse(_STATIC / "index.html", media_type="text/html", headers=_NOCACHE)
+
+
+@router.get("/desk", include_in_schema=False)
+def desk_page() -> FileResponse:
+    """The Desk observability page — same SPA; the client opens the Desk view from this path."""
     return FileResponse(_STATIC / "index.html", media_type="text/html", headers=_NOCACHE)
 
 
@@ -285,7 +360,8 @@ def api_performance(portfolio: str = "flagship") -> JSONResponse:
     """Equity curve and performance summary for a $1M paper account (default: flagship)."""
     try:
         from portfolio import paper_account
-        payload = paper_account.performance(portfolio_id=portfolio)
+        payload = paper_account.performance(portfolio_id=portfolio,
+                                            prices=_book_marks(portfolio))
         return JSONResponse(payload)
     except Exception as exc:
         # never 500 — return a safe minimal payload
@@ -348,7 +424,7 @@ def api_portfolio(portfolio: str = "flagship") -> JSONResponse:
         # ------------------------------------------------------------------
         try:
             from portfolio import paper_account
-            prices = _live_prices(_account_tickers(portfolio))
+            prices = _book_marks(portfolio)
             pnl = paper_account.positions_pnl(prices, portfolio_id=portfolio) if prices else {}
             for pos in payload.get("positions", []):
                 rec = pnl.get(pos.get("ticker"))
@@ -420,59 +496,86 @@ def api_portfolio(portfolio: str = "flagship") -> JSONResponse:
         return JSONResponse({"error": str(exc)}, status_code=500)
 
 
+# The tab-switcher status payload is just NAV/return chips — re-pricing every book on every poll or
+# tab click is wasteful, so cache the assembled payload for a short window. A live trade or reprice
+# shows up within _PORTFOLIOS_TTL; the per-book live marks underneath have their own (shorter) caches.
+_PORTFOLIOS_TTL = 45.0  # seconds
+_portfolios_cache: dict[str, Any] = {}  # {"payload": dict, "ts": float}
+
+
+def _portfolio_status(meta: dict) -> dict:
+    """Assemble one book's tab-switcher row (metadata + quick status). I/O-bound (live marks +
+    benchmark history), so callers run these concurrently across books."""
+    from portfolio import paper_account, registry
+    pid = meta["id"]
+    status: dict[str, Any] = {"nav": None, "total_return_pct": None, "vs_spy_pct": None,
+                              "day_change_pct": None, "holdings": 0, "cash_pct": None, "as_of": None}
+    # the self-directed book has its own engine (not paper_account) — read its NAV/return directly
+    if pid == "self_directed":
+        try:
+            from portfolio import self_directed
+            bk = self_directed.book()
+            alloc = bk.get("allocation") or {}
+            status.update({
+                "nav": bk.get("nav"),
+                "total_return_pct": alloc.get("total_return_pct"),
+                "cash_pct": round((alloc.get("cash_pct") or 0) * 100, 1),
+                "holdings": alloc.get("n_positions") or 0,
+                "as_of": bk.get("inception_date"),
+            })
+        except Exception:
+            pass
+        return {**{k: meta.get(k) for k in ("id", "name", "tagline", "kind", "manager", "benchmark", "currency")},
+                "status": status}
+    try:
+        perf = paper_account.performance(portfolio_id=pid, prices=_book_marks(pid))
+        nav = perf.get("current_nav") or 0
+        status.update({
+            "nav": perf.get("current_nav"),
+            "total_return_pct": perf.get("total_return_pct"),
+            "vs_spy_pct": perf.get("vs_spy_pct"),
+            "day_change_pct": perf.get("day_change_pct"),
+            "cash_pct": round((perf.get("cash") or 0) / nav * 100, 1) if nav else None,
+            "as_of": perf.get("realized_since"),
+        })
+    except Exception:
+        pass
+    try:
+        latest = registry.data_dir(pid) / "latest.json"
+        if latest.exists():
+            d = json.loads(latest.read_text())
+            status["holdings"] = len(d.get("positions") or [])
+            status["as_of"] = d.get("as_of") or status["as_of"]
+    except Exception:
+        pass
+    return {**{k: meta.get(k) for k in ("id", "name", "tagline", "kind", "manager", "benchmark", "currency")},
+            "status": status}
+
+
 @router.get("/api/portfolios")
 def api_portfolios() -> JSONResponse:
     """The set of portfolios the dashboard switches between, each with a quick status
     (NAV, return, vs-SPY, holdings) for the tab labels. The flagship is the gated engine
-    book; the autonomous book is managed free-form by the Opus Brain."""
-    from portfolio import paper_account, registry
-    out = []
-    for meta in registry.all_portfolios():
-        pid = meta["id"]
-        status: dict[str, Any] = {"nav": None, "total_return_pct": None, "vs_spy_pct": None,
-                                  "day_change_pct": None, "holdings": 0, "cash_pct": None, "as_of": None}
-        # the self-directed book has its own engine (not paper_account) — read its NAV/return directly
-        if pid == "self_directed":
-            try:
-                from portfolio import self_directed
-                bk = self_directed.book()
-                alloc = bk.get("allocation") or {}
-                status.update({
-                    "nav": bk.get("nav"),
-                    "total_return_pct": alloc.get("total_return_pct"),
-                    "cash_pct": round((alloc.get("cash_pct") or 0) * 100, 1),
-                    "holdings": alloc.get("n_positions") or 0,
-                    "as_of": bk.get("inception_date"),
-                })
-            except Exception:
-                pass
-            out.append({**{k: meta.get(k) for k in ("id", "name", "tagline", "kind", "manager", "benchmark")},
-                        "status": status})
-            continue
-        try:
-            perf = paper_account.performance(portfolio_id=pid)
-            nav = perf.get("current_nav") or 0
-            status.update({
-                "nav": perf.get("current_nav"),
-                "total_return_pct": perf.get("total_return_pct"),
-                "vs_spy_pct": perf.get("vs_spy_pct"),
-                "day_change_pct": perf.get("day_change_pct"),
-                "cash_pct": round((perf.get("cash") or 0) / nav * 100, 1) if nav else None,
-                "as_of": perf.get("realized_since"),
-            })
-        except Exception:
-            pass
-        try:
-            latest = registry.data_dir(pid) / "latest.json"
-            if latest.exists():
-                d = json.loads(latest.read_text())
-                status["holdings"] = len(d.get("positions") or [])
-                status["as_of"] = d.get("as_of") or status["as_of"]
-        except Exception:
-            pass
-        out.append({**{k: meta.get(k) for k in ("id", "name", "tagline", "kind", "manager")},
-                    "status": status})
-    return JSONResponse({"portfolios": out, "default": registry.DEFAULT_ID})
+    book; the autonomous book is managed free-form by the Opus Brain.
+
+    Each book's status is I/O-bound (live marks + benchmark history); we price them concurrently
+    and cache the assembled payload for ``_PORTFOLIOS_TTL`` so a tab click / poll doesn't re-price."""
+    from portfolio import registry
+    now = time.time()
+    cached = _portfolios_cache.get("payload")
+    if cached is not None and (now - _portfolios_cache.get("ts", 0.0)) < _PORTFOLIOS_TTL:
+        return JSONResponse(cached)
+
+    metas = registry.all_portfolios()
+    # Price the books concurrently — each row is independent and network-bound, so wall-clock
+    # collapses to roughly the slowest single book instead of the sum across all of them.
+    with ThreadPoolExecutor(max_workers=max(1, len(metas))) as ex:
+        out = list(ex.map(_portfolio_status, metas))
+
+    payload = {"portfolios": out, "default": registry.DEFAULT_ID}
+    _portfolios_cache["payload"] = payload
+    _portfolios_cache["ts"] = now
+    return JSONResponse(payload)
 
 
 @router.get("/api/decisions")
@@ -486,14 +589,63 @@ def api_decisions(portfolio: str = "autonomous", limit: int = 60) -> JSONRespons
             from bot import heavyweight as _src
         elif portfolio == "china":
             from bot import china as _src
+        elif portfolio == "hk":
+            from bot import hk as _src
+        elif portfolio == "etf":
+            from bot import etf as _src
         else:
-            return JSONResponse({"decisions": [], "note": "decision log is Brain-book-only (autonomous/heavyweight/china)"})
+            return JSONResponse({"decisions": [], "note": "decision log is Brain-book-only (autonomous/heavyweight/china/hk/etf)"})
         decisions = _src.load_decisions(limit)
+        today_iso = date.today().isoformat()
+        # Region books (China A-shares, HK) trade opaque numeric / HK codes — resolve the human
+        # display name (Chinese for A-shares, English for HK/ADR) for every holding AND executed
+        # trade so the Daily Decision Log's buy/sell chips and holding rows read like the Positions
+        # panel. Resolved server-side on every read (not just baked in at log time) so historical
+        # entries logged before names were captured backfill too; mirrors api_trades. US books are
+        # self-describing and stay code-only.
+        _name = None
+        try:
+            from portfolio import registry
+            if registry.venues(portfolio):
+                from brain import china_intake
+                _name = china_intake.display_name
+        except Exception:  # noqa: BLE001
+            _name = None
+        # A dollar figure alone doesn't say how much of a position a SELL trimmed or whether it
+        # made money. Enrich each executed sell with the fraction of the position sold (pct_sold;
+        # 1.0 = full exit) and the realized P&L + %, sourced from the SAME FIFO blotter the Trade
+        # History panel uses so the two agree. Derived from fills on every read, so historical
+        # decision-log entries (which stored only ticker/side/value) backfill too.
+        try:
+            from portfolio import trade_history
+            _sell = trade_history.sell_realized(portfolio)
+        except Exception:  # noqa: BLE001
+            _sell = {}
         # Attach cached Chinese for the AI write-ups so the Daily Decision Log renders in
         # Chinese when zh is toggled. cached_zh() is a pure cache lookup (None -> client
         # falls back to English) — warmed by brain.translate.translate_decisions() on the
         # daily run; English never regresses if the cache is cold.
         for d in decisions:
+            # flag a decision logged today so the UI can highlight + tag it "new"
+            d["today"] = str(d.get("asof") or "")[:10] == today_iso
+            for rec in (d.get("executed") or []):
+                if _name and rec.get("ticker") and not rec.get("name"):
+                    nm = _name(rec["ticker"])
+                    if nm and nm.upper() != rec["ticker"].upper():
+                        rec["name"] = nm
+                if rec.get("side") == "sell":
+                    det = _sell.get((d.get("asof"), (rec.get("ticker") or "").upper()))
+                    if det:
+                        for k in ("pct_of_position", "realized_pnl", "realized_pct"):
+                            if det.get(k) is not None and rec.get(k) is None:
+                                rec[k] = det[k]
+            if _name:
+                for h in (d.get("holdings") or []):
+                    tk = (h.get("ticker") or "")
+                    if tk and not h.get("name"):
+                        nm = _name(tk)
+                        if nm and nm.upper() != tk.upper():
+                            h["name"] = nm
             for fld in ("summary", "sold_note", "brain_text"):
                 v = d.get(fld)
                 if v:
@@ -521,6 +673,20 @@ def api_etf_outcomes() -> JSONResponse:
         return JSONResponse(etf_outcomes.summary())
     except Exception as exc:  # noqa: BLE001
         return JSONResponse({"scorecard": {"status": "building"}, "error": str(exc)})
+
+
+@router.get("/api/overnight-tape")
+def api_overnight_tape() -> JSONResponse:
+    """The LIVE overnight cross-asset tape — US index futures, international indices, FX/rates, vol,
+    commodities and crypto, each with its overnight % change, plus a distilled risk read
+    (calm/elevated/stressed). What's moving while the cash market is shut — the thing the EOD macro
+    dashboard can't see. Polled by the dashboard's Overnight Tape panel; cached ~5 min server-side."""
+    try:
+        from data_layer import overnight
+        return JSONResponse(overnight.tape())
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"groups": {}, "risk": {"state": "calm", "reasons": ["unavailable"]},
+                             "live": False, "error": str(exc)})
 
 
 @router.get("/api/research")
@@ -672,14 +838,27 @@ def api_trades(portfolio: str = "flagship") -> JSONResponse:
     every individual buy/sell, with realized P&L on sells and live unrealized P&L
     on still-open buy remainders. Scoped to a portfolio (default: flagship)."""
     try:
-        from portfolio import market_calendar, paper_account, position_log, trade_history
+        from portfolio import market_calendar, paper_account, position_log, registry, trade_history
         prices = _live_prices(_account_tickers(portfolio))
+        history = trade_history.history(prices, portfolio_id=portfolio)
+        pending = paper_account.load_pending(portfolio)
+        # Region books (China A-shares, HK) trade opaque numeric / HK codes — attach the
+        # human display name (Chinese for A-shares, English for HK/ADR) to each blotter and
+        # pending row so Trade History reads like the Positions panel. Scoped to venue-
+        # restricted books; US tickers are self-describing and stay code-only.
+        if registry.venues(portfolio):
+            from brain import china_intake
+            for row in (*history, *pending):
+                tk = (row.get("ticker") or "")
+                nm = china_intake.display_name(tk)
+                if nm and nm.upper() != tk.upper():
+                    row["name"] = nm
         return JSONResponse({
             "open": position_log.open_positions(portfolio_id=portfolio),
             "closed": position_log.closed_positions(portfolio_id=portfolio),
-            "history": trade_history.history(prices, portfolio_id=portfolio),
+            "history": history,
             # PENDING orders queued while the market is closed — fill at next open
-            "pending": paper_account.load_pending(portfolio),
+            "pending": pending,
             "market": market_calendar.status(),
         })
     except Exception as exc:
@@ -1136,6 +1315,12 @@ def api_activity() -> JSONResponse:
     except Exception:
         pass
 
+    # flag actions logged today so the Brain Log can highlight + tag them "new".
+    # Wall-clock date is the trading-day source of truth here (matches the data's as_of).
+    today_iso = date.today().isoformat()
+    for e in events:
+        e["today"] = (e.get("ts") or "")[:10] == today_iso
+
     # sort newest first, cap at 60
     events.sort(key=lambda e: e.get("ts") or "", reverse=True)
     return JSONResponse(events[:60])
@@ -1210,3 +1395,321 @@ def api_competitors() -> JSONResponse:
         "and a falsifiable scorecard ledger — never auto-executes."
     )
     return JSONResponse({"strategies": strategies, "note": note})
+
+
+# ---------------------------------------------------------------------------
+# DESK observability — surface the multi-seat Flagship "desk" artifacts the
+# committee/gate/risk machinery already writes to disk. STRICTLY READ-ONLY and
+# ADDITIVE: every endpoint is wrapped try/except → JSONResponse, never raises,
+# and degrades to {"status": "building"} / [] when an artifact is absent.
+#
+# Artifact tree (relative to the project data/ dir):
+#   committee/<asof>/_FLAGSHIP/strategist.json   — the macro strategist verdict
+#   committee/<asof>/<TICKER>/{forge,sentinel,nexus}.json — per-name committee
+#   gate_officer/<asof>/decisions.json           — portfolio gate decisions
+#   risk_officer/<asof>/decisions.json           — portfolio risk decisions
+#   portfolios/flagship/watchlist.jsonl          — parked (withheld) names
+#   brain/{calibration,reputation}.json,
+#   brain/attribution/_rollup.json, brain/cio/<week>.{json,md} — per-seat scorecard
+# ---------------------------------------------------------------------------
+
+def _committee_dir() -> Path:
+    return _data() / "committee"
+
+
+def _gate_officer_dir() -> Path:
+    return _data() / "gate_officer"
+
+
+def _risk_officer_dir() -> Path:
+    return _data() / "risk_officer"
+
+
+def _is_date_dir(name: str) -> bool:
+    """A committee/<asof> dir name is an ISO date (YYYY-MM-DD)."""
+    return bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", name or ""))
+
+
+def _latest_asof(*roots: Path) -> str | None:
+    """The most-recent ISO-date subdir name across one or more artifact roots ({} → None)."""
+    dates: set[str] = set()
+    for root in roots:
+        try:
+            for p in root.iterdir():
+                if p.is_dir() and _is_date_dir(p.name):
+                    dates.add(p.name)
+        except Exception:  # noqa: BLE001
+            continue
+    return max(dates) if dates else None
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    """Parse a JSON file → dict; {} on any failure (missing / malformed)."""
+    try:
+        if path.exists():
+            d = json.loads(path.read_text())
+            return d if isinstance(d, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+    return {}
+
+
+@router.get("/api/desk/strategist")
+def api_desk_strategist(asof: str = "") -> JSONResponse:
+    """The macro STRATEGIST verdict for `asof` (default: most-recent available) — the confirmed
+    themes (with member names + why), the backdrop stance, the crowding flags, the emerging
+    watch-list and the rationale. 'building' until the desk has written a strategist artifact."""
+    try:
+        asof = (asof or "")[:10]
+        if not (asof and _is_date_dir(asof)):
+            asof = _latest_asof(_committee_dir())
+        if not asof:
+            return JSONResponse({"status": "building", "asof": None})
+        j = _read_json(_committee_dir() / asof / "_FLAGSHIP" / "strategist.json")
+        verdict = j.get("verdict") or {}
+        if not verdict:
+            return JSONResponse({"status": "building", "asof": asof})
+        inp = j.get("input") or {}
+        # bound payloads: cap the per-theme member list + the emerging/crowding arrays
+        themes = []
+        for t in (verdict.get("confirmed_themes") or [])[:20]:
+            themes.append({
+                "theme": t.get("theme"),
+                "stage": t.get("stage"),
+                "leadership": t.get("leadership"),
+                "names": (t.get("names") or [])[:12],
+                "why": (t.get("why") or "")[:600],
+            })
+        return JSONResponse({
+            "status": "scoring",
+            "asof": asof,
+            "regime": {k: (inp.get("regime") or {}).get(k) for k in
+                       ("quad", "quad_name", "liquidity_overlay", "cycle_tag")},
+            "confirmed_themes": themes,
+            "backdrop_stance": verdict.get("backdrop_stance"),
+            "supportive": verdict.get("supportive"),
+            "watch_emerging": (verdict.get("watch_emerging") or [])[:12],
+            "crowding_flags": (verdict.get("crowding_flags") or [])[:12],
+            "rationale": (verdict.get("rationale") or "")[:1600],
+            "calibration_multiplier": verdict.get("calibration_multiplier"),
+        })
+    except Exception as exc:  # noqa: BLE001 — never raise; degrade to building
+        return JSONResponse({"status": "building", "asof": None, "error": str(exc)})
+
+
+@router.get("/api/desk/decisions")
+def api_desk_decisions(asof: str = "") -> JSONResponse:
+    """The per-name desk decision log for `asof` (default: most-recent) — one readable row per name:
+    what FORGE confirmed, SENTINEL's stance, NEXUS's action, the Gate Officer's action, and the
+    realized risk action, each joined from the committee + gate + risk artifacts. 'building' when no
+    committee dir exists for the date."""
+    try:
+        asof = (asof or "")[:10]
+        if not (asof and _is_date_dir(asof)):
+            asof = _latest_asof(_committee_dir(), _gate_officer_dir(), _risk_officer_dir())
+        if not asof:
+            return JSONResponse({"status": "building", "asof": None, "decisions": []})
+
+        # Gate + Risk per-name decisions (keyed by ticker) for the date
+        def _by_ticker(root: Path) -> dict[str, dict]:
+            j = _read_json(root / asof / "decisions.json")
+            out: dict[str, dict] = {}
+            for dec in ((j.get("result") or {}).get("decisions") or []):
+                tk = str(dec.get("ticker") or "").upper().strip()
+                if tk:
+                    out[tk] = {"action": str(dec.get("action") or "").lower(),
+                               "scale": dec.get("scale"),
+                               "reason": (dec.get("reason") or "")[:400]}
+            return out
+
+        gate = _by_ticker(_gate_officer_dir())
+        risk = _by_ticker(_risk_officer_dir())
+
+        cdir = _committee_dir() / asof
+        rows: list[dict[str, Any]] = []
+        tickers: list[str] = []
+        try:
+            if cdir.exists():
+                tickers = sorted(p.name for p in cdir.iterdir()
+                                 if p.is_dir() and p.name != "_FLAGSHIP")
+        except Exception:  # noqa: BLE001
+            tickers = []
+        # also surface gate/risk-only names (e.g. a withheld name with no committee folder)
+        for tk in sorted(set(gate) | set(risk)):
+            if tk not in tickers:
+                tickers.append(tk)
+
+        for tk in tickers[:120]:
+            forge = _read_json(cdir / tk / "forge.json")
+            sentinel = _read_json(cdir / tk / "sentinel.json")
+            nexus = _read_json(cdir / tk / "nexus.json")
+            g = gate.get(tk) or {}
+            r = risk.get(tk) or {}
+            rows.append({
+                "ticker": tk,
+                "forge": ({"confirmed": forge.get("confirmed"),
+                           "combined": forge.get("combined"),
+                           "viability": forge.get("viability"),
+                           "size_mult": forge.get("size_mult")} if forge else None),
+                "sentinel": ({"stance": sentinel.get("stance"),
+                              "confidence": sentinel.get("confidence"),
+                              "strongest_bear": (sentinel.get("strongest_bear") or "")[:400]}
+                             if sentinel else None),
+                "nexus": ({"action": nexus.get("action"), "scale": nexus.get("scale"),
+                           "lean": nexus.get("lean"),
+                           "rationale": (nexus.get("rationale") or "")[:400]} if nexus else None),
+                "gate": (g or None),
+                "risk": (r or None),
+            })
+        return JSONResponse({"status": "scoring" if rows else "building",
+                             "asof": asof, "decisions": rows})
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"status": "building", "asof": None, "decisions": [], "error": str(exc)})
+
+
+@router.get("/api/desk/watchlist")
+def api_desk_watchlist(book: str = "flagship") -> JSONResponse:
+    """The parked (withheld) names for a book — the daily re-review queue. Dedups to the latest
+    record per ticker, each with its reason + asof. [] when the watchlist is empty/absent. The
+    module is flagship-scoped today; `book` is accepted for forward-compatibility."""
+    try:
+        from portfolio import watchlist
+        # the re-review state machine (state + days-in-state) is the source of truth when present;
+        # fall back to the append-log latest() for any parked name not yet in the snapshot so the
+        # surface is never thinner than before (back-compatible).
+        state_by_ticker = {}
+        try:
+            for s in (watchlist.state_rows() or []):
+                t = (s.get("ticker") or "").upper()
+                if t:
+                    state_by_ticker[t] = s
+        except Exception:  # noqa: BLE001
+            state_by_ticker = {}
+        rows = []
+        for r in (watchlist.latest() or []):
+            t = (r.get("ticker") or "").upper()
+            s = state_by_ticker.get(t) or {}
+            rows.append({"ticker": t,
+                         "asof": str(r.get("asof") or "")[:10],
+                         "reason": (s.get("reason") or r.get("reason") or "")[:400],
+                         "combined": r.get("combined"),
+                         "state": s.get("state") or "watch",
+                         "days_in_state": s.get("days_in_state"),
+                         "last_review": str(s.get("last_review") or "")[:10] or None})
+        # surface EXPIRED names from the snapshot too (they've left the append-log's active view).
+        for t, s in state_by_ticker.items():
+            if s.get("state") == "expired" and not any(x["ticker"] == t for x in rows):
+                rows.append({"ticker": t,
+                             "asof": str(s.get("asof") or "")[:10],
+                             "reason": (s.get("expire_reason") or s.get("reason") or "")[:400],
+                             "combined": s.get("combined"),
+                             "state": "expired",
+                             "days_in_state": s.get("days_in_state"),
+                             "last_review": str(s.get("last_review") or "")[:10] or None})
+        return JSONResponse({"book": book, "watchlist": rows[:120]})
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"book": book, "watchlist": [], "error": str(exc)})
+
+
+@router.get("/api/desk/scorecard")
+def api_desk_scorecard() -> JSONResponse:
+    """The per-seat accountability scorecard: each seat's calibration (multiplier / reliability /
+    n / status), its cumulative attributed bps (the Brinson credit rollup), and its reputation
+    label — plus the latest CIO weekly note. Every input degrades independently to empty/None, so
+    the payload is always valid even before any seat has cleared cold-start."""
+    out: dict[str, Any] = {"seats": [], "cio": None, "status": "building"}
+    # --- per-agent calibration (the spine of the table) ---
+    agents: dict[str, Any] = {}
+    try:
+        from brain import calibration
+        agents = (calibration.load() or {}).get("agents") or {}
+    except Exception:  # noqa: BLE001
+        agents = {}
+    # --- cumulative attributed bps per seat (Brinson rollup) ---
+    attr_seats: dict[str, Any] = {}
+    try:
+        from brain import attribution
+        attr_seats = (attribution.rollup() or {}).get("seats") or {}
+    except Exception:  # noqa: BLE001
+        attr_seats = {}
+    # --- CIO weekly review: structured per-seat reputation + the note (md + week) ---
+    # Prefer the PERSISTED weekly artifact (data/brain/cio/<week>.json, written by cio.write() on the
+    # daily/weekly build) — it's a single bounded file read, so the live endpoint stays snappy. Fall
+    # back to a fresh, LLM-free cio.review() only when nothing has been persisted yet (which does the
+    # heavier KPI scan). Either way the per-seat reputation labels + the note (md + week) are surfaced.
+    rep_by_seat: dict[str, str] = {}
+    cio_block: dict[str, Any] | None = None
+    try:
+        rep = None
+        cio_dir = _data() / "brain" / "cio"
+        try:
+            files = sorted(cio_dir.glob("*.json"), reverse=True) if cio_dir.exists() else []
+            if files:
+                rep = json.loads(files[0].read_text())
+        except Exception:  # noqa: BLE001
+            rep = None
+        if not rep:
+            from brain import cio
+            rep = cio.review()  # LLM-free; deterministic fallback note
+        for s in (rep.get("per_seat") or []):
+            if s.get("seat"):
+                rep_by_seat[s["seat"]] = s.get("reputation")
+        cio_block = {"week": rep.get("iso_week"),
+                     "note_md": (rep.get("note_md") or "")[:8000],
+                     "whats_working": rep.get("whats_working") or [],
+                     "whats_broken": rep.get("whats_broken") or [],
+                     "tuning_recommendations": (rep.get("tuning_recommendations") or [])[:12]}
+    except Exception:  # noqa: BLE001
+        cio_block = None
+
+    # the seats we surface, in desk reading order (calibration keys); only emit those that exist
+    # in at least one source so the table stays honest, but always include the core six.
+    _order = ["strategist", "forge", "sentinel", "nexus", "gate", "risk",
+              "pm", "timing", "autonomous", "heavyweight", "china", "hk"]
+    seats: list[dict[str, Any]] = []
+    try:
+        keys = [k for k in _order if k in agents or k in attr_seats or k in rep_by_seat]
+        # append any unexpected calibration agents not in our order list (forward-compatible)
+        for k in agents:
+            if k not in keys:
+                keys.append(k)
+        for k in keys:
+            cal = agents.get(k) or {}
+            ab = attr_seats.get(k) or {}
+            seats.append({
+                "seat": k,
+                "status": cal.get("status"),
+                "multiplier": cal.get("multiplier"),
+                "reliability": cal.get("reliability"),
+                "n": cal.get("n"),
+                "attributed_bps": ab.get("attributed_bps"),
+                "attributed_n": ab.get("n"),
+                "reputation": rep_by_seat.get(k),
+            })
+    except Exception:  # noqa: BLE001
+        seats = []
+    out["seats"] = seats
+    out["cio"] = cio_block
+    out["status"] = "scoring" if seats else "building"
+    # --- nightly per-book Opus-cost spend vs the tripwire cap (OFF/unlimited by default) ---
+    try:
+        from brain import cost_guard
+        out["cost"] = cost_guard.summary()
+    except Exception:  # noqa: BLE001 — additive; never break the scorecard
+        out["cost"] = None
+    return JSONResponse(out)
+
+
+@router.get("/api/desk/firm-exposure")
+def api_desk_firm_exposure() -> JSONResponse:
+    """READ-ONLY firm-level cross-book exposure monitor — where the independent books (flagship,
+    heavyweight, US/CN/HK/ETF Brains) have piled into the SAME names / sectors. Surfaces the flagged
+    concentrations + the top firm-wide exposures + a sector rollup. A MONITOR only: it never changes
+    any allocation or trades. Degrades to an honest empty payload; never 500s."""
+    try:
+        from portfolio import firm_exposure
+        return JSONResponse(firm_exposure.summary())
+    except Exception as exc:  # noqa: BLE001 — never raise; degrade to an honest stub
+        return JSONResponse({"as_of": None, "books": [], "n_books": 0, "top_exposures": [],
+                             "flags": [], "by_sector": {}, "thresholds": {}, "currency_clean": False,
+                             "note": f"Firm exposure unavailable: {exc}"})

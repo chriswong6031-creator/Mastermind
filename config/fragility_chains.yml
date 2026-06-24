@@ -1,0 +1,115 @@
+# Fragility chains — the leading-edge "what cracks first" map for the Macro Risk Officer.
+#
+# A fragility chain is a causal supply/demand chain whose LEADING-EDGE node tends to crack first
+# when liquidity tightens or a theme blows off, propagating downstream. The desk's defensive layer
+# (brain/macro_risk.py + portfolio/fragility_chain.py) uses this to answer the 2026-06-23 question
+# that nothing answered: "is our book a leveraged bet on the thing that is cracking?".
+#
+# Externalized (like config/etf_strategy.yml) so it is a tunable, reviewable artifact — NOT
+# hardcoded. portfolio.fragility_chain falls back to an in-code default if this file is missing or
+# malformed, so a bad edit never breaks the book. Re-read fresh each call.
+#
+# Each chain:
+#   id        — stable key
+#   name      — human label
+#   driver    — the LEADING-EDGE node that cracks first (what to watch for the first tell)
+#   nodes     — the causal links, leading-edge → downstream (narrative only)
+#   tickers   — single names that ARE this chain (any position in chain order)
+#   leading   — the subset of `tickers` sitting at the fragile leading edge (cracks first)
+#   proxies   — ETFs/baskets that express the chain (used for the live "-X% theme day" tripwire)
+
+chains:
+  ai_buildout:
+    name: "AI build-out (memory → hyperscaler capex → buildout → industrial-AI power)"
+    driver: "memory / DRAM pricing + hyperscaler-capex guidance"
+    nodes:
+      - "memory/DRAM (the first cyclical tell — pricing rolls before the buildout slows)"
+      - "hyperscaler capex (MSFT/GOOGL/META/AMZN budgets fund the whole chain)"
+      - "AI compute buildout (GPUs/accelerators/networking — the crowded momentum core)"
+      - "industrial-AI capex (power/grid/cooling — last to feel it, most extended late)"
+    leading: ["MU", "STX", "WDC", "SK_HYNIX", "SMCI"]
+    tickers:
+      - "MU"
+      - "STX"
+      - "WDC"
+      - "SMCI"
+      - "MSFT"
+      - "GOOGL"
+      - "GOOG"
+      - "META"
+      - "AMZN"
+      - "NVDA"
+      - "AVGO"
+      - "AMD"
+      - "TSM"
+      - "ANET"
+      - "APH"
+      - "VRT"
+      - "ETN"
+      - "GEV"
+      - "PWR"
+      - "CEG"
+      - "VST"
+      - "NBIS"
+      - "ORCL"
+      - "DELL"
+    proxies: ["SMH", "SOXX", "XLK", "IGV"]
+
+  long_duration_tech:
+    name: "Long-duration / high-multiple tech (rate- and liquidity-sensitive growth)"
+    driver: "real yields + risk appetite for unprofitable/long-duration cash flows"
+    nodes:
+      - "real yields up / liquidity contracting compresses the multiple first"
+      - "high-beta software + unprofitable growth de-rates"
+      - "momentum unwinds as the crowded long-duration trade reverses"
+    leading: ["ARKK"]
+    tickers:
+      - "CRM"
+      - "NOW"
+      - "SNOW"
+      - "CRWD"
+      - "PLTR"
+      - "NET"
+      - "DDOG"
+      - "SHOP"
+      - "PANW"
+    proxies: ["IGV", "ARKK", "QQQ"]
+
+  rate_sensitive:
+    name: "Rate-sensitive financials & real assets (banks / REITs / utilities)"
+    driver: "the direction of the long end + the credit cycle"
+    nodes:
+      - "rates-UP hurts REITs/utilities (duration) + can steepen bank NIM but stress credit"
+      - "a growth-scare/credit event hurts banks (loan losses) but can HELP duration proxies"
+      - "the sign flips with the DRIVER — not a fixed avoid (see defensive_playbook caveats)"
+    leading: []
+    tickers:
+      - "JPM"
+      - "BAC"
+      - "WFC"
+      - "C"
+      - "GS"
+      - "MS"
+      - "PLD"
+      - "AMT"
+      - "O"
+      - "SPG"
+    proxies: ["XLF", "XLRE", "KRE"]
+
+  commodity_inflation:
+    name: "Commodity / inflation cyclicals (energy + materials)"
+    driver: "the inflation impulse + the global growth cycle"
+    nodes:
+      - "an inflation shock LIFTS this chain (real-asset beneficiary) while it hurts duration"
+      - "a global growth-scare CRACKS it (demand) even with inflation elevated"
+    leading: []
+    tickers:
+      - "XOM"
+      - "CVX"
+      - "COP"
+      - "SLB"
+      - "FCX"
+      - "NUE"
+      - "CAT"
+      - "DE"
+    proxies: ["XLE", "XLB", "XOP"]

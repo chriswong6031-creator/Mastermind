@@ -195,6 +195,7 @@ def test_scorer_skips_non_directional_thesis():
 
 def _mk_stock(ticker="AVGO", sector="Technology", *, value_z=0.5, cheap=72, forward_pe=24.0,
               rev_cagr=30.0, eps_cagr=24.0, quality_z=0.6, accounting=None, altman="safe",
+              altman_approx=False,
               piotroski=7, mfe=22.0, dd_avg=-10.0, dd_tail=-15.0, ext_grade="ok", parabolic=False,
               pct_vs_200dma=14.0, above50=True, above200=True, macd=True, rsi=60.0,
               off_52w_high=-6.0, pct_vs_50dma=3.0, price=200.0, nb=5, ns=1, band="strong",
@@ -203,7 +204,8 @@ def _mk_stock(ticker="AVGO", sector="Technology", *, value_z=0.5, cheap=72, forw
         "ticker": ticker, "sector": sector,
         "valuation": {"value_z": value_z, "trailing_pe": {"cheap": cheap}, "forward_pe": forward_pe},
         "financials": {"multiyear": {"rev_cagr": rev_cagr, "eps_cagr": eps_cagr,
-                                     "altman": {"zone": altman}, "piotroski": {"score": piotroski}}},
+                                     "altman": {"zone": altman, "approx": altman_approx},
+                                     "piotroski": {"score": piotroski}}},
         "conviction": {"axes": {"quality": {"z": quality_z, "flags": {"accounting": accounting}}},
                        "ext": {"grade": ext_grade, "parabolic": parabolic},
                        "band": band, "score": conv_score, "size": {"pct": size_pct},
@@ -268,10 +270,35 @@ def test_archetype_parabolic_blocked():
 
 
 def test_archetype_altman_distress_blocked():
-    full = _run(_mk_stock(ticker="XXX", altman="distress"), _mk_regime(), "XXX")
+    # complete-data distress in a sector where Altman Z is valid (Tech) → the hard veto fires.
+    full = _run(_mk_stock(ticker="XXX", sector="Technology", altman="distress"), _mk_regime(), "XXX")
     s = full["synthesis"]
     assert "altman_distress" in s["vetoes"]
     assert s["size_authority"] == "blocked"
+
+
+def test_archetype_altman_distress_sector_demoted():
+    # Altman Z is structurally invalid for high-leverage non-manufacturers — a distress read on a
+    # utility/financial/REIT is CONTEXT, not a hard veto, so it must NOT size the name to 0.
+    for sector in ("Utilities", "Financials", "Real Estate"):
+        full = _run(_mk_stock(ticker="UTL", sector=sector, altman="distress"), _mk_regime(), "UTL")
+        s = full["synthesis"]
+        assert "altman_distress" not in s["vetoes"], f"{sector} distress must be context, not a veto"
+        assert s["size_authority"] != "blocked", f"{sector} must not be hard-blocked by Altman"
+        solv = next(r for r in full["rows"] if r["lens"] == "solvency")
+        assert solv["value"]["altman_context"] == "sector-invalid"
+
+
+def test_archetype_altman_distress_approx_demoted():
+    # a distress score computed WITHOUT the X4 leverage leg (approx=True: liabilities missing and
+    # un-reconstructable) is too incomplete to hard-block on — demote to context.
+    full = _run(_mk_stock(ticker="APX", sector="Technology", altman="distress", altman_approx=True),
+                _mk_regime(), "APX")
+    s = full["synthesis"]
+    assert "altman_distress" not in s["vetoes"]
+    assert s["size_authority"] != "blocked"
+    solv = next(r for r in full["rows"] if r["lens"] == "solvency")
+    assert solv["value"]["altman_context"] == "approx-data"
 
 
 def test_archetype_gold_miner_in_gold_bear_blocked():

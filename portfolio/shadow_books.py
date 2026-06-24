@@ -52,6 +52,12 @@ POLICIES = [
      "desc": "Raw engine-confluence sizing; no research multiplier, no committee.",
      "desc_zh": "原始引擎合流规模；无研究乘数，无委员会。",
      "committee": False, "calibration": True, "sizing": "engine"},
+    {"id": "risk_tilt", "label": "Risk-tilt (low-vol overlay)", "label_zh": "风险倾斜（低波动叠加）",
+     "desc": "Prod book + a SUBTRACT-ONLY vol-managed / anti-lottery size haircut — the forward test "
+             "of the only backtest-confirmed edge (low-risk is a Sharpe/drawdown lever, not a picker).",
+     "desc_zh": "实盘组合 + 仅做减法的波动管理/反彩票规模折减 — 对唯一经回测确认的边际的前瞻检验"
+                "（低风险是夏普/回撤杠杆，而非选股器）。",
+     "committee": True, "calibration": True, "sizing": "research", "risk_tilt": True},
 ]
 
 _POLICY_BY_ID = {p["id"]: p for p in POLICIES}
@@ -370,12 +376,57 @@ def _gather_prices(tickers: set, seed: dict | None) -> dict:
     return px
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# risk-tilt overlay — the forward test of the backtest-confirmed low-risk edge
+# ─────────────────────────────────────────────────────────────────────────────
+_RT_TARGET_VOL = 0.25      # annualized vol target for the vol-managed leg
+_RT_WIN = 63              # trailing business days for realized vol / max-daily-return
+_RT_FLOOR = 0.30          # never haircut a name below 30% of its prod size
+
+
+def _risk_mult(panel: dict, ticker: str, asof: str) -> float:
+    """SUBTRACT-ONLY (≤1.0) size multiplier for one name: vol-managed (min(1, target/realized_vol))
+    × an anti-lottery haircut for big single-day pops. Computed ONLY from prices ≤ asof (leakage-free).
+    A name absent from the panel keeps full size (1.0)."""
+    try:
+        import numpy as np
+        import pandas as pd
+        s = (panel or {}).get((ticker or "").upper())
+        if s is None:
+            return 1.0
+        s = s[s.index <= pd.Timestamp(asof)]
+        r = s.pct_change().dropna().iloc[-_RT_WIN:]
+        if len(r) < 20:
+            return 1.0
+        vol = float(r.std()) * (252 ** 0.5)
+        vol_mult = min(1.0, _RT_TARGET_VOL / vol) if vol > 0 else 1.0
+        maxret = float(r.max())
+        lottery_mult = max(0.6, 1.0 - 2.0 * max(0.0, maxret - 0.10))   # >10% pop → progressive haircut
+        return round(max(_RT_FLOOR, min(1.0, vol_mult * lottery_mult)), 4)
+    except Exception:  # noqa: BLE001
+        return 1.0
+
+
 def run(asof: str, prices: dict | None = None, inputs: list | None = None) -> dict:
     """Re-derive every policy book for `asof`, mark each forward, label its theses, and write the
     leaderboard. `inputs` defaults to the persisted decision-inputs file. Best-effort; never raises."""
     asof = str(asof)[:10]
     inputs = inputs if inputs is not None else read_inputs(asof)
     targets_by_book = {p["id"]: apply_policy(p, inputs) for p in POLICIES}
+    # risk_tilt = prod weights scaled by a leakage-free, subtract-only risk-quality multiplier, then
+    # re-capped. Gross only SHRINKS (more cash) → it's the forward A/B of the low-risk Sharpe lever.
+    if "risk_tilt" in targets_by_book and targets_by_book["risk_tilt"]:
+        try:
+            from portfolio import predictions as _pred
+            _panel = _pred._load_panel()
+            rt = {tk: round(w * _risk_mult(_panel, tk, asof), 4)
+                  for tk, w in targets_by_book["risk_tilt"].items()}
+            tot = sum(rt.values())
+            if tot > 1.0:
+                rt = {k: round(v / tot, 4) for k, v in rt.items()}
+            targets_by_book["risk_tilt"] = rt
+        except Exception:  # noqa: BLE001
+            pass
     needed: set = set()
     for tw in targets_by_book.values():
         needed |= set(tw)

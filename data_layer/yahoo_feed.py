@@ -1,14 +1,17 @@
-"""Yahoo (yfinance) live price feed — fresh closes for the Hong-Kong book.
+"""Yahoo (yfinance) live price feed — fresh quotes for the US and Hong-Kong books.
 
-Tushare's A-share ``daily`` endpoint is bulk + high-limit (see ``data_layer.tushare_feed``), but its
-``hk_daily`` endpoint is throttled to ~1 request/hour on the standard token tier — far too tight to
-mark a multi-name HK book. Yahoo Finance covers Hong Kong (``*.HK``), needs no token, and serves a
-whole basket in ONE ``yf.download`` call, so the HK book marks against it instead.
+Serves any yfinance symbol in ONE batched ``yf.download`` call, token-free:
+  * US names (bare tickers + ETFs, e.g. ``SMH``, ``NVDA``) — the US books had NO live leg and
+    marked off the CI/EOD-lagging vendored snapshot, so on a fast day (SMH -7%) the NAV was wrong.
+    paper_account now routes US marks here too.
+  * Hong-Kong names (``0700.HK``) — Tushare's ``hk_daily`` is throttled to ~1 req/hr; Yahoo isn't.
+The quote is in the symbol's native currency (USD for US, HKD for ``*.HK``); ``paper_account``
+converts to the book's base currency via ``portfolio.fx``.
 
-Yahoo's symbol for a Hong-Kong name is identical to the book's (``0700.HK``) — no code mapping — and
-the close is in the native quote currency (HKD); ``paper_account`` converts to the book's base
-currency via ``portfolio.fx``. We cache the latest close per symbol for the current calendar day, so
-``warm()`` once per mark fetches the whole book in a single request and per-name lookups are free.
+Liveness: the cache carries an INTRADAY TTL (``YAHOO_FEED_TTL_SEC``, default 120s) so a long-lived
+server re-fetches a moving symbol rather than freezing it at the day's first print — a book viewed
+mid-selloff shows the live drawdown. ``warm(all_tickers)`` once per mark fetches the whole book in a
+single request; per-name ``price_local`` lookups reuse the cache until the TTL lapses.
 
 Pure-ish + degrade-never-raise: any network/parse miss leaves the cache untouched and returns None,
 so ``paper_account`` falls back to the vendored snapshot and pricing never breaks.
@@ -16,12 +19,24 @@ so ``paper_account`` falls back to the vendored snapshot and pricing never break
 from __future__ import annotations
 
 import logging
+import os
+import time
 from datetime import date
 
 log = logging.getLogger(__name__)
 
-_CACHE: dict[str, float] = {}      # SYMBOL -> latest close in its local quote currency (per process)
-_FETCHED_DAY: str | None = None    # the calendar day _CACHE was populated for (cleared when it rolls)
+_CACHE: dict[str, float] = {}      # SYMBOL -> latest quote in its local currency (per process)
+_TS: dict[str, float] = {}         # SYMBOL -> monotonic ts of its last fetch (drives the intraday TTL)
+_FETCHED_DAY: str | None = None    # the calendar day the cache was populated for (cleared when it rolls)
+
+
+def _ttl() -> float:
+    """Seconds before a cached quote is re-fetched (intraday liveness). 0 = per-day cache only.
+    Tunable via env ``YAHOO_FEED_TTL_SEC`` (default 120)."""
+    try:
+        return max(0.0, float(os.environ.get("YAHOO_FEED_TTL_SEC", "120")))
+    except (TypeError, ValueError):
+        return 120.0
 
 
 def _today() -> str:
@@ -33,19 +48,31 @@ def _today() -> str:
 
 def _reset_if_stale() -> None:
     """Drop the cache when the calendar day rolls so a long-lived server re-fetches each day."""
-    global _FETCHED_DAY, _CACHE
+    global _FETCHED_DAY, _CACHE, _TS
     d = _today()
     if _FETCHED_DAY != d:
-        _CACHE = {}
+        _CACHE, _TS = {}, {}
         _FETCHED_DAY = d
 
 
+def _fresh(sym: str, now: float, ttl: float) -> bool:
+    """A cached symbol is fresh iff present AND (TTL disabled OR fetched within the TTL window)."""
+    if sym not in _CACHE:
+        return False
+    if ttl <= 0:
+        return True
+    return (now - _TS.get(sym, 0.0)) <= ttl
+
+
 def warm(tickers) -> None:
-    """Fetch recent closes for `tickers` in ONE batched yfinance call and cache the latest per
-    symbol. Best-effort: a missing yfinance / network / parse failure leaves the cache as-is, and
-    callers degrade to the vendored snapshot. Symbols already cached today are skipped."""
+    """Fetch quotes for `tickers` in ONE batched yfinance call and cache the latest per symbol.
+    Re-fetches only symbols that are missing or past the intraday TTL — fresh symbols cost nothing.
+    Best-effort: a missing yfinance / network / parse failure leaves the cache as-is, and callers
+    degrade to the vendored snapshot."""
     _reset_if_stale()
-    want = sorted({(t or "").upper().strip() for t in (tickers or [])} - {""} - set(_CACHE))
+    now, ttl = time.monotonic(), _ttl()
+    want = sorted({(t or "").upper().strip() for t in (tickers or [])} - {""})
+    want = [s for s in want if not _fresh(s, now, ttl)]
     if not want:
         return
     try:
@@ -64,25 +91,24 @@ def warm(tickers) -> None:
             for sym in close.columns:
                 s = close[sym].dropna()
                 if len(s):
-                    _CACHE[str(sym).upper().strip()] = float(s.iloc[-1])
+                    k = str(sym).upper().strip()
+                    _CACHE[k], _TS[k] = float(s.iloc[-1]), now
         else:                                     # single ticker → a bare Series
             s = close.dropna()
             if len(s) and len(want) == 1:
-                _CACHE[want[0]] = float(s.iloc[-1])
+                _CACHE[want[0]], _TS[want[0]] = float(s.iloc[-1]), now
     except Exception as e:  # noqa: BLE001
         log.debug("yahoo_feed parse failed (%s)", e)
 
 
 def price_local(ticker: str, asof: str | None = None) -> float | None:
-    """The latest Yahoo close for `ticker` in its LOCAL quote currency (HKD for ``*.HK``), or None
-    when unavailable. Lazily warms the cache for this one symbol if the book hasn't been primed via
-    ``warm()`` yet this day — but a single up-front ``warm(all_tickers)`` keeps it to one request."""
+    """The latest Yahoo quote for `ticker` in its LOCAL currency (USD for US, HKD for ``*.HK``), or
+    None when unavailable. Refreshes the symbol if it is missing or past the intraday TTL; a single
+    up-front ``warm(all_tickers)`` keeps a whole book to one request."""
     t = (ticker or "").upper().strip()
     if not t:
         return None
-    _reset_if_stale()
-    if t not in _CACHE:
-        warm([t])
+    warm([t])                                     # no-op when the symbol is still fresh
     return _CACHE.get(t)
 
 
@@ -91,17 +117,12 @@ _HEALTH_PROBE = "0700.HK"          # Tencent — about as liquid as Hong Kong ge
 
 
 def feed_healthy(probe: str | None = None) -> bool | None:
-    """Is the live Yahoo HK feed actually serving closes? Tri-state, mirroring
+    """Is the live Yahoo feed actually serving quotes? Tri-state, mirroring
     ``tushare_feed.feed_healthy`` so the HK book gates identically to the China book:
-      * ``True``  — a canonical liquid HK name (Tencent ``0700.HK``) prices through the live path.
-      * ``False`` — yfinance is importable but the probe won't price: a live OUTAGE. A held name
-                    would still mark off the stale snapshot while a fresh candidate returns
-                    ``priceable=false`` — the same asymmetric map the China leg guards against.
-      * ``None``  — yfinance isn't importable; the live feed isn't deployed (tests stub it off) and
-                    the book runs on the vendored snapshot by design. NOT an outage.
-
-    Yahoo needs no token (unlike Tushare), so importability stands in for "the live feed is
-    deployed". Reuses ``warm()``'s per-day cache — the probe symbol is fetched at most once."""
+      * ``True``  — a canonical liquid name prices through the live path.
+      * ``False`` — yfinance is importable but the probe won't price: a live OUTAGE.
+      * ``None``  — yfinance isn't importable; the live feed isn't deployed (tests stub it off).
+    Yahoo needs no token, so importability stands in for "the live feed is deployed"."""
     try:
         import yfinance  # noqa: F401
     except Exception:
@@ -111,6 +132,6 @@ def feed_healthy(probe: str | None = None) -> bool | None:
 
 def clear_cache() -> None:
     """Drop the per-process price memo (tests / a forced refresh)."""
-    global _CACHE, _FETCHED_DAY
-    _CACHE = {}
+    global _CACHE, _TS, _FETCHED_DAY
+    _CACHE, _TS = {}, {}
     _FETCHED_DAY = None

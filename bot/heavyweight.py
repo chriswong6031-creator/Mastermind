@@ -137,6 +137,18 @@ def run_heavyweight(asof: str | None = None, *, force: bool = False, armed: bool
     inaugural = not _has_history() and not (state0.get("positions") or {})
     out["inaugural"] = inaugural
 
+    # 0. NIGHTLY COST TRIPWIRE (before the Brain). The armed Opus seat below is the dominant cost
+    #    (~$1+). If this book has already hit the configured per-night USD cap, SKIP the seat and
+    #    carry the prior book unchanged. OFF by default (cap <= 0 → over_budget always False) so
+    #    this is a no-op and the run is byte-identical.
+    from brain import cost_guard
+    if armed and cost_guard.over_budget(PORTFOLIO_ID, asof):
+        print(f"heavyweight turn {asof} — nightly cost cap hit "
+              f"(${cost_guard.spent(PORTFOLIO_ID, asof):.2f} / ${cost_guard.cap():.2f}); "
+              "skipping the Brain and carrying the book unchanged.")
+        armed = False
+        out["cost_capped"] = True
+
     # 1. run the Brain (armed) → it studies Flagship and submits a concentrated target book
     heavyweight_mcp.clear_submission(PORTFOLIO_ID)
     brain: dict = {"ok": False, "skipped": not armed}
@@ -145,6 +157,8 @@ def run_heavyweight(asof: str | None = None, *, force: bool = False, armed: bool
             brain = _run_brain(asof, inaugural)
         except Exception as e:                       # noqa: BLE001
             brain = {"ok": False, "error": repr(e)[:300]}
+        # record this seat's known cost against the nightly per-book ledger (no-op when unknown).
+        cost_guard.record(PORTFOLIO_ID, brain.get("cost_usd"), asof)
     out["brain"] = {k: brain.get(k) for k in ("ok", "cost_usd", "tools_used", "error", "run_id", "model")}
 
     # 2. read the submitted book
@@ -249,6 +263,8 @@ _PERSONA = (
     "8 names, each 5% to 50% of NAV. Sub-5% nibbles are DROPPED and only your top ~8 by size are kept, "
     "so submit a short, decisive list. Hold cash when you lack conviction; do not dilute the book with "
     "marginal names.\n\n"
+    "Idle cash earns ~4% annualized (a money-market sweep) — holding it when you lack a "
+    "high-conviction asymmetric bet is a REWARDED choice, not dead money. \n\n"
     "You also have the macro dashboard (mcp__bot__*) and the open web for context, but your universe is "
     "Flagship's holdings. When done, call mcp__heavydesk__submit_book ONCE with your complete "
     "concentrated target book, a one-paragraph conviction rationale per holding, and a summary of how "
@@ -259,12 +275,14 @@ _PERSONA = (
 
 def _run_brain(asof: str, inaugural: bool) -> dict:
     from brain import heavyweight_mcp, cli_bridge
+    from brain import self_mirror              # lazy (package-attr lesson); flag-gated, byte-identical OFF
     prompt = _build_prompt(asof, inaugural)
+    persona = self_mirror.inject(_PERSONA, "heavyweight", _safe_date(asof))
     coro = cli_bridge.reason(
         prompt,
         role="deep",                 # opus, per config/agents.yml
         arm=True,
-        append_system=_PERSONA,
+        append_system=persona,
         mcp_servers=heavyweight_mcp.build_servers(),
         allowed_tools=heavyweight_mcp.allowed_tools(),
         max_turns=_MAX_TURNS,

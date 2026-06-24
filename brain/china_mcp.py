@@ -27,6 +27,12 @@ SERVER_NAME = "china"
 PORTFOLIO_ID = "china"
 BENCHMARK = "FXI"
 
+# Registry-driven so the HK desk (brain/hk_mcp.py) reuses this contract: the China book is CNY /
+# A-shares-only; the HK book is HKD / HK-only. ALLOWED_VENUES empty = unrestricted.
+from portfolio import registry as _registry
+CURRENCY = _registry.currency(PORTFOLIO_ID)            # "CNY"
+ALLOWED_VENUES = set(_registry.venues(PORTFOLIO_ID))   # {"A-share"}
+
 # Marker the builder / streaming layer can scan a tool result for (shared with the autonomous desk).
 BOOK_MARKER = autonomous_mcp.BOOK_MARKER
 
@@ -72,8 +78,8 @@ def read_submission():
 @tool("get_my_book",
       "Your CURRENT China portfolio: cash, NAV (CNY), and every holding with shares, weight, "
       "average cost, live CNY price, unrealized P&L, and the rationale you last gave it. The book "
-      "holds mainland A-shares (*.SS/*.SZ), Hong Kong names (*.HK), and US-listed China ADRs, all "
-      "marked to CNY. Call this FIRST to see exactly what you already hold before deciding today.",
+      "holds mainland A-shares (*.SS / *.SZ) ONLY, marked in CNY. Call this FIRST to see exactly "
+      "what you already hold before deciding today.",
       {})
 async def get_my_book(args):
     from portfolio import fx, paper_account, registry
@@ -81,9 +87,9 @@ async def get_my_book(args):
     tickers = list((state.get("positions") or {}).keys())
     prices: dict[str, float] = {}
     for t in tickers + [BENCHMARK]:
-        cny = fx.usd_to_cny(paper_account._current_price(t))   # shared store is USD → CNY base
-        if cny:
-            prices[t] = cny
+        base = fx.usd_to(paper_account._current_price(t), CURRENCY)   # shared store is USD → book ccy
+        if base:
+            prices[t] = base
     pnl = paper_account.positions_pnl(prices, PORTFOLIO_ID)
     nav = paper_account.nav(prices, PORTFOLIO_ID)
     rationales: dict[str, str] = {}
@@ -109,7 +115,7 @@ async def get_my_book(args):
     pending = paper_account.load_pending(PORTFOLIO_ID)
     return bot_mcp._json({
         "cash": round(float(state.get("cash") or 0.0), 2),
-        "nav": round(nav, 2), "currency": "CNY",
+        "nav": round(nav, 2), "currency": CURRENCY,
         "benchmark": BENCHMARK,
         "starting_nav": state.get("starting_nav"),
         "inception_date": state.get("inception_date"),
@@ -125,22 +131,23 @@ async def get_my_book(args):
       "include EVERY name you want to keep. Weights are fractions of NAV (0-1) and must sum to <= 1.0 "
       "(the remainder stays in cash). Provide a one-paragraph rationale for EVERY holding (required) "
       "plus an overall summary, and optionally note what you sold and why. There is NO gate. Trade "
-      "liquid Greater-China equities: mainland A-shares (ticker like 600519.SS / 300750.SZ), Hong "
-      "Kong (0700.HK), or US-listed China ADRs (BABA). Confirm a name is priceable with get_quote "
+      "liquid mainland A-shares ONLY (ticker like 600519.SS / 300750.SZ); Hong Kong (*.HK) and "
+      "US-listed ADRs are REJECTED by this book. Confirm a name is priceable with get_quote "
       "before relying on it (names we cannot price are skipped). Call this ONCE, at the end.",
       {"type": "object", "properties": {
           "holdings": {"type": "array", "items": {"type": "object", "properties": {
               "ticker": {"type": "string", "description": "venue-suffixed: *.SS/*.SZ A-share, *.HK Hong Kong, bare = US ADR"},
               "weight": {"type": "number", "description": "fraction of NAV, 0-1"},
-              "rationale": {"type": "string", "description": "one paragraph: why you own this, now"},
+              "rationale": {"type": "string", "description": "one paragraph: why you own this, now — name the company alongside its ticker, e.g. 贵州茅台 (600519.SS), never a bare code"},
               "conviction": {"type": "string", "enum": ["high", "medium", "low"]}},
               "required": ["ticker", "weight", "rationale"]}},
-          "summary": {"type": "string", "description": "overall thesis / how the book is positioned today"},
+          "summary": {"type": "string", "description": "overall thesis / how the book is positioned today — refer to each name by company name + ticker, e.g. 贵州茅台 (600519.SS)"},
           "sold_note": {"type": "string", "description": "optional: what you exited or trimmed and why"}},
        "required": ["holdings", "summary"]})
 async def submit_book(args):
     holdings = args.get("holdings") or []
     cleaned: list[dict] = []
+    rejected_offvenue: list[str] = []
     gross = 0.0
     seen: set[str] = set()
     for h in holdings:
@@ -152,9 +159,13 @@ async def submit_book(args):
         r = (h.get("rationale") or "").strip()
         if not t or t in seen or w <= 0 or not r:
             continue
+        v = china_intake._venue(t)
+        if ALLOWED_VENUES and v not in ALLOWED_VENUES:
+            rejected_offvenue.append(t)      # wrong venue for this book (e.g. an HK name in the A-share book)
+            continue
         seen.add(t)
         cleaned.append({"ticker": t, "weight": w, "rationale": r,
-                        "venue": china_intake._venue(t),
+                        "venue": v,
                         "conviction": (h.get("conviction") or "medium")})
         gross += w
     scaled = False
@@ -176,7 +187,9 @@ async def submit_book(args):
     cash_pct = max(0.0, 1.0 - gross) * 100
     note = (f"China book submitted: {len(cleaned)} holdings, {gross * 100:.0f}% invested, "
             f"{cash_pct:.0f}% cash" + (" (scaled to remove leverage)" if scaled else "")
-            + ". The desk will rebalance the paper account (USD) to these targets at the next mark.")
+            + (f". REJECTED {len(rejected_offvenue)} off-venue name(s) (this book is A-shares only): "
+               + ", ".join(rejected_offvenue) if rejected_offvenue else "")
+            + ". The desk will rebalance the paper account to these targets at the next mark.")
     return bot_mcp._ok(f"{BOOK_MARKER} {json.dumps({'n': len(cleaned), 'gross': round(gross, 4)})}\n{note}")
 
 
@@ -223,13 +236,18 @@ async def get_china_standouts(args):
     limit = max(1, min(int(args.get("limit") or 20), 40))
     a = china_intake._read("factordata/china_standouts.json") or {}
     hk = china_intake._read("factordata/hk_standouts.json") or {}
-    return _capped_json({
-        "as_of": a.get("as_of") or hk.get("as_of"),
-        "a_share_buy": [_slim_standout(s) for s in (a.get("buy") or [])[:limit]],
-        "hk_buy": [_slim_standout(s) for s in (hk.get("buy") or [])[:limit]],
-        "note": "A-share + HK buy boards (slimmed). entry_bucket='avoid'/cycle_blocked = wait for a "
-                "pullback. Call get_china_intake for the cross-desk corroborated ranking.",
-    }, ["a_share_buy", "hk_buy"])
+    # Only surface the board(s) for this book's venue — the A-share book never sees the HK board.
+    show_a = (not ALLOWED_VENUES) or ("A-share" in ALLOWED_VENUES)
+    show_hk = (not ALLOWED_VENUES) or ("HK" in ALLOWED_VENUES)
+    out: dict = {"as_of": a.get("as_of") or hk.get("as_of"),
+                 "note": "Buy board(s) for this book's venue (slimmed). entry_bucket='avoid'/cycle_blocked "
+                         "= wait for a pullback. Call get_china_intake for the corroborated ranking."}
+    shrink: list[str] = []
+    if show_a:
+        out["a_share_buy"] = [_slim_standout(s) for s in (a.get("buy") or [])[:limit]]; shrink.append("a_share_buy")
+    if show_hk:
+        out["hk_buy"] = [_slim_standout(s) for s in (hk.get("buy") or [])[:limit]]; shrink.append("hk_buy")
+    return _capped_json(out, shrink)
 
 
 @tool("get_china_intake",
@@ -241,12 +259,14 @@ async def get_china_intake(args):
     limit = max(1, min(int(args.get("limit") or 25), 60))
     built = china_intake.build(limit)
     # Project a compact candidate row so the funnel — the Brain's primary shortlist — never exceeds
-    # the tool serialization cap and returns truncated/invalid JSON.
-    slim = [{"ticker": c.get("ticker"), "venue": c.get("venue"), "score": c.get("score"),
+    # the tool serialization cap and returns truncated/invalid JSON. Restrict to the book's venue.
+    slim = [{"ticker": c.get("ticker"), "name": china_intake.display_name(c.get("ticker")),
+             "venue": c.get("venue"), "score": c.get("score"),
              "n_sources": c.get("n_sources"), "lean": c.get("lean"),
              "sources": c.get("sources"), "reasons": (c.get("reasons") or [])[:2],
              "falsifier": c.get("falsifier")}
-            for c in (built.get("candidates") or [])]
+            for c in (built.get("candidates") or [])
+            if not ALLOWED_VENUES or c.get("venue") in ALLOWED_VENUES]
     return _capped_json({"as_of": built.get("as_of"), "macro_context": built.get("macro_context"),
                          "n_universe": built.get("n_universe"), "candidates": slim,
                          "note": built.get("note")}, ["candidates"])
@@ -276,13 +296,14 @@ async def get_quote(args):
     if not t:
         return bot_mcp._json({"error": "no ticker"})
     usd = paper_account._current_price(t)        # shared store returns USD
-    cny = fx.usd_to_cny(usd)                      # the book's base currency
+    base = fx.usd_to(usd, CURRENCY)              # the book's base currency (CNY for china, HKD for hk)
     cur = fx.currency_of(t)                       # native quote currency
     local = round(usd * fx.rate_per_usd(cur), 4) if usd else None   # native-currency price
     return bot_mcp._json({
         "ticker": t, "name": china_intake.display_name(t), "venue": china_intake._venue(t),
-        "currency": cur, "price_local": local, "price_cny": round(cny, 4) if cny else None,
-        "priceable": bool(cny and cny > 0),
+        "currency": cur, "price_local": local, "base_currency": CURRENCY,
+        "price_base": round(base, 4) if base else None,
+        "priceable": bool(base and base > 0),
     })
 
 

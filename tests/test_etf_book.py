@@ -279,9 +279,10 @@ def test_run_etf_offline_inaugural(iso, monkeypatch):
 def test_run_etf_executes_and_filters(iso, monkeypatch):
     prices = {"XLK": 200.0, "SGOV": 100.0, "SPY": 740.0}   # VLUE deliberately unpriceable
     monkeypatch.setattr(paper_account, "_current_price", lambda t: prices.get(t))
-    from bot import etf
+    from bot import etf, settle
     from brain import etf_board, etf_mcp
     monkeypatch.setattr(etf_board, "risk_state", lambda regime=None: {"state": "calm", "reasons": ["test"]})
+    monkeypatch.setattr(settle, "is_open", lambda pid: True)   # force OPEN so it fills (not queues)
 
     def fake_brain(asof, inaugural):
         etf_mcp.submission_path().parent.mkdir(parents=True, exist_ok=True)
@@ -312,6 +313,74 @@ def test_run_etf_executes_and_filters(iso, monkeypatch):
     latest = json.loads((registry.data_dir("etf") / "latest.json").read_text())
     xlk = next(p for p in latest["positions"] if p["ticker"] == "XLK")
     assert xlk["rationale"] and xlk["sleeve"] == "brain" and xlk["group"] == "sectors"
+
+
+# --------------------------------------------------------------------------- market-hours gate
+
+def _seed_etf_submission(holdings):
+    from brain import etf_mcp
+    etf_mcp.submission_path().parent.mkdir(parents=True, exist_ok=True)
+    etf_mcp.submission_path().write_text(json.dumps({"holdings": holdings, "summary": "x"}))
+
+
+def test_run_etf_queues_when_closed_no_fills(iso, monkeypatch):
+    prices = {"XLK": 200.0, "SGOV": 100.0, "SPY": 740.0}
+    monkeypatch.setattr(paper_account, "_current_price", lambda t: prices.get(t))
+    from bot import etf, settle
+    from brain import etf_board
+    monkeypatch.setattr(etf_board, "risk_state", lambda regime=None: {"state": "calm", "reasons": ["t"]})
+    monkeypatch.setattr(settle, "is_open", lambda pid: False)        # market CLOSED
+    monkeypatch.setattr(etf, "_run_brain", lambda asof, inaug: (
+        _seed_etf_submission([{"ticker": "XLK", "weight": 0.3, "rationale": "a"},
+                              {"ticker": "SGOV", "weight": 0.3, "rationale": "b"}]),
+        {"ok": True, "model": "m"})[1])
+
+    out = etf.run_etf(asof="2026-06-22", armed=True)
+    assert out["decided"] is True and out["market_open"] is False
+    assert out["queued_for_open"] is True
+    assert out["executed"] == []                                    # NO off-hours fills
+    assert not (paper_account._load_account("etf").get("positions") or {})   # book unchanged (all cash)
+    pt = paper_account.load_pending_target("etf")
+    assert pt and set(pt["target"]) == {"XLK", "SGOV"}             # target queued for the open
+
+    # re-run while STILL closed → still no fills, just re-queues (idempotent, no churn)
+    out2 = etf.run_etf(asof="2026-06-22", armed=True)
+    assert out2["executed"] == []
+    assert not (paper_account._load_account("etf").get("positions") or {})
+
+
+def test_settle_open_fills_queued_target(iso, monkeypatch):
+    prices = {"XLK": 200.0, "SGOV": 100.0, "SPY": 740.0}
+    monkeypatch.setattr(paper_account, "_current_price", lambda t: prices.get(t))
+    from bot import settle
+    from brain import etf_board
+    monkeypatch.setattr(etf_board, "risk_state", lambda regime=None: {"state": "calm", "reasons": ["t"]})
+    paper_account.save_pending_target({"XLK": 0.3, "SGOV": 0.3}, "2026-06-22", portfolio_id="etf")
+
+    # closed → no-op, target stays queued
+    monkeypatch.setattr(settle, "is_open", lambda pid: False)
+    assert settle.settle_open("etf", asof="2026-06-22").get("skipped") == "market_closed"
+    assert paper_account.load_pending_target("etf") is not None
+
+    # open → fills the queued target and clears it
+    monkeypatch.setattr(settle, "is_open", lambda pid: True)
+    res = settle.settle_open("etf", asof="2026-06-22")
+    assert res["ok"] is True
+    sides = {(t["ticker"], t["side"]) for t in res["executed"]}
+    assert ("XLK", "buy") in sides and ("SGOV", "buy") in sides
+    assert set(paper_account._load_account("etf").get("positions") or {}) == {"XLK", "SGOV"}
+    assert paper_account.load_pending_target("etf") is None        # cleared after settle
+
+
+def test_settle_target_round_trip(iso, monkeypatch):
+    # paper_account-level: a queued target settles to a full rebalance at the given marks
+    monkeypatch.setattr(paper_account, "_current_price", lambda t: {"SPY": 740.0}.get(t))
+    paper_account.save_pending_target({"XLK": 0.5}, "2026-06-22", portfolio_id="etf")
+    assert paper_account.load_pending_target("etf")["target"] == {"XLK": 0.5}
+    settled = paper_account.settle_target({"XLK": 200.0}, "2026-06-22", portfolio_id="etf")
+    assert settled == {"XLK": 0.5}
+    assert "XLK" in (paper_account._load_account("etf").get("positions") or {})
+    assert paper_account.load_pending_target("etf") is None        # cleared
 
 
 def test_web_endpoints_etf_aware(iso, monkeypatch):

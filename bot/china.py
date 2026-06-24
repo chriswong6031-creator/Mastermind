@@ -47,7 +47,8 @@ ALLOWED_VENUES = set(_registry.venues(PORTFOLIO_ID))   # {"A-share"} — empty s
 # the daily entrypoint
 # ---------------------------------------------------------------------------
 
-def run_china(asof: str | None = None, *, force: bool = False, armed: bool = True) -> dict:
+def run_china(asof: str | None = None, *, force: bool = False, armed: bool = True,
+              directive: str | None = None) -> dict:
     """Run one China turn end-to-end. Best-effort: every step degrades gracefully so a missing
     credential / price never leaves the book in a half-traded state."""
     from portfolio import china_calendar, paper_account, position_log
@@ -81,15 +82,30 @@ def run_china(asof: str | None = None, *, force: bool = False, armed: bool = Tru
         armed = False
         out["feed_aborted"] = True
 
+    # 0b. NIGHTLY COST TRIPWIRE (before the Brain). The armed Opus seat below is the dominant cost
+    #    (~$1+). If this book has already hit the configured per-night USD cap, SKIP the seat and
+    #    carry the book unchanged — same posture as the feed-health abort above. OFF by default
+    #    (cap <= 0 → over_budget always False) so this is a no-op and the run is byte-identical.
+    from brain import cost_guard
+    if armed and cost_guard.over_budget(PORTFOLIO_ID, asof):
+        log.warning("China turn %s — nightly cost cap hit ($%.2f / $%.2f); skipping the Brain and "
+                    "carrying the book unchanged.", asof,
+                    cost_guard.spent(PORTFOLIO_ID, asof), cost_guard.cap())
+        armed = False
+        out["cost_capped"] = True
+
     # 1. run the Brain (armed) → it researches and submits a target book with rationales
     from brain import china_mcp
     china_mcp.clear_submission()                 # never replay yesterday's decision
     brain: dict = {"ok": False, "skipped": not armed}
     if armed:
         try:
-            brain = _run_brain(asof, inaugural)
+            # directive is an optional ad-hoc override (overnight reviews) — pass it through only when set
+            brain = _run_brain(asof, inaugural, directive=directive) if directive else _run_brain(asof, inaugural)
         except Exception as e:                   # noqa: BLE001
             brain = {"ok": False, "error": repr(e)[:300]}
+        # record this seat's known cost against the nightly per-book ledger (no-op when unknown).
+        cost_guard.record(PORTFOLIO_ID, brain.get("cost_usd"), asof)
     out["brain"] = {k: brain.get(k) for k in ("ok", "cost_usd", "tools_used", "error", "run_id", "model")}
 
     # 2. read the submitted book — then ENFORCE the venue restriction in the trusted layer: drop any
@@ -120,33 +136,33 @@ def run_china(asof: str | None = None, *, force: bool = False, armed: bool = Tru
         if base and base > 0:
             prices[t] = base
 
-    # 4. EXECUTE — rebalance the paper book to the target at close prices (USD). Free trades: no
-    #    gate, no veto, no caps. Names we cannot price are skipped (and surfaced honestly).
+    # 4. EXECUTE — market-hours-aware (A-share session). OPEN → rebalance to the target at the live
+    #    CNY mark; CLOSED (the normal post-close run, or any off-hours run) → QUEUE the target to
+    #    settle at the next A-share open, booking NO fills now — so the book never trades off-hours
+    #    and re-running a closed session can't churn it (bot/settle.py + the scheduler's open settle).
+    #    Names we cannot price are skipped (the full target still flows so an unpriceable held name is
+    #    carried, not liquidated on a feed gap — critical for the Asia leg).
+    from bot import settle as _settle
     executed: list[dict] = []
     skipped: list[str] = []
+    queued = False
     if decided:
-        priceable = {t: w for t, w in target.items() if t in prices}
         skipped = sorted(t for t in target if t not in prices)
-        before = dict((paper_account._load_account(PORTFOLIO_ID).get("positions") or {}))
-        try:
-            # Pass the FULL target (not just the priceable subset) so rebalance can distinguish a
-            # name the Brain DROPPED (→ sell) from one merely unpriceable THIS run (→ carry, don't
-            # liquidate). rebalance only trades names it can price and only closes out names absent
-            # from the target; handing it `priceable` would make an unpriceable held name look
-            # "dropped" and wrongly sell it on a transient feed gap — critical for the Asia leg.
-            paper_account.rebalance(target, prices, asof, portfolio_id=PORTFOLIO_ID)
-        except Exception as e:                   # noqa: BLE001
-            out["rebalance_error"] = repr(e)[:200]
-        after = dict((paper_account._load_account(PORTFOLIO_ID).get("positions") or {}))
-        executed = _diff_trades(before, after, prices)
-        ledger_positions = [{"ticker": t, "sleeve": SLEEVE, "weight": w,
-                             "entry_price": prices.get(t)}
-                            for t, w in priceable.items()]
-        try:
-            position_log.update(ledger_positions, asof, portfolio_id=PORTFOLIO_ID)
-        except Exception:
-            pass
+        res = _settle.execute_or_queue(PORTFOLIO_ID, target, prices, asof)
+        executed = res.get("executed") or []
+        queued = bool(res.get("queued"))
+        if res.get("error"):
+            out["rebalance_error"] = res["error"]
+        if executed:
+            ledger_positions = [{"ticker": t, "sleeve": SLEEVE, "weight": w, "entry_price": prices.get(t)}
+                                for t, w in target.items() if t in prices]
+            try:
+                position_log.update(ledger_positions, asof, portfolio_id=PORTFOLIO_ID)
+            except Exception:
+                pass
     out["executed"] = executed
+    out["queued_for_open"] = queued
+    out["market_open"] = _settle.is_open(PORTFOLIO_ID)
     out["skipped_unpriceable"] = skipped
 
     # 5. mark NAV vs FXI (benchmark auto-resolved per-book from the registry)
@@ -194,6 +210,9 @@ _PERSONA = (
     "FULL discretion: you decide every buy, sell, trim, and the cash level, and you rebalance the "
     "whole book daily. There is NO gate, NO committee, NO research-paper requirement, and NO "
     "doctrine constraining you — only paper cash (you cannot use leverage). \n\n"
+    "Idle cash earns ~4% annualized (a money-market sweep), so holding cash when you lack "
+    "high-conviction ideas is a REWARDED choice, not dead money — do not force marginal names just "
+    "to stay invested. \n\n"
     "Your universe is MAINLAND CHINA A-SHARES ONLY — Shanghai (``*.SS``) and Shenzhen (``*.SZ``) "
     "listings, quoted in CNY (e.g. 600519.SS, 300750.SZ, 601318.SS). You MAY NOT hold Hong Kong "
     "(``*.HK``) names or US-listed ADRs — those belong to the separate HK book, and any non-A-share "
@@ -219,14 +238,16 @@ _PERSONA = (
 )
 
 
-def _run_brain(asof: str, inaugural: bool) -> dict:
+def _run_brain(asof: str, inaugural: bool, directive: str | None = None) -> dict:
     from brain import china_mcp, cli_bridge
-    prompt = _build_prompt(asof, inaugural)
+    from brain import self_mirror              # lazy (package-attr lesson); flag-gated, byte-identical OFF
+    prompt = _build_prompt(asof, inaugural, directive=directive)
+    persona = self_mirror.inject(_PERSONA, "china", _safe_date(asof))
     coro = cli_bridge.reason(
         prompt,
         role="deep",                 # opus, per config/agents.yml
         arm=True,
-        append_system=_PERSONA,
+        append_system=persona,
         mcp_servers=china_mcp.build_servers(),
         allowed_tools=china_mcp.allowed_tools(),
         max_turns=_MAX_TURNS,
@@ -234,7 +255,7 @@ def _run_brain(asof: str, inaugural: bool) -> dict:
     return _run_coro(coro)
 
 
-def _build_prompt(asof: str, inaugural: bool) -> str:
+def _build_prompt(asof: str, inaugural: bool, directive: str | None = None) -> str:
     from portfolio import paper_account
     state = paper_account._load_account(PORTFOLIO_ID)
     cash = float(state.get("cash") or 0.0)
@@ -242,6 +263,8 @@ def _build_prompt(asof: str, inaugural: bool) -> str:
     regime = _regime_brief()
 
     lines = [f"# China book — daily decision for {asof}", ""]
+    if directive:
+        lines += ["## ⚠ PRIORITY DIRECTIVE FOR THIS RUN", directive.strip(), ""]
     if regime:
         lines += [f"China macro regime (in-house read): {regime}", ""]
     if inaugural:

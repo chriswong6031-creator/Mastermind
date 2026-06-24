@@ -14,6 +14,7 @@ Price sources:
 from __future__ import annotations
 
 import json
+import os
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,29 @@ def _pending_path() -> Path:
 
 _STARTING_NAV = 1_000_000.0
 _INCEPTION_DATE = date.today().isoformat()  # forward-realized track begins today
+
+
+# ---------------------------------------------------------------------------
+# No-trade band (rebalancing tolerance)
+# ---------------------------------------------------------------------------
+# A Brain book restates its FULL target book every run. When it re-states the same weight
+# for a name it intends to HOLD, that weight — measured against a NAV/price that has drifted
+# since the last mark — almost never equals the position's current value to the dollar, so a
+# naive snap-to-target generates a tiny "rebalancing" trim/add the Brain never asked for
+# (e.g. a 19.8-share sell out of 1007, ~2% of the line). Those de-minimis fills clutter the
+# trade dashboard with confusing noise.
+#
+# The band fixes that: an incremental adjustment to a CONTINUING position (held before AND
+# still in the target) is only executed when its notional clears this fraction of NAV; below
+# it, the position is left untouched (drift accumulates against the live target each run, so a
+# genuinely meaningful move still trades once it crosses the band — no unbounded drift). A
+# brand-new entry and a full exit (name dropped from the target) ALWAYS execute — they are
+# deliberate decisions, never de-minimis noise. Override via env for tuning.
+def _no_trade_band_frac() -> float:
+    try:
+        return max(0.0, float(os.environ.get("MASTERMIND_NO_TRADE_BAND_FRAC", "0.01")))
+    except (TypeError, ValueError):
+        return 0.01
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +115,48 @@ def _load_account(portfolio_id: str | None = None) -> dict[str, Any]:
 def _save_account(state: dict[str, Any], portfolio_id: str | None = None) -> None:
     _ensure_dir(portfolio_id)
     _paths(portfolio_id)["account"].write_text(json.dumps(state, indent=2, default=str))
+
+
+# --------------------------------------------------------------------------- #
+# cash sweep — idle cash earns a money-market yield, so a Brain that holds cash
+# for lack of conviction is REWARDED (~4%/yr), not penalized vs a fully-invested
+# benchmark. Incentivizes discipline over forced marginal buys.
+# --------------------------------------------------------------------------- #
+_CASH_YIELD_DEFAULT = 0.04            # 4% annualized money-market sweep
+_TRADING_DAYS = 252
+
+
+def _cash_yield_rate() -> float:
+    """Annual cash-sweep rate; tunable via env CASH_YIELD_ANNUAL (default 4%)."""
+    try:
+        return float(os.environ.get("CASH_YIELD_ANNUAL", _CASH_YIELD_DEFAULT))
+    except (TypeError, ValueError):
+        return _CASH_YIELD_DEFAULT
+
+
+def accrue_cash_yield(asof: str, portfolio_id: str | None = None,
+                      annual_rate: float | None = None) -> float:
+    """Accrue ONE trading-day of money-market yield to the cash balance, IDEMPOTENT per
+    (book, calendar date): a re-run on the same ``asof`` is a no-op (no double-accrual). Best-effort;
+    never raises. Returns the (possibly grown) cash balance. Call once per trading day, before
+    ``mark()`` — the daily mark job (Mon-Fri) supplies the ~252 accruals/yr the rate/252 step
+    assumes. Only the cash value changes; ``mark()``'s idempotent nav_history write is untouched."""
+    rate = _cash_yield_rate() if annual_rate is None else float(annual_rate)
+    try:
+        state = _load_account(portfolio_id)
+        cash = float(state.get("cash") or 0.0)
+        if state.get("cash_yield_through") == asof or cash <= 0 or rate <= 0:
+            return round(cash, 2)
+        cash = round(cash * (1.0 + rate / _TRADING_DAYS), 2)
+        state["cash"] = cash
+        state["cash_yield_through"] = asof
+        _save_account(state, portfolio_id)
+        return cash
+    except Exception:  # noqa: BLE001 — the sweep is additive; never break a build/mark
+        try:
+            return round(float(_load_account(portfolio_id).get("cash") or 0.0), 2)
+        except Exception:  # noqa: BLE001
+            return 0.0
 
 
 def _append_jsonl(path: Path, record: dict) -> None:
@@ -195,7 +261,16 @@ def _live_price(ticker: str) -> float | None:
             local = yahoo_feed.price_local(t)
         except Exception:
             local = None
-    # Fallback (and the only path for US ADRs): the vendored per-name snapshot.
+    else:
+        # US (bare tickers + ETFs): the LIVE Yahoo quote (USD) via yfinance — reflects TODAY's tape.
+        # The vendored stockdata snapshot is CI/EOD-lagging, so on a fast day (e.g. SMH -7%) it marks a
+        # stale price and the book NAV is wrong; the live leg fixes that. Degrades to the snapshot below.
+        try:
+            from data_layer import yahoo_feed
+            local = yahoo_feed.price_local(t)
+        except Exception:
+            local = None
+    # Fallback (and the only path when the live leg misses): the vendored per-name snapshot.
     if local is None:
         try:
             p = _ROOT / "vendor" / "macro" / "site" / sub / f"{t}.json"
@@ -341,6 +416,10 @@ def rebalance(
         )
     )
 
+    # No-trade band, in dollars, for this run's NAV. Incremental adjustments to a continuing
+    # position below this notional are suppressed (see _no_trade_band_frac for the rationale).
+    band = _no_trade_band_frac() * current_nav
+
     fills: list[dict] = []
 
     # ---- determine target shares for each ticker we can PRICE this run ----
@@ -367,6 +446,10 @@ def rebalance(
             sell_shares = -diff
             px = prices.get(ticker, pos["avg_cost"])
             value = sell_shares * px
+            # No-trade band: a sub-band trim of a name we're still holding (tgt > 0, so never a
+            # full exit) is left alone — don't manufacture a tiny sell the Brain never intended.
+            if value < band:
+                continue
             state["cash"] += value
             pos["shares"] = tgt
             if pos["shares"] < 1e-9:
@@ -405,6 +488,10 @@ def rebalance(
         if diff > 1e-9:
             px = prices.get(ticker)
             if px is None or px <= 0:
+                continue
+            # No-trade band: skip a sub-band ADD to a CONTINUING position (held before this run).
+            # A brand-new entry (cur ~ 0) is a deliberate open and always executes.
+            if cur > 1e-9 and diff * px < band:
                 continue
             # clamp so we don't spend more than available cash
             buy_shares = min(diff, state["cash"] / px)
@@ -637,6 +724,66 @@ def fill_pending(prices: dict[str, float], asof: str, portfolio_id: str | None =
     return fills
 
 
+# ---------------------------------------------------------------------------
+# pending TARGET — the market-closed branch for the free-form Brain books
+# ---------------------------------------------------------------------------
+# The flagship queues BUY orders when shut (queue_orders, above). The Brain books submit a COMPLETE
+# target book (sells + trims + buys), so a buy-only queue can't represent "rebalance to this at the
+# open." Instead we persist the whole decided target and settle it with one rebalance() at the next
+# open. Idempotent: re-running a closed session REPLACES the queued target (latest decision wins), so
+# repeatedly building after the close can never churn the book — nothing is filled until the open.
+
+def _pending_target_path(portfolio_id: str | None = None) -> Path:
+    return _paths(portfolio_id)["data"] / "pending_target.json"
+
+
+def save_pending_target(target_weights: dict[str, float], asof: str,
+                        portfolio_id: str | None = None) -> None:
+    """Persist a decided target book to settle at the NEXT market open — no fills now. Idempotent."""
+    _ensure_dir(portfolio_id)
+    payload = {
+        "target": {str(k).upper(): float(v) for k, v in (target_weights or {}).items() if v},
+        "asof": asof,
+        "queued_at": datetime.now(timezone.utc).isoformat(),
+    }
+    _pending_target_path(portfolio_id).write_text(json.dumps(payload, indent=2, default=str))
+
+
+def load_pending_target(portfolio_id: str | None = None) -> dict | None:
+    """The queued target ({target, asof, queued_at}) or None. Survives a corrupt file."""
+    try:
+        p = _pending_target_path(portfolio_id)
+        if p.exists():
+            d = json.loads(p.read_text())
+            if isinstance(d, dict) and isinstance(d.get("target"), dict):
+                return d
+    except Exception:
+        pass
+    return None
+
+
+def clear_pending_target(portfolio_id: str | None = None) -> None:
+    try:
+        _pending_target_path(portfolio_id).unlink()
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+
+
+def settle_target(prices: dict[str, float], asof: str,
+                  portfolio_id: str | None = None) -> dict | None:
+    """If a target was queued while the market was closed, rebalance to it now (at the open marks)
+    and clear it. Returns the settled target dict, or None if nothing was queued. Paper-only."""
+    pt = load_pending_target(portfolio_id)
+    if not pt:
+        return None
+    target = pt.get("target") or {}
+    rebalance(target, prices, asof, portfolio_id=portfolio_id)
+    clear_pending_target(portfolio_id)
+    return target
+
+
 def mark(prices: dict[str, float], asof: str, portfolio_id: str | None = None,
          benchmark: str | None = None) -> None:
     """Snapshot NAV to nav_history.jsonl. Also initialises the benchmark shares on first call.
@@ -654,6 +801,22 @@ def mark(prices: dict[str, float], asof: str, portfolio_id: str | None = None,
     if state.get("spy_shares") is None and spy_px and spy_px > 0:
         state["spy_shares"] = _STARTING_NAV / spy_px
         state["spy_inception_price"] = spy_px
+        _save_account(state, portfolio_id)
+
+    # ADDITIVE: persist each held position's latest mark onto the account so non-mark readers
+    # (and the dashboard) have a stored current_price even between live-quote refreshes. We use the
+    # SAME prices dict the NAV computation below uses, falling back to avg_cost when a name has no
+    # live quote this run (so a stale/missing quote can't be written as a misleadingly precise mark).
+    # Existing readers ignore the field; nav() still recomputes from `prices`, so this never alters NAV.
+    _marked_any = False
+    for ticker, pos in state["positions"].items():
+        px = prices.get(ticker)
+        if px is None or px <= 0:
+            px = pos.get("avg_cost")
+        if px is not None:
+            pos["current_price"] = round(float(px), 4)
+            _marked_any = True
+    if _marked_any:
         _save_account(state, portfolio_id)
 
     current_nav = state["cash"] + sum(
