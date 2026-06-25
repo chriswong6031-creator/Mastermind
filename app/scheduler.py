@@ -186,6 +186,7 @@ def _daily_mark_job():
             paper_account.accrue_cash_yield(_today_iso(), portfolio_id=pid)
             state = paper_account._load_account(pid)
             bench = paper_account._benchmark_for(pid)
+            ccy = registry.currency(pid)
             tickers = set(state.get("positions", {}).keys()) | {bench}
             # batch-warm the US live quotes in ONE request so the per-name loop below hits a warm
             # cache instead of firing a separate yfinance download per holding.
@@ -196,7 +197,23 @@ def _daily_mark_job():
                 pass
             prices: dict = {}
             for t in tickers:
-                px = paper_account._current_price(t)
+                px = paper_account._current_price(t)        # ALWAYS in USD
+                if not (px and px > 0):
+                    continue
+                # A non-USD book is priced end-to-end in its BASE currency (cash, avg_cost, AND its
+                # benchmark inception price), so the USD mark must be converted before it hits
+                # mark()/NAV — exactly as bot/settle._price does (it converts EVERY symbol, benchmark
+                # included). WITHOUT this the daily sweep books a CNY/HKD position at its USD value
+                # (~÷7) against base-currency cash, so a china/hk book it merely re-marks (didn't
+                # rebuild) shows a phantom crash in nav_history (the 2026-06-23 china/hk cliff). The
+                # benchmark is converted too: its inception price was stored in base currency, so
+                # leaving the live mark in USD would crater the spy_nav line by the same factor.
+                if ccy != "USD":
+                    try:
+                        from portfolio import fx
+                        px = fx.usd_to(px, ccy)
+                    except Exception:  # noqa: BLE001
+                        continue
                 if px and px > 0:
                     prices[t] = px
             if prices:
@@ -249,28 +266,31 @@ def start():
     sch.add_job(_daily_mark_job,
                 CronTrigger(day_of_week="mon-fri", hour=hour, minute=35, timezone="UTC"),
                 id="daily_mark", replace_existing=True, misfire_grace_time=3600, coalesce=True)
-    sch.add_job(_job, CronTrigger(hour=hour, minute=40), id="daily_loop",
+    # UTC-pinned for the same reason as settle_pending below: a bare CronTrigger INSTANCE inherits
+    # the machine's local tz (not the scheduler's UTC default), drifting the build off the intended
+    # post-close anchor on a non-UTC host.
+    sch.add_job(_job, CronTrigger(hour=hour, minute=40, timezone="UTC"), id="daily_loop",
                 replace_existing=True, misfire_grace_time=3600, coalesce=True)
     # Mon–Fri only (no Sat/Sun) — the autonomous book refreshes once per trading day after close.
-    sch.add_job(_autonomous_job, CronTrigger(day_of_week="mon-fri", hour=a_hour, minute=10),
+    sch.add_job(_autonomous_job, CronTrigger(day_of_week="mon-fri", hour=a_hour, minute=10, timezone="UTC"),
                 id="autonomous_daily", replace_existing=True, misfire_grace_time=3600, coalesce=True)
     # Heavyweight runs LAST (23:25 by default) — after flagship's 22:40 build (so it constrains
     # against a fresh Flagship book) and after autonomous's 23:10 (so the two Brain runs don't
     # hammer the subscription/price feeds at once; they touch disjoint data dirs — no state race).
-    sch.add_job(_heavyweight_job, CronTrigger(day_of_week="mon-fri", hour=h_hour, minute=25),
+    sch.add_job(_heavyweight_job, CronTrigger(day_of_week="mon-fri", hour=h_hour, minute=25, timezone="UTC"),
                 id="heavyweight_daily", replace_existing=True, misfire_grace_time=3600, coalesce=True)
     # All-China book on Asia's clock (Mon–Fri after the A-share close). Touches a disjoint data dir
     # (data/portfolios/china) and a different feed window from the US books — no state race.
-    sch.add_job(_china_job, CronTrigger(day_of_week="mon-fri", hour=cn_hour, minute=0),
+    sch.add_job(_china_job, CronTrigger(day_of_week="mon-fri", hour=cn_hour, minute=0, timezone="UTC"),
                 id="china_daily", replace_existing=True, misfire_grace_time=3600, coalesce=True)
     # HK book on Asia's clock (Mon–Fri after the HK close, ~09:00 UTC). Disjoint data dir
     # (data/portfolios/hk) — no state race with the A-share china book.
-    sch.add_job(_hk_job, CronTrigger(day_of_week="mon-fri", hour=hk_hour, minute=0),
+    sch.add_job(_hk_job, CronTrigger(day_of_week="mon-fri", hour=hk_hour, minute=0, timezone="UTC"),
                 id="hk_daily", replace_existing=True, misfire_grace_time=3600, coalesce=True)
     # ETF book on the US evening cadence (Mon–Fri after the close), staggered 5 min after the
     # autonomous book so the two US Brain runs don't hammer the subscription/price feeds at once;
     # disjoint data dir (data/portfolios/etf) — no state race.
-    sch.add_job(_etf_job, CronTrigger(day_of_week="mon-fri", hour=a_hour, minute=15),
+    sch.add_job(_etf_job, CronTrigger(day_of_week="mon-fri", hour=a_hour, minute=15, timezone="UTC"),
                 id="etf_daily", replace_existing=True, misfire_grace_time=3600, coalesce=True)
     # Settle flagship's queued PENDING orders at the open (Mon–Fri, 15:00 UTC ≈ 10–11am ET — mid US
     # session year-round). Closes the gap left by the post-close-only build, which queues overnight
@@ -318,7 +338,7 @@ def start():
     # Runs every day (the macro site refreshes daily); touches only the macro repo's
     # site/mastermind/ path and pushes to its origin/main.
     snap_hours = (os.environ.get("MACRO_SNAPSHOT_UTC_HOURS", "12,22").strip() or "12,22")
-    sch.add_job(_snapshot_job, CronTrigger(hour=snap_hours, minute=25),
+    sch.add_job(_snapshot_job, CronTrigger(hour=snap_hours, minute=25, timezone="UTC"),
                 id="publish_macro_snapshot", replace_existing=True,
                 misfire_grace_time=3600, coalesce=True)
 
