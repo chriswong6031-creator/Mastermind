@@ -78,7 +78,30 @@ def test_summary_reliability_and_lens_edge(tmp_path, monkeypatch):
     assert trend_bull["n"] == 4 and trend_bull["hit_rate"] == 0.75
 
 
+def test_summary_attribution_splits(tmp_path, monkeypatch):
+    ol, _ = _paths(monkeypatch, tmp_path)
+    theses, realized = [], {}
+    # 12 'add' conviction theses (>= _GROUP_MIN_N) → the 'add' bucket is reported; 9 hits / 3 miss
+    for i in range(12):
+        tid = f"a{i}"
+        theses.append(_thesis(tid, f"AD{i}", 0.7, lean="add"))
+        realized[tid] = 0.10 if i < 9 else -0.09
+    # 3 'trim' theses → below _GROUP_MIN_N → must be OMITTED from by_lean (cold-start safety)
+    for i in range(3):
+        tid = f"tr{i}"
+        theses.append(_thesis(tid, f"TR{i}", 0.6, lean="trim"))
+        realized[tid] = 0.02
+    assert ol.resolve("2026-07-17", realized, theses=theses) == 15
+    s = ol.summary()
+    assert s["by_sleeve"]["conviction"]["n"] == 15          # all 15 share the conviction sleeve
+    assert s["by_horizon"]["21"]["n"] == 15
+    assert s["by_lean"]["add"]["n"] == 12 and s["by_lean"]["add"]["hit_rate"] == 0.75
+    assert "trim" not in s["by_lean"]                        # 3 < _GROUP_MIN_N → omitted
+
+
 def test_empty_when_no_resolutions(tmp_path, monkeypatch):
     ol, _ = _paths(monkeypatch, tmp_path)
     assert ol.resolve("2026-07-17", {}, theses=[]) == 0
-    assert ol.summary()["status"] == "building" and ol.reliability_curve() == [] and ol.lens_edge() == []
+    s = ol.summary()
+    assert s["status"] == "building" and ol.reliability_curve() == [] and ol.lens_edge() == []
+    assert s["by_sleeve"] == {} and s["by_lean"] == {} and s["by_horizon"] == {}

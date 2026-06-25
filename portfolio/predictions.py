@@ -251,6 +251,24 @@ def _ci(mean, se, z=1.96):
         return None
 
 
+def _reliability_curve(probs, outs, bins: int = 5) -> list:
+    """Reliability diagram: per predicted-probability bucket, mean predicted vs realized hit-rate. A
+    well-calibrated engine has hit_rate ≈ mean_predicted in every bucket. `probs`/`outs` are arrays of
+    the stated prob and the directional hit (0/1). On the FAST tiers (#1) this fills in within weeks."""
+    out = []
+    for i in range(bins):
+        lo, hi = i / bins, (i + 1) / bins
+        idx = [j for j, p in enumerate(probs)
+               if (lo <= float(p) < hi) or (i == bins - 1 and float(p) == hi)]
+        if not idx:
+            continue
+        m = len(idx)
+        out.append({"bin": f"{lo:.2f}-{hi:.2f}", "n": m,
+                    "mean_predicted": round(sum(float(probs[j]) for j in idx) / m, 3),
+                    "hit_rate": round(sum(float(outs[j]) for j in idx) / m, 3)})
+    return out
+
+
 def _thin_independent(pairs: list, horizon: int = _HORIZON) -> list:
     """Keep ONE observation per ~horizon window so the kept series is (approximately) independent.
 
@@ -347,6 +365,17 @@ def score(asof: str | None = None, horizon: int | None = None) -> dict:
             hits = _thin_independent([(d, float(np.mean(v))) for d, v in hbd.items() if v], horizon)
             nw = newey_west_tstat(pd.Series(hits), lags=_HAC_LAGS) if len(hits) >= _MIN_DATES else {}
             br = brier_reliability(probs, outs) if len(probs) >= 30 else {}
+            # reliability decomposition (#6): binned predicted-vs-realized + a calibration error + an
+            # over/under-confidence tilt. Descriptive; the curve fills in fast on the short tiers.
+            curve = _reliability_curve(probs, outs)
+            cal_err, tilt = None, None
+            if curve and len(probs) >= 20:
+                tot = float(len(probs))
+                cal_err = round(sum(abs(b["mean_predicted"] - b["hit_rate"]) * b["n"] for b in curve) / tot, 4)
+                mp = sum(b["mean_predicted"] * b["n"] for b in curve) / tot
+                hr = sum(b["hit_rate"] * b["n"] for b in curve) / tot
+                tilt = ("overconfident" if mp - hr > 0.05
+                        else "underconfident" if hr - mp > 0.05 else "calibrated")
             out["directional"] = {
                 "hit_rate": round(float(outs.mean()), 3), "n": len(dirrows), "n_dates": len(hits),
                 "hit_ci95": _ci(nw.get("mean"), nw.get("se")) if nw else None,
@@ -354,6 +383,7 @@ def score(asof: str | None = None, horizon: int | None = None) -> dict:
                 "brier_skill": round(br["skill_score"], 4) if br.get("skill_score") is not None else None,
                 "beats_coin": bool(nw.get("mean") is not None and nw.get("se") is not None
                                    and (nw["mean"] - 1.96 * nw["se"]) > 0.5),
+                "reliability_curve": curve, "calibration_error": cal_err, "confidence_tilt": tilt,
             }
 
         # ── does 'up' actually outperform? (thinned per-date mean rel-return, HAC t) ──

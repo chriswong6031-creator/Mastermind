@@ -31,6 +31,8 @@ from brain.ledger import all_theses
 _ROOT = Path(__file__).resolve().parent.parent
 _PATH = _ROOT / "data" / "brain" / "outcome_ledger.jsonl"
 
+_GROUP_MIN_N = 12       # below this many graded records in a bucket, don't report it (cold-start safety)
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -153,19 +155,45 @@ def load() -> list[dict]:
     return _read()
 
 
+def _group_stats(rows: list[dict], key: str) -> dict:
+    """Per-bucket n / hit-rate / Brier grouped by `key` (sleeve / lean / horizon_d), so the calibration
+    signal can be ATTRIBUTED to a source instead of pooled — a seat/sleeve/horizon that is reliably
+    over- or under-confident is then de-confidenced TARGETED rather than washing out in the pool. Only
+    buckets with ≥ `_GROUP_MIN_N` graded records are reported (a 3-observation cell isn't evidence)."""
+    groups: dict = {}
+    for r in rows:
+        groups.setdefault(r.get(key), []).append(r)
+    out: dict = {}
+    for k, rs in groups.items():
+        m = len(rs)
+        if m < _GROUP_MIN_N or k is None:
+            continue
+        hits = sum(r["outcome"] for r in rs)
+        out[str(k)] = {"n": m, "hit_rate": round(hits / m, 3),
+                       "mean_predicted": round(sum(r["prob_correct"] for r in rs) / m, 3),
+                       "brier": round(sum((r["prob_correct"] - r["outcome"]) ** 2 for r in rs) / m, 4)}
+    return out
+
+
 def summary() -> dict:
-    """Brier, hit-rate and calibration error over all graded records (status='building' while n=0)."""
+    """Brier, hit-rate and calibration error over all graded records (status='building' while n=0),
+    plus per-sleeve / per-lean / per-horizon ATTRIBUTION splits (each bucket's own n/hit-rate/Brier)
+    so a miscalibrated source can be isolated rather than pooled."""
     rows = [r for r in _read() if r.get("outcome") in (0, 1) and r.get("prob_correct") is not None]
     n = len(rows)
     if n == 0:
-        return {"n": 0, "status": "building", "brier": None, "hit_rate": None, "calibration_error": None}
+        return {"n": 0, "status": "building", "brier": None, "hit_rate": None,
+                "calibration_error": None, "by_sleeve": {}, "by_lean": {}, "by_horizon": {}}
     hits = sum(r["outcome"] for r in rows)
     brier = round(sum((r["prob_correct"] - r["outcome"]) ** 2 for r in rows) / n, 4)
     curve = reliability_curve()
     cal_err = (round(sum(abs(b["mean_predicted"] - b["hit_rate"]) * b["n"] for b in curve) / n, 4)
                if curve else None)
     return {"n": n, "status": "scoring", "hits": hits, "hit_rate": round(hits / n, 3),
-            "brier": brier, "calibration_error": cal_err}
+            "brier": brier, "calibration_error": cal_err,
+            "by_sleeve": _group_stats(rows, "sleeve"),
+            "by_lean": _group_stats(rows, "lean"),
+            "by_horizon": _group_stats(rows, "horizon_d")}
 
 
 def reliability_curve(bins: int = 5) -> list[dict]:

@@ -218,6 +218,28 @@ def test_score_filters_strictly_by_horizon(monkeypatch):
     assert P.score("2026-06-01", horizon=21)["n_resolved"] == 1
 
 
+def test_directional_reliability_curve_and_tilt(monkeypatch):
+    # 30 'up' predictions stated at prob 0.70 but right only ~half the time → the engine is
+    # OVERCONFIDENT: mean_predicted (0.70) >> realized hit-rate (~0.50). The reliability decomposition
+    # (#6) must surface a non-empty curve, a positive calibration_error, and confidence_tilt.
+    import pandas as pd
+    base = pd.Timestamp("2026-01-05")
+    rows = []
+    for i in range(30):
+        d = (base + pd.Timedelta(days=35 * (i % 9))).strftime("%Y-%m-%d")
+        realized = 0.05 if i % 2 == 0 else -0.05            # 'up' is right exactly half the time
+        rows.append({"id": f"x{i}", "ticker": f"T{i}", "asof": d, "dir": "up",
+                     "score": 80, "band": "high", "prob": 0.70, "entry_px": 100.0,
+                     "horizon_d": 21, "status": "resolved", "realized": realized, "resolved_on": d})
+    monkeypatch.setattr(P, "_load_ledger", lambda: rows)
+    dirn = P.score("2026-12-01", horizon=21)["directional"]
+    assert dirn["reliability_curve"]                         # non-empty diagram
+    bucket = next(b for b in dirn["reliability_curve"] if b["bin"] == "0.60-0.80")
+    assert bucket["n"] == 30 and bucket["mean_predicted"] == 0.7 and bucket["hit_rate"] == 0.5
+    assert dirn["calibration_error"] == 0.2                  # |0.7-0.5| weighted
+    assert dirn["confidence_tilt"] == "overconfident"
+
+
 def test_summary_shape(monkeypatch, sandbox):
     monkeypatch.setattr(P, "_load_ledger", lambda: [])
     s = P.summary("2026-06-21")
