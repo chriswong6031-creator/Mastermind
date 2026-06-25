@@ -198,6 +198,14 @@ def _loop_maintenance_job():
         student.train(asof)
     except Exception:  # noqa: BLE001
         pass
+    # 1d. retrain the DISTILLED-OPUS classifier (#3 v2) — mimics Opus's buy decisions so easy calls can
+    #     be routed cheaply (don't-waste-Opus). LLM-free, degrade-safe, 'building' until Opus accrues
+    #     months of decisions. No-op if catboost absent / too few buys.
+    try:
+        from brain import distill
+        distill.train(asof)
+    except Exception:  # noqa: BLE001
+        pass
 
     # 2. parallel forward shadow books + desk-lever A/B — re-derive (or HOLD on a carried day) + mark
     #    forward. The empty-inputs guard inside run() prevents a no-decision day from liquidating them.

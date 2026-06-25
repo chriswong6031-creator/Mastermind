@@ -12,7 +12,7 @@ import pytest
 from brain import student as S
 
 
-def _panel(n: int = 260, start: str = "2025-01-01"):
+def _panel(n: int = 340, start: str = "2024-06-01"):
     import numpy as np
     import pandas as pd
     idx = pd.bdate_range(start, periods=n)
@@ -26,8 +26,11 @@ def test_pit_features_shape_and_history_floor():
     panel, spy = _panel()
     asof = panel["AAA"].index[-1].strftime("%Y-%m-%d")
     f = S._pit_features(panel, spy, "AAA", asof)
-    assert f is not None and set(f) == {"ret_21", "ret_63", "vol_21", "dist_50", "dist_200", "rs_63"}
-    # too little history (<210 closes ≤ asof) → None (no half-baked features)
+    assert f is not None and set(f) == {
+        "ret_21", "ret_63", "ret_126", "ret_252", "vol_21", "vol_63",
+        "dist_50", "dist_200", "rs_63", "rs_126", "rs_252", "draw_252"}
+    assert f["draw_252"] <= 0.0                                    # distance below the 52w high
+    # too little history (<260 closes ≤ asof) → None (no half-baked features)
     early = panel["AAA"].index[50].strftime("%Y-%m-%d")
     assert S._pit_features(panel, spy, "AAA", early) is None
     assert S._pit_features(panel, spy, "ZZZ", asof) is None        # absent name
@@ -95,9 +98,9 @@ def test_inject_is_flag_gated_and_identity_when_empty(monkeypatch):
 def test_train_and_predict_with_real_catboost(monkeypatch, tmp_path):
     pytest.importorskip("catboost")
     import numpy as np
-    panel, spy = _panel(n=320)
+    panel, spy = _panel(n=460)
     idx = panel["AAA"].index
-    dates = [idx[i].strftime("%Y-%m-%d") for i in range(210, 310)]   # 100 dates, all ≥210 history
+    dates = [idx[i].strftime("%Y-%m-%d") for i in range(300, 440)]   # 140 dates, all ≥260 history
     rng = np.random.default_rng(0)
     ledger = []
     for d in dates:

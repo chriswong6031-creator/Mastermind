@@ -35,7 +35,12 @@ _HORIZON = 21            # train on the canonical 21-bday tier (the deepest, mos
 _MIN_SAMPLES = 150       # below this many resolved feature rows, don't train (cold-start safety)
 _MIN_TEST = 40           # need a real OOS block before reporting metrics
 _CAT_FEATURES = ["band", "dir"]   # CatBoost's native categorical handling (the reason to pick CatBoost)
-_NUM_FEATURES = ["score", "ret_21", "ret_63", "vol_21", "dist_50", "dist_200", "rs_63"]
+# All PRICE-PANEL-derived (reconstructable point-in-time from historical closes → leakage-free for
+# training on PAST dates). Stockdata-contract / regime features are deliberately EXCLUDED: the published
+# contracts are overwritten daily, so they aren't available PIT for past asofs (training on them would
+# leak). v3 = add a historical regime timeline once one is confirmed PIT-safe.
+_NUM_FEATURES = ["score", "ret_21", "ret_63", "ret_126", "ret_252", "vol_21", "vol_63",
+                 "dist_50", "dist_200", "rs_63", "rs_126", "rs_252", "draw_252"]
 _FEATURES = _NUM_FEATURES + _CAT_FEATURES
 
 
@@ -66,19 +71,28 @@ def _pit_features(panel, spy, ticker: str, asof_iso: str) -> dict | None:
         ts = pd.Timestamp(asof_iso)
         s = s[(s.index <= ts) & (s > 0)]
         sp = spy[(spy.index <= ts) & (spy > 0)]
-        if len(s) < 210 or len(sp) < 65:
+        if len(s) < 260 or len(sp) < 260:        # need ~1y for the 252-day features
             return None
         px = float(s.iloc[-1])
         r = s.pct_change().dropna()
         ret_21 = px / float(s.iloc[-22]) - 1.0
         ret_63 = px / float(s.iloc[-64]) - 1.0
+        ret_126 = px / float(s.iloc[-127]) - 1.0
+        ret_252 = px / float(s.iloc[-253]) - 1.0
         vol_21 = float(r.iloc[-21:].std()) * (252 ** 0.5)
+        vol_63 = float(r.iloc[-63:].std()) * (252 ** 0.5)
         dist_50 = px / float(s.iloc[-50:].mean()) - 1.0
         dist_200 = px / float(s.iloc[-200:].mean()) - 1.0
         spy_ret_63 = float(sp.iloc[-1]) / float(sp.iloc[-64]) - 1.0
-        rs_63 = ret_63 - spy_ret_63
-        return {"ret_21": round(ret_21, 4), "ret_63": round(ret_63, 4), "vol_21": round(vol_21, 4),
-                "dist_50": round(dist_50, 4), "dist_200": round(dist_200, 4), "rs_63": round(rs_63, 4)}
+        spy_ret_126 = float(sp.iloc[-1]) / float(sp.iloc[-127]) - 1.0
+        spy_ret_252 = float(sp.iloc[-1]) / float(sp.iloc[-253]) - 1.0
+        peak_252 = float(s.iloc[-252:].max())
+        draw_252 = (px / peak_252 - 1.0) if peak_252 > 0 else 0.0     # <=0: distance below the 52w high
+        return {"ret_21": round(ret_21, 4), "ret_63": round(ret_63, 4), "ret_126": round(ret_126, 4),
+                "ret_252": round(ret_252, 4), "vol_21": round(vol_21, 4), "vol_63": round(vol_63, 4),
+                "dist_50": round(dist_50, 4), "dist_200": round(dist_200, 4),
+                "rs_63": round(ret_63 - spy_ret_63, 4), "rs_126": round(ret_126 - spy_ret_126, 4),
+                "rs_252": round(ret_252 - spy_ret_252, 4), "draw_252": round(draw_252, 4)}
     except Exception:  # noqa: BLE001
         return None
 
@@ -137,7 +151,11 @@ def train(asof: str | date | None = None) -> dict:
         df = pd.DataFrame(rows).sort_values("asof").reset_index(drop=True)
         dates = sorted(df["asof"].unique())
         cut = dates[int(len(dates) * 0.7)] if len(dates) > 3 else dates[-1]
-        tr, te = df[df["asof"] < cut], df[df["asof"] >= cut]
+        # EMBARGO the seam: a train row's label is a _HORIZON-bday FORWARD return, so a row entered within
+        # ~_HORIZON bdays of `cut` resolves INTO the test window — drop those train rows so the OOS metric
+        # is honestly out-of-sample (mirrors loop/harness EMBARGO discipline; without it OOS is optimistic).
+        emb = (pd.Timestamp(cut) - pd.tseries.offsets.BDay(_HORIZON)).strftime("%Y-%m-%d")
+        tr, te = df[df["asof"] < emb], df[df["asof"] >= cut]
         if len(tr) < _MIN_SAMPLES - _MIN_TEST or len(te) < _MIN_TEST:
             _persist_metrics(out)
             return out

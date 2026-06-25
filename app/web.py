@@ -1132,6 +1132,20 @@ def api_student() -> JSONResponse:
         return JSONResponse({"status": "building", "top_predicted": [], "error": str(exc)})
 
 
+@router.get("/api/distill")
+def api_distill() -> JSONResponse:
+    """The DISTILLED-OPUS model (#3 v2) — its latest metrics (OOS AUC mimicking Opus's buys) + the names
+    it predicts Opus would most likely buy. 'building' until Opus accrues months of decisions. Read-only."""
+    try:
+        import bot  # noqa: F401
+        from brain import distill
+        out = distill.summary()
+        out["top_predicted"] = distill.predict(top=12)
+        return JSONResponse(out)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"status": "building", "top_predicted": [], "error": str(exc)})
+
+
 @router.get("/api/engine_backtest")
 def api_engine_backtest() -> JSONResponse:
     """Historical engine-backtest verdict — the HIGH-statistical-power, leakage-free read on the

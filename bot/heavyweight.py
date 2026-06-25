@@ -275,8 +275,9 @@ _PERSONA = (
 
 def _run_brain(asof: str, inaugural: bool) -> dict:
     from brain import heavyweight_mcp, cli_bridge
-    from brain import self_mirror, risk_lens   # lazy (package-attr lesson); both flag-gated, byte-identical OFF
+    from brain import self_mirror, risk_lens, student   # lazy; all flag-gated, byte-identical OFF
     prompt = _build_prompt(asof, inaugural)
+    prompt = student.inject(prompt, _safe_date(asof))   # #3 fast numeric prior (MASTERMIND_STUDENT; OFF→unchanged)
     persona = self_mirror.inject(_PERSONA, "heavyweight", _safe_date(asof))
     persona = risk_lens.govern_persona(persona, "heavyweight")  # RISK GOVERNOR (concentration); OFF → unchanged
     coro = cli_bridge.reason(
