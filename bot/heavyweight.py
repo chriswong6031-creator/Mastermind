@@ -275,9 +275,10 @@ _PERSONA = (
 
 def _run_brain(asof: str, inaugural: bool) -> dict:
     from brain import heavyweight_mcp, cli_bridge
-    from brain import self_mirror              # lazy (package-attr lesson); flag-gated, byte-identical OFF
+    from brain import self_mirror, risk_lens   # lazy (package-attr lesson); both flag-gated, byte-identical OFF
     prompt = _build_prompt(asof, inaugural)
     persona = self_mirror.inject(_PERSONA, "heavyweight", _safe_date(asof))
+    persona = risk_lens.govern_persona(persona, "heavyweight")  # RISK GOVERNOR (concentration); OFF → unchanged
     coro = cli_bridge.reason(
         prompt,
         role="deep",                 # opus, per config/agents.yml
@@ -301,6 +302,11 @@ def _build_prompt(asof: str, inaugural: bool) -> str:
     lines = [f"# Heavyweight book — daily decision for {asof}", ""]
     if regime:
         lines += [f"Macro regime (in-house read): {regime}", ""]
+    # RISK GOVERNOR — the live risk-state block that governs CONCENTRATION (flag-gated; OFF → "").
+    from brain import risk_lens
+    brief = risk_lens.briefing("heavyweight", regime=_regime_dict(), asof=asof, held=sorted(positions))
+    if brief:
+        lines += [brief, ""]
     lines += [
         f"FLAGSHIP currently holds {len(allowed)} names — this is your ENTIRE tradable universe. You "
         "may ONLY hold names from this list (anything else you submit is dropped):",

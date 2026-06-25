@@ -174,9 +174,10 @@ _PERSONA = (
 
 def _run_brain(asof: str, inaugural: bool, directive: str | None = None) -> dict:
     from brain import autonomous_mcp, cli_bridge
-    from brain import self_mirror              # lazy (package-attr lesson); flag-gated, byte-identical OFF
+    from brain import self_mirror, risk_lens   # lazy (package-attr lesson); both flag-gated, byte-identical OFF
     prompt = _build_prompt(asof, inaugural, directive=directive)
     persona = self_mirror.inject(_PERSONA, "autonomous", _safe_date(asof))
+    persona = risk_lens.govern_persona(persona, "autonomous")   # RISK GOVERNOR mandate; OFF → unchanged
     coro = cli_bridge.reason(
         prompt,
         role="deep",                 # opus, per config/agents.yml
@@ -201,6 +202,11 @@ def _build_prompt(asof: str, inaugural: bool, directive: str | None = None) -> s
         lines += ["## ⚠ PRIORITY DIRECTIVE FOR THIS RUN", directive.strip(), ""]
     if regime:
         lines += [f"Macro regime (in-house read): {regime}", ""]
+    # RISK GOVERNOR — the live risk-state block that governs sizing/gross (flag-gated; OFF → "").
+    from brain import risk_lens
+    brief = risk_lens.briefing("autonomous", regime=_regime_dict(), asof=asof, held=sorted(positions))
+    if brief:
+        lines += [brief, ""]
     if inaugural:
         lines += [
             "This is your INAUGURAL run. The book is 100% cash: $1,000,000. Build the portfolio "

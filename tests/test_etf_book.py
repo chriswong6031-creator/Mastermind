@@ -169,6 +169,117 @@ def test_board_builds(monkeypatch):
     assert board["universe"] == etf_universe.GROUPS
 
 
+# --------------------------------------------------------------------------- fragility (leading risk)
+
+# a synthetic regime with every leading-fragility signal lit but NO coincident crisis trigger — the
+# 06-22 setup: risk gauges read calm while GEX flipped, breadth diverged and the tape was one factor.
+_FRAGILE_REGIME = {
+    "alerts": [
+        {"rule": "gex_flip_cross", "severity": "warn", "message": "GEX: net GEX changed sign (net -57bn)"},
+        {"rule": "sector_holdings_accumulation", "severity": "info",
+         "message": "XLK: NVDA weight +2.3pp ... cycle NEARING A HIGH·TAKE PROFITS"},
+    ],
+    "conditions": {
+        "complacency": {"state": "watch", "breadth_div": True,
+                        "breadth_above200_pctile": 0.38, "spy_high_prox": 0.98},
+    },
+    "cross_asset": {"verdict": "concentrated", "absorption_pctile_5y": 0.93,
+                    "headline": "CONCENTRATED — 3 of 6 markets are one bet"},
+    "market_drivers": {"primary_label": "Oil shock", "direction": "oil collapsing",
+                       "scores": [{"family": "equity-leadership", "strength": 0.18}]},
+}
+
+
+def test_fragility_surfaces_leading_signals():
+    from brain import etf_board
+    f = etf_board.build_fragility(_FRAGILE_REGIME)
+    assert f["gex_negative"] is True
+    assert f["breadth_divergence"] is True
+    assert f["concentrated"] is True
+    assert f["level"] == "high"                                   # gex + breadth + concentration = 3 warns
+    keys = {s["key"] for s in f["signals"]}
+    assert {"gex_negative", "breadth_divergence", "cross_asset_concentration", "holdings_topping"} <= keys
+    assert f["dominant_driver"]["primary"] == "Oil shock"         # the real driver, not the book's tilt
+    # a cold/empty dashboard degrades to all-clear, never raises
+    z = etf_board.build_fragility({})
+    assert z["level"] == "low" and z["warn_count"] == 0 and z["signals"] == []
+
+
+def test_risk_state_escalates_on_leading_fragility(monkeypatch):
+    from brain import etf_board
+    monkeypatch.setattr(etf_board, "etf_trend", lambda t: {})     # isolate the SPY trend read
+    # the full fragile cluster, with NO coincident trigger → LEADING-stressed (the fix for 'calm' at the top)
+    rs = etf_board.risk_state(_FRAGILE_REGIME)
+    assert rs["state"] == "stressed" and rs["fragility_level"] == "high"
+    assert any("leading:" in r for r in rs["reasons"])
+    # a lone GEX flip is not the whole cluster → elevated, not stressed
+    one = etf_board.risk_state({"alerts": [{"rule": "gex_flip_cross", "message": "flip"}]})
+    assert one["state"] == "elevated" and one["fragility_level"] == "elevated"
+    # a genuinely clean tape still reads calm
+    assert etf_board.risk_state({})["state"] == "calm"
+
+
+# --------------------------------------------------------------------------- overextension + concentration guardrails
+
+# fixed guardrails incl. the new limits so these tests don't depend on config/etf_strategy.yml
+_FIXED_GUARDRAILS_V2 = {
+    "max_single_weight": 0.35, "min_trade": 0.015,
+    "offensive_cap": {"stressed": 0.55, "elevated": 0.80},
+    "overextension": {"pct_vs_200d_cap": 40.0, "max_weight": 0.08},
+    "factor_clusters": [{"name": "megacap_growth_semis",
+                         "members": ["QQQ", "XLK", "SMH", "IGV", "MTUM", "SIZE"], "max_gross": 0.40}],
+}
+
+
+def test_guardrail_overextension_trim(iso, monkeypatch):
+    from bot import etf
+    from brain import etf_board
+    monkeypatch.setattr(etf, "_guardrails", lambda: _FIXED_GUARDRAILS_V2)
+    # SMH +60% above its 200d (parabolic) → clamped to 8%; SPY +9% is fine → untouched
+    monkeypatch.setattr(etf_board, "etf_trend",
+                        lambda t: {"SMH": {"pct_vs_200d": 60.0}, "SPY": {"pct_vs_200d": 9.0}}.get(t, {}))
+    adj, notes = etf._apply_guardrails({"SMH": 0.14, "SPY": 0.25}, {"SMH": 668.0, "SPY": 744.0},
+                                       {"state": "calm"})
+    assert adj["SMH"] == pytest.approx(0.08, abs=1e-6)            # blow-off top not held at size
+    assert adj["SPY"] == 0.25
+    assert any("overextended SMH" in n for n in notes)
+
+
+def test_guardrail_factor_cluster_cap(iso, monkeypatch):
+    from bot import etf
+    from brain import etf_board
+    monkeypatch.setattr(etf, "_guardrails", lambda: _FIXED_GUARDRAILS_V2)
+    monkeypatch.setattr(etf_board, "etf_trend", lambda t: {})    # no overextension trim — isolate G5
+    # QQQ+SMH+MTUM = 50% of one growth/semis factor → scaled to 40% combined; SGOV (defensive) untouched
+    target = {"QQQ": 0.20, "SMH": 0.15, "MTUM": 0.15, "SGOV": 0.30}
+    prices = {"QQQ": 740.0, "SMH": 668.0, "MTUM": 345.0, "SGOV": 100.0}
+    adj, notes = etf._apply_guardrails(target, prices, {"state": "calm"})
+    assert adj["QQQ"] + adj["SMH"] + adj["MTUM"] == pytest.approx(0.40, abs=1e-3)   # cluster capped
+    assert adj["QQQ"] == pytest.approx(0.16, abs=1e-3)           # each scaled *0.40/0.50
+    assert adj["SMH"] == pytest.approx(0.12, abs=1e-3)
+    assert adj["SGOV"] == 0.30                                   # defensive, outside the cluster
+    assert any("factor cap" in n for n in notes)
+
+
+def test_persona_advertises_new_guardrails():
+    from bot import etf
+    p = etf._build_persona()
+    assert "blow-off top" in p and "200d" in p                   # overextension clamp advertised
+    assert "megacap_growth_semis" in p and "COMBINED gross" in p # factor-cluster cap advertised
+    assert "fragility" in p                                      # process points at the leading-risk block
+
+
+def test_new_guardrails_in_spec_and_fallback(monkeypatch):
+    g = etf_universe.guardrails()
+    assert g["overextension"]["pct_vs_200d_cap"] == 40 and g["overextension"]["max_weight"] == 0.08
+    assert any(c["name"] == "megacap_growth_semis" for c in g["factor_clusters"])
+    # a missing/corrupt spec still yields the in-code defaults for the new limits
+    monkeypatch.setattr(etf_universe, "load_spec", lambda: {})
+    gd = etf_universe.guardrails()
+    assert gd["overextension"]["pct_vs_200d_cap"] == 40.0
+    assert gd["factor_clusters"] and gd["factor_clusters"][0]["members"]
+
+
 # --------------------------------------------------------------------------- strategy spec
 
 def test_spec_drives_universe_and_guardrails():

@@ -548,6 +548,37 @@ def test_api_decisions_sell_chips_show_pct_and_realized_pnl(iso, monkeypatch):
     assert sell["realized_pnl"] == blot["realized_pnl"]
 
 
+def test_api_portfolio_banner_summary_falls_back_to_decision_log(iso):
+    """The top banner summary is published from the live submission, which is CLEARED at the start
+    of every run — so a skipped/feed-gated run nulls latest.json's summary AND appends a
+    summary-less decision. /api/portfolio must surface the most recent decision that DOES carry a
+    summary (the still-current book) rather than blank the banner. Gated/self-directed books, which
+    have no Brain decision log, get no such fallback."""
+    from app import web
+    cdir = registry.data_dir("hk")
+    cdir.mkdir(parents=True, exist_ok=True)
+    # what a carried-unchanged run leaves on disk: a nulled banner summary ...
+    (cdir / "latest.json").write_text(json.dumps({
+        "portfolio_id": "hk", "as_of": "2026-06-23", "kind": "hk_brain",
+        "summary": None, "positions": []}))
+    # ... and a NEWEST decision with no summary on top of the prior one that has the real rationale
+    (cdir / "decisions.jsonl").write_text(
+        json.dumps({"asof": "2026-06-22", "ts": "2026-06-22T00:00:00+00:00",
+                    "summary": "Stagflation barbell — hold the thesis.",
+                    "sold_note": "exited CCB", "holdings": [], "executed": []}) + "\n" +
+        json.dumps({"asof": "2026-06-23", "ts": "2026-06-23T00:00:00+00:00",
+                    "summary": None, "holdings": [], "executed": []}) + "\n")
+
+    b = json.loads(web.api_portfolio(portfolio="hk").body)
+    assert b["summary"] == "Stagflation barbell — hold the thesis."     # walked back past empty newest
+    assert b.get("sold_note") == "exited CCB"
+
+    # only the free-form Brain books carry a decision log to fall back on
+    assert web._brain_book_module("hk") is not None
+    assert web._brain_book_module("flagship") is None
+    assert web._brain_book_module("self_directed") is None
+
+
 # --------------------------------------------------------------------------- #
 # regression guards for the adversarial-review findings
 # --------------------------------------------------------------------------- #

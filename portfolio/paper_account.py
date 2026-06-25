@@ -61,6 +61,67 @@ def _no_trade_band_frac() -> float:
 
 
 # ---------------------------------------------------------------------------
+# Minimum trade size (dust filter)
+# ---------------------------------------------------------------------------
+# Sizing is purely `weight * NAV / price`, so a Brain that hands a name a sliver of a weight
+# (a few bps) buys a sliver of a share — e.g. 0.4 shares of IWM (~$118) or 0.1 of HUBB. Those
+# dust lines are pointless: they can't move the book, they clutter the blotter, and a fractional
+# share count reads as broken. Two rules kill them, applied to every BUY in every book:
+#   1. Whole shares — a buy is floored to an integer share count (no fractional dust). A-share
+#      board lots (buy in 100s) are intentionally NOT enforced here: a high-priced name (a ¥1800
+#      stock would need a >2% line to clear one lot) would be silently dropped, so whole-share +
+#      the notional floor is the safe, currency-agnostic rule. (Revisit per-venue lots later.)
+#   2. Notional floor — after flooring, a buy worth less than this fraction of NAV is skipped
+#      entirely (the position is simply not opened / not topped up). Default 0.1% of NAV (~$1k on
+#      a $1M book) — well under the 0.5% "small starter" the no-trade-band tests protect, so a
+#      deliberate small open still goes through.
+# Sells/exits are NEVER blocked — a dust line you already hold must always stay fully exitable.
+# Both knobs override via env; set MASTERMIND_ALLOW_FRACTIONAL=1 to restore fractional sizing.
+def _min_trade_frac() -> float:
+    try:
+        return max(0.0, float(os.environ.get("MASTERMIND_MIN_TRADE_FRAC", "0.001")))
+    except (TypeError, ValueError):
+        return 0.001
+
+
+def _allow_fractional() -> bool:
+    return os.environ.get("MASTERMIND_ALLOW_FRACTIONAL", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _min_position_frac() -> float:
+    """Smallest weight at which a BRAND-NEW position may be OPENED — a target below this isn't worth
+    a book slot, so the name simply isn't opened. Names already HELD are exempt: this floor never
+    force-closes a position (the Brain trims/exits those deliberately, and a name dropped from the
+    target still fully exits). Stricter than the per-trade dust floor (_min_trade_frac): that one
+    governs every trade incl. top-ups; this one governs new entries. Default 0.5% of NAV — the same
+    threshold the no-trade-band treats as the smallest deliberate starter. Override via env."""
+    try:
+        return max(0.0, float(os.environ.get("MASTERMIND_MIN_POSITION_FRAC", "0.005")))
+    except (TypeError, ValueError):
+        return 0.005
+
+
+def _quantize_buy_shares(shares: float) -> float:
+    """Floor a desired BUY to whole shares (kill fractional dust) unless fractional sizing is
+    explicitly re-enabled. Sells are not quantized — a held line must stay fully exitable."""
+    import math
+    if _allow_fractional() or shares <= 0:
+        return max(0.0, float(shares))
+    return float(math.floor(shares))
+
+
+def _buyable_shares(shares: float, px: float, nav_now: float) -> float:
+    """Tradable size for a BUY: whole-share quantized, then dust-filtered against the min
+    notional (a fraction of NAV). Returns 0.0 when the trade is too small to bother with."""
+    q = _quantize_buy_shares(shares)
+    if q <= 0.0 or px <= 0.0:
+        return 0.0
+    if q * px < _min_trade_frac() * max(nav_now, 0.0):
+        return 0.0
+    return q
+
+
+# ---------------------------------------------------------------------------
 # multi-portfolio path resolution
 # ---------------------------------------------------------------------------
 # Mastermind now harnesses several independent books. Every public operation takes an
@@ -429,6 +490,9 @@ def rebalance(
         px = prices.get(ticker)
         if px is None or px <= 0:
             continue                               # targeted but unpriceable this run -> carry, don't trade
+        held = state["positions"].get(ticker, {}).get("shares", 0.0)
+        if held <= 1e-9 and weight < _min_position_frac() - 1e-9:
+            continue                               # don't OPEN a sub-floor sliver position (held names exempt)
         target_dollar = weight * current_nav
         target_shares[ticker] = target_dollar / px
 
@@ -495,6 +559,8 @@ def rebalance(
                 continue
             # clamp so we don't spend more than available cash
             buy_shares = min(diff, state["cash"] / px)
+            # dust filter: whole shares + min-notional floor (skip sliver buys like 0.4 IWM)
+            buy_shares = _buyable_shares(buy_shares, px, current_nav)
             if buy_shares < 1e-9:
                 continue
             value = buy_shares * px
@@ -558,8 +624,10 @@ def execute_fill(ticker: str, side: str, *, weight: float | None = None,
             dollars = max(0.0, float(weight or 0.0)) * nav(pmap, portfolio_id)
             shares = dollars / px
         shares = min(float(shares), state["cash"] / px)          # cash-bounded, no leverage
+        # dust filter: whole shares + min-notional floor (same rule as the Brain rebalance)
+        shares = _buyable_shares(shares, px, nav({**(prices or {}), ticker: px}, portfolio_id))
         if shares <= 1e-9:
-            return {"ok": False, "ticker": ticker, "error": "insufficient cash / zero size"}
+            return {"ok": False, "ticker": ticker, "error": "below minimum trade size"}
         value = shares * px
         state["cash"] = max(0.0, state["cash"] - value)
         if pos:
@@ -653,13 +721,15 @@ def queue_orders(
         px = est_prices.get(ticker)
         if px is None or px <= 0:
             continue                                   # can't estimate without a prior close
-        target_shares = (weight * nav_base) / px
         held = state["positions"].get(ticker, {}).get("shares", 0.0)
-        shares = round(target_shares - held, 6)            # match the stored/displayed precision
+        if held <= 1e-9 and weight < _min_position_frac() - 1e-9:
+            continue                                   # don't OPEN a sub-floor sliver position (held names exempt)
+        target_shares = (weight * nav_base) / px
+        # dust filter: whole shares + min-notional floor (don't queue sliver buys)
+        shares = _buyable_shares(target_shares - held, px, nav_base)
         value = round(shares * px, 2)
         if shares <= 0.0 or value <= 0.0:
-            continue                                   # already at/above target, or a sub-rounding
-                                                       # residue that would render as "BUY 0 / $0"
+            continue                                   # already at/above target, or below the dust floor
         orders.append({
             "id": f"{asof}-{ticker}-buy",
             "ticker": ticker,
@@ -699,8 +769,9 @@ def fill_pending(prices: dict[str, float], asof: str, portfolio_id: str | None =
             still_pending.append(o)                    # can't fill without a price — keep queued
             continue
         buy = min(want, state["cash"] / px) if px else 0.0
+        buy = _quantize_buy_shares(buy)                # whole shares (queued count already dust-filtered)
         if buy <= 1e-9:
-            still_pending.append(o)                    # out of cash — keep queued
+            still_pending.append(o)                    # out of cash / sub-lot — keep queued
             continue
         value = buy * px
         state["cash"] = max(0.0, state["cash"] - value)

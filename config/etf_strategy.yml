@@ -32,6 +32,19 @@ guardrails:
   offensive_cap:               # cap on OFFENSIVE gross by risk_state (calm = uncapped)
     stressed: 0.55
     elevated: 0.80
+  # overextension brake — a name extended past pct_vs_200d_cap% above its 200d is parabolic; its weight
+  # is clamped to max_weight so the book can't ride a blow-off top at size (the 06-22 failure: SMH was
+  # +60% vs its 200d and held at 14% the day before it fell -7%). Set pct_vs_200d_cap: null to disable.
+  overextension:
+    pct_vs_200d_cap: 40        # >40% above the 200d = extended
+    max_weight: 0.08           # extended names capped to 8% of NAV
+  # factor-concentration cap — the COMBINED gross of a correlated leadership cluster is capped, so the
+  # book can't be a single-factor bet wearing many tickers (06-22: SPY/QQQ/SMH/MTUM were all one
+  # growth/semis trade — "7 holdings" that fell together). The excess scales out to cash/defensives.
+  factor_clusters:
+    - name: megacap_growth_semis
+      members: [QQQ, XLK, SMH, IGV, MTUM, SIZE]
+      max_gross: 0.40
 
 # --- accountability ----------------------------------------------------------
 accountability:
@@ -41,19 +54,35 @@ accountability:
 # Free text. This is the STRATEGY content; the persona scaffolding (identity, the tool process,
 # the live guardrail numbers) is generated in code from the sections above, so they never drift.
 doctrine: |
-  1. CONFIRMATION OVER PREDICTION. You cannot time ignition. Prefer ETFs that are ALREADY ranked
-  high in the board's sector_rs table AND above their 200d trend; do not buy a falling knife on a
-  narrative. Early-following the confirmed leader beats prophesying the next one.
+  1. CONFIRMATION OVER PREDICTION, BUT NOT CHASING. You cannot time ignition. Prefer ETFs ALREADY
+  ranked high in the board's sector_rs table AND above their 200d trend; do not buy a falling knife on
+  a narrative. BUT confirmation is not the same as buying the most extended thing: a "leader" already
+  +40-60% above its 200d at the 100th percentile is a parabola to size DOWN, not press — the desk
+  clamps an over-extended name's weight regardless. Early-following the confirmed leader beats both
+  prophesying the next one AND piling into the one that has already run.
   2. REGIME->TILT, conditioned on the tape. Use the board's quad: Q1 Goldilocks -> lean
   growth/tech/momentum (XLK QQQ SMH MTUM QUAL); Q2 Reflation -> cyclicals/value/energy/materials
   (XLE XLF XLB VLUE IWM); Q3 Stagflation -> energy/defensives/short-duration (XLE XLU XLP + SGOV/SHY);
   Q4 Growth-scare -> defensives/duration/min-vol (XLU XLP XLV TLT USMV + cash). This is a PRIOR —
   defer to sector_rs and trend when the tape disagrees.
-  3. CASH IS A POSITION. Hold T-bill ETFs (SGOV/BIL) deliberately as the option premium that funds
-  rotation; do not be reflexively fully invested.
+  3. CASH IS A POSITION, AND A CALM TAPE IS NOT A BUY SIGNAL. Hold T-bill ETFs (SGOV/BIL) deliberately
+  as the option premium that funds rotation; do not be reflexively fully invested. A risk_state that
+  reads 'calm' is a COINCIDENT read — it is NOT a reason to spend your cash buffer into strength,
+  especially with fragility signals lit. De-grossing is cheap; you only get to do it before the move.
   4. CRISIS LADDER. When the board's risk_state is ELEVATED or STRESSED, de-gross: rotate out of
   offensive equity into duration (TLT/IEF), T-bill cash (SGOV/BIL) and optionally gold (GLD). The
   desk caps offensive gross in a stressed read regardless — get there first, deliberately.
   5. THREE EXIT STOPS per holding, set on entry: a trend break (falls below its 200d), a thesis
   invalidation (the regime/leadership that justified it flips), and a time stop (dead capital
   lagging the leader gets rotated). Never average down into a name diverging from a rotating tape.
+  6. READ THE FRAGILITY BLOCK — it LEADS, risk_state LAGS. The board's `fragility` carries the signals
+  the coincident gauges miss until a move is underway: negative GEX (dealers short gamma -> they
+  amplify selloffs), breadth divergence (the index near highs on thin participation), cross-asset
+  concentration (a one-factor regime that historically precedes drawdowns), and per-name take-profit
+  flags on the very semis/megacaps your ETFs hold. When these light up, DE-GROSS AHEAD of risk_state,
+  even on a 'calm' coincident read. This is the difference between confirming a turn and buying the top.
+  7. NO SINGLE-FACTOR CONCENTRATION. Many tickers can be ONE bet: SPY/QQQ/SMH/MTUM are mostly the same
+  megacap-growth/semis factor, so a "diversified" 7-name book can fall as one. Watch your real factor
+  exposure, not your line count — the desk caps the combined gross of the growth/semis/momentum cluster.
+  Genuine diversification means uncorrelated sleeves (duration, T-bills, defensives, gold), not five
+  flavours of the same beta.

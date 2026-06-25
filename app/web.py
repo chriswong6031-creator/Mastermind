@@ -55,6 +55,20 @@ def _portfolio_dir(portfolio_id: str | None = None) -> Path:
         return _data() / "portfolio"
 
 
+# The free-form "Brain" books — each backed by a bot module exposing load_decisions(). Maps a
+# portfolio id to that module (None for the gated flagship / self-directed, which have no Brain
+# decision log). Shared by /api/decisions and /api/portfolio's banner-summary fallback.
+_BRAIN_BOOK_MODULES = {"autonomous": "bot.autonomous", "heavyweight": "bot.heavyweight",
+                       "china": "bot.china", "hk": "bot.hk", "etf": "bot.etf"}
+
+
+def _brain_book_module(portfolio: str):
+    """Import the bot module backing a Brain book's decision log, or None for non-Brain books."""
+    import importlib
+    name = _BRAIN_BOOK_MODULES.get(portfolio)
+    return importlib.import_module(name) if name else None
+
+
 def _account_tickers(portfolio_id: str | None = None) -> list[str]:
     """Tickers currently held in a paper account (for live marks)."""
     try:
@@ -463,6 +477,33 @@ def api_portfolio(portfolio: str = "flagship") -> JSONResponse:
             if zh_rej:
                 rej["_zh"] = zh_rej
 
+        # Banner write-up (top-of-page one-paragraph summary). It's published from the live
+        # submission, which is CLEARED at the start of every run — so a run that carries the book
+        # unchanged (feed gate, off-hours, skipped Brain) nulls it even though the last decision's
+        # rationale still holds. For the Brain books, fall back to the most recent decision-log
+        # summary so the banner never goes blank when the book hasn't changed.
+        if not payload.get("summary"):
+            src = _brain_book_module(portfolio)
+            if src is not None:
+                try:
+                    # walk newest→oldest to the last decision that actually CARRIES a summary —
+                    # a skipped/feed-gated run appends a summary-less entry, which shouldn't blank
+                    # the banner when an earlier rationale (the still-current book) holds.
+                    for rec in src.load_decisions(60):
+                        if rec.get("summary"):
+                            payload["summary"] = rec["summary"]
+                            if not payload.get("sold_note"):
+                                payload["sold_note"] = rec.get("sold_note")
+                            break
+                except Exception:  # noqa: BLE001
+                    pass
+        # zh for the banner summary (cache lookup; client falls back to English when cold)
+        _sum = payload.get("summary")
+        if _sum and not payload.get("summary_zh"):
+            zh_sum = _cached_zh(_sum)
+            if zh_sum:
+                payload["summary_zh"] = zh_sum
+
         return JSONResponse(payload)
     except Exception as exc:
         return JSONResponse({"error": str(exc)}, status_code=500)
@@ -555,17 +596,8 @@ def api_decisions(portfolio: str = "autonomous", limit: int = 60) -> JSONRespons
     """The autonomous Brain's daily decision log — what it bought / sold / held each day, and
     the rationale for every holding. Empty for the gated flagship (it journals via research papers)."""
     try:
-        if portfolio == "autonomous":
-            from bot import autonomous as _src
-        elif portfolio == "heavyweight":
-            from bot import heavyweight as _src
-        elif portfolio == "china":
-            from bot import china as _src
-        elif portfolio == "hk":
-            from bot import hk as _src
-        elif portfolio == "etf":
-            from bot import etf as _src
-        else:
+        _src = _brain_book_module(portfolio)
+        if _src is None:
             return JSONResponse({"decisions": [], "note": "decision log is Brain-book-only (autonomous/heavyweight/china/hk/etf)"})
         decisions = _src.load_decisions(limit)
         today_iso = date.today().isoformat()
@@ -633,6 +665,27 @@ def api_decisions(portfolio: str = "autonomous", limit: int = 60) -> JSONRespons
         return JSONResponse({"decisions": decisions})
     except Exception as exc:  # noqa: BLE001
         return JSONResponse({"decisions": [], "error": str(exc)})
+
+
+@router.get("/api/posture")
+def api_posture(book: str = "flagship") -> JSONResponse:
+    """The book's STRATEGY-LABEL signal — a glance-able posture on top of the free-form rationale:
+    {book, posture_label, posture_label_zh, posture_tone, sub_strategy, favored[], avoided[],
+    driver, detail, cash_pct, invested_pct, available}.
+
+    Derived deterministically from the book's structured state (cash / gross / net trade flow /
+    macro regime) and enriched with a keyword scan over the Brain's own write-up. Read-only,
+    offline (no LLM), and graceful: an absent / malformed book degrades to ``available: False``
+    rather than raising. The `book` id is any registry portfolio (flagship / autonomous /
+    heavyweight / china / hk / etf)."""
+    try:
+        from brain import posture as _posture
+        return JSONResponse(_posture.posture(book))
+    except Exception as exc:  # noqa: BLE001 — never raise; degrade to an honest stub
+        return JSONResponse({"book": book, "available": False, "posture_label": "—",
+                             "posture_label_zh": "—", "posture_tone": "muted", "sub_strategy": None,
+                             "favored": [], "avoided": [], "driver": None, "detail": None,
+                             "cash_pct": None, "invested_pct": None, "error": str(exc)})
 
 
 @router.get("/api/etf/outcomes")
@@ -1005,6 +1058,20 @@ def api_predictions() -> JSONResponse:
         from datetime import date as _date
         from portfolio import predictions
         return JSONResponse(predictions.summary(_date.today().isoformat()))
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"coverage": {}, "scorecard": {}, "error": str(exc)})
+
+
+@router.get("/api/rejections")
+def api_rejections() -> JSONResponse:
+    """Off-policy REJECTION log — every name the gate rejected (conviction veto / research hold /
+    committee drop / timing withhold), forward-graded vs SPY. Returns coverage + the veto-regret
+    scorecard ('did the gate veto winners?', split by reject stage). Read-only; best-effort."""
+    try:
+        import bot  # noqa: F401 — bootstraps vendor/macro for the price labeler
+        from datetime import date as _date
+        from portfolio import rejections
+        return JSONResponse(rejections.summary(_date.today().isoformat()))
     except Exception as exc:  # noqa: BLE001
         return JSONResponse({"coverage": {}, "scorecard": {}, "error": str(exc)})
 
@@ -1397,6 +1464,10 @@ def _risk_officer_dir() -> Path:
     return _data() / "risk_officer"
 
 
+def _macro_risk_dir() -> Path:
+    return _data() / "macro_risk"
+
+
 def _is_date_dir(name: str) -> bool:
     """A committee/<asof> dir name is an ISO date (YYYY-MM-DD)."""
     return bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", name or ""))
@@ -1672,6 +1743,51 @@ def api_desk_scorecard() -> JSONResponse:
     return JSONResponse(out)
 
 
+@router.get("/api/desk/macro-risk")
+def api_desk_macro_risk(asof: str = "") -> JSONResponse:
+    """The MACRO RISK OFFICER read for `asof` (default: most-recent, else computed LIVE). The top-down
+    DEFENSE state the desk lacked on 2026-06-23: the deterministic RISK STATE (risk_on/caution/risk_off)
+    + per-axis fragility (vol / credit-USD / liquidity / crowding / dealer-gamma), the leading-edge
+    fragile DRIVER chains, the hard gross cap + add-block (the teeth), the driver-aware defensive tilt,
+    and the falsifier. Reads the persisted artifact; falls back to a fresh deterministic compute (no
+    LLM) so the card is never blank. Never 500s."""
+    def _shape(st: dict) -> dict:
+        st = st or {}
+        return {
+            "asof": st.get("asof"),
+            "state": st.get("state"),
+            "fragility": st.get("fragility"),
+            "gross_cap": st.get("gross_cap"),
+            "allow_adds": st.get("allow_adds"),
+            "axes": st.get("axes") or {},
+            "signals": (st.get("signals") or [])[:10],
+            "drivers": (st.get("drivers") or [])[:8],
+            "hot_tickers": (st.get("hot_tickers") or [])[:12],
+            "defensive_tilt": st.get("defensive_tilt") or {},
+            "falsifier": (st.get("falsifier") or "")[:600],
+            "check_by": st.get("check_by"),
+            "rationale": (st.get("rationale") or "")[:1600],
+            "lead_driver": (st.get("lead_driver") or "")[:300],
+        }
+    try:
+        asof = (asof or "")[:10]
+        if not (asof and _is_date_dir(asof)):
+            asof = _latest_asof(_macro_risk_dir())
+        if asof:
+            j = _read_json(_macro_risk_dir() / asof / "state.json")
+            st = j.get("state") or {}
+            if st:
+                return JSONResponse({"status": "scoring", **_shape(st)})
+        # nothing persisted yet — compute the deterministic state LIVE (no LLM) so the card renders
+        from brain import macro_risk
+        reg = _read_json(Path(_data().parent / "vendor" / "macro" / "data" / "regime" / "latest.json")) \
+            if (_data().parent / "vendor" / "macro" / "data" / "regime" / "latest.json").exists() else {}
+        st = macro_risk.risk_state(reg.get("date") or "", reg or None)
+        return JSONResponse({"status": "scoring" if st.get("state") else "building", **_shape(st)})
+    except Exception as exc:  # noqa: BLE001 — never raise; degrade to building
+        return JSONResponse({"status": "building", "state": None, "error": str(exc)})
+
+
 @router.get("/api/desk/firm-exposure")
 def api_desk_firm_exposure() -> JSONResponse:
     """READ-ONLY firm-level cross-book exposure monitor — where the independent books (flagship,
@@ -1683,5 +1799,5 @@ def api_desk_firm_exposure() -> JSONResponse:
         return JSONResponse(firm_exposure.summary())
     except Exception as exc:  # noqa: BLE001 — never raise; degrade to an honest stub
         return JSONResponse({"as_of": None, "books": [], "n_books": 0, "top_exposures": [],
-                             "flags": [], "by_sector": {}, "thresholds": {}, "currency_clean": False,
-                             "note": f"Firm exposure unavailable: {exc}"})
+                             "flags": [], "by_sector": {}, "by_chain": {}, "thresholds": {},
+                             "currency_clean": False, "note": f"Firm exposure unavailable: {exc}"})

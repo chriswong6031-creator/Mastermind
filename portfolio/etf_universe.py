@@ -42,7 +42,45 @@ _DEFAULT_GROUPS: dict[str, list[str]] = {
 _DEFAULT_DEFENSIVE_EXTRA = ["USMV", "XLP", "XLU"]
 _DEFAULT_GUARDRAILS = {"max_single_weight": 0.35, "min_trade": 0.015,
                        "offensive_cap": {"stressed": 0.55, "elevated": 0.80}}
+# Overextension: a name extended past `pct_vs_200d_cap`% above its 200d is parabolic — cap its weight
+# to `max_weight` so the book can't ride a blow-off top at size. `pct_vs_200d_cap: null`/≤0 disables.
+_DEFAULT_OVEREXTENSION = {"pct_vs_200d_cap": 40.0, "max_weight": 0.08}
+# Factor clusters: cap the COMBINED gross of a correlated leadership group so the book can't be a
+# single-factor bet wearing many tickers (SPY/QQQ/SMH/MTUM were all one growth/semis trade on 06-22).
+_DEFAULT_FACTOR_CLUSTERS = [
+    {"name": "megacap_growth_semis", "members": ["QQQ", "XLK", "SMH", "IGV", "MTUM", "SIZE"],
+     "max_gross": 0.40},
+]
 _DEFAULT_HORIZON = 21
+
+
+def _norm_overextension(ov) -> dict:
+    ov = ov if isinstance(ov, dict) else {}
+    d = _DEFAULT_OVEREXTENSION
+    cap = ov.get("pct_vs_200d_cap", d["pct_vs_200d_cap"])
+    try:
+        cap = float(cap) if cap is not None else None      # None / null = disabled
+    except (TypeError, ValueError):
+        cap = d["pct_vs_200d_cap"]
+    try:
+        mw = float(ov.get("max_weight", d["max_weight"]))
+    except (TypeError, ValueError):
+        mw = d["max_weight"]
+    return {"pct_vs_200d_cap": cap, "max_weight": mw}
+
+
+def _norm_clusters(clusters) -> list[dict]:
+    if not isinstance(clusters, list):
+        clusters = _DEFAULT_FACTOR_CLUSTERS
+    out: list[dict] = []
+    for c in clusters:
+        if not isinstance(c, dict):
+            continue
+        members = [str(m).upper().strip() for m in (c.get("members") or []) if m]
+        mg = c.get("max_gross")
+        if members and isinstance(mg, (int, float)):
+            out.append({"name": str(c.get("name") or "cluster"), "members": members, "max_gross": float(mg)})
+    return out
 
 
 def load_spec() -> dict:
@@ -85,10 +123,13 @@ OFFENSIVE: frozenset[str] = frozenset(t for t in ALL if t not in DEFENSIVE)
 
 def guardrails() -> dict:
     """The hard risk limits from the spec (with in-code fallbacks). Read fresh so an edit retunes
-    the next run. Shape: {max_single_weight, min_trade, offensive_cap: {stressed, elevated}}."""
+    the next run. Shape: {max_single_weight, min_trade, offensive_cap: {stressed, elevated},
+    overextension: {pct_vs_200d_cap, max_weight}, factor_clusters: [{name, members, max_gross}]}."""
     g = load_spec().get("guardrails") or {}
     oc = g.get("offensive_cap") or {}
     d = _DEFAULT_GUARDRAILS
+    overext = _norm_overextension(g.get("overextension"))      # tolerant of its own bad fields
+    clusters = _norm_clusters(g.get("factor_clusters"))
     try:
         return {
             "max_single_weight": float(g.get("max_single_weight", d["max_single_weight"])),
@@ -97,9 +138,13 @@ def guardrails() -> dict:
                 "stressed": float(oc.get("stressed", d["offensive_cap"]["stressed"])),
                 "elevated": float(oc.get("elevated", d["offensive_cap"]["elevated"])),
             },
+            "overextension": overext,
+            "factor_clusters": clusters,
         }
     except (TypeError, ValueError):
-        return {k: (dict(v) if isinstance(v, dict) else v) for k, v in d.items()}
+        return {**{k: (dict(v) if isinstance(v, dict) else v) for k, v in d.items()},
+                "overextension": dict(_DEFAULT_OVEREXTENSION),
+                "factor_clusters": [dict(c) for c in _DEFAULT_FACTOR_CLUSTERS]}
 
 
 def horizon_days() -> int:

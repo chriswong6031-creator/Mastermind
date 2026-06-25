@@ -21,6 +21,13 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parent.parent
 _V = _ROOT / "vendor" / "macro"
 
+# Leading-fragility escalation thresholds (tunable engine internals — the per-name overextension /
+# factor-concentration limits the Brain reasons with live in config/etf_strategy.yml; these govern
+# how many LEADING fragility warns flip the risk gate ahead of the coincident gauges).
+_FRAG_ELEVATED_MIN = 1       # ≥1 leading warn → at least elevated (offensive gross capped ~80%)
+_FRAG_STRESSED_MIN = 3       # the full fragile cluster (e.g. neg GEX + breadth div + concentration) → stressed
+_ABSORPTION_CONCENTRATED_PCTILE = 0.90   # cross-asset absorption ≥90th pctile = one-factor regime
+
 
 def _read(rel: str) -> dict:
     """Read a vendored dashboard JSON (relative to vendor/macro). {} on any miss."""
@@ -65,10 +72,107 @@ def etf_trend(ticker: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# fragility — the LEADING risk signals the coincident gauges miss
+# ---------------------------------------------------------------------------
+
+def build_fragility(regime: dict | None = None) -> dict:
+    """Distil the dashboard's LEADING fragility signals — the ones the board used to strip and the
+    coincident ``risk_state`` gauges (dislocation / drawdown / systemic / VIX-term) don't see until a
+    move is already underway: dealer gamma sign (GEX), breadth divergence, cross-asset concentration
+    (absorption percentile), per-name take-profit cycle flags, and the dominant market driver vs the
+    book's growth/semis leadership.
+
+    These FRONT-RUN the coincident read. The booleans ``{gex_negative, breadth_divergence,
+    concentrated}`` are what ``risk_state`` escalates on; ``signals`` + ``note`` are what the Brain
+    reads on the board. Pure + degrade-never-raise: a thin block on a cold dashboard, never an
+    exception. (Motivated by the 06-22 top-buy: every one of these was lit while risk_state read calm.)
+    """
+    r = regime if regime is not None else _read_regime()
+    cond = r.get("conditions") if isinstance(r.get("conditions"), dict) else {}
+    alerts = r.get("alerts") if isinstance(r.get("alerts"), list) else []
+    xa = r.get("cross_asset") if isinstance(r.get("cross_asset"), dict) else {}
+    comp = cond.get("complacency") if isinstance(cond.get("complacency"), dict) else (
+        r.get("complacency") if isinstance(r.get("complacency"), dict) else {})
+    md = r.get("market_drivers") if isinstance(r.get("market_drivers"), dict) else {}
+
+    signals: list[dict] = []
+
+    # 1. dealer gamma — a flipped / net-negative GEX means dealers AMPLIFY moves (sell into weakness):
+    #    the classic air-pocket precondition. Sourced from the same alert the dashboard surfaces.
+    gex_alert = next((a for a in alerts
+                      if isinstance(a, dict) and a.get("rule") == "gex_flip_cross"), None)
+    gex_negative = gex_alert is not None
+    if gex_negative:
+        signals.append({"key": "gex_negative", "level": "warn",
+                        "detail": gex_alert.get("message") or "net GEX flipped negative (dealers short gamma)"})
+
+    # 2. breadth divergence — the index sits near highs on narrow participation; the advance is thin.
+    breadth_div = bool(comp.get("breadth_div"))
+    if breadth_div:
+        b200, prox = comp.get("breadth_above200_pctile"), comp.get("spy_high_prox")
+        bits = ["breadth diverging"]
+        if isinstance(b200, (int, float)):
+            bits.append(f"only {round(b200 * 100)}th-pctile names >200d")
+        if isinstance(prox, (int, float)):
+            bits.append(f"SPY {round(prox * 100)}% of its high")
+        signals.append({"key": "breadth_divergence", "level": "warn", "detail": ", ".join(bits)})
+
+    # 3. cross-asset concentration — high absorption (a one-factor regime) has historically led drawdowns.
+    absb_pctile = xa.get("absorption_pctile_5y")
+    concentrated = (isinstance(absb_pctile, (int, float)) and absb_pctile >= _ABSORPTION_CONCENTRATED_PCTILE) \
+        or str(xa.get("verdict") or "").lower() == "concentrated"
+    if concentrated:
+        signals.append({"key": "cross_asset_concentration", "level": "warn",
+                        "detail": xa.get("headline") or (
+                            f"absorption {round(absb_pctile * 100)}th-pctile (one-factor regime)"
+                            if isinstance(absb_pctile, (int, float)) else "cross-asset concentrated")})
+
+    # 4. per-name take-profit cycle flags — the underlyings of the ETFs the book is long flashing
+    #    NEARING A HIGH / TOPPING. Informational (does not escalate the gate by itself), but it's the
+    #    'your leaders are extended' tell the doctrine's exit stops want to see.
+    topping = [str(a.get("message") or "") for a in alerts
+               if isinstance(a, dict) and a.get("rule") == "sector_holdings_accumulation"
+               and any(k in str(a.get("message") or "").upper()
+                       for k in ("TAKE PROFITS", "NEARING A HIGH", "TOPPING"))]
+    if topping:
+        signals.append({"key": "holdings_topping", "level": "info",
+                        "detail": f"{len(topping)} ETF underlying(s) flagged take-profit/topping",
+                        "names": topping[:8]})
+
+    # 5. dominant driver — what's ACTUALLY moving the tape, and where AI/semis leadership ranks in it.
+    dominant = None
+    if md:
+        ai = next((s for s in (md.get("scores") or [])
+                   if isinstance(s, dict) and s.get("family") == "equity-leadership"), None)
+        dominant = {"primary": md.get("primary_label") or md.get("primary"),
+                    "direction": md.get("direction"),
+                    "ai_semis_strength": (ai or {}).get("strength")}
+
+    warn_count = sum(1 for s in signals if s.get("level") == "warn")
+    level = "high" if warn_count >= _FRAG_STRESSED_MIN else ("elevated" if warn_count >= _FRAG_ELEVATED_MIN else "low")
+    return {
+        "level": level,
+        "warn_count": warn_count,
+        "gex_negative": gex_negative,
+        "breadth_divergence": breadth_div,
+        "concentrated": concentrated,
+        "absorption_pctile_5y": absb_pctile,
+        "dominant_driver": dominant,
+        "signals": signals,
+        "note": ("LEADING fragility — these front-run the coincident risk gauges. Negative GEX (dealers "
+                 "short gamma → moves amplify), breadth divergence (a thin advance), and cross-asset "
+                 "concentration (a one-factor regime) together are the setup that precedes air-pockets. "
+                 "When ≥1 is lit, de-gross BEFORE risk_state catches up — and do NOT spend cash into "
+                 "strength on a quiet coincident read."),
+    }
+
+
+# ---------------------------------------------------------------------------
 # risk_state — the distilled crisis read (display == enforcement)
 # ---------------------------------------------------------------------------
 
-def risk_state(regime: dict | None = None, spy_trend: dict | None = None) -> dict:
+def risk_state(regime: dict | None = None, spy_trend: dict | None = None,
+               fragility: dict | None = None) -> dict:
     """Distil the dashboard's risk gauges into one state ∈ {calm, elevated, stressed} with the
     reasons that set it. This is the SINGLE read both the board (display) and ``bot/etf.py``'s
     crisis floor (enforcement) consume, so they can never disagree.
@@ -125,20 +229,34 @@ def risk_state(regime: dict | None = None, spy_trend: dict | None = None) -> dic
     if spy.get("above_200d") is False:
         elevated.append("SPY<200d")
 
-    if stressed:
+    # LEADING-fragility escalation — front-runs the coincident gauges above. A lit fragility warn
+    # (negative GEX / breadth divergence / cross-asset concentration) nudges the gate to elevated even
+    # on a quiet coincident tape; the full fragile cluster (≥_FRAG_STRESSED_MIN) goes stressed. This is
+    # the fix for risk_state reading 'calm — all clear' the day before a momentum unwind.
+    frag = fragility if isinstance(fragility, dict) else build_fragility(r)
+    frag_warns: list[str] = []
+    if frag.get("gex_negative"):
+        frag_warns.append("leading:gex_negative")
+    if frag.get("breadth_divergence"):
+        frag_warns.append("leading:breadth_divergence")
+    if frag.get("concentrated"):
+        frag_warns.append("leading:cross_asset_concentrated")
+
+    if stressed or len(frag_warns) >= _FRAG_STRESSED_MIN:
         state = "stressed"
-    elif elevated:
+    elif elevated or frag_warns:
         state = "elevated"
     else:
         state = "calm"
     return {
         "state": state,
-        "reasons": (stressed + elevated) or ["all clear"],
+        "reasons": (stressed + elevated + frag_warns) or ["all clear"],
         "drawdown_band": dd_band or None,
         "vix_term": vix_term or None,
         "dislocation": disloc.get("verdict"),
         "systemic_stress": sys_state or None,
         "spy_above_200d": spy.get("above_200d"),
+        "fragility_level": frag.get("level"),
     }
 
 
@@ -189,10 +307,14 @@ def build_board(universe=None) -> dict:
         if tv:
             trend[t] = tv
 
+    fragility = build_fragility(r)        # LEADING risk — computed once, fed into risk_state below
     return {
         "as_of": r.get("date"),
         "regime": regime or {"note": "regime not built yet"},
-        "risk_state": risk_state(r, spy_trend=trend.get("SPY")),   # reuse the trend already computed
+        # risk_state reuses the trend already computed AND the fragility just distilled, so the
+        # displayed gate and the enforced crisis floor key off the exact same leading + coincident read.
+        "risk_state": risk_state(r, spy_trend=trend.get("SPY"), fragility=fragility),
+        "fragility": fragility,
         "sector_rs": sector_rs,
         "pair_ratios": r.get("pair_ratios"),
         "cross_asset_absorption": (r.get("cross_asset") or {}).get("absorption_ratio")
@@ -202,6 +324,8 @@ def build_board(universe=None) -> dict:
         "universe": etf_universe.GROUPS,
         "note": ("Confirmation over prediction: prefer ETFs ranked high in sector_rs AND above their "
                  "200d trend; size duration/cash by risk_state; in a stressed read the desk caps "
-                 "offensive gross. RS/factor signals are descriptive (rank-IC≈0) — synthesise, don't "
-                 "chase."),
+                 "offensive gross. But read `fragility` FIRST: negative GEX, breadth divergence and "
+                 "cross-asset concentration LEAD drawdowns and the coincident risk_state lags them — "
+                 "de-gross when they light up, and don't buy what's already most extended (per-name "
+                 "take-profit flags). RS/factor signals are descriptive (rank-IC≈0) — synthesise, don't chase."),
     }

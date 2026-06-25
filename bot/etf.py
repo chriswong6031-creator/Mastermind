@@ -57,6 +57,10 @@ def _guardrails() -> dict:
             "stressed": _f("ETF_OFFENSIVE_CAP_STRESSED", g["offensive_cap"]["stressed"]),
             "elevated": _f("ETF_OFFENSIVE_CAP_ELEVATED", g["offensive_cap"]["elevated"]),
         },
+        # overextension + factor-concentration limits are spec-driven (retuned in config/etf_strategy.yml,
+        # not by env) — passed straight through from the normalized spec read.
+        "overextension": g.get("overextension") or {},
+        "factor_clusters": g.get("factor_clusters") or [],
     }
 
 
@@ -127,6 +131,7 @@ def run_etf(asof: str | None = None, *, force: bool = False, armed: bool = True,
     from brain import etf_board
     risk = etf_board.risk_state()
     out["risk_state"] = risk.get("state")
+    out["fragility"] = risk.get("fragility_level")
     guardrail_notes: list[str] = []
     if decided:
         target, guardrail_notes = _apply_guardrails(target, prices, risk)
@@ -209,6 +214,10 @@ def _apply_guardrails(target: dict[str, float], prices: dict[str, float],
       G3 crisis floor — in a stressed/elevated risk_state, OFFENSIVE (growth/cyclical) gross is capped
          per _OFFENSIVE_CAP; the freed weight falls to cash (the Brain can pre-empt by holding duration/
          T-bills itself — defensives are exempt from the cap).
+      G4 overextension trim — a name more than `pct_vs_200d_cap`% above its 200d is clamped to
+         `max_weight` (no riding a blow-off top at size); names with no trend series are left as-is.
+      G5 factor-concentration cap — each correlated cluster's COMBINED gross is capped to `max_gross`,
+         scaling its members down (the book can't be one factor in many tickers). Excess falls to cash.
     """
     from portfolio import etf_universe, paper_account
     gr = _guardrails()                                   # fresh from the spec (+ env) — no import-time drift
@@ -256,6 +265,35 @@ def _apply_guardrails(target: dict[str, float], prices: dict[str, float],
                 adj[t] = round(adj[t] * scale, 6)
             notes.append(f"risk={risk.get('state')}: offensive gross {off_gross*100:.0f}%→"
                          f"{off_cap*100:.0f}% (freed to cash / defensives)")
+
+    # G4 overextension trim — a name extended far above its 200d is parabolic; cap its weight so the
+    #    book can't ride a blow-off top at size (the 06-22 failure: SMH +60% vs 200d held at 14%). The
+    #    trend read comes from the board; a name with no series (no pct_vs_200d) is left untouched.
+    ov = gr.get("overextension") or {}
+    cap_pct, ov_max = ov.get("pct_vs_200d_cap"), ov.get("max_weight")
+    if cap_pct and cap_pct > 0 and ov_max:
+        from brain import etf_board
+        for t in list(adj):
+            pct = etf_board.etf_trend(t).get("pct_vs_200d")
+            if isinstance(pct, (int, float)) and pct > cap_pct and adj[t] > ov_max + 1e-9:
+                notes.append(f"overextended {t} +{pct:.0f}% vs 200d: {adj[t]*100:.0f}%→{ov_max*100:.0f}%")
+                adj[t] = round(ov_max, 6)
+
+    # G5 factor-concentration cap — limit the COMBINED gross of a correlated leadership cluster so the
+    #    book can't be one factor wearing many tickers (SPY/QQQ/SMH/MTUM were all the same growth/semis
+    #    trade). The excess scales out to cash/defensives, like the crisis floor.
+    for cl in (gr.get("factor_clusters") or []):
+        members = [m for m in (cl.get("members") or []) if m in adj]
+        mg = cl.get("max_gross")
+        if not members or not isinstance(mg, (int, float)):
+            continue
+        gross = sum(adj[m] for m in members)
+        if gross > mg + 1e-9 and gross > 0:
+            scale = mg / gross
+            for m in members:
+                adj[m] = round(adj[m] * scale, 6)
+            notes.append(f"factor cap [{cl.get('name')}]: {gross*100:.0f}%→{mg*100:.0f}% gross "
+                         f"({len(members)} correlated names scaled to cash/defensives)")
     return adj, notes
 
 
@@ -268,22 +306,31 @@ def _apply_guardrails(target: dict[str, float], prices: dict[str, float],
 # the UNIVERSE block and the live guardrail numbers from the spec too, so the persona can never
 # drift from what the universe filter + the trusted layer actually enforce.
 _DEFAULT_DOCTRINE = (
-    "1. CONFIRMATION OVER PREDICTION. You cannot time ignition. Prefer ETFs that are ALREADY ranked "
-    "high in the board's sector_rs table AND above their 200d trend; do not buy a falling knife on a "
-    "narrative. Early-following the confirmed leader beats prophesying the next one.\n"
+    "1. CONFIRMATION OVER PREDICTION, BUT NOT CHASING. You cannot time ignition. Prefer ETFs ALREADY "
+    "ranked high in the board's sector_rs table AND above their 200d trend; do not buy a falling knife "
+    "on a narrative. BUT a 'leader' already +40-60% above its 200d at the 100th percentile is a parabola "
+    "to size DOWN, not press — the desk clamps an over-extended name's weight regardless.\n"
     "2. REGIME->TILT, conditioned on the tape. Use the board's quad: Q1 Goldilocks -> lean growth/tech/"
     "momentum (XLK QQQ SMH MTUM QUAL); Q2 Reflation -> cyclicals/value/energy/materials (XLE XLF XLB "
     "VLUE IWM); Q3 Stagflation -> energy/defensives/short-duration (XLE XLU XLP + SGOV/SHY); Q4 Growth-"
     "scare -> defensives/duration/min-vol (XLU XLP XLV TLT USMV + cash). A PRIOR — defer to sector_rs "
     "and trend when the tape disagrees.\n"
-    "3. CASH IS A POSITION. Hold T-bill ETFs (SGOV/BIL) deliberately as the option premium that funds "
-    "rotation; do not be reflexively fully invested.\n"
+    "3. CASH IS A POSITION, AND A CALM TAPE IS NOT A BUY SIGNAL. Hold T-bill ETFs (SGOV/BIL) deliberately "
+    "as the option premium that funds rotation; do not be reflexively fully invested. A 'calm' risk_state "
+    "is coincident — NOT a reason to spend the buffer into strength, especially with fragility lit.\n"
     "4. CRISIS LADDER. When the board's risk_state is ELEVATED or STRESSED, de-gross into duration "
     "(TLT/IEF), T-bill cash (SGOV/BIL) and optionally gold (GLD). The desk caps offensive gross in a "
     "stressed read regardless — get there first, deliberately.\n"
     "5. THREE EXIT STOPS per holding, set on entry: a trend break (below its 200d), a thesis "
     "invalidation (the regime/leadership that justified it flips), and a time stop (dead capital "
-    "lagging the leader gets rotated). Never average down into a name diverging from a rotating tape."
+    "lagging the leader gets rotated). Never average down into a name diverging from a rotating tape.\n"
+    "6. READ THE FRAGILITY BLOCK — it LEADS, risk_state LAGS. Negative GEX (dealers amplify selloffs), "
+    "breadth divergence, cross-asset concentration and per-name take-profit flags front-run the "
+    "coincident gauges; when they light up, de-gross AHEAD of risk_state even on a 'calm' read.\n"
+    "7. NO SINGLE-FACTOR CONCENTRATION. SPY/QQQ/SMH/MTUM are mostly ONE megacap-growth/semis factor — a "
+    "'diversified' 7-name book can fall as one. Watch real factor exposure, not line count; the desk "
+    "caps the growth/semis/momentum cluster's combined gross. Diversify with duration/bills/defensives/"
+    "gold, not five flavours of the same beta."
 )
 
 _GROUP_LABEL = {"core_index": "core index", "sectors": "sectors", "factors": "factors/style",
@@ -299,6 +346,14 @@ def _build_persona() -> str:
     uni = "\n".join(f"  • {_GROUP_LABEL.get(g, g)}: {' '.join(groups[g])}" for g in groups)
     doctrine = (etf_universe.load_spec().get("doctrine") or "").strip() or _DEFAULT_DOCTRINE
     g = _guardrails()                  # same source the trusted layer enforces (spec + env), no drift
+    ov = g.get("overextension") or {}
+    extra = ""
+    if ov.get("pct_vs_200d_cap") and ov.get("pct_vs_200d_cap") > 0 and ov.get("max_weight"):
+        extra += (f" Any ETF extended more than ~{ov['pct_vs_200d_cap']:.0f}% above its 200d is clamped to "
+                  f"~{ov['max_weight'] * 100:.0f}% (no riding a blow-off top at size).")
+    for cl in (g.get("factor_clusters") or []):
+        extra += (f" The correlated cluster [{cl['name']}: {' '.join(cl['members'])}] is capped to "
+                  f"~{cl['max_gross'] * 100:.0f}% COMBINED gross (don't be one factor in many tickers).")
     return (
         "You are the ETF PORTFOLIO MANAGER of a real-money-style $1,000,000 PAPER book. You run once per "
         "US trading day, after the close, and rebalance the whole book daily. You have FULL discretion over "
@@ -311,8 +366,10 @@ def _build_persona() -> str:
         f"{g['max_single_weight'] * 100:.0f}% is clamped; a weight change under ~{g['min_trade'] * 100:.1f}% of NAV "
         f"is NOT traded (don't churn — only move when the board moved); in a stressed risk_state offensive "
         f"(growth/cyclical) gross is capped ~{g['offensive_cap']['stressed'] * 100:.0f}% "
-        f"(~{g['offensive_cap']['elevated'] * 100:.0f}% elevated), the rest forced to cash/defensives.\n\n"
-        "PROCESS: call mcp__desk__get_etf_board FIRST (regime + sector_rs + risk_state + per-ETF trend), then "
+        f"(~{g['offensive_cap']['elevated'] * 100:.0f}% elevated), the rest forced to cash/defensives."
+        + extra + "\n\n"
+        "PROCESS: call mcp__desk__get_etf_board FIRST (regime + sector_rs + risk_state + per-ETF trend + the "
+        "`fragility` block of LEADING risk), then "
         "mcp__desk__get_my_book to see what you hold; deepen with the macro mcp__bot__* desks and/or the web. "
         "Confirm any name with mcp__desk__get_quote. When done, call mcp__desk__submit_book ONCE with your "
         "COMPLETE target book — every ETF you want to hold, its weight (fraction of NAV), and a one-paragraph "
@@ -432,6 +489,12 @@ def _build_payload(asof: str, submission: dict | None, prices: dict, executed: l
         accountability = etf_outcomes.scorecard()    # forward track record vs SPY (resolved picks)
     except Exception:
         accountability = {}
+    fragility = {}
+    try:
+        from brain import etf_board
+        fragility = etf_board.build_fragility()      # LEADING risk — shown on the desk so de-grossing is explained
+    except Exception:
+        fragility = {}
     return {
         "as_of": asof,
         "portfolio_id": PORTFOLIO_ID,
@@ -441,6 +504,7 @@ def _build_payload(asof: str, submission: dict | None, prices: dict, executed: l
         "regime": _regime_dict(),
         "risk_state": risk.get("state"),
         "risk_reasons": risk.get("reasons"),
+        "fragility": fragility,
         "guardrails": guardrails,
         "accountability": accountability,
         "gross": gross,
