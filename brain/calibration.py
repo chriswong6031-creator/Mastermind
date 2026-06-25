@@ -355,6 +355,11 @@ def _pred_resolved_index() -> dict:
         for r in predictions._load_ledger():
             if r.get("status") != "resolved" or r.get("realized") is None:
                 continue
+            # PIN to the canonical horizon: the seats this index grades (strategist/pm) have a 21-bday
+            # economic horizon, and the ledger now carries multiple horizon tiers PER (ticker, date) —
+            # without this filter the short tiers would collide on the (tk, d) key and silently overwrite.
+            if int(r.get("horizon_d") or predictions._HORIZON) != predictions._HORIZON:
+                continue
             tk = str(r.get("ticker") or "").upper().strip()
             d = str(r.get("asof") or "")[:10]
             if tk and d:
@@ -479,6 +484,8 @@ def _universe_timing(asof: date, idx: dict) -> dict:
                 continue
             if str(r.get("dir") or "") != "up":
                 continue
+            if int(r.get("horizon_d") or predictions._HORIZON) != predictions._HORIZON:
+                continue   # canonical-horizon only (the short tiers are scored in predictions.score)
             d = str(r.get("asof") or "")[:10]
             if not d or not _elapsed(d, asof):
                 continue

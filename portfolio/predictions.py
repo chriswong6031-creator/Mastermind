@@ -32,7 +32,16 @@ _LEDGER = _PRED_DIR / "ledger.jsonl"
 _STOCKDATA = _ROOT / "vendor" / "macro" / "site" / "stockdata"
 _BREADTH = _ROOT / "vendor" / "macro" / "data" / "breadth"
 
-_HORIZON = 21          # business days — matches the conviction sleeve falsifier
+_HORIZON = 21          # business days — the CANONICAL tier (matches the conviction sleeve falsifier +
+                       # the calibration fast-arm, which is pinned to this horizon)
+# Short-horizon TIERS logged alongside the canonical 21-bday call. Each name carries one open
+# prediction PER horizon (deduped on (ticker, horizon)), so a 3-bday call re-enters ~7x more often
+# than the 21-bday one and the cross-sectional scorecard reaches independent-cluster significance in
+# WEEKS on the fast tiers instead of ~8 months — without leakage (each tier is graded over its own
+# window and date-clustered to NON-OVERLAPPING windows of that horizon). 21 stays canonical so the
+# id/scheme and the calibration fast-arm (brain/calibration._pred_resolved_index, pinned to _HORIZON)
+# are byte-unchanged.
+_HORIZONS = [3, 5, 10, 21]
 _MAX_RESOLVED = 60_000  # soft cap so the ledger can't grow without bound
 _MIN_NAMES_PER_DATE = 10   # rank_ic needs a real cross-section
 _MIN_DATES = 8             # INDEPENDENT (non-overlapping) clusters; also the newey_west n-floor
@@ -180,21 +189,26 @@ def _save_ledger(rows: list) -> None:
 
 
 def record(asof: str) -> dict:
-    """Open one prediction per name the engine has an opinion on (deduped while open, like the prod
-    ledger), then label every open prediction forward and resolve the matured ones. Returns coverage.
-    Best-effort; never raises."""
+    """Open one prediction per (name, HORIZON) the engine has an opinion on (deduped while open, like
+    the prod ledger), then label every open prediction forward and resolve the matured ones. Returns
+    coverage. Best-effort; never raises."""
     asof_iso = str(asof)[:10]
     ledger = _load_ledger()
-    open_subj = {r["ticker"] for r in ledger if r.get("status") == "open"}
+    # dedup on (ticker, horizon) so each horizon tier re-enters on its OWN clock. Legacy rows carry
+    # horizon_d=21 and id '...-pred', so they fold into the (tk, 21) canonical tier seamlessly.
+    open_keys = {(r["ticker"], int(r.get("horizon_d") or _HORIZON))
+                 for r in ledger if r.get("status") == "open"}
     for u in universe():
         tk = u["ticker"]
-        if tk in open_subj:
-            continue
-        ledger.append({"id": f"{asof_iso}-{tk}-pred", "ticker": tk, "asof": asof_iso,
-                       "dir": u["dir"], "score": u["score"], "band": u["band"],
-                       "prob": _prob(u["score"]), "entry_px": u["price"], "horizon_d": _HORIZON,
-                       "status": "open", "realized": None, "resolved_on": None})
-        open_subj.add(tk)
+        for h in _HORIZONS:
+            if (tk, h) in open_keys:
+                continue
+            pid = f"{asof_iso}-{tk}-pred" if h == _HORIZON else f"{asof_iso}-{tk}-pred{h}"
+            ledger.append({"id": pid, "ticker": tk, "asof": asof_iso,
+                           "dir": u["dir"], "score": u["score"], "band": u["band"],
+                           "prob": _prob(u["score"]), "entry_px": u["price"], "horizon_d": h,
+                           "status": "open", "realized": None, "resolved_on": None})
+            open_keys.add((tk, h))
     panel, spy = _load_panel(), _spy_series()
     if panel and spy is not None:
         for r in ledger:
@@ -216,10 +230,15 @@ def coverage(ledger: list | None = None) -> dict:
     by_dir = defaultdict(int)
     for r in ledger:
         by_dir[r.get("dir")] += 1
+    by_h: dict = defaultdict(lambda: {"open": 0, "resolved": 0})
+    for r in ledger:
+        h = int(r.get("horizon_d") or _HORIZON)
+        by_h[h]["resolved" if r.get("status") == "resolved" else "open"] += 1
     dates = sorted({r.get("asof") for r in ledger if r.get("asof")})
     res_dates = sorted({r.get("asof") for r in resolved})
     return {"n_total": len(ledger), "n_open": len(ledger) - len(resolved), "n_resolved": len(resolved),
-            "by_dir": dict(by_dir), "n_entry_dates": len(dates), "n_resolved_dates": len(res_dates),
+            "by_dir": dict(by_dir), "by_horizon": {str(h): dict(v) for h, v in sorted(by_h.items())},
+            "n_entry_dates": len(dates), "n_resolved_dates": len(res_dates),
             "first_date": dates[0] if dates else None, "last_date": dates[-1] if dates else None}
 
 
@@ -232,50 +251,55 @@ def _ci(mean, se, z=1.96):
         return None
 
 
-def _thin_independent(pairs: list) -> list:
+def _thin_independent(pairs: list, horizon: int = _HORIZON) -> list:
     """Keep ONE observation per ~horizon window so the kept series is (approximately) independent.
 
-    Predictions are entered near-daily but each is graded over a 21-business-day forward window, so
-    adjacent entry-dates' per-date stats OVERLAP and are serially correlated — pooling them with a
+    Predictions are entered near-daily but each is graded over a `horizon`-business-day forward window,
+    so adjacent entry-dates' per-date stats OVERLAP and are serially correlated — pooling them with a
     naive CI is overconfident (the exact bug the review caught). Thinning to ≥horizon-spaced dates
     makes each retained observation a genuinely independent time-cluster, so the pooled CI is honest
     and `effective_n` reflects the real number of independent clusters (the true bound on power —
-    breadth makes each cluster precise but cannot manufacture independent clusters). `pairs` is a
-    list of (date_iso, value); returns the kept values in date order. Greedy + deterministic."""
+    breadth makes each cluster precise but cannot manufacture independent clusters). A SHORTER horizon
+    therefore yields MORE independent clusters per calendar month — the whole point of the fast tiers.
+    `pairs` is a list of (date_iso, value); returns the kept values in date order. Greedy + det."""
     import numpy as np
     import pandas as pd
+    horizon = int(horizon or _HORIZON)
     kept, last = [], None
     for d, v in sorted(pairs, key=lambda x: x[0]):
         try:
             ts = pd.Timestamp(d)
         except Exception:  # noqa: BLE001
             continue
-        # non-overlapping ⇔ ≥ _HORIZON BUSINESS days since the last kept entry (windows are bday-based)
-        if last is None or int(np.busday_count(last.date(), ts.date())) >= _HORIZON:
+        # non-overlapping ⇔ ≥ `horizon` BUSINESS days since the last kept entry (windows are bday-based)
+        if last is None or int(np.busday_count(last.date(), ts.date())) >= horizon:
             kept.append(v)
             last = ts
     return kept
 
 
-def score(asof: str | None = None) -> dict:
-    """Cross-sectional, date-clustered scorecard over the resolved prediction log.
+def score(asof: str | None = None, horizon: int | None = None) -> dict:
+    """Cross-sectional, date-clustered scorecard over the resolved prediction log for ONE horizon tier.
 
     - IC: per entry-date rank-IC of ladder.score vs realized rel-return, pooled with a HAC t-stat.
     - Directional: pooled hit-rate (dir matches sign of rel-return) + Brier of the stated prob,
       with a date-clustered CI.
     - up_edge: mean rel-return of 'up' calls per date, HAC t (does 'up' actually outperform?).
     Every metric reports effective-n = # of independent entry-date clusters, not raw prediction count.
-    Returns an honest empty-but-valid block while it's still building."""
+    `horizon` selects the tier (default 21, the canonical); the date-clustering window matches it, so a
+    shorter tier reaches significance in far fewer calendar days. Honest empty-but-valid while building."""
+    horizon = int(horizon or _HORIZON)
     out = {"status": "building", "ic": {}, "directional": {}, "up_edge": {},
-           "effective_n": 0, "n_resolved": 0,
-           "note": f"clustered to independent ~{_HORIZON}-business-day windows"}
+           "effective_n": 0, "n_resolved": 0, "horizon_d": horizon,
+           "note": f"clustered to independent ~{horizon}-business-day windows"}
     try:
         import numpy as np
         import pandas as pd
         from engine.validation import rank_ic, newey_west_tstat, brier_reliability
 
         ledger = _load_ledger()
-        res = [r for r in ledger if r.get("status") == "resolved" and r.get("realized") is not None]
+        res = [r for r in ledger if r.get("status") == "resolved" and r.get("realized") is not None
+               and int(r.get("horizon_d") or _HORIZON) == horizon]
         out["n_resolved"] = len(res)
         if not res:
             return out
@@ -293,7 +317,7 @@ def score(asof: str | None = None) -> dict:
                              pd.Series([x["realized"] for x in rows]))
                 if ic == ic:                          # not NaN
                     ic_pairs.append((d, ic))
-        ics = _thin_independent(ic_pairs)
+        ics = _thin_independent(ic_pairs, horizon)
         out["effective_n"] = len(ics)
         if len(ics) >= _MIN_DATES:
             s = pd.Series(ics)
@@ -320,7 +344,7 @@ def score(asof: str | None = None) -> dict:
             hbd = defaultdict(list)
             for r, o in zip(dirrows, outs):
                 hbd[r["asof"]].append(o)
-            hits = _thin_independent([(d, float(np.mean(v))) for d, v in hbd.items() if v])
+            hits = _thin_independent([(d, float(np.mean(v))) for d, v in hbd.items() if v], horizon)
             nw = newey_west_tstat(pd.Series(hits), lags=_HAC_LAGS) if len(hits) >= _MIN_DATES else {}
             br = brier_reliability(probs, outs) if len(probs) >= 30 else {}
             out["directional"] = {
@@ -337,7 +361,7 @@ def score(asof: str | None = None) -> dict:
         for r in res:
             if r.get("dir") == "up":
                 ubd[r["asof"]].append(r["realized"])
-        ups = _thin_independent([(d, float(np.mean(v))) for d, v in ubd.items() if v])
+        ups = _thin_independent([(d, float(np.mean(v))) for d, v in ubd.items() if v], horizon)
         if len(ups) >= _MIN_DATES:
             s = pd.Series(ups)
             nw = newey_west_tstat(s, lags=_HAC_LAGS)
@@ -356,6 +380,9 @@ def score(asof: str | None = None) -> dict:
 
 
 def summary(asof: str | None = None) -> dict:
-    """Coverage + cross-sectional scorecard for /api/predictions."""
+    """Coverage + cross-sectional scorecard for /api/predictions. `scorecard` is the canonical 21-bday
+    tier (back-compat); `scorecards_by_horizon` carries every tier (3/5/10/21) so the dashboard can show
+    the fast tiers maturing first."""
     return {"coverage": coverage(), "scorecard": score(asof),
-            "horizon_d": _HORIZON, "min_dates": _MIN_DATES}
+            "scorecards_by_horizon": {str(h): score(asof, h) for h in _HORIZONS},
+            "horizons": _HORIZONS, "horizon_d": _HORIZON, "min_dates": _MIN_DATES}

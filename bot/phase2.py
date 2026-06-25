@@ -923,6 +923,19 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
     except Exception as _e:
         _rl_log(_run_id, "decision", "prediction log error", f"{_e!r}"[:160])
 
+    # ———— off-policy REJECTION log — the desk's NEGATIVE space, forward-graded ————
+    # Log every name the gate REJECTED (conviction veto / research hold / committee drop / timing
+    # withhold) with the policy's selection propensity, then forward-grade each vs SPY → the veto-regret
+    # read ("did the gate veto winners?") and, once ε-exploration is armed, off-policy value estimates.
+    # Isolated under data/shadow/rejections/; no LLM, no look-ahead. Best-effort.
+    try:
+        from portfolio import rejections as _rej
+        _rjc = _rej.record(asof, rejected=_rejected, held=research_held)
+        _rl_log(_run_id, "book_step", "rejection log updated",
+                f"open={_rjc.get('n_open')} resolved={_rjc.get('n_resolved')} total={_rjc.get('n_total')}")
+    except Exception as _e:
+        _rl_log(_run_id, "decision", "rejection log error", f"{_e!r}"[:160])
+
     # ———— forward-proof READINESS watcher — pings (persistent dashboard alert) the moment a
     #      forward threshold crosses (calibration n≥min, cross-sectional IC ≥ enough clusters, shadow
     #      books first resolved). Rides this daily heartbeat; once-per-crossing. Best-effort. ————

@@ -85,8 +85,24 @@ def test_record_dedups_while_open(sandbox, monkeypatch):
     P.record("2026-06-01")
     P.record("2026-06-02")                                  # same name, still open
     led = P._load_ledger()
-    assert len([r for r in led if r["ticker"] == "AAA"]) == 1
+    aaa = [r for r in led if r["ticker"] == "AAA"]
+    # one OPEN row per horizon tier, NOT duplicated across the two build days (dedup on (ticker,horizon))
+    assert len(aaa) == len(P._HORIZONS)
+    assert sorted(r["horizon_d"] for r in aaa) == sorted(P._HORIZONS)
     assert (sandbox / "ledger.jsonl").exists()
+
+
+def test_record_opens_one_canonical_id_per_name(sandbox, monkeypatch):
+    # the canonical 21-bday tier keeps the legacy '...-pred' id (back-compat with existing rows); the
+    # short tiers get '...-pred3/5/10'. This guarantees old 21-rows fold into the (tk,21) tier cleanly.
+    monkeypatch.setattr(P, "universe", lambda: [{"ticker": "AAA", "dir": "up", "score": 40,
+                                                 "band": "high", "price": 100.0}])
+    monkeypatch.setattr(P, "_load_panel", lambda: None)
+    monkeypatch.setattr(P, "_spy_series", lambda: None)
+    P.record("2026-06-01")
+    ids = {r["horizon_d"]: r["id"] for r in P._load_ledger() if r["ticker"] == "AAA"}
+    assert ids[21] == "2026-06-01-AAA-pred"
+    assert ids[3] == "2026-06-01-AAA-pred3"
 
 
 def test_record_resolves_matured(sandbox, monkeypatch):
@@ -168,7 +184,56 @@ def test_score_empty_is_valid(monkeypatch):
     assert sc["status"] == "building" and sc["n_resolved"] == 0
 
 
+def _resolved_h(score, realized, date, ticker, horizon, direction="up"):
+    return {"id": f"{date}-{ticker}-pred{horizon}", "ticker": ticker, "asof": date, "dir": direction,
+            "score": score, "band": "neutral", "prob": P._prob(score), "entry_px": 100.0,
+            "horizon_d": horizon, "status": "resolved", "realized": realized, "resolved_on": date}
+
+
+def test_fast_tier_matures_while_canonical_tier_is_empty(monkeypatch):
+    # 10 entry dates each 4 BUSINESS days apart (≥ the 3-bday window → all independent for the 3-tier).
+    # Rows are tagged horizon_d=3 ONLY. score(horizon=3) must reach 'scoring' (≥8 clusters) while
+    # score(horizon=21) sees no 21-tier rows → honestly 'building'. This is the fast-tier unlock.
+    import pandas as pd
+    dates = [d.strftime("%Y-%m-%d") for d in pd.bdate_range("2026-01-05", periods=40)[::4]]
+    rows = []
+    for d in dates:
+        for n in range(20):
+            sc = (n - 10) * 10
+            rows.append(_resolved_h(sc, sc / 1000.0, d, f"T{n}", 3, "up" if sc >= 0 else "down"))
+    monkeypatch.setattr(P, "_load_ledger", lambda: rows)
+    fast = P.score("2026-12-01", horizon=3)
+    slow = P.score("2026-12-01", horizon=21)
+    assert fast["status"] == "scoring" and fast["effective_n"] >= 8 and fast["horizon_d"] == 3
+    assert fast["ic"]["mean_ic"] > 0.5 and fast["ic"]["significant"] is True
+    assert slow["status"] == "building" and slow["n_resolved"] == 0   # no 21-tier rows → empty, honest
+
+
+def test_score_filters_strictly_by_horizon(monkeypatch):
+    # a 3-tier and a 21-tier row for the same name/date must not bleed into each other's scorecard
+    rows = [_resolved_h(50, 0.05, "2026-01-05", "AAA", 3),
+            _resolved_h(50, -0.09, "2026-01-05", "AAA", 21)]
+    monkeypatch.setattr(P, "_load_ledger", lambda: rows)
+    assert P.score("2026-06-01", horizon=3)["n_resolved"] == 1
+    assert P.score("2026-06-01", horizon=21)["n_resolved"] == 1
+
+
 def test_summary_shape(monkeypatch, sandbox):
     monkeypatch.setattr(P, "_load_ledger", lambda: [])
     s = P.summary("2026-06-21")
     assert "coverage" in s and "scorecard" in s and s["horizon_d"] == P._HORIZON
+    # per-horizon scorecards present, one per tier, each carrying its own horizon_d
+    assert set(s["scorecards_by_horizon"]) == {str(h) for h in P._HORIZONS}
+    assert s["scorecards_by_horizon"]["3"]["horizon_d"] == 3
+
+
+def test_calibration_index_pins_to_canonical_horizon(monkeypatch):
+    # the calibration fast-arm keys realized returns on (ticker, date); with the ledger now carrying
+    # multiple horizons per (ticker, date), the index MUST take only the canonical 21-tier or the short
+    # tiers would silently overwrite it. Guards brain/calibration._pred_resolved_index.
+    from brain import calibration as C
+    rows = [_resolved_h(50, 0.07, "2026-01-05", "AAA", 21),
+            _resolved_h(50, -0.20, "2026-01-05", "AAA", 3)]   # short-tier value must be ignored
+    monkeypatch.setattr(P, "_load_ledger", lambda: rows)
+    idx = C._pred_resolved_index()
+    assert idx.get(("AAA", "2026-01-05")) == 0.07            # the 21-tier value, not the 3-tier -0.20

@@ -177,11 +177,17 @@ def _loop_maintenance_job():
     asof = date.today().isoformat()
     asof_d = date.today()
 
-    # 1. universe-wide forward prediction log — reads the engine's published universe fresh and only
-    #    ADDS/labels (never liquidates), so it is always safe to run.
+    # 1. universe-wide forward prediction log + off-policy REJECTION log — both read fresh and only
+    #    ADD/label/grade (never liquidate), so they are always safe to run. rejections.record() with no
+    #    new items just forward-grades the open rejected names (a carried day still resolves matured ones).
     try:
         from portfolio import predictions
         predictions.record(asof)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from portfolio import rejections
+        rejections.record(asof)
     except Exception:  # noqa: BLE001
         pass
 
