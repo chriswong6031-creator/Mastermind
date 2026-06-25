@@ -119,6 +119,38 @@ def test_nvda_growth_leader_passes_gate():
     assert f["synthesis"]["size_authority"] == "up" and not f["synthesis"]["vetoes"]
 
 
+def test_flow_lens_direction_from_reliable_doi_only(monkeypatch):
+    """Options-flow DIRECTION comes ONLY from the reliable day-over-day ΔOI positioning — the SOFT
+    signed flow (signed_pc / net_premium sign) carries no directional weight. status is always
+    'context' (direction is soft-sourced even when positioning is reliable)."""
+    mm = {"names": {
+        "PUTHVY": {"net_doi": 0, "positioning_lean": None, "signed_pc": 2.9, "net_premium_mn": 400, "reliable": True},
+        "CALLBLD": {"net_doi": 1500000, "positioning_lean": "net new CALL positioning", "reliable": True},
+        "PUTBLD": {"net_doi": 1200000, "positioning_lean": "net new PUT positioning (defensive)", "reliable": True},
+        "NOPOS": {"net_doi": None, "net_premium_mn": 30},
+    }}
+    monkeypatch.setattr(lenses, "_load", lambda rel: mm if "flow/mastermind" in rel else None)
+    assert lenses._flow_row("PUTHVY")["direction"] == "neutral"   # soft put-heavy ignored (ΔOI flat)
+    assert lenses._flow_row("CALLBLD")["direction"] == "bull"
+    assert lenses._flow_row("PUTBLD")["direction"] == "bear"
+    assert lenses._flow_row("NOPOS")["direction"] == "neutral"    # magnitude context only, no direction
+    assert all(lenses._flow_row(t)["status"] == "context" for t in ("PUTHVY", "CALLBLD", "PUTBLD", "NOPOS"))
+    assert lenses._flow_row("UNKNOWN") is None
+
+
+def test_flow_lens_is_independent_and_never_sizes_alone():
+    """options_flow is INDEPENDENT evidence (not in the fund/macro blocs) and a lone flow-bull
+    among neutrals must NOT flip size_authority to 'up' (a single context vote « the 0.30 bar)."""
+    assert "options_flow" not in lenses._FUND_BLOC and "options_flow" not in lenses._MACRO_BLOC
+    fake = {"rows": [
+        {"lens": "options_flow", "direction": "bull", "value": {}, "status": "context"},
+        {"lens": "valuation", "direction": "neutral", "value": {}},
+        {"lens": "quality", "direction": "neutral", "value": {}},
+        {"lens": "conviction", "direction": "neutral", "value": {"band": "neutral"}},
+    ]}
+    assert lenses.synthesize(fake)["size_authority"] != "up"
+
+
 # ---------------- vol-regime context lens (subtract-only gross caution) ----------------
 def _vol_mm(regime="backwardation-stress", **extra):
     return {"schema": "vol_regime.context.v1", "regime": regime, "kill_switch": regime == "backwardation-stress",

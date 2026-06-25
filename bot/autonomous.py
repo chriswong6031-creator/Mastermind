@@ -92,24 +92,51 @@ def run_autonomous(asof: str | None = None, *, force: bool = False, armed: bool 
         if px and px > 0:
             prices[t] = px
 
-    # 4. EXECUTE — market-hours-aware. OPEN → rebalance to the target at the live mark; CLOSED (the
-    #    normal post-close run, or any off-hours run) → QUEUE the target to settle at the next open,
-    #    booking NO fills now. So the book never trades off-hours and re-running a closed session
-    #    can't churn it (bot/settle.py + the scheduler's open settle). Unpriceable names are skipped.
+    # 4. EXECUTE — market-hours-aware, with the safety de-gross firebreak applied to the target.
+    #    First the ONE risk firebreak over the free-form Brain: a SUBTRACT-ONLY safety de-gross — if
+    #    the Brain's target book measures fragile (deep drawdown / high beta / one-factor
+    #    concentration / low score), scale it down and let the freed weight stay cash. Never levers
+    #    up, never changes which names — risk control, not a second opinion on selection.
+    #    Then route the (possibly de-grossed) target through the market-hours-aware settle: OPEN →
+    #    rebalance to the target at the live mark; CLOSED (the normal post-close run, or any off-hours
+    #    run) → QUEUE the target to settle at the next open, booking NO fills now. So the book never
+    #    trades off-hours and re-running a closed session can't churn it (bot/settle.py + the
+    #    scheduler's open settle). Unpriceable names are skipped (and surfaced honestly).
     from bot import settle as _settle
     executed: list[dict] = []
     skipped: list[str] = []
     queued = False
+    _safety = None
+    _safety_overlay = {"gross_mult": 1.0}
     if decided:
+        priceable = {t: w for t, w in target.items() if t in prices}
         skipped = sorted(t for t in target if t not in prices)
-        res = _settle.execute_or_queue(PORTFOLIO_ID, target, prices, asof)
+        try:
+            from portfolio import safety as _safety_mod
+            if priceable:
+                _inv = round(sum(priceable.values()), 4)
+                _safety = _safety_mod.compute_safety(
+                    PORTFOLIO_ID, asof=asof, weights=priceable,
+                    cash_weight=round(max(0.0, 1.0 - _inv), 4), bootstrap=True, network=False)
+                _safety_overlay = _safety_mod.gross_overlay(_safety)
+                _gm = float(_safety_overlay.get("gross_mult", 1.0))
+                if _gm < 1.0:
+                    priceable = {t: round(w * _gm, 4) for t, w in priceable.items()}
+                _safety["overlay"] = {**_safety_overlay, "applied": _gm < 1.0}
+                try:
+                    _safety_mod.persist(_safety, PORTFOLIO_ID)
+                except Exception:
+                    pass
+        except Exception as e:                           # noqa: BLE001 — never block the book
+            out["safety_error"] = repr(e)[:200]
+        res = _settle.execute_or_queue(PORTFOLIO_ID, priceable, prices, asof)
         executed = res.get("executed") or []
         queued = bool(res.get("queued"))
         if res.get("error"):
             out["rebalance_error"] = res["error"]
         if executed:   # reconcile the rationale-bearing ledger only when fills actually happened
             ledger_positions = [{"ticker": t, "sleeve": SLEEVE, "weight": w, "entry_price": prices.get(t)}
-                                for t, w in target.items() if t in prices]
+                                for t, w in priceable.items()]
             try:
                 position_log.update(ledger_positions, asof, portfolio_id=PORTFOLIO_ID)
             except Exception:
@@ -127,6 +154,9 @@ def run_autonomous(asof: str | None = None, *, force: bool = False, armed: bool 
 
     # 6. publish the book contract + 7. append the daily decision log
     payload = _build_payload(asof, submission, prices, executed, skipped, brain)
+    payload["safety"] = _safety                  # consumed risk backtest (drove the de-gross)
+    payload["safety_overlay"] = _safety_overlay
+    out["safety_overlay"] = _safety_overlay
     try:
         from bridge import build_portfolio
         out["paths"] = build_portfolio.write(payload, portfolio_id=PORTFOLIO_ID)

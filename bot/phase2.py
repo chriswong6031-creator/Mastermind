@@ -741,7 +741,40 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
         except Exception as _e:
             _rl_log(_run_id, "decision", "macro risk wiring error", f"{_e!r}"[:160])
 
-    # ———— cash (sized after all exits) ————
+    # ———— safety overlay: SUBTRACT-ONLY de-gross of a fragile book (CONSUMED, not display) ————
+    # Measure the proposed book's risk (static-weight historical sim; local prices only so the
+    # build stays fast + deterministic) and, if it is fragile (deep drawdown / high beta /
+    # one-factor concentration / low score), scale every position down — the freed weight
+    # becomes cash. This is the safety read actually CHANGING the book, never levering it up.
+    # Runs LAST, on the post-exit book (after the Risk Officer + Macro Risk Officer passes), so the
+    # fragility read + the de-gross reflect the final set of held names.
+    _safety = None
+    _safety_overlay = {"gross_mult": 1.0}
+    try:
+        from portfolio import safety as _safety_mod
+        _pw = {p["ticker"]: p["weight"] for p in book}
+        if _pw:
+            _pre = round(sum(_pw.values()), 4)
+            _safety = _safety_mod.compute_safety(
+                portfolio_id="flagship", asof=asof, weights=_pw,
+                cash_weight=round(max(0.0, 1.0 - _pre), 4), bootstrap=True, network=False)
+            _safety_overlay = _safety_mod.gross_overlay(_safety)
+            _gm = float(_safety_overlay.get("gross_mult", 1.0))
+            if _gm < 1.0:
+                for p in book:
+                    p["weight"] = round(p["weight"] * _gm, 4)
+                    p["safety_degross"] = _gm
+                _rl_log(_run_id, "book_step", "safety de-gross",
+                        f"gross_mult={_gm} reasons={_safety_overlay.get('reasons')}")
+            _safety["overlay"] = {**_safety_overlay, "applied": True}   # the consumed action, on the report
+            try:
+                _safety_mod.persist(_safety, "flagship")     # so /api/risk serves it w/o recompute
+            except Exception:
+                pass
+    except Exception as _e:
+        _rl_log(_run_id, "decision", "safety overlay error", f"{_e!r}"[:160])
+
+    # ———— cash (sized after all exits + the safety de-gross) ————
     gross = round(sum(p["weight"] for p in book), 4)
     macro_implied_cash = round(max(0.0, 1.0 - gross), 4)
     cash = round(binding_cash(macro_implied_cash), 4)
@@ -753,6 +786,11 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
     # ———— detectors (on the post-exit book) ————
     fired = detectors.d3_no_rotation_capacity(cash, top_theme_conc, "self") + \
         detectors.d6_cap_breach(capped["breaches"], "self") + _d5_fired + _d124_fired
+    try:                                              # D7 = whole-book fragility (from the safety read)
+        from portfolio import safety as _safety_mod
+        fired += _safety_mod.fragility_detectors(_safety, "self")
+    except Exception:
+        pass
 
     if fired:
         _rl_log(_run_id, "decision", "detectors fired",
@@ -993,6 +1031,8 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
         "positions": book, "decisions": decisions, "detectors": fired, "track_record": tr,
         "rejected": _rejected,
         "research_held": research_held,
+        "safety": _safety,                  # the consumed risk backtest (drives the de-gross below)
+        "safety_overlay": _safety_overlay,  # {gross_mult, cash_added, reasons} actually applied
         "llm_used": bool(_armed_ok),
         # market-hours discipline: whether this book is live-traded or queued for the next open
         "market_status": "open" if _market_open else "closed",
@@ -1016,6 +1056,7 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
 
     return {"ran": True, "triggers": decision["triggers"], "book": book, "sleeves": payload["sleeves"],
             "detectors": fired, "track_record": tr, "paths": paths, "llm_used": payload["llm_used"],
+            "safety": _safety, "safety_overlay": _safety_overlay,
             "research": research_out, "research_held": research_held, "run_id": _run_id}
 
 

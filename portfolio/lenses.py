@@ -499,10 +499,11 @@ def _name_rows(t: str) -> list[dict]:
     gx = _load(f"site/gex/{t}.json")
     ad = _altdata_row(t)                 # political/insider/contract flow — independent of stockdata
     nw = _news_row(t)                    # public-record financial news flow — context only
+    fl = _flow_row(t)                    # options flow: magnitude context + reliable ΔOI positioning
     rows = []
     if not d:
-        # a Trump-linked entity (ABTC/DJT/...) may carry alt-data flow but no S&P stockdata
-        base = ([ad] if ad else []) + ([nw] if nw else [])
+        # a Trump-linked entity (ABTC/DJT/...) may carry alt-data / options flow but no S&P stockdata
+        base = ([ad] if ad else []) + ([nw] if nw else []) + ([fl] if fl else [])
         return base + [_row("conviction", None, "missing", None, "no stockdata")]
 
     # valuation — GROWTH-ADJUSTED (the NVDA false-reject fix). The raw value-factor z (built from
@@ -658,6 +659,9 @@ def _name_rows(t: str) -> list[dict]:
     # news-flow: public-record financial news (context)
     if nw:
         rows.append(nw)
+    # options flow: magnitude + reliable ΔOI positioning (context; independent confluence vote)
+    if fl:
+        rows.append(fl)
     # name -> theme via basket membership: narrative + policy
     rows += _theme_context_for_name(d)
     rows += _macro_rows()
@@ -748,6 +752,58 @@ def _policy_row(theme_id: str) -> dict:
 
 
 # ---------------- macro lenses (shared) ----------------
+def _flow_mastermind() -> dict:
+    """The per-name options-flow context block (macro engine/options_flow -> site/flow/
+    mastermind.json, schema options_flow.context.v1). {} when absent (vendor/macro not yet
+    rebuilt with the FLOW desk)."""
+    return ((_load("site/flow/mastermind.json") or _load("data/flow/mastermind.json") or {})
+            .get("names") or {})
+
+
+def _flow_row(t: str):
+    """Per-name options FLOW — CONTEXT-only, magnitude-led. The desk's hard-won reliability
+    contract (macro research/OPTIONS_FLOW_DATA.md): single-name flow DIRECTION from the minute
+    tape is SOFT (tick-rule signing, no NBBO — signing_gate.direction_reliable=False), so net
+    signed premium / signed P/C carry NO directional weight here. Direction is taken ONLY from
+    the RELIABLE day-over-day ΔOI positioning (net_doi / positioning_lean): net NEW call
+    positioning -> bull, net NEW put (defensive) positioning -> bear, else neutral. ΔOI is null
+    until >=2 trading-day OI snapshots accrue, so most names vote NEUTRAL today and sharpen
+    forward. Magnitude (premium / fresh contracts / 0DTE / gamma exposure) rides along as
+    context. status='context' ALWAYS — never 'validated' (direction is soft-sourced even when
+    positioning is reliable). Absent name -> None (omitted, never imputed). It is INDEPENDENT
+    evidence (NOT in _FUND_BLOC/_MACRO_BLOC) — one de-correlated confluence vote, never sizes
+    alone (a lone flow-bull among neutrals yields confluence « the 0.30 size-up bar)."""
+    rec = _flow_mastermind().get((t or "").upper())
+    if not rec:
+        return None
+    net_doi = rec.get("net_doi")
+    lean = (rec.get("positioning_lean") or "")
+    reliable = rec.get("reliable", net_doi is not None)
+    leanU = str(lean).upper()
+    # direction from RELIABLE ΔOI positioning ONLY (never from signed_pc / delta_flow sign)
+    direction = "neutral"
+    if reliable and net_doi:
+        if "PUT" in leanU or "BEAR" in leanU or "DEFENSIVE" in leanU:
+            direction = "bear"
+        elif "CALL" in leanU or "BULL" in leanU or net_doi > 0:
+            direction = "bull"
+    bits = []
+    if rec.get("net_premium_mn") is not None:
+        bits.append(f"${rec['net_premium_mn']:.0f}M net prem")
+    if rec.get("fresh_contracts"):
+        bits.append(f"{rec['fresh_contracts']} new")
+    if lean:
+        bits.append(str(lean))
+    note = " · ".join(bits)[:120]
+    value = {
+        "net_doi": net_doi, "doi_pc": rec.get("doi_pc"), "positioning_lean": lean or None,
+        "net_premium_mn": rec.get("net_premium_mn"), "fresh_contracts": rec.get("fresh_contracts"),
+        "zerodte_share": rec.get("zerodte_share"), "gamma_flow_bn": rec.get("gamma_flow_bn"),
+        "positioning_reliable": bool(reliable), "asof": rec.get("asof"),
+    }
+    return _row("options_flow", value, "context", direction, note)
+
+
 def _vol_regime_row() -> dict:
     """The validated INDEX vol-regime (engine/vol_regime -> site/vol/mastermind.json, schema
     vol_regime.context.v1). CONTEXT-only and SUBTRACT-ONLY: it votes BEAR (nudges gross DOWN)

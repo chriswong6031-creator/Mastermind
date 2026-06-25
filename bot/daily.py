@@ -35,6 +35,11 @@ def run_daily(asof: str | None = None, *, force: bool = False, armed: bool = Tru
     except Exception as e:
         out["book"] = {"error": str(e)[:200]}
 
+    # NOTE: the flagship book's safety scorecard is computed + CONSUMED inside phase2 (it
+    # de-grosses a fragile book before sizing cash) and persisted to data/portfolio/safety.json.
+    # Other books' safety is computed on demand by the /api/risk endpoint (cached). So there is
+    # no separate safety step here — safety is part of the book build, not a bolt-on display pass.
+
     # 2. armed regime/theme research -> gated ledger (needs a Claude credential)
     if armed:
         try:
@@ -82,6 +87,10 @@ if __name__ == "__main__":
     b = o.get("book", {})
     print("book:", "ran" if b.get("ran") else b.get("reason", b.get("error")),
           "| sleeves:", b.get("sleeves"))
+    _sf = (b or {}).get("safety") or {}
+    _ov = (b or {}).get("safety_overlay") or {}
+    print("safety:", f"score={_sf.get('safety_score')}({_sf.get('grade')})",
+          f"gross_mult={_ov.get('gross_mult')}", f"reasons={_ov.get('reasons')}")
     r = o.get("research", {})
     print("research:", (r.get("ingest") or {}).get("ingested", r.get("error")), "theses ingested")
     c = o.get("competitor", {})
