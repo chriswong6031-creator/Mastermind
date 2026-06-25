@@ -190,6 +190,14 @@ def _loop_maintenance_job():
         rejections.record(asof)
     except Exception:  # noqa: BLE001
         pass
+    # 1c. retrain the fast statistical STUDENT (CatBoost) on the resolved universe log (#3) — nightly,
+    #     cheap, LLM-free, walk-forward OOS, degrade-safe (no-op without catboost / enough resolved rows).
+    #     Its calibrated read feeds the Brain prompts (flag-gated MASTERMIND_STUDENT).
+    try:
+        from brain import student
+        student.train(asof)
+    except Exception:  # noqa: BLE001
+        pass
 
     # 2. parallel forward shadow books + desk-lever A/B — re-derive (or HOLD on a carried day) + mark
     #    forward. The empty-inputs guard inside run() prevents a no-decision day from liquidating them.

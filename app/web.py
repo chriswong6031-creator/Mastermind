@@ -1117,6 +1117,21 @@ def api_shadow_bandit() -> JSONResponse:
         return JSONResponse({"status": "building", "arms": [], "error": str(exc)})
 
 
+@router.get("/api/student")
+def api_student() -> JSONResponse:
+    """The fast statistical STUDENT (#3, CatBoost) — its latest training metrics (OOS rank-IC, hit-rate,
+    feature importances) + the current top predicted-edge names. 'unavailable' without catboost,
+    'building' until the universe log accrues resolved rows. Read-only; best-effort."""
+    try:
+        import bot  # noqa: F401 — bootstraps vendor/macro for the price panel
+        from brain import student
+        out = student.summary()
+        out["top_predicted"] = student.predict(top=12)
+        return JSONResponse(out)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"status": "building", "top_predicted": [], "error": str(exc)})
+
+
 @router.get("/api/engine_backtest")
 def api_engine_backtest() -> JSONResponse:
     """Historical engine-backtest verdict — the HIGH-statistical-power, leakage-free read on the
