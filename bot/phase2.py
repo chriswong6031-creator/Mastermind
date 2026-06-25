@@ -315,6 +315,7 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
     gate_info: dict[str, dict] = {}          # ticker -> {full, paper, breakdown, research_block}
     confirmed_sized: list[dict] = []
     research_held: list[dict] = []
+    _explored: list[dict] = []               # borderline rejects ε-EXPLORE-bought this run (#2 OPE)
     # ── shadow-book decision inputs: one self-contained record per evaluated candidate so the
     #    forward shadow books (portfolio.shadow_books) can replay TODAY under counterfactual policies
     #    (committee on/off, calibration on/off, alt sizing) WITHOUT re-running any LLM — purely from
@@ -345,6 +346,32 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
             "rs": _tech["rs"], "urgency": _tech["urgency"],
             "eq_grade": _tech["eq_grade"], "parabolic": _tech["parabolic"],
         })
+
+    def _maybe_explore(ticker, c, breakdown, research_block, stage, reason, *,
+                       committee_block=None, sentinel=None, price=None, is_new=True):
+        """ε-EXPLORATION (#2, flag-gated OFF): with probability ε, BUY a BORDERLINE reject (a committee
+        drop / timing withhold — both already cleared conviction+research-confirm) at a floor weight
+        instead of dropping it, so its forward outcome makes the gate's off-policy value estimable. The
+        draw is DETERMINISTIC per (ticker, asof) so phase2 reruns are idempotent. Returns True iff the
+        name was promoted to a buy (caller should `continue`). Inert (always False) unless
+        MASTERMIND_SELECTION_EXPLORE is armed — so the live buy path is byte-identical by default. Never
+        raises into the gate."""
+        try:
+            from portfolio import rejections as _rej_mod
+            if not _rej_mod.explore_buy(ticker, asof, stage):
+                return False
+            ew = _rej_mod._explore_weight()
+            confirmed_sized.append({**c, "weight": ew, "research": research_block,
+                                    "explored": True, "explore_stage": stage})
+            _explored.append({"ticker": ticker, "stage": stage, "reason": "explore: " + (reason or ""),
+                              "combined": breakdown.get("combined"), "confluence": c.get("confluence")})
+            _emit_shadow(ticker, c, breakdown, forge_confirmed=True, weight_prod=ew,
+                         committee_block=committee_block, sentinel=sentinel, price=price, is_new=is_new)
+            _rl_log(_run_id, "decision", f"EXPLORE BUY {ticker}",
+                    f"{stage} explored at {ew} (eps); {reason}", ticker=ticker)
+            return True
+        except Exception:  # noqa: BLE001 — exploration is additive; never break the gate
+            return False
 
     for c in sized:
         t = c["ticker"]
@@ -390,6 +417,9 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
                 from portfolio import watchlist as _watchlist
                 _twreason = _watchlist.timing_withhold(_entry_tech_fields(t))
                 if _twreason:
+                    if _maybe_explore(t, c, breakdown, research_block, "timing_withhold", _twreason,
+                                      price=px, is_new=is_new):
+                        continue
                     research_held.append({"ticker": t, "reason": "timing withhold: " + _twreason,
                                           **research_block})
                     _emit_shadow(t, c, breakdown, forge_confirmed=True, weight_prod=0.0,
@@ -419,6 +449,10 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
                         _sent = {k: _sv.get(k) for k in ("stance", "raw_confidence", "confidence")} \
                             if _sv else None
                         if cm.get("action") == "drop":
+                            if _maybe_explore(t, c, breakdown, research_block, "committee_drop",
+                                              cm.get("rationale", ""), committee_block=committee_block,
+                                              sentinel=_sent, price=px, is_new=is_new):
+                                continue
                             research_held.append({"ticker": t, "reason": "committee: " + cm.get("rationale", ""),
                                                   **research_block, "committee": committee_block})
                             _emit_shadow(t, c, breakdown, forge_confirmed=True, weight_prod=0.0,
@@ -930,7 +964,7 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
     # Isolated under data/shadow/rejections/; no LLM, no look-ahead. Best-effort.
     try:
         from portfolio import rejections as _rej
-        _rjc = _rej.record(asof, rejected=_rejected, held=research_held)
+        _rjc = _rej.record(asof, rejected=_rejected, held=research_held, explored=_explored)
         _rl_log(_run_id, "book_step", "rejection log updated",
                 f"open={_rjc.get('n_open')} resolved={_rjc.get('n_resolved')} total={_rjc.get('n_total')}")
     except Exception as _e:

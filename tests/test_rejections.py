@@ -108,11 +108,62 @@ def test_propensity_positive_for_borderline_when_armed(sandbox, monkeypatch):
     _no_grade(monkeypatch)
     monkeypatch.setenv("MASTERMIND_SELECTION_EXPLORE", "1")
     monkeypatch.setenv("MASTERMIND_EXPLORE_EPS", "0.05")
-    R.record("2026-06-01", rejected=[_veto("PARA")],          # hard veto → still 0
-             held=[_held("AAA", "Insufficient research conviction")])  # soft reject → eps
+    R.record("2026-06-01", rejected=[_veto("PARA")],                       # hard veto → 0
+             held=[_held("CMT", "committee: bear case dominates"),         # borderline → eps
+                   _held("RH", "Insufficient research conviction")])       # research hold → 0
     led = {r["ticker"]: r for r in R._load_ledger()}
-    assert led["AAA"]["propensity"] == 0.05 and led["AAA"]["policy"] == "epsilon_greedy"
-    assert led["PARA"]["propensity"] == 0.0                   # conviction vetoes are never explored
+    assert led["CMT"]["propensity"] == 0.05 and led["CMT"]["policy"] == "epsilon_greedy"
+    assert led["RH"]["propensity"] == 0.0          # research holds are not borderline-explorable
+    assert led["PARA"]["propensity"] == 0.0        # conviction vetoes are never explored
+
+
+# ── explore_buy (deterministic, flag- + stage-gated) ──────────────────────────────
+def test_draw_is_deterministic_and_bounded():
+    assert R._draw("AAA", "2026-06-01") == R._draw("AAA", "2026-06-01")
+    assert 0.0 <= R._draw("AAA", "2026-06-01") < 1.0
+    assert R._draw("AAA", "2026-06-01") != R._draw("BBB", "2026-06-01")   # varies by ticker
+
+
+def test_explore_buy_off_by_default(sandbox, monkeypatch):
+    monkeypatch.delenv("MASTERMIND_SELECTION_EXPLORE", raising=False)
+    monkeypatch.setattr(R, "_draw", lambda tk, asof: 0.0)                 # would explore IF armed
+    assert R.explore_buy("AAA", "2026-06-01", "committee_drop") is False  # disarmed → never
+
+
+def test_explore_buy_stage_gated_when_armed(sandbox, monkeypatch):
+    monkeypatch.setenv("MASTERMIND_SELECTION_EXPLORE", "1")
+    monkeypatch.setenv("MASTERMIND_EXPLORE_EPS", "0.05")
+    monkeypatch.setattr(R, "_draw", lambda tk, asof: 0.0)                 # draw < eps → explore
+    assert R.explore_buy("AAA", "2026-06-01", "committee_drop") is True
+    assert R.explore_buy("AAA", "2026-06-01", "timing_withhold") is True
+    assert R.explore_buy("AAA", "2026-06-01", "research_hold") is False   # not borderline
+    assert R.explore_buy("AAA", "2026-06-01", "conviction_veto") is False # hard veto never explored
+    monkeypatch.setattr(R, "_draw", lambda tk, asof: 0.99)               # draw > eps → no explore
+    assert R.explore_buy("AAA", "2026-06-01", "committee_drop") is False
+
+
+def test_explore_weight_clears_new_position_floor():
+    # explored buys must be >= master's MASTERMIND_MIN_POSITION_FRAC (0.5%) or paper_account drops them
+    assert R._explore_weight() >= 0.005
+
+
+def test_explored_buy_logged_and_scored_separately(sandbox, monkeypatch):
+    monkeypatch.setenv("MASTERMIND_SELECTION_EXPLORE", "1")
+    monkeypatch.setenv("MASTERMIND_EXPLORE_EPS", "0.05")
+    rels = {"AAA": 0.06, "BBB": 0.04}   # both beat SPY: AAA was explore-bought, BBB was rejected
+    monkeypatch.setattr("brain.outcomes.label_thesis",
+                        lambda t, asof=None: {"resolved": True, "rel_return": rels[t["subject"]]})
+    R.record("2026-06-01",
+             held=[_held("BBB", "committee: bear")],
+             explored=[{"ticker": "AAA", "stage": "committee_drop", "reason": "bear", "combined": 70}])
+    led = {r["ticker"]: r for r in R._load_ledger()}
+    assert led["AAA"]["action"] == "explored_buy" and led["AAA"]["propensity"] == 0.05
+    assert led["BBB"]["action"] == "reject"
+    sc = R.scorecard("2026-06-21")
+    assert sc["explored_cohort"]["n"] == 1 and sc["explored_cohort"]["paid_rate"] == 1.0
+    # veto-regret is computed over REJECTS only — the explored buy must not pollute it
+    assert sc["veto_regret_rate"] == 1.0
+    assert sc["by_stage"].get("committee_drop", {}).get("n") == 1
 
 
 # ── veto-regret scorecard ─────────────────────────────────────────────────────────

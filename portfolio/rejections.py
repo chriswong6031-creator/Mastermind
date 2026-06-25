@@ -20,6 +20,7 @@ Best-effort throughout — never breaks the build.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from collections import defaultdict
@@ -33,7 +34,12 @@ _LEDGER = _DIR / "ledger.jsonl"
 _HORIZON = 21              # business days — matches the conviction falsifier (what these names competed for)
 _MAX_RESOLVED = 60_000     # soft cap so the ledger can't grow without bound
 _MIN_RESOLVED = 20         # below this the scorecard is honestly 'building'
-_SOFT_STAGES = ("research_hold", "committee_drop", "timing_withhold")   # explorable (not hard vetoes)
+# Stages eligible for ε-EXPLORATION (an actual floor-weight buy of a rejected name, to make off-policy
+# value estimable). ONLY the truly-borderline "confirmed-then-dropped" stages: a committee drop and a
+# timing withhold both already CLEARED conviction + research-confirm and were dropped by a soft overlay.
+# research_hold spans non-confirmed names, and hard conviction vetoes (parabolic/distress/downtrend) are
+# safety rules — neither is ever explored. See docs/design/desk/OFF_POLICY_EXPLORATION.md.
+_EXPLORE_STAGES = ("committee_drop", "timing_withhold")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -53,12 +59,40 @@ def _explore_eps() -> float:
         return 0.05
 
 
+def _explore_weight() -> float:
+    """Target weight for an EXPLORED buy. Must clear master's new-position floor
+    (MASTERMIND_MIN_POSITION_FRAC, default 0.5% NAV) or paper_account would silently drop it as
+    sub-floor — so default 0.6% and never below 0.5%."""
+    try:
+        return max(0.005, min(0.05, float(os.environ.get("MASTERMIND_EXPLORE_WEIGHT", "0.006"))))
+    except (TypeError, ValueError):
+        return 0.006
+
+
+def _draw(ticker: str, asof) -> float:
+    """A DETERMINISTIC uniform draw in [0,1) from (ticker, asof). Deterministic (not random.random) so a
+    re-run of the same build day makes the SAME exploration choice — idempotent across phase2 reruns and
+    the loop_maintenance re-grade, and reproducible/auditable. Uses sha1 (hash() is process-salted)."""
+    h = hashlib.sha1(f"{(ticker or '').upper()}|{str(asof)[:10]}".encode()).hexdigest()
+    return int(h[:8], 16) / float(0xFFFFFFFF)
+
+
+def explore_buy(ticker: str, asof, stage: str) -> bool:
+    """Should the desk EXPLORE-buy this rejected name? True iff exploration is armed
+    (MASTERMIND_SELECTION_EXPLORE), the stage is borderline (committee_drop / timing_withhold), and the
+    deterministic draw falls under ε. Default OFF → always False → the live buy path is byte-identical."""
+    eps = _explore_eps()
+    if not eps or stage not in _EXPLORE_STAGES:
+        return False
+    return _draw(ticker, asof) < eps
+
+
 def _propensity(stage: str, eps: float) -> float:
-    """The logged P(buy | rejected candidate) under the CURRENT selection policy. Deterministic greedy
-    desk → 0.0 (the name was not selectable). With ε-exploration armed, BORDERLINE soft-rejects carry
-    propensity ε (the rate at which the policy would have explored them); hard conviction vetoes are
-    never explored, so they stay 0.0. OPE value-estimation needs this > 0 (see the design note)."""
-    if eps and stage in _SOFT_STAGES:
+    """The logged exploration probability P(explore-buy | candidate) under the CURRENT policy. 0.0 for a
+    deterministic greedy desk (the name was not selectable). With ε armed, BORDERLINE rejects
+    (committee_drop / timing_withhold) carry ε; hard vetoes and research holds stay 0.0. OPE value
+    estimation needs this > 0 on the explored cohort (see the design note)."""
+    if eps and stage in _EXPLORE_STAGES:
         return round(float(eps), 4)
     return 0.0
 
@@ -120,33 +154,43 @@ def _grade(ticker: str, entry_iso: str, horizon: int, asof: date) -> float | Non
 # ─────────────────────────────────────────────────────────────────────────────
 # driver — open one row per newly-rejected name (deduped while open), grade matured ones
 # ─────────────────────────────────────────────────────────────────────────────
-def record(asof: str, rejected: list | None = None, held: list | None = None) -> dict:
+def record(asof: str, rejected: list | None = None, held: list | None = None,
+           explored: list | None = None) -> dict:
     """Sync the rejection ledger: open one row per newly-rejected name (deduped while open, like the
     prod ledger), then forward-grade every open row and resolve the matured ones. `rejected` is the
     conviction-gate veto list ({ticker, reason, vetoes, bear, confluence}); `held` is the research-gate
-    hold list ({ticker, reason, **research_block, [committee]}). Both may be omitted (a carried day just
-    grades open rows forward). Returns coverage. Best-effort; never raises."""
+    hold list ({ticker, reason, **research_block, [committee]}); `explored` is the borderline rejects the
+    desk ε-EXPLORE-BOUGHT this run ({ticker, stage, reason, ...}) — logged action='explored_buy' at
+    propensity ε so their forward outcome makes the off-policy value estimable. All may be omitted (a
+    carried day just grades open rows forward). Returns coverage. Best-effort; never raises."""
     try:
         asof_iso = str(asof)[:10]
         ledger = _load_ledger()
         open_subj = {r["ticker"] for r in ledger if r.get("status") == "open"}
         eps = _explore_eps()
-        for stage, items in (("conviction_veto", rejected or []), (None, held or [])):
+        # (action, default_stage, items) — explored buys are NOT rejects: they were actually bought.
+        batches = (
+            ("reject", "conviction_veto", rejected or []),
+            ("reject", None, held or []),
+            ("explored_buy", None, explored or []),
+        )
+        for action, default_stage, items in batches:
             for it in items:
                 if not isinstance(it, dict):
                     continue
                 tk = (it.get("ticker") or "").upper().strip()
                 if not tk or tk in open_subj:
                     continue
-                st = stage or _held_stage(it.get("reason"))
+                st = it.get("stage") or default_stage or _held_stage(it.get("reason"))
                 score = it.get("combined")
                 if score is None:
                     score = it.get("confluence")
+                prop = round(float(eps), 4) if action == "explored_buy" else _propensity(st, eps)
                 ledger.append({
                     "id": f"{asof_iso}-{tk}-rej", "ticker": tk, "asof": asof_iso,
-                    "stage": st, "reason": (it.get("reason") or "")[:200],
+                    "action": action, "stage": st, "reason": (it.get("reason") or "")[:200],
                     "score": score, "confluence": it.get("confluence"),
-                    "propensity": _propensity(st, eps),
+                    "propensity": prop,
                     "policy": "epsilon_greedy" if eps else "deterministic",
                     "horizon_d": _HORIZON, "status": "open", "realized": None, "resolved_on": None})
                 open_subj.add(tk)
@@ -180,26 +224,35 @@ def coverage(ledger: list | None = None) -> dict:
 
 
 def scorecard(asof: str | None = None) -> dict:
-    """The veto-regret / false-negative read over RESOLVED rejected names: how often a name the desk
-    rejected went on to BEAT SPY (a false negative the gate should have caught), split by reject stage.
-    Descriptive (rates + n), not a significance claim — overlapping windows make it serially correlated,
-    so it reports counts, not a t-stat. 'building' until enough resolves."""
+    """The veto-regret / false-negative read over RESOLVED REJECTED names: how often a name the desk
+    rejected went on to BEAT SPY (a false negative the gate should have caught), split by reject stage —
+    plus the EXPLORED-BUY cohort (borderline rejects the desk actually ε-bought) so you can see whether
+    exploring them paid. Descriptive (rates + n), not a significance claim — overlapping windows make it
+    serially correlated, so it reports counts, not a t-stat. 'building' until enough resolves."""
     ledger = _load_ledger()
     res = [r for r in ledger if r.get("status") == "resolved" and r.get("realized") is not None]
+    rejects = [r for r in res if r.get("action", "reject") == "reject"]
+    explored = [r for r in res if r.get("action") == "explored_buy"]
     out = {"status": "building", "n_resolved": len(res), "n_open": len(ledger) - len(res),
            "horizon_d": _HORIZON, "veto_regret_rate": None, "avg_rel_return": None, "by_stage": {},
+           "explored_cohort": {"n": 0, "paid_rate": None, "avg_rel": None},
            "note": "veto_regret_rate = fraction of REJECTED names that beat SPY (gate said no, tape said yes)"}
-    if not res:
-        return out
-    rels = [r["realized"] for r in res]
-    out["avg_rel_return"] = round(sum(rels) / len(rels), 4)
-    out["veto_regret_rate"] = round(sum(1 for x in rels if x > 0) / len(rels), 3)
-    for st in sorted({r.get("stage") for r in res if r.get("stage")}):
-        b = [r["realized"] for r in res if r.get("stage") == st]
-        out["by_stage"][st] = {"n": len(b),
-                               "beat_spy_rate": round(sum(1 for x in b if x > 0) / len(b), 3),
-                               "avg_rel": round(sum(b) / len(b), 4)}
-    out["status"] = "scoring" if len(res) >= _MIN_RESOLVED else "building"
+    if rejects:
+        rels = [r["realized"] for r in rejects]
+        out["avg_rel_return"] = round(sum(rels) / len(rels), 4)
+        out["veto_regret_rate"] = round(sum(1 for x in rels if x > 0) / len(rels), 3)
+        for st in sorted({r.get("stage") for r in rejects if r.get("stage")}):
+            b = [r["realized"] for r in rejects if r.get("stage") == st]
+            out["by_stage"][st] = {"n": len(b),
+                                   "beat_spy_rate": round(sum(1 for x in b if x > 0) / len(b), 3),
+                                   "avg_rel": round(sum(b) / len(b), 4)}
+    if explored:
+        erels = [r["realized"] for r in explored]
+        out["explored_cohort"] = {"n": len(explored),
+                                  "paid_rate": round(sum(1 for x in erels if x > 0) / len(erels), 3),
+                                  "avg_rel": round(sum(erels) / len(erels), 4)}
+    if res:
+        out["status"] = "scoring" if len(res) >= _MIN_RESOLVED else "building"
     if isinstance(asof, str):
         out["as_of"] = asof[:10]
     return out
