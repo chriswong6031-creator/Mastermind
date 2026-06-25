@@ -155,6 +155,87 @@ def _cio_weekly_job():
         pass
 
 
+def _loop_maintenance_job():
+    """Advance the FORWARD-LEARNING substrate every trading day — independent of the flagship's
+    material-change gate.
+
+    The flagship build (bot.phase2) hosts the whole accountability/learning loop: the parallel
+    forward SHADOW A/B books, the desk-lever A/B, the universe-wide PREDICTION log, the OUTCOME-LEDGER
+    resolution, and the track-record + empirical-CALIBRATION refresh. But all of that lives AFTER
+    phase2's material-change gate — so on a carried-forward day it never runs and the forward clocks
+    freeze (observed: the shadow books advanced on 3 of 6 sessions while the live book advanced
+    daily). That starves the very flywheel the system is meant to grow over months.
+
+    This job re-runs the gate-INDEPENDENT, prod-ISOLATED, degrade-safe pieces after the evening builds
+    so matured theses resolve ON TIME and the A/B NAV curves tick every session. It NEVER trades and
+    never touches prod book/cash/position state. Best-effort per step (one failure can't sink the
+    others) and never raises into the scheduler. Runs Mon–Fri at 23:45 UTC, after the flagship
+    (22:40) + autonomous (23:10) + heavyweight (23:25) builds: on a rebuild day it picks up today's
+    fresh decision inputs; on a carried day the shadow/desk-A/B runs HOLD + re-mark (empty-inputs
+    guard) instead of liquidating."""
+    from datetime import date
+    asof = date.today().isoformat()
+    asof_d = date.today()
+
+    # 1. universe-wide forward prediction log — reads the engine's published universe fresh and only
+    #    ADDS/labels (never liquidates), so it is always safe to run.
+    try:
+        from portfolio import predictions
+        predictions.record(asof)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 2. parallel forward shadow books + desk-lever A/B — re-derive (or HOLD on a carried day) + mark
+    #    forward. The empty-inputs guard inside run() prevents a no-decision day from liquidating them.
+    try:
+        from portfolio import shadow_books
+        shadow_books.run(asof)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from portfolio import desk_ab
+        desk_ab.run(asof)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 3. grade matured theses ONCE via the entry→horizon path-replay grader, then fan the result into
+    #    (a) the OUTCOME LEDGER (reliability + lens-edge substrate), (b) the Brier TRACK RECORD + prod
+    #    ledger close, and (c) the empirical CALIBRATION refresh — so the perception→outcome loop
+    #    advances every trading day, not only on a flagship rebuild. Each step is idempotent.
+    try:
+        from brain import outcomes as _outcomes
+        realized = _outcomes.realized_returns(asof_d)
+    except Exception:  # noqa: BLE001
+        realized = {}
+    try:
+        from brain import outcome_ledger
+        outcome_ledger.resolve(asof, realized=realized)     # {} → no-op; shares the same grader
+    except Exception:  # noqa: BLE001
+        pass
+    if realized:
+        try:
+            from brain import scorer as _scorer, ledger as _ledger
+            from data_layer import store as _store
+            tr = _scorer.track_record(asof_d, realized=realized)
+            con = _store.connect()
+            _store.save_track_record(con, asof, tr)
+            _by_id = {t["id"]: t for t in _ledger.all_theses()}
+            for _tid, _rr in realized.items():
+                _th = _by_id.get(_tid)
+                if _th and _th.get("status", "open") == "open":
+                    try:
+                        _ledger.close(_th["subject"], "resolved", realized=_rr)
+                    except Exception:  # noqa: BLE001
+                        pass
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        from brain import calibration as _calibration
+        _calibration.persist(asof_d)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 # The books that the deterministic/Brain builders mark only on their OWN run day. flagship marks
 # on its build (and on its carried-forward sweep), each Brain book on its run — but a book that
 # does NOT rebuild on a given day never advances its nav_history, so it can't be graded forward.
@@ -186,6 +267,7 @@ def _daily_mark_job():
             paper_account.accrue_cash_yield(_today_iso(), portfolio_id=pid)
             state = paper_account._load_account(pid)
             bench = paper_account._benchmark_for(pid)
+            ccy = registry.currency(pid)
             tickers = set(state.get("positions", {}).keys()) | {bench}
             # batch-warm the US live quotes in ONE request so the per-name loop below hits a warm
             # cache instead of firing a separate yfinance download per holding.
@@ -196,7 +278,23 @@ def _daily_mark_job():
                 pass
             prices: dict = {}
             for t in tickers:
-                px = paper_account._current_price(t)
+                px = paper_account._current_price(t)        # ALWAYS in USD
+                if not (px and px > 0):
+                    continue
+                # A non-USD book is priced end-to-end in its BASE currency (cash, avg_cost, AND its
+                # benchmark inception price), so the USD mark must be converted before it hits
+                # mark()/NAV — exactly as bot/settle._price does (it converts EVERY symbol, benchmark
+                # included). WITHOUT this the daily sweep books a CNY/HKD position at its USD value
+                # (~÷7) against base-currency cash, so a china/hk book it merely re-marks (didn't
+                # rebuild) shows a phantom crash in nav_history (the 2026-06-23 china/hk cliff). The
+                # benchmark is converted too: its inception price was stored in base currency, so
+                # leaving the live mark in USD would crater the spy_nav line by the same factor.
+                if ccy != "USD":
+                    try:
+                        from portfolio import fx
+                        px = fx.usd_to(px, ccy)
+                    except Exception:  # noqa: BLE001
+                        continue
                 if px and px > 0:
                     prices[t] = px
             if prices:
@@ -249,28 +347,31 @@ def start():
     sch.add_job(_daily_mark_job,
                 CronTrigger(day_of_week="mon-fri", hour=hour, minute=35, timezone="UTC"),
                 id="daily_mark", replace_existing=True, misfire_grace_time=3600, coalesce=True)
-    sch.add_job(_job, CronTrigger(hour=hour, minute=40), id="daily_loop",
+    # UTC-pinned for the same reason as settle_pending below: a bare CronTrigger INSTANCE inherits
+    # the machine's local tz (not the scheduler's UTC default), drifting the build off the intended
+    # post-close anchor on a non-UTC host.
+    sch.add_job(_job, CronTrigger(hour=hour, minute=40, timezone="UTC"), id="daily_loop",
                 replace_existing=True, misfire_grace_time=3600, coalesce=True)
     # Mon–Fri only (no Sat/Sun) — the autonomous book refreshes once per trading day after close.
-    sch.add_job(_autonomous_job, CronTrigger(day_of_week="mon-fri", hour=a_hour, minute=10),
+    sch.add_job(_autonomous_job, CronTrigger(day_of_week="mon-fri", hour=a_hour, minute=10, timezone="UTC"),
                 id="autonomous_daily", replace_existing=True, misfire_grace_time=3600, coalesce=True)
     # Heavyweight runs LAST (23:25 by default) — after flagship's 22:40 build (so it constrains
     # against a fresh Flagship book) and after autonomous's 23:10 (so the two Brain runs don't
     # hammer the subscription/price feeds at once; they touch disjoint data dirs — no state race).
-    sch.add_job(_heavyweight_job, CronTrigger(day_of_week="mon-fri", hour=h_hour, minute=25),
+    sch.add_job(_heavyweight_job, CronTrigger(day_of_week="mon-fri", hour=h_hour, minute=25, timezone="UTC"),
                 id="heavyweight_daily", replace_existing=True, misfire_grace_time=3600, coalesce=True)
     # All-China book on Asia's clock (Mon–Fri after the A-share close). Touches a disjoint data dir
     # (data/portfolios/china) and a different feed window from the US books — no state race.
-    sch.add_job(_china_job, CronTrigger(day_of_week="mon-fri", hour=cn_hour, minute=0),
+    sch.add_job(_china_job, CronTrigger(day_of_week="mon-fri", hour=cn_hour, minute=0, timezone="UTC"),
                 id="china_daily", replace_existing=True, misfire_grace_time=3600, coalesce=True)
     # HK book on Asia's clock (Mon–Fri after the HK close, ~09:00 UTC). Disjoint data dir
     # (data/portfolios/hk) — no state race with the A-share china book.
-    sch.add_job(_hk_job, CronTrigger(day_of_week="mon-fri", hour=hk_hour, minute=0),
+    sch.add_job(_hk_job, CronTrigger(day_of_week="mon-fri", hour=hk_hour, minute=0, timezone="UTC"),
                 id="hk_daily", replace_existing=True, misfire_grace_time=3600, coalesce=True)
     # ETF book on the US evening cadence (Mon–Fri after the close), staggered 5 min after the
     # autonomous book so the two US Brain runs don't hammer the subscription/price feeds at once;
     # disjoint data dir (data/portfolios/etf) — no state race.
-    sch.add_job(_etf_job, CronTrigger(day_of_week="mon-fri", hour=a_hour, minute=15),
+    sch.add_job(_etf_job, CronTrigger(day_of_week="mon-fri", hour=a_hour, minute=15, timezone="UTC"),
                 id="etf_daily", replace_existing=True, misfire_grace_time=3600, coalesce=True)
     # Settle flagship's queued PENDING orders at the open (Mon–Fri, 15:00 UTC ≈ 10–11am ET — mid US
     # session year-round). Closes the gap left by the post-close-only build, which queues overnight
@@ -318,7 +419,7 @@ def start():
     # Runs every day (the macro site refreshes daily); touches only the macro repo's
     # site/mastermind/ path and pushes to its origin/main.
     snap_hours = (os.environ.get("MACRO_SNAPSHOT_UTC_HOURS", "12,22").strip() or "12,22")
-    sch.add_job(_snapshot_job, CronTrigger(hour=snap_hours, minute=25),
+    sch.add_job(_snapshot_job, CronTrigger(hour=snap_hours, minute=25, timezone="UTC"),
                 id="publish_macro_snapshot", replace_existing=True,
                 misfire_grace_time=3600, coalesce=True)
 
@@ -329,6 +430,18 @@ def start():
     sch.add_job(_cio_weekly_job,
                 CronTrigger(day_of_week=cio_dow, hour=cio_hour, minute=0, timezone="UTC"),
                 id="cio_weekly", replace_existing=True, misfire_grace_time=7200, coalesce=True)
+    # FORWARD-LEARNING MAINTENANCE — advance the accountability/learning substrate EVERY trading day,
+    # independent of the flagship's material-change gate. The shadow A/B books, the desk-lever A/B, the
+    # universe prediction log, the outcome-ledger resolution and the track-record/calibration refresh
+    # all live AFTER phase2's gate, so on a carried-forward day they never run and the forward clocks
+    # freeze. This job re-runs the gate-independent, prod-ISOLATED, degrade-safe pieces after the
+    # evening builds (Mon–Fri 23:45 UTC, after flagship 22:40 + autonomous 23:10 + heavyweight 23:25),
+    # so matured theses resolve on time and the A/B NAV curves tick every session. UTC-pinned for the
+    # same reason as settle_pending (a bare trigger would inherit the host tz). Configurable hour.
+    lm_hour = int(os.environ.get("LOOP_MAINT_UTC_HOUR", "23"))
+    sch.add_job(_loop_maintenance_job,
+                CronTrigger(day_of_week="mon-fri", hour=lm_hour, minute=45, timezone="UTC"),
+                id="loop_maintenance", replace_existing=True, misfire_grace_time=3600, coalesce=True)
     sch.start()
     _scheduler = sch
     return sch

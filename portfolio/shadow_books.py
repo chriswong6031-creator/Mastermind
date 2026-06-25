@@ -433,12 +433,19 @@ def run(asof: str, prices: dict | None = None, inputs: list | None = None) -> di
     for p in POLICIES:                                     # also re-mark names still held
         needed |= set(_load_account(p["id"]).get("positions", {}))
     px = _gather_prices(needed, prices)
+    # GUARD against the empty-inputs LIQUIDATION trap: on a day that carried NO decision input (a
+    # quiet/carried flagship day → inputs==[]) every policy's targets are {}, and an unguarded
+    # _rebalance would drive every held position to zero — wiping the forward A/B books. On such a
+    # day we HOLD existing positions and only re-mark/relabel forward. A genuine all-cash signal
+    # (inputs PRESENT but nothing forge-confirmed) still liquidates: `targets or _has_inputs`.
+    _has_inputs = bool(inputs)
     books = {}
     for p in POLICIES:
         bid = p["id"]
         targets = targets_by_book[bid]
         try:
-            _rebalance(bid, targets, px, asof)
+            if targets or _has_inputs:
+                _rebalance(bid, targets, px, asof)
             nav_rows = _nav_rows(bid)
             row = _mark(bid, px, asof)
             nav_rows = [x for x in nav_rows if x.get("date") != asof] + [row]

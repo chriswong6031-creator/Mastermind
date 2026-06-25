@@ -267,3 +267,29 @@ def test_run_is_idempotent_per_date(sandbox, monkeypatch):
            (sandbox / "desk_ab" / "books" / "prod" / "nav_history.jsonl").read_text().splitlines()
            if l.strip()]
     assert len([r for r in nav if r["date"] == "2026-06-22"]) == 1
+
+
+def test_carried_day_empty_inputs_holds_not_liquidates(sandbox, monkeypatch):
+    """Carried day (inputs==[]): the input-derived desk books must HOLD, not liquidate. The daily
+    loop_maintenance job calls desk_ab.run on quiet days too, so an unguarded empty-inputs run would
+    wipe the A/B books. (desk_ab.run swaps S._BOOKS internally, so read account.json off disk.)"""
+    monkeypatch.setattr("portfolio.paper_account._current_price",
+                        lambda t: {"AME": 100.0, "SPY": 400.0}.get(t))
+    monkeypatch.setattr("brain.outcomes.label_thesis",
+                        lambda t, asof=None: {"resolved": False, "rel_return": None})
+
+    def _prod_pos():
+        p = sandbox / "desk_ab" / "books" / "prod" / "account.json"
+        return json.loads(p.read_text())["positions"] if p.exists() else {}
+
+    desk_ab.run("2026-06-22", prices={"SPY": 400.0}, inputs=[_rec("AME", price=100.0)])
+    assert (_prod_pos().get("AME") or {}).get("shares", 0) > 0
+    # CARRIED day — no inputs → HOLD AME (not liquidate), still mark forward
+    res = desk_ab.run("2026-06-23", prices={"SPY": 400.0}, inputs=[])
+    assert (_prod_pos().get("AME") or {}).get("shares", 0) > 0, \
+        "carried day liquidated the desk book (the empty-inputs trap)"
+    assert res["books"]["prod"]["holdings"] == ["AME"]
+    nav = [json.loads(l) for l in
+           (sandbox / "desk_ab" / "books" / "prod" / "nav_history.jsonl").read_text().splitlines()
+           if l.strip()]
+    assert "2026-06-23" in [r["date"] for r in nav]   # forward clock advanced on the held day

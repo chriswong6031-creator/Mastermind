@@ -4,7 +4,7 @@ Coexists with, and is complementary to, brain/calibration.py (which de-confidenc
 shrink-only multiplier). This module does the OTHER half of closing the perception-to-outcome loop:
 when a thesis resolves, it records a row joining three things the engine otherwise never connects:
   1. what it PREDICTED   — prob_correct + the falsifier (brain/decision, brain/ledger),
-  2. what HAPPENED        — realized rel-return vs SPY and the hit/miss (brain/scorer.realize_returns),
+  2. what HAPPENED        — realized rel-return vs SPY and the hit/miss (brain/outcomes.realized_returns),
   3. what it SAW          — the point-in-time lens snapshot at decision time (brain/signal_history).
 
 From these it answers the two questions that turn opinion into skill: "when the engine said 60%, was
@@ -15,7 +15,9 @@ cohort is captured cleanly the day it lands.
 
 Append-only JSONL (data/brain/outcome_ledger.jsonl), KEEP-FIRST per thesis_id. Crash-safe / degrade-
 never. Decoupled: `realized` may be passed in (to share the track-record's source) or computed via
-scorer.realize_returns. Records whose decision predates signal_history carry an empty lens snapshot —
+outcomes.realized_returns (the SAME entry→horizon path-replay grader the track record uses, so the
+two halves of the loop can never disagree). Records whose decision predates signal_history carry an
+empty lens snapshot —
 reliability still works from day one; lens_edge compounds as fully-recorded cohorts resolve.
 """
 from __future__ import annotations
@@ -57,11 +59,16 @@ def _scored_ids() -> set[str]:
 
 
 def _realized_map(asof) -> dict[str, float]:
-    """{thesis_id: realized rel-return} for due theses. Uses the SAME grader as the track record
-    (brain.scorer.realize_returns), guarded so a cold price store degrades to {} rather than raising."""
+    """{thesis_id: realized rel-return} for matured theses. Uses the SAME entry→horizon path-replay
+    grader the Brier track record + the prod ledger close use (brain.outcomes.realized_returns) —
+    leakage-free and measured over the EXACT falsifier window — so the reliability/lens-edge substrate
+    can never disagree with the track record. (Previously this read brain.scorer.realize_returns,
+    which marks entry→NOW at the live price; that drifts from the 21-bday window the later resolve runs
+    after maturity, and the gap widens on a quiet stretch.) Guarded: a cold price store degrades to {}."""
     try:
-        from brain import scorer
-        return scorer.realize_returns(asof) or {}
+        from brain import outcomes
+        asof_d = asof if isinstance(asof, date) else date.fromisoformat(str(asof)[:10])
+        return outcomes.realized_returns(asof_d) or {}
     except Exception:
         return {}
 
@@ -94,7 +101,7 @@ def _outcome(check: dict, realized: float) -> int | None:
 def resolve(asof, realized: dict | None = None, *, theses: list | None = None) -> int:
     """Emit ledger records for every thesis that has resolved (id present in `realized`), joining
     prediction + outcome + the decision-time lens snapshot. KEEP-FIRST per thesis_id. Returns the
-    count written. `realized` defaults to scorer.realize_returns(asof). Never raises."""
+    count written. `realized` defaults to outcomes.realized_returns(asof). Never raises."""
     try:
         rmap = realized if realized is not None else _realized_map(asof)
         if not rmap:

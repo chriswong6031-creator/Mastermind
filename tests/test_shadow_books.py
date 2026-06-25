@@ -155,6 +155,31 @@ def test_run_never_raises_on_garbage(sandbox, monkeypatch):
         S.run("2026-06-01", prices={}, inputs=bad)              # must not raise
 
 
+def test_carried_day_empty_inputs_holds_not_liquidates(sandbox, monkeypatch):
+    """A day that carried NO decision input (inputs==[]) must HOLD the book — an unguarded run would
+    target {} for every policy and liquidate held positions, wiping the forward A/B. A GENUINE all-cash
+    signal (inputs present but nothing forge-confirmed) must still liquidate."""
+    monkeypatch.setattr("portfolio.paper_account._current_price",
+                        lambda t: {"AAA": 100.0, "SPY": 400.0}.get(t))
+    monkeypatch.setattr("brain.outcomes.label_thesis",
+                        lambda t, asof: {"resolved": False, "rel_return": None})
+    px = {"AAA": 100.0, "SPY": 400.0}
+    # day 1 — build a real position
+    S.run("2026-06-01", prices=px, inputs=[_rec("AAA", weight_forge=0.5, weight_prod=0.5, price=100.0)])
+    assert (S._load_account("prod")["positions"].get("AAA") or {}).get("shares", 0) > 0
+    # day 2 — CARRIED day (no inputs at all): must HOLD AAA, NOT liquidate, and still mark forward
+    res = S.run("2026-06-02", prices=px, inputs=[])
+    assert (S._load_account("prod")["positions"].get("AAA") or {}).get("shares", 0) > 0, \
+        "carried day liquidated the book (the empty-inputs trap)"
+    assert res["books"]["prod"]["holdings"] == ["AAA"]
+    assert "2026-06-02" in [r["date"] for r in S._nav_rows("prod")]   # forward clock advanced
+    # day 3 — GENUINE all-cash signal: inputs PRESENT but nothing confirmed → DO liquidate
+    res = S.run("2026-06-03", prices=px,
+                inputs=[_rec("AAA", forge_confirmed=False, weight_forge=0.0, weight_prod=0.0)])
+    assert "AAA" not in S._load_account("prod")["positions"]
+    assert res["books"]["prod"]["holdings"] == []
+
+
 def test_thesis_deduped_while_open_and_resolves_forward(sandbox, monkeypatch):
     monkeypatch.setattr("portfolio.paper_account._current_price", lambda t: 100.0)
     inputs = [_rec("AAA", weight_forge=0.5, weight_prod=0.5, price=100.0)]

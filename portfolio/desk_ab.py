@@ -345,12 +345,19 @@ def run(asof: str, prices: dict | None = None, inputs: list | None = None) -> di
             needed |= set(S._load_account(p["id"]).get("positions", {}))
         px = S._gather_prices(needed, prices)
 
+        # Same empty-inputs LIQUIDATION guard as shadow_books.run: on a carried/quiet day (inputs==[])
+        # the input-derived books (prod/L1/L2/L3/desk_proxy) all target {}, and an unguarded rebalance
+        # would liquidate them. HOLD + re-mark instead. The autonomous-clone book is NOT input-derived
+        # (its targets come from the US Brain's own submission for `asof`), so when it legitimately
+        # changed its targets are non-empty and `targets or _has_inputs` rebalances it normally.
+        _has_inputs = bool(inputs)
         books = {}
         for p in POLICIES:
             bid = p["id"]
             targets = targets_by_book[bid]
             try:
-                S._rebalance(bid, targets, px, asof)
+                if targets or _has_inputs:
+                    S._rebalance(bid, targets, px, asof)
                 nav_rows = S._nav_rows(bid)
                 row = S._mark(bid, px, asof)
                 nav_rows = [x for x in nav_rows if x.get("date") != asof] + [row]
