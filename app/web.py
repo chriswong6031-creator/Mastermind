@@ -1104,6 +1104,19 @@ def api_rejections() -> JSONResponse:
         return JSONResponse({"coverage": {}, "scorecard": {}, "error": str(exc)})
 
 
+@router.get("/api/shadow_bandit")
+def api_shadow_bandit() -> JSONResponse:
+    """Discounted Thompson Sampling over the shadow policies — each arm's discounted forward hit-rate
+    posterior + P(arm is best). A faster, regime-adaptive read of which policy is winning than the raw
+    cumulative-return leaderboard. Read-only (never switches the live policy); best-effort."""
+    try:
+        import bot  # noqa: F401 — bootstraps vendor/macro for the shadow ledgers
+        from portfolio import bandit
+        return JSONResponse(bandit.rank_shadow_books())
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"status": "building", "arms": [], "error": str(exc)})
+
+
 @router.get("/api/engine_backtest")
 def api_engine_backtest() -> JSONResponse:
     """Historical engine-backtest verdict — the HIGH-statistical-power, leakage-free read on the
