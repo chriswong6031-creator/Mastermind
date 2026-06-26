@@ -1146,6 +1146,19 @@ def api_distill() -> JSONResponse:
         return JSONResponse({"status": "building", "top_predicted": [], "error": str(exc)})
 
 
+@router.get("/api/interim_marks")
+def api_interim_marks() -> JSONResponse:
+    """Interim trajectory checkpoints (#11) — day-5/day-10 rel-return per open conviction thesis, a
+    per-checkpoint hit-rate, and the live early-warning list (held names underwater at their latest
+    checkpoint). Evidence only, never the 21-bday label. Read-only; best-effort."""
+    try:
+        import bot  # noqa: F401 — bootstraps vendor/macro for the price labeler
+        from brain import interim_marks
+        return JSONResponse(interim_marks.summary())
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"scorecard": {}, "error": str(exc)})
+
+
 @router.get("/api/engine_backtest")
 def api_engine_backtest() -> JSONResponse:
     """Historical engine-backtest verdict — the HIGH-statistical-power, leakage-free read on the

@@ -183,7 +183,8 @@ def summary() -> dict:
     n = len(rows)
     if n == 0:
         return {"n": 0, "status": "building", "brier": None, "hit_rate": None,
-                "calibration_error": None, "by_sleeve": {}, "by_lean": {}, "by_horizon": {}}
+                "calibration_error": None, "by_sleeve": {}, "by_lean": {}, "by_horizon": {},
+                "by_regime": {}}
     hits = sum(r["outcome"] for r in rows)
     brier = round(sum((r["prob_correct"] - r["outcome"]) ** 2 for r in rows) / n, 4)
     curve = reliability_curve()
@@ -193,7 +194,24 @@ def summary() -> dict:
             "brier": brier, "calibration_error": cal_err,
             "by_sleeve": _group_stats(rows, "sleeve"),
             "by_lean": _group_stats(rows, "lean"),
-            "by_horizon": _group_stats(rows, "horizon_d")}
+            "by_horizon": _group_stats(rows, "horizon_d"),
+            # REGIME-CONDITIONAL (#10): stratify reliability by the decision-time regime quad so a seat
+            # that's calibrated in one regime but not another is de-confidenced PER regime, not pooled.
+            "by_regime": _group_stats(rows, "quad_at_entry")}
+
+
+def regime_playbook() -> str:
+    """A one-line per-regime realized read ('what has worked when the regime looked like this') for the
+    Brain / dashboard. Empty until ≥1 regime bucket clears _GROUP_MIN_N. Never inflates; never raises."""
+    try:
+        rows = [r for r in _read() if r.get("outcome") in (0, 1) and r.get("prob_correct") is not None]
+        by = _group_stats(rows, "quad_at_entry")
+        if not by:
+            return ""
+        parts = [f"{q}: {b['hit_rate'] * 100:.0f}% hit (n={b['n']})" for q, b in sorted(by.items())]
+        return "Realized doctrine hit-rate by regime — " + "; ".join(parts) + "."
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def reliability_curve(bins: int = 5) -> list[dict]:

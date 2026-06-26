@@ -99,9 +99,27 @@ def test_summary_attribution_splits(tmp_path, monkeypatch):
     assert "trim" not in s["by_lean"]                        # 3 < _GROUP_MIN_N → omitted
 
 
+def test_summary_by_regime_and_playbook(tmp_path, monkeypatch):
+    ol, sh = _paths(monkeypatch, tmp_path)
+    theses, realized = [], {}
+    for i in range(12):                                          # 12 Q1-regime resolutions, 9 hits / 3 miss
+        tk = f"R{i}"
+        sh.archive("2026-06-21", [sh.make_record(
+            "2026-06-21", tk, sleeve="conviction", decision="sized", regime={"quad": "Q1"},
+            synthesis={"confluence": 0.7})])
+        theses.append(_thesis(f"r{i}", tk, 0.7))
+        realized[f"r{i}"] = 0.10 if i < 9 else -0.09
+    assert ol.resolve("2026-07-17", realized, theses=theses) == 12
+    s = ol.summary()
+    assert s["by_regime"]["Q1"]["n"] == 12 and s["by_regime"]["Q1"]["hit_rate"] == 0.75
+    pb = ol.regime_playbook()
+    assert "Q1" in pb and "75%" in pb
+
+
 def test_empty_when_no_resolutions(tmp_path, monkeypatch):
     ol, _ = _paths(monkeypatch, tmp_path)
     assert ol.resolve("2026-07-17", {}, theses=[]) == 0
     s = ol.summary()
     assert s["status"] == "building" and ol.reliability_curve() == [] and ol.lens_edge() == []
-    assert s["by_sleeve"] == {} and s["by_lean"] == {} and s["by_horizon"] == {}
+    assert s["by_sleeve"] == {} and s["by_lean"] == {} and s["by_horizon"] == {} and s["by_regime"] == {}
+    assert ol.regime_playbook() == ""

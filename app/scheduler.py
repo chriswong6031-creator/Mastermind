@@ -206,6 +206,14 @@ def _loop_maintenance_job():
         distill.train(asof)
     except Exception:  # noqa: BLE001
         pass
+    # 1e. INTERIM MARKS (#11) — log day-5/day-10 trajectory checkpoints for open conviction theses
+    #     (early-warning for the risk layer weeks before the 21-bday grade). Evidence only, never the
+    #     label; idempotent keep-first; degrade-safe.
+    try:
+        from brain import interim_marks
+        interim_marks.record(asof)
+    except Exception:  # noqa: BLE001
+        pass
 
     # 2. parallel forward shadow books + desk-lever A/B — re-derive (or HOLD on a carried day) + mark
     #    forward. The empty-inputs guard inside run() prevents a no-decision day from liquidating them.
