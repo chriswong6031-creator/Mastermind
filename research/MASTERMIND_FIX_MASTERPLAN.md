@@ -163,7 +163,33 @@ Model-tier routing per house policy: **Sonnet** for well-specified code, **Opus*
 - **Test hygiene**: the suite is stateful and order-dependent (pre-existing failures catalogued in the W0 PR body); W1 should add the conftest isolation pattern to every prod-state file the tests touch. Never run the suite in the production checkout until then (it wipes `bot.db`).
 - **Restart discipline**: uvicorn runs without `--reload` — merged changes reach production only after `systemctl`/manual restart of the app process, on the checkout it runs from. Coordinate with the other session before restarting.
 
+### W-E — The Eyes / Perception Era (full plan: research/eyes/build_plan.md; runs after W-I merges)
+KEYSTONE FINDING (coverage audit): the regime file the bot loads EVERY BUILD embeds ~50 sub-planes — risk_radar
+(drawdown_prob, cap_leadership), mtf_signals (per-ticker 3D-MACD + trail stops), froth_fragility ('leaders
+distributing', alert=True), the dashboard's own gross_factor=0.9 — and the bot slices ~10 fields and discards
+the rest. The incident's smoking guns were in the file it read every day. Bot perceives ~20% of the audited
+signal queue today → ~95% priority-weighted after W-E, with NO new data sources for Tier A.
+- W-E.0 perception organs (zero behavior change): rotation_tensor.py (12×12 RS-velocity bps/day + episodes),
+  anticipation.py (SECTOR-TOP/BUBBLE/CRASH alarms, authority-tiered), market_view.py (PlaneRecords +
+  label_vs_planes disagreement layer + deterministic brief), incident+calm fixtures, perception runlog step.
+- W-E.1 read-only fan-out: seats get the brief + PlaneRecords; market_view.html mirror; wake triggers;
+  walk-forward validation jobs.
+- W-E.2 posture_decider.py (SHADOW): defense_pressure D over shrink-biased planes; OFFENSE/BALANCED/
+  ROTATE-DEFENSIVE/PRESERVE bands w/ hysteresis; THE SUBSUMPTION PR (budget() → shim; fragility_signal
+  retired; W-I evidence damp folds into D; eff_cap=min(state,sev,posture_notch); grep-gate CI: every signal
+  consumed exactly once). Byte-identity migration tests are ship-blockers.
+- W-E.3 shadow 2wk → ARM on gates (replay battery green, calm-tape zero-drift, CRASH-RISK AUC>0.55, no
+  compounding). Pre-committed kills + fallback.
+- Dashboard handoffs H1-H6 (chip spawned): transition ratchet, P(quad) vector, schema_version+liquidity-quality
+  field, sparse vendoring-manifest extension (RRG/froth-log/dislocation/event-calendar/intl), per-sector
+  breadth, one consistent asOf. None block the bot.
+
 ## 5. Status log
+
+- **2026-07-02 (takeover, Fable): CHARTER v2 committed** (10 principles + standing self-interrogation). P1 hot
+  patch live (autonomous persona now reads the full perception block — it re-risked into semis on the bare
+  label this morning). Judgment SHADOW book ARMED at restart (PID 55944, FLAGSHIP_JUDGMENT=1 persisted).
+  W-E designed (16 agents: coverage audit + 3 judge panels + build plan → research/eyes/).
 
 - **2026-07-02 (session 3, Fable): INCIDENT + DEPLOY + W4.** Semis/memory/AI-infra breakdown while every US book sat 60-90% offensive with $0 defensive exposure (full post-mortem: research/incidents/2026-07-02-semis-breakdown/). Forensics: tripwire fired EVERY session 06-26→07-02 cutting nothing; cap raised 0.70→1.00 as SOXX printed −6.4%; autonomous whipsawed SMH (sold 626/rebought 605); ETF book spent cash into strength against its own fragility panel; regime label regressed WEAKENING→STABLE (ratchet-less flag counter); 'expanding liquidity' = TGA drawdown at RRP $6.4bn (hollow); books lagged own SPY bench −1.6..−2.5pts/week vs user's XLV +7.8%. **PRODUCTION DEPLOYED**: prod checkout moved to prod-deploy-w0w3 (= master W0-W3 + risk_radar sparse fix eb9fd0b), uvicorn restarted 22:33 UTC PID 84236, flags persisted to .env; other session's WIP checkpointed on its branch (d3fa69b) — they merge properly with time. **W4 MERGED** (dc656f5): defensive_candidates (today: XLU/XLC/XLY + playbook survive gate_go=False), judgment pipe w/ leadership + deterministic authority clamp, three-questions Brier duty, rotation.py DEF_SLEEVE floor (default 0 = byte-identical), overnight off-ramp for flagship/heavyweight. Second restart arms MASTERMIND_FLAGSHIP_JUDGMENT=1 (SHADOW book; promotion rule + week-1 watch list in incidents/ ops.md + integrator report). **W-I (Incident Wave) OPENED** — see §3bis below.
 
