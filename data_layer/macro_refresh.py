@@ -74,7 +74,7 @@ _REMOTE = "https://github.com/chriswong6031-creator/macro.git"
 # migration) silently broke every engine import in loop/ and the test_smoke canary —
 # keep the code trees in the checkout; they are small text. data/yahoo (~250 curated
 # parquets) is the engine price store — loop/harness backtests and test_smoke need it.
-_SPARSE_PATHS = ("site", "data/regime", "engine", "lib", "data/yahoo")
+_SPARSE_PATHS = ("site", "data/regime", "engine", "lib", "data/yahoo", "data/risk_radar")
 
 _MAX_AGE_DAYS = 2
 
