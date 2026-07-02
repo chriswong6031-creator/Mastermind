@@ -1,0 +1,1071 @@
+{
+ "resolutions": [
+  {
+   "question_id": "self_directed_outperformance_fair_measure",
+   "headline": "Yes: fairly renormalized to one price source at the latest common inception, Self-Directed (+2.92%) beats every Brain in every window tested, and the gap is almost entirely allocation (a defensive tilt into a risk-off tape), not the Brains' churn.",
+   "answer": "MEASUREMENT CONSTRAINT (load-bearing): the latest common inception is Self-Directed's first fill on 2026-06-23, and ALL parquet price sources in the macro repo end 2026-06-26. So the only fairly-measurable common window is 3 trading days (06-23 to 06-26). Fills after 06-26 (autonomous/heavyweight/hk trade through 07-01; flagship/etf/china through 06-29/30) CANNOT be marked to a real price and are excluded from the head-to-head. The books' own account.json current_price fields mark to 07-01, but that is the bot's self-reported price, not the mandated single source, so I did not use it for the comparison.\n\nPRICE SOURCE: yahoo data/yahoo/*.parquet close (dividend-adjusted) primary; where a name is absent I fell back, in order, to macro data/baskets/ohlcv (US single-names), data/china_stocks, data/hk_stocks, all same vintage, all ending 06-26. Names with NO series anywhere (6 flagship small-caps at inception, SGOV, MCY, 2-4 heavyweight names) are HELD FLAT at last fill price (NAV-neutral) rather than dropped to zero. Markable NAV at inception: self_directed/china/hk = 100%; autonomous 90.6%, flagship 89.7%, etf 85.1%, heavyweight 76.5% (its number is the softest).\n\nRESULT, every book renormalized to $1.00 at 2026-06-23 close, total return 06-23 to 06-26:\n  self_directed  +2.923%   maxDD  0.00%   turnover  99%   (100% markable)\n  heavyweight    +0.754%   maxDD -1.97%   turnover 278%\n  etf            -0.016%   maxDD -0.92%   turnover 161%\n  autonomous     -0.465%   maxDD -2.02%   turnover  81%\n  flagship       -0.493%   maxDD -1.71%   turnover  98%\n  china          -0.481% (CNY, FX caveat)  maxDD -0.48%  turnover 113%\n  hk             -3.013% (HKD, FX caveat)  maxDD -3.32%  turnover 114%\n  SPY benchmark  -0.626%\n\nDOES SELF-DIRECTED BEAT EVERY BRAIN? Yes, and it beats SPY too. Margins vs Self-Directed (USD books): flagship -3.42pp, autonomous -3.39pp, etf -2.94pp, heavyweight -2.17pp. china/hk are local-currency (CNY/HKD) so not directly comparable in USD, but both are negative in local terms while SD is +2.9%. Self-Directed has ZERO drawdown over the window; every Brain has a negative maxDD.\n\nROBUSTNESS: the ranking is invariant to inception choice. Testing inception 06-22 / 06-23 / 06-24 (all to 06-26), Self-Directed wins by +5.7 / +3.4 / +2.4pp respectively over the best Brain, and never loses in any window.\n\nHOW MUCH IS TURNOVER/CHURN vs ALLOCATION? Almost all allocation. Frozen day-1 buy-and-hold (freeze inception positions, no trading) vs actual: flagship frozen -0.382% vs actual -0.493% (churn drag -0.11pp); autonomous frozen -0.344% vs actual -0.465% (churn -0.12pp); etf frozen -0.457% vs actual -0.016% (churn +0.44pp, helped); heavyweight frozen -0.007% vs actual +0.754% (churn +0.76pp, helped). So churn is a small effect (~0.1-0.8pp) and in etf/heavyweight it actually HELPED over this window. The 2.4-3.4pp deficit is the allocation itself: the Brains hold SMH/XLK/MTUM/semis-momentum (SMH -1.68% over the window) while Self-Directed holds XLU/XLV/XLF/XLP. Leg decomposition of Self-Directed's +2.923%: XLV +5.36% (contrib +1.61pp), XLU +2.51% (contrib +1.25pp), XLP +1.18% (+0.12pp), XLF -0.58% (-0.06pp). It is a defensive-vs-momentum factor win during a 3-day risk-off tape.\n\nBOTTOM LINE for the customer's framing: the outperformance is REAL as measured, but it is a 3-day, factor-timing artifact of a defensive allocation catching a risk-off window, NOT demonstrated skill over a meaningful horizon. The books are 8-12 days old and price data only supports 3 common days. This is an N-of-3-day result. The honest verdict: Self-Directed's edge over this window is real and allocation-driven, but the sample is far too short to conclude durable superiority.",
+   "method": "Wrote /tmp/mm_reaudit/recon.py. For each book, replayed fills.jsonl from account.json starting_nav (cash) with zero positions, applied every fill (buy: shares+, cash-value; sell: shares-, cash+value) up to each mark date, then marked surviving positions to a single price source: yahoo data/yahoo close (dividend-adjusted) primary, falling back to data/baskets/ohlcv, data/china_stocks, data/hk_stocks (all end 2026-06-26). Renormalized each book's NAV to $1.00 at 2026-06-23 (latest common inception = self_directed first fill). Computed total return, max drawdown, turnover (sum abs(fill value) / avg NAV). Unmarkable names held flat at last fill price to avoid phantom losses. Allocation-vs-selection = frozen day-1 hold (freeze inception positions, mark to end) vs actual replay. Sensitivity-tested inception at 06-22/23/24. FX: china/hk reported in local currency (CNY/HKD) with caveat, not converted.",
+   "evidence": [
+    "data/portfolio/self_directed/fills.jsonl: 5 fills all dated 2026-06-23, queued=true, buying XLU 500k / XLV 300k / XLF 100k / XLP 100k = $1.0M; account.json inception_date 2026-06-22, starting_nav 1000000, cash 0.0 -> book is a static 4-ETF buy-and-hold, 100% price-coverable in yahoo",
+    "Price coverage: yahoo/*.parquet is only 216 curated files; 35/41 flagship names, 22/26 heavyweight names, and ALL china/hk names are absent from yahoo. Union with data/baskets/ohlcv + data/china_stocks + data/hk_stocks closes the gap to 6 flagship / 1 etf / 1 autonomous / 2-4 heavyweight unmarkable names. All four sources' last row = 2026-06-26 (verified via df.index.max()).",
+    "recon.py output over 06-23->06-26: self_directed +2.923%, heavyweight +0.754%, etf -0.016%, autonomous -0.465%, flagship -0.493%, china -0.481% CNY, hk -3.013% HKD, SPY -0.626%. Self-Directed maxDD 0.00% (monotone up: 1.0000/1.0081/1.0149/1.0292); every Brain has negative maxDD.",
+    "Allocation-vs-selection (frozen D1 hold vs actual): flagship -0.382 vs -0.493 (churn -0.11pp); autonomous -0.344 vs -0.465 (-0.12pp); etf -0.457 vs -0.016 (+0.44pp); heavyweight -0.007 vs +0.754 (+0.76pp). Churn is small and in two books positive; the multi-point deficit is allocation.",
+    "Self-Directed leg decomposition (yahoo div-adj close 06-23->06-26): XLV +5.362%, XLU +2.507%, XLP +1.183%, XLF -0.575% -> weighted +2.923%. Contrast SMH -1.678% (the Brains' core momentum holding) and SPY -0.626%. Defensive-over-momentum factor win.",
+    "Window sensitivity: inception 06-22/06-23/06-24 all to 06-26 -> Self-Directed +2.9/+2.9/+2.1% and wins every window; best Brain never catches it (closest is heavyweight +0.754% at 06-23, still -2.17pp behind and carrying -1.97% DD with only 76.5% of NAV markable).",
+    "Turnover: heavyweight 278%, etf 161%, china 113%, hk 114% of avg NAV over a 3-day window (heavyweight buys total $3.12M sells $2.22M on a $1M book) confirms the Brains rotate heavily; Self-Directed turnover 99% is the single day-1 build with zero subsequent trading."
+   ],
+   "confidence": 0.72,
+   "implications": "Confirms RC6 (the outperforming defensive book is invisible to learning) is pointing at a REAL in-window edge, not a measurement mirage: over the only fairly-comparable 3 days, Self-Directed's XLU/XLV/XLF/XLP beats every Brain by 2.2-3.4pp and beats SPY, with zero drawdown. But it recasts the magnitude: the win is a defensive-vs-momentum FACTOR TILT catching a risk-off tape, and it is nearly all ALLOCATION (churn contributes only ~0.1-0.8pp and in etf/heavyweight actually helped). This sharpens the fix priority: the deficit is the Brains' allocation (RC2/RC5 hardcoded momentum/semis tilt with no defensive rotation), NOT their turnover, so throttling churn will not close the gap; adding a defensive/contrarian allocation seat (RC1/RC5) would. Crucial caveat for ranking: this is an N-of-3-trading-day result on 8-12-day-old books with price data ending 06-26; it CANNOT support a durable-superiority claim. The correct next step is not to crown Self-Directed but to (a) extend the price source past 06-26 (the missing site/stockdata / fresh yahoo pull) so the 07-01 books can be fairly marked, and (b) re-run this exact harness weekly. Any leaderboard shown to the user must carry the '3 common days, allocation-driven, not skill' label or it will overstate the defensive book."
+  },
+  {
+   "question_id": "W2-sector-cycle-forward-power",
+   "headline": "Wiring sector_cycles.json into the bot as a Peak/Topping veto is NOT worth it \u2014 the veto lowers CAGR (8.2%\u21924.8%) and Sharpe (0.61\u21920.47) with negligible drawdown benefit; the phase signal has real but weak forward power (Trough best, Peak worst) that does not survive translation into the bot's top-RS leadership rule.",
+   "answer": "RECOMMENDATION: Do NOT build W2 as a cycle-phase VETO on the leadership sleeve. The phase does carry mild forward-return information, but a Peak/Topping veto degrades the strategy, and a Peak+Downturn veto is just another de-gross-to-cash lever (RC5), not alpha.\n\nPART A \u2014 does phase carry forward-return power? Weakly, yes, directionally correct. Pooled 1,444 sector-month observations (2015-2026), forward returns by phase:\n- Trough (Bottoming): +237bps/20d, +361bps/60d \u2014 BEST absolute, consistent with the contract's \"prime entry\" claim.\n- Peak (Topping): +58bps/20d, +238bps/60d absolute, but NEGATIVE excess vs SPY: -39bps/20d, -72bps/60d \u2014 the \"topping is bad\" intuition is directionally real.\n- BUT Peak-vs-nonPeak is NOT statistically significant: Welch t=-1.70 p=0.089 (20d), t=-1.00 p=0.316 (60d); excess t=-1.16 p=0.248 / t=-0.72 p=0.473. The edge is a soft tilt, not a gate.\n\nPART B \u2014 does the veto improve the bot's actual leadership rule? NO. Walk-forward, monthly, top-4 RS sectors above 200d equal-weight, strict point-in-time:\n- BASELINE:   CAGR 8.17%  Sharpe 0.61  maxDD -23.35%  (2.43x)\n- PEAK-HALVE:  CAGR 6.54%  Sharpe 0.57  maxDD -22.76%  (2.05x)\n- PEAK-EXCLUDE:CAGR 4.77%  Sharpe 0.47  maxDD -22.62%  (1.70x)\nVetoing Peak sectors monotonically DESTROYS return and Sharpe while cutting drawdown by <1pp. The reason: top-RS leaders are frequently IN the Peak phase precisely while they are still leading; halving/excluding them forfeits the leadership premium the sleeve exists to harvest.\n\nPART C \u2014 robustness / other framings:\n- VETO Peak+Downturn: CAGR 0.44%, Sharpe 0.11, but maxDD -12.24%. This halves drawdown ONLY by sitting in cash \u2014 pure de-grossing, exactly RC5's subtract-only pathology. Not risk-adjusted improvement (Sharpe collapses).\n- CYCLE-TILT (additive/RC1 angle: overweight Trough/Recovery to 0.35, underweight Peak to 0.15): CAGR 7.29%, Sharpe 0.61 \u2014 matches baseline Sharpe, slightly lower CAGR. No improvement.\n- Conditional on risk-off (SPY<200d, n=23 rebalances): base already earns +1.82%/mo; VETO-PK gives +1.87% (marginal) but costs risk-on months (+0.52%\u2192+0.15%). The veto does not even earn its keep in the drawdown regime it's meant to protect.\n- Context: SPY B&H CAGR 14.08% Sharpe 0.91; the user's SELF-DEF book (XLU/XLV/XLF/XLP EW) CAGR 9.45% Sharpe 0.76 \u2014 both beat every leadership variant on Sharpe, corroborating the user's framing that the defensive book outperforms.\n\nCONFIDENCE-HAIRCUT variant (optional): SKIPPED honestly \u2014 the leadership sleeve consumes no regime-confidence input in this test and the contract's per-sector phase carries no stored confidence field, so a regime-confidence haircut cannot be cleanly attributed to the cycle signal without confounding it with a market-timing overlay. The Part-C conditional split (SPY-trend regime) is the closest clean proxy and showed no benefit.\n\nPROXY VALIDATION: My oscillator/phase reconstruction is faithful \u2014 osc-position correlation 0.994 vs the live contract, 9/11 exact phase matches as of 2026-06-26 (2 mismatches are boundary direction-tiebreaks: XLK Peak-vs-Downturn, XLU Trough-vs-Recovery, from MACD-vs-osc-slope direction). Conclusion is not a proxy artifact. No look-ahead: osc uses only causal ewm/rolling(min_periods) ops; all rebalance quantities computed from close[:T].\n\nNET FOR W2: The sector_cycles.json phase is a decent DESCRIPTIVE bottoming/topping map (Trough forward returns are genuinely strong) but a poor PRESCRIPTIVE veto for a momentum-leadership sleeve, because leaders live in Peak. If W2 ships at all, it should be (1) an ENTRY-side Trough/Recovery preference for NEW additions (the one leg with positive excess return and the additive RC1 flavor), NOT (2) a Peak exit/veto on existing leaders. Even the entry tilt only matched baseline Sharpe here, so the bar for building it is high.",
+   "method": "Faithful reimplementation of vendor/macro_src/engine/sector_cycles.py _detrended_osc (252d EMA-detrend, 252d stochastic min-max, ewm smooth) and _classify_phase (0-100 position + direction), validated against the live contract (corr 0.994, 9/11 phase match). Walk-forward 2015-2026 on dividend-adjusted sector-ETF parquets (data/yahoo/XL*.parquet, SPY), strict point-in-time (close[:T]). Part A: pooled sector-month forward 20d/60d returns by phase + Welch t-tests (excess vs SPY). Part B/C: monthly top-4 RS>200d EW leadership sleeve with base/halve/exclude/veto-Peak+Downturn/cycle-tilt variants; CAGR, annualized vol, Sharpe, maxDD; conditional split on SPY-vs-200d regime. Scripts under /tmp/mm_reaudit/.",
+   "evidence": [
+    "vendor/macro_src/engine/sector_cycles.py:92-103 _detrended_osc: dt=(c/c.ewm(span=252).mean()).ewm(span=10).mean(); stochastic-normalise over 252d rolling min/max -> 0-100 osc (causal, no look-ahead)",
+    "vendor/macro_src/engine/sector_cycles.py:182-189 _classify_phase: pos>=68 & rising->Peak/Topping, pos<=32 & rising->Recovery/Prime-entry; direction from weekly+3d MACD (I proxy with osc-slope+63d momentum)",
+    "vendor/macro_src/site/sectordata/sector_cycles.json now block: XLK now.phase=Peak signal=SELL pos=81.6 (leader in topping) \u2014 illustrates why vetoing Peak forfeits the leader",
+    "PART A pooled N=1444: Trough f20=+237bps/f60=+361bps (best); Peak f20_ex=-39bps f60_ex=-72bps (negative alpha but Welch p=0.089/0.316 \u2014 not significant)",
+    "PART B walk-forward: BASELINE CAGR 8.17% Sharpe 0.61 maxDD -23.35% vs PEAK-EXCLUDE CAGR 4.77% Sharpe 0.47 maxDD -22.62% \u2014 veto monotonically worse",
+    "PART C: VETO Peak+Downturn CAGR 0.44% Sharpe 0.11 maxDD -12.24% = de-gross-to-cash (RC5), not alpha; CYCLE-TILT Sharpe 0.61 = no improvement over baseline",
+    "PART C conditional: risk-off (SPY<200d, n=23) base +1.82%/mo vs veto-Peak +1.87% marginal, while veto costs risk-on (+0.52%->+0.15%)",
+    "Proxy validation: osc-position corr 0.994 vs live contract, 9/11 exact phase match at 2026-06-26; SELF-DEF defensive book Sharpe 0.76 > every leadership variant (corroborates user framing)"
+   ],
+   "confidence": 0.85,
+   "implications": "De-prioritize / redesign masterplan wave W2. The prior audit's implicit assumption \u2014 that sector_cycles.json is consumed by zero code (RC4) and wiring it in would add value \u2014 is only half right: consuming it as a Peak veto would ACTIVELY HARM the leadership sleeve and add yet another subtract-only cash lever (RC5), the exact pathology the re-audit is trying to escape. The empirically defensible use is narrow: an ENTRY-side preference for Trough/Recovery (Prime-entry) sectors on NEW additions only (the sole leg with positive excess return and an additive RC1 character), never a topping-exit on held leaders. Even that only matched baseline Sharpe, so W2 should either ship as this narrow entry tilt or be dropped in favor of higher-leverage work. It does NOT close the gap to the defensive self-directed book (Sharpe 0.76), which still beats every leadership variant \u2014 reinforcing that the real fix is rotation-into-defensives (RC5/RC6), not a cycle gate on momentum leaders. Falsification: re-run with a true weekly+3d MACD direction leg (not the osc-slope proxy) and daily rebalance; if a Peak veto then shows Sharpe > baseline+0.1 out-of-sample, revisit."
+  },
+  {
+   "question_id": "flagship-judgment-echo-vs-diverge",
+   "headline": "Arming MASTERMIND_FLAGSHIP_JUDGMENT produces a genuinely divergent book (rotates out of the ETF momentum sleeve into single names and holds ~29% cash) \u2014 echo-risk is LOW \u2014 but the divergence is blind to the contrarian signals (regime confidence/transition_state, froth/macro-risk, and the outperforming self-directed defensive book) because all three are stripped before the seats see them.",
+   "answer": "DIVERGE, not echo \u2014 but the divergence is momentum-flavored, not contrarian-informed.\n\n(1) INCENTIVE \u2014 divergence-friendly. brain/pm_conviction.py:99-126 (_PM_PERSONA) tells the PM: (a) \"IDLE CASH EARNS ~4% ANNUALIZED ... holding cash when you lack high-conviction ideas is a REWARDED choice, not dead money\" and \"NEVER dilute the book with marginal names just to stay fully invested\" \u2014 explicit permission to hold cash / not stay invested; (b) \"EXPRESS EACH THEME THROUGH SINGLE NAMES, NOT ETFs. ... broad sector/index/factor ETFs (e.g. SMH, XLK, MTUM, IWM) are a LAST-RESORT placeholder ... must never be the core of the book\" \u2014 explicit permission to rotate OUT of the engine's top-RS ETF leadership sleeve (the RC2 momentum funnel); (c) \"you MAY add high-conviction thematic names the engine missed and DROP engine names that lack a live thesis\"; (d) \"Confirmation over prediction \u2014 every name needs a why-now.\" Grading is forward rel_return vs SPY, 21d (brain/calibration.py:32,55,114; brain/cio.py:57 vs=\"SPY\"). A grep for press/winners/NAV/S&P over brain/*.py returns ONLY attribution/benchmark plumbing (attribution.py, decision.py, calibration.py) \u2014 there is NO \"beat the S&P\", \"press your winners\", \"stay fully invested\", or headline/NAV-race directive in any persona. The reward structure permits and rewards divergence.\n\n(2) EMPIRICAL PROOF IT DIVERGES \u2014 the live dry-run artifact. data/portfolios/flagship_judgment/_pending_decision.json (written 2026-07-01 18:44, a real armed-Opus dry-run) shows the PM did NOT echo: it dropped IREN (\"crowded high-beta\"), TRIMMED the engine's core momentum ETFs SMH/XLK/MTUM ~2pts each explicitly \"to respect the contracting-liquidity governor\", kept IWM full as the \"healthy broadening leg\", RAISED EME to a real position, added ~18 single-name industrial/electrification names (EME/AME/APH/ANET/TILE/WAB/CHRW/FSS/NDSN/HUBB/MLI/DD/DY/KMT/LQDT/EXPD/MAS/GATX/URI), and held ~29% cash (\"dry powder for the pullback the engine is telling me to wait for\"). gross=0.704. It also explicitly DECLINED four Strategist-named \"confirmed leaders\" (AEIS/CAT/TLN/ETN) because they failed the engine gate. That is a book with a different sleeve mix, different names, and a large deliberate cash sleeve \u2014 the opposite of an echo.\n\n(3) CONTRARIAN INPUTS \u2014 largely NOT fed (the caveat). The regime file (vendor/macro_src/data/regime/latest.json) HAS confidence=0.327, transition_state=WEAKENING, plus contradicting, froth_fragility, macro_risk, risk_state, turning_point. But every intake point strips them to the same 7-key bullish slice {quad, quad_name, growth_score, inflation_score, liquidity_overlay, cycle_tag, sector_rs_top}: strategist input brain/strategist.py:65-67, PM input brain/pm_conviction.py:85-87, and the get_regime MCP tool brain/bot_mcp.py:~130. So neither seat is told the regime is low-confidence (0.327) or WEAKENING/transitioning \u2014 the RC4 confidence-blind intake reproduces itself inside the judgment layer. The self-directed defensive book (XLU/XLV/XLF/XLP, the +1.45% benchmark the user says beats every model) is invisible: no MCP tool exposes it (grep for self-direct/defensive/XLU/XLV/XLP over brain/bot_mcp.py and brain/flagship_desk_mcp.py returns nothing), and read_signal (bot_mcp.py:477-496) actively DENIES reading any portfolio book. sector_cycles.json is only reachable if the PM proactively guesses the path and calls read_signal \u2014 it is not in the prompt. MACRO RISK OFFICER context (macro_rs state/fragility/gross_cap/defensive_tilt) IS injected into portfolio_ctx (judgment_book.py:191-193) but ONLY when MASTERMIND_MACRO_RISK=1 AND it feeds the deterministic subtract-only teeth, not the PM's idea generation. Net: the seats can diverge, but on the same bullish confirmed-theme funnel the engine uses \u2014 the divergence you get is \"rotate momentum ETFs into single-name industrials + hold cash\", not \"the regime is weakening at 0.327 confidence, rotate to defensives\" \u2014 because the defensive-relevant facts never enter the prompt.\n\n(4) ANCHORING RISK \u2014 MODERATE. The PM sees the engine's WEIGHTS before opining: _pm_input embeds engine_candidates with \"weight\": c.get(\"weight\") (brain/pm_conviction.py:56), serialized straight into the prompt JSON (brain/pm_conviction.py:129-157, _build_prompt dumps payload). It also sees the engine's per-name bull/bear and the Strategist's confirmed-theme list. There is no \"reason from a blank book\" framing. The 07-01 artifact shows the anchoring is not fatal (the PM re-weighted and dropped names), but weights-visible-first is a real anchor toward the engine's sizing, and the whole candidate pool is the engine's own funnel plus its rejected pool \u2014 the PM is not shown any independently-sourced defensive universe to anchor against.\n\n(5) DEFINITIVE SHADOW A/B DESIGN.\n  Env \u2014 SHADOW arm (never touches the live book; PM submits to the isolated flagship_judgment path per pm_conviction.py:30 + flagship_desk_mcp.py:12-13): MASTERMIND_FLAGSHIP_JUDGMENT=1, MASTERMIND_GATE_OFFICER=1, MASTERMIND_MACRO_RISK=1 (arm the defensive teeth so the A/B tests the FULL judgment stack), MASTERMIND_SELF_MIRROR=1, FLAGSHIP_PM_MAX_TURNS=30, MASTERMIND_RESEARCH_LLM=1. CONTROL arm = the current live engine book (flagship trunk, judgment OFF). Run both nightly on the SAME asof/regime so the only variable is the seat.\n  Duration \u2014 min 25 trading nights to clear cio.py:_MIN_DATES=8 independent (thinned) clusters for a Newey-West t-stat; 40 nights preferred (the seats grade on a 21d horizon, so the first fully-resolved KPI window lands ~21 trading days in).\n  Metrics, logged per night from the isolated flagship_judgment artifacts + nav_history.jsonl: (i) DIVERGENCE RATE = 1 - Jaccard(name set) and L1 weight distance between judgment book and engine book; (ii) CASH% of the judgment book (gross from _pending_decision.json); (iii) SEMIS/momentum-ETF weight = summed weight in {SMH,XLK,MTUM,SOXX,IWM,QQQ} \u2014 the RC2 crowded sleeve; (iv) single-name % vs ETF %; (v) NAV vs engine book AND vs SPY AND vs the self-directed defensive basket (equal-weight XLU/XLV/XLF/XLP) via cio._nav_summary (extend _NAV_BOOKS with a synthetic self-directed row); (vi) contrarian-alignment: correlation between judgment cash% and regime confidence/transition_state on days the regime WEAKENS.\n  Success thresholds (echo-risk LOW confirmed): divergence rate > 0.30 name-Jaccard AND >8pts mean L1 weight distance across the window; momentum-ETF weight < engine's by >=5pts on average; cash% responds to regime (cash% on WEAKENING/low-confidence days materially above risk-on days). FAILURE / echo (would flip verdict to HIGH): divergence rate < 0.10, cash% flat ~engine, momentum-ETF weight within 2pts of engine. WIN condition (the point of the program): judgment NAV beats BOTH the engine book AND the self-directed defensive basket over the window with a Newey-West-significant PM KPI (cio.py per-seat significance, ci95 lower bound > 0). PARTIAL (diverges but doesn't beat defensives): expected given finding (3) \u2014 the fix is to feed confidence/transition_state/froth + a defensive universe into _pm_input/_strategist_input/get_regime, then re-run.",
+   "method": "Static analysis of the four seat modules + config + MCP surface, cross-checked against one live armed-Opus dry-run artifact. Read brain/judgment_book.py, brain/pm_conviction.py (incl. _PM_PERSONA + _pm_input), brain/strategist.py (incl. _strategist_input + _STRATEGIST_SYS), brain/cio.py, config/agents.yml, brain/flagship_desk_mcp.py, and brain/bot_mcp.py (get_regime + read_signal + tool list). Compared the regime fields present in vendor/macro_src/data/regime/latest.json (via python json load) against the fields each intake point actually extracts. Grepped brain/*.py for graded/NAV/S&P/SPY/press/winners/benchmark/self-direct/defensive/XLU/XLV/XLP. Read the real dry-run output data/portfolios/flagship_judgment/_pending_decision.json and confirmed its mtime (2026-07-01 18:44) and that it is the isolated flagship_judgment submit path. No LLM was run.",
+   "evidence": [
+    "brain/pm_conviction.py:99-126 _PM_PERSONA: 'IDLE CASH EARNS ~4% ANNUALIZED ... a REWARDED choice, not dead money' + 'NEVER dilute the book with marginal names just to stay fully invested' \u2014 divergence/cash explicitly rewarded, no stay-invested pressure",
+    "brain/pm_conviction.py:106-108: 'broad sector/index/factor ETFs (e.g. SMH, XLK, MTUM, IWM) are a LAST-RESORT placeholder ... must never be the core' \u2014 explicit mandate to rotate OUT of the engine's RC2 ETF momentum sleeve",
+    "brain/pm_conviction.py:56 _pm_input passes engine 'weight': c.get('weight') into the prompt payload (dumped at :154) \u2014 the PM sees the engine's SIZES before opining (anchoring risk MODERATE)",
+    "brain/pm_conviction.py:85-87 and brain/strategist.py:65-67: regime reduced to {quad,quad_name,growth_score,inflation_score,liquidity_overlay,cycle_tag,sector_rs_top}; brain/bot_mcp.py get_regime uses the same 7-key slice",
+    "vendor/macro_src/data/regime/latest.json: confidence=0.327, transition_state=WEAKENING present in file but dropped at every intake point (RC4 reproduced inside the judgment layer); contradicting/froth_fragility/macro_risk also stripped",
+    "grep self-direct|defensive|XLU|XLV|XLP over brain/bot_mcp.py + brain/flagship_desk_mcp.py = ZERO hits; read_signal (bot_mcp.py:477-496) DENIES portfolio-book reads \u2014 the outperforming self-directed defensive book is invisible to the seats (RC6 reproduced)",
+    "data/portfolios/flagship_judgment/_pending_decision.json (2026-07-01 18:44, isolated submit path): dropped IREN, trimmed SMH/XLK/MTUM ~2pts, raised EME, added ~18 single names, held ~29% cash (gross=0.704), declined 4 Strategist 'confirmed leaders' failing the gate \u2014 empirical proof of divergence, not echo",
+    "brain/calibration.py:32,55,114 + brain/cio.py:57 vs='SPY': seats graded on forward 21d rel_return vs SPY; no S&P-race/press-winners incentive anywhere (grep confirms only attribution plumbing)",
+    "brain/judgment_book.py:191-193: macro_risk context injected to portfolio_ctx only when MASTERMIND_MACRO_RISK=1, and it feeds the deterministic subtract-only teeth (:294-307), NOT the PM's idea generation"
+   ],
+   "confidence": 0.83,
+   "implications": "Reframes the 'weak dashboard links' complaint: the judgment layer, once armed, WILL break the engine's echo problem (it rotates out of the RC2 top-RS ETF sleeve into single names and holds cash on its own volition) \u2014 so the fix is worth arming, but arming alone will NOT close the gap to the self-directed defensive book because the seats are fed the same confidence-blind bullish funnel (RC4) and can't see the defensive benchmark (RC6). The high-leverage, low-risk changes are three additive prompt edits, not new machinery: (1) add confidence/transition_state/contradicting/froth_fragility to the reg slice in pm_conviction._pm_input:85-87, strategist._strategist_input:65-67, and bot_mcp.get_regime; (2) inject the self-directed defensive basket (XLU/XLV/XLF/XLP) NAV path as an explicit benchmark the PM must beat, into _PM_PERSONA and the payload; (3) reduce anchoring by moving engine weights out of the seed or labeling them 'for reference only, do not anchor sizing'. The shadow A/B in the answer is the gate: run it 25-40 nights, and the PARTIAL outcome (diverges but doesn't beat defensives) is the expected result that justifies edits (1)-(2) before a live cutover. Do NOT arm FLAGSHIP_JUDGMENT in production before the A/B \u2014 the seat is additive and reversible, but the contrarian-blindness means an unaided arming could underperform the defensive book it's meant to catch."
+  }
+ ],
+ "novel_verified": [
+  {
+   "id": "P1",
+   "title": "Every seat is graded on 'beat SPY over a fixed 21-bday window' \u2014 a horizon and benchmark that structurally reward relative-momentum and cannot credit a cash sleeve, position weight, drawdown path, or the actual holding period",
+   "verdict": "partially-confirmed",
+   "confidence": 0.85,
+   "evidence": [
+    "CONFIRMED verbatim: brain/calibration.py:32 `_HORIZON = 21  # forward business-day window the seat decisions are graded over`. All grading anchors to this single horizon: _label_name (L113-125) builds a synthetic rel_return falsifier with horizon_d=_HORIZON vs='SPY' default; the universe-fed seats pin to it (L361, L407, L487).",
+    "CONFIRMED: brain/calibration.py:312-336 _book_reliability grades the free-form Brain books. L332-333 `r = float(lab['rel_return']); rows.append((1 if r >= 0 else 0, _conviction_conf(...)))` \u2014 a held name is 'right' iff its 21d rel_return vs benchmark >= 0. Binary; docstring L278-280 confirms 'A holding is right iff it beat its benchmark (rel_return >= 0)'. No weight, no drawdown path, no absolute-return or risk-adjusted term.",
+    "CONFIRMED: brain/calibration.py:546-548 wires autonomous->'SPY', heavyweight->'SPY', china/hk->'FXI'. bot/autonomous.py:200-201 the live persona ends 'this book is graded on its realized NAV vs the S&P 500'; L185 'you rebalance the whole book daily'. So the persona is told its benchmark is a 100%-equity index while it rebalances daily but is graded on a frozen 21d forward window.",
+    "CONFIRMED holding-period mismatch: _book_reliability iterates logged `holdings` per decision date d and grades each on its 21d forward window (L318-333) with NO check that the name survived to d+21 \u2014 a name trimmed after 3 days is still scored on its frozen 21d path. _elapsed (L140-146) only requires d < asof.",
+    "CONFIRMED load-bearing in production: MASTERMIND_SELF_MIRROR=1 is set live. brain/self_mirror.py:166-206 _book_rows mirrors _book_reliability (outcome = 1 if rel>=0 vs SPY/FXI) and feeds a digest injected into the Brain prompt (docstring L5-9 example: 'your VETO on NVDA ... cost +8.3% vs SPY (it ripped)'). The reward function is not cosmetic \u2014 it teaches the autonomous/heavyweight Brains (the books underperforming the defensive self-directed book) which holdings 'went right' by beat-SPY-over-21d.",
+    "CONFIRMED novel vs the 47: the nearest priors are no-learning-loop-from-benchmark-book (self_directed writes no decisions ledger so it is EXCLUDED from grading \u2014 different mechanism), unfair-inception-and-benchmark-basis (DISPLAY/NAV comparison basis), and self-directed-outperformance-gap (subtract-only ROTATION logic). None audits the reward function's horizon/benchmark for the seats that ARE graded. synthesis.md:126 only *speculatively anticipated* 'personas are graded on NAV-vs-SPY' as a contingency of the judgment-shadow test; it never traced _HORIZON=21 or _book_reliability.",
+    "CONFIRMED not fixed on fix/bot-orphans-arming: `git log master..fix/bot-orphans-arming -- brain/calibration.py` is empty; `git diff` shows brain/calibration.py byte-identical; _HORIZON=21 and the `1 if r >= 0` grade unchanged on the branch.",
+    "REFUTES the claim's overstatement 'cannot credit a defensive edge': gate/risk seats DO credit defensive ACTIONS \u2014 brain/calibration.py:231-271 _seat_decision_reliability grades a VETO/WITHHOLD/EXIT as right (`1 if r < 0`) when the name underperforms. And because the book grade is RELATIVE (beat SPY), a defensive name that falls less than SPY in a selloff scores a 1. What the reward genuinely CANNOT credit is the CASH sleeve (cash is never a holding row, so a correct de-gross-to-cash earns zero grading credit \u2014 this is exactly the user's winning move), plus it ignores weight/drawdown-path/holding-period."
+   ],
+   "severity_final": "high",
+   "refinement": "Downgrade the claim's rhetoric from 'rewards whatever is ripping / cannot credit a defensive edge' to the precise, code-backed version: the free-form-book reward is a BINARY beat-benchmark-over-21d flag with (a) no absolute-return or risk-adjusted term, (b) no credit for the cash sleeve \u2014 cash generates zero grading rows, so a Brain that correctly raises cash in a drawdown (the self-directed book's actual edge is 4 defensive ETFs + implicitly staying out of the ripping momentum) gets no positive signal, (c) no position-weight or drawdown-path term, and (d) a horizon frozen at 21 bdays that mismatches the daily-rebalance holding period. A RELATIVE-outperformance defensive (falls less than SPY) DOES score, so the mechanism is a 'relative-return-vs-100%-equity echo' rather than a pure 'own what's ripping' echo \u2014 but on any risk-on stretch beating SPY over 21d overwhelmingly favors high-beta momentum, which is why the incentive would keep RC2's momentum selection alive even if selection were fixed. Severity stays HIGH because MASTERMIND_SELF_MIRROR=1 makes this reward live-injected into the exact Brains that lose to the defensive book. Proposed falsifier is sound and unchanged: recompute the last-60d free-form-book grade rows three ways [(a) current beat-SPY-21d binary, (b) beat XLU/XLV/XLF/XLP basket 21d, (c) return/realized-vol absolute] and rank-correlate each with the name's trailing-20d RS decile at decision time; if (a) correlates materially more with trailing-RS than (b)/(c), the reward is a provable momentum echo. Add a fourth cut: fraction of grading rows attributable to cash (expected ~0) to quantify the cash-blind hole. If all four correlate equally with RS, downgrade to medium. Files: brain/calibration.py (reward fn), brain/self_mirror.py (injection path), bot/autonomous.py (persona benchmark)."
+  },
+  {
+   "id": "P2",
+   "title": "Self-mirror (live, SELF_MIRROR=1) is de-confidence-ONLY and surfaces only misses \u2014 but it DOES have an anti-timidity branch; the real defect is benchmark-relative outcome scoring that surfaces market-matching defensive holds as \"characteristic misses\"",
+   "verdict": "partially-confirmed",
+   "confidence": 0.85,
+   "evidence": [
+    "brain/self_mirror.py:14-15 docstring 'De-confidence ONLY. The digest NEVER says \"raise conviction\"' \u2014 ACCURATE quote. Corroborated by brain/calibration.py:31,39: FLOOR=0.5 and _mult clamps to min(1.0, reliability/mean_conf), so the NUMERIC multiplier line (self_mirror.py:266) can never exceed 1.0. The quantitative signal is genuinely shrink-only. Claim sub-assertions 1, 2, 4 confirmed.",
+    "brain/self_mirror.py:260-261: misses = sorted((r for r ... if r.get('outcome')==0 ...))[:_MAX_MISSES] \u2014 only losers are quoted as detail rows; winners never surfaced. ACCURATE.",
+    "REFUTES the strong framing: brain/self_mirror.py:278-280 contains an explicit anti-timidity branch \u2014 else: lines.append(f'Pattern (effective-n {eff}): you have been right on {1-wrong_share:.0%} of these calls \u2014 calibrated, do not over-shrink.'). The claim asserts 'there is no branch that says you have been too cautious' and its own falsifier says 'if any digest branch can credit inactivity/caution or raise conviction, the asymmetry claim is wrong.' This branch credits caution against over-shrinking, so the falsifier fires. The digest is NOT monotonically conviction-suppressing.",
+    "The SURVIVING real defect (claim sub-assertion 5): brain/self_mirror.py:186 outcome=1 if r>=0 else 0 and brain/calibration.py:335 (1 if r>=0 else 0) define outcome as beat-benchmark (rel_return>=0 vs SPY/FXI). A defensive hold (XLU/XLV/XLP) that merely matches or slightly trails SPY gets rel<0 -> outcome=0 -> eligible to be quoted at self_mirror.py:287-288 as 'your hold on <tk> at <date> cost <rel> vs SPY (it went the other way).' The winning defensive behavior IS surfaced back as a characteristic miss. This is live (SELF_MIRROR=1) and novel.",
+    "Novelty + not-fixed confirmed: no prior-47 verdict/evidence entry mentions self-mirror, over-shrink, de-confidence asymmetry, or timidity (grep of /tmp/mm_audit/*.json,synthesis.md = 0 hits). Branch fix/bot-orphans-arming does not touch brain/self_mirror.py (commits cover china-seam, detectors D1/D2/D4, attribution #17, predictions #8, armory #2/#11, fused_risk prior d1f4c92). Wiring live at bot/autonomous.py:210, heavyweight.py:292, china.py:270, hk.py:267."
+   ],
+   "severity_final": "medium",
+   "refinement": "Split the claim. FALSE part: \"uniformly conviction-suppressing / monotonically de-risking / no branch can credit caution.\" self_mirror.py:278-280 is an explicit 'do not over-shrink' branch \u2014 a well-calibrated seat (reliability>=0.5) is told NOT to reduce conviction. The numeric multiplier IS shrink-only [0.5,1.0], but the prose digest is two-sided. Caveat: the anti-timidity line is gated behind effective-n>=8 (line 271), so in thin early-production data it may rarely fire, leaving only misses + the multiplier line \u2014 worth noting as a practical (not design) asymmetry. TRUE and worth keeping (re-severity to medium): the outcome=beat-SPY definition (self_mirror.py:186 / calibration.py:335) means a market-matching or slightly-lagging defensive hold scores outcome=0 and can be quoted back as a 'characteristic miss' (self_mirror.py:287-288). Combined with P1 (outcome=beat-SPY) and RC6 (defensive Self-Directed book invisible to learning), this is the concrete channel by which the winning defensive behavior is fed back to a Brain as a loss. Falsifier for the surviving claim: construct a resolved _book_rows entry for XLU with rel_return in (-0.03, 0) on a date whose 21d window elapsed; assert it (a) yields outcome=0 and (b) can appear in the top-_MAX_MISSES miss list quoted into the injected persona. If it cannot appear as a miss, the surviving claim is wrong too."
+  },
+  {
+   "id": "P3",
+   "title": "The winning self-directed defensive book is graded by ZERO seats \u2014 absent from _BOOK_BENCHMARK, _ROW_BUILDERS, and the calibration agents dict \u2014 so its excess return exerts no corrective pressure on any LLM seat's confidence/persona/reputation",
+   "verdict": "confirmed",
+   "confidence": 0.9,
+   "evidence": [
+    "brain/self_mirror.py:163 `_BOOK_BENCHMARK = {\"autonomous\":\"SPY\",\"heavyweight\":\"SPY\",\"china\":\"FXI\",\"hk\":\"FXI\"}` \u2014 self_directed absent. self_mirror.py:209-218 `_ROW_BUILDERS` keys = strategist/pm/gate/risk/autonomous/heavyweight/china/hk; no self_directed builder, and rows() at :223 returns [] for any unknown agent.",
+    "brain/calibration.py:537-549 compute() agents dict grades forge/sentinel/strategist/pm/timing/gate/risk + book-graders autonomous/heavyweight/china/hk (each _book_reliability(d, id, SPY|FXI)). self_directed is not passed as a portfolio_id anywhere, so it never enters the calibration multipliers.",
+    "brain/reputation.py:217-221 `_ROW_BUILDERS` = sentinel/strategist/gate/risk only; regime_reliability()/influence_weight() (the seat-weighting used in committee) key exclusively off these seats. No self_directed seat exists to earn or lose weight.",
+    "Falsifier executed: grep -rniE 'cross.?book|excess.?return|beaten.?by|outperform|self.?directed' over brain/*.py returns NO term that blends a self-directed-derived excess-return variable into any reason()/persona/confidence path. The only self_directed hit in brain/ is an incidental comment (brain/heavyweight_mcp.py:316). Confirms zero incentive references \u2014 the falsifier does not fire.",
+    "Distinct from prior audit RC6 entry `self-directed-outperformance-gap` (/tmp/mm_audit/verdicts.json), whose evidence is entirely about rotation-logic (subtract-only desk, advisory favor list in defensive_playbook.py:165-202, RISK_GOVERNOR dark) \u2014 i.e. why the Brain CANNOT rotate into defensives. That entry never touches the seat-grading registries. P3 is a genuinely different mechanism (incentive/grading-registry absence), not a duplicate.",
+    "Not fixed on fix/bot-orphans-arming: git diff --name-only master..branch touches no calibration.py/self_mirror.py/reputation.py; the branch commits are china-brain/detectors/attribution/predictions work.",
+    "COUPLING CAVEAT (why not 1.0 confidence): data/portfolios/self_directed/ contains only safety.json \u2014 it has NO decisions.jsonl, whereas autonomous/heavyweight/china/hk each have 8-10 lines. calibration._book_decisions (calibration.py:294-296) reads <id>/decisions.jsonl. So P3's proposed test (add a self_directed entry to _BOOK_BENCHMARK/_ROW_BUILDERS) would return EMPTY rows today \u2014 the incentive-layer gap and the RC6 data-plumbing gap are coupled, not fully independent as the claim asserts. The registry absence is real, but wiring it alone does not create a live signal without a self_directed decision ledger."
+   ],
+   "severity_final": "medium",
+   "refinement": "CONFIRMED as written on every literal assertion: self_directed is hard-absent from all three seat-grading enumerations (self_mirror._BOOK_BENCHMARK + _ROW_BUILDERS, calibration.compute agents dict, reputation._ROW_BUILDERS), and no code blends a cross-book excess-return term into any seat's confidence/persona/reputation \u2014 the falsifier does not fire. It is a distinct mechanism from prior RC6 (which is about rotation-logic, not grading registries), and not fixed on the active branch. TWO refinements: (1) Severity down high->medium. The registry absence is a necessary-but-not-sufficient gap: self_directed also has no decisions.jsonl (only safety.json), so P3's own proposed test would return empty rows \u2014 the incentive layer and RC6's data-plumbing layer are coupled, and fixing one enumeration without also emitting a self_directed decision ledger produces no signal. The claim slightly overstates independence ('even if self-directed produced perfect logs...'). (2) The real fix is a two-part chain: (a) make self_directed emit decisions.jsonl on the same schedule as the Brain books, then (b) add it to the three registries AND, crucially, introduce a cross-book excess-return term that actually reaches a prompt \u2014 grading self_directed as just another book (row-builder) grades ITS picks, but does NOT by itself create the 'you are being beaten by 4 defensive ETFs' incentive the claim wants; that needs a new cross-book gap variable injected into the other books' personas. Maps to RC6/S6."
+  },
+  {
+   "id": "P4",
+   "title": "Reputation weighting compounds only the BEAR seat's power (subtract-only asymmetry baked into the learning layer)",
+   "verdict": "confirmed",
+   "confidence": 0.95,
+   "severity_final": "medium",
+   "evidence": [
+    "brain/reputation.py:16,50-52 -- influence_weight is bounded to [W_FLOOR,W_CEIL]=[0.5,1.0]. Docstring L50: 'The band never exceeds 1.0 -- influence weighting cannot inflate a seat above its nominal vote.' By construction the weight can only equal or shrink the nominal vote, never raise it. Additive impossibility confirmed at the source.",
+    "brain/reputation.py:20-24 property 3 (verbatim): 'SUBTRACT-ONLY PRESERVED. The weight only ever modulates a DE-RISKING action (a trim/veto)... a high-influence adversary can veto/trim HARDER... but can NEVER create additive size or rescue a name.' Matches the candidate quote exactly.",
+    "brain/committee.py:170-177 -- the SOLE consumer. Fires only for seat='sentinel' (L170 influence_active('sentinel'), L171 influence_weight('sentinel')). A calibrated bear does exactly two things: L176 drop_bar=max(0.45, 0.6-0.15*lean_in) LOWERS the OPPOSE->drop bar toward 0.45, and L177 trim_scale=0.5*w DEEPENS the trim toward 0. Both strictly subtract-only. The confirm/scale=1.0 branches in nexus() (L143-195) are hardcoded and untouched by w.",
+    "Grep of brain/ for influence_weight(/influence_active(/cap_influence yields exactly ONE non-docstring caller: committee.py, passing 'sentinel' only. The 'strategist' row-builder (reputation.py:217-222, the only non-de-risking graded seat) IS graded but its influence weight is NEVER consumed by any code path -- confirming the candidate's claim that the additive seat cannot inject size via reputation.",
+    "reputation._ROW_BUILDERS (reputation.py:217-222) grades 4 seats: sentinel (bear), strategist (confirmed-themes), gate (veto/withhold), risk (exit) -- 3 of 4 de-risking; the 1 additive seat is dead-ended. NOT a duplicate: prior audit (/tmp/mm_audit) references reputation.influence_weight only as a grep TARGET for the S3 self-directed feedback gap, never analyzing the layer's internal add/subtract asymmetry. NOT fixed on fix/bot-orphans-arming: git diff shows committee.py gains only adversary_diversity() (#11); the nexus() reputation block L157-195 is byte-unchanged; reputation.py is untouched."
+   ],
+   "refinement": "CONFIRMED as stated, severity medium upheld. The asymmetry is total by construction: influence_weight returns w in [0.5,1.0] and cap_influence returns eff in [0, MAX_QUORUM_SHARE=0.45] -- both bounded <=1.0 -- and the single consumer (committee.nexus L170-177) applies w only to lower drop_bar and shrink trim_scale for SENTINEL. No input to influence_weight can raise an additive action; the falsifier ('any code path lets a well-calibrated seat earn additive size') fails to find one. Two clarifications that SHARPEN rather than weaken the claim: (1) The strategist seat is graded in _ROW_BUILDERS but its weight is a dead artifact -- never read -- so even the nominally 'additive' seat has zero authority to add, reinforcing the finding. (2) cio._reputation (cio.py:262-320) is a separate display-only label in the READ-ONLY review() using the calibration de-confidence multiplier (also bounded <=1.0); it does not size and is not a counterexample. Practical caveat: this is dormant in production -- MASTERMIND_REPUTATION_WEIGHTING is not in the dumped live env (default OFF), and it is cold-start inert until a seat clears MIN_N=12 grades IN the current regime; hence medium not high. But it is a genuine RC1-deeper design gap: arming the committee's learning layer can ONLY ever grow the momentum-remover's power, so the learning dynamics themselves are subtract-only and cannot evolve the desk toward the winning defensive rotation. Proposed test is sound; add: also assert influence_weight('strategist') is computed-but-unconsumed (grep shows zero call sites) to demonstrate the additive seat is dead-ended, and confirm max over all seats/regimes of influence_weight <= 1.0 to prove the ceiling analytically."
+  },
+  {
+   "id": "P5",
+   "title": "SENTINEL sees the engine's size_authority + confluence before forming its \"independent\" bear case \u2014 the blind adversary is anchored on the engine's own bullish verdict",
+   "verdict": "confirmed",
+   "confidence": 0.82,
+   "evidence": [
+    "brain/committee.py:52-60 `_sentinel_input` returns `engine_synthesis: {k: syn.get(k) for k in ('size_authority','confluence','vetoes','divergences','quad')}` \u2014 the engine's sizing verdict AND gate score are literally sliced into SENTINEL's payload. CONFIRMED verbatim on both master and branch tip fix/bot-orphans-arming (git show fix/bot-orphans-arming:brain/committee.py:44-60 is byte-identical).",
+    "portfolio/lenses.py:1022-1030 proves size_authority IS a bull/bear verdict: `if vetoes: 'blocked'; elif confluence>0.3 and leadership_ok and not price_downtrend...: 'up'; elif confluence<-0.3: 'down'; else 'hold'`. It is derived directly from confluence, so showing SENTINEL {size_authority:'up', confluence:1.0} shows it the engine's optimism, not a neutral fact.",
+    "brain/committee.py:45-46 docstring: 'Deliberately excludes FORGE's paper, verdict, scores and recommendation, so its bear case is genuinely independent (no anchoring on the bull thesis).' \u2014 it excludes FORGE but NOT the engine synthesis; the 'no anchoring' claim is false w.r.t. the engine verdict. This is the exact subtlety the prior audit took at face value.",
+    "brain/committee.py:63-76 `_SENTINEL_SYS` instructs 'reason independently' / 'Assume the bull thesis is WRONG' while the payload hands it confluence + size_authority='up' \u2014 a strong numeric anchor; and a name only reaches SENTINEL because bot/phase2.py:379-444 already built engine_full via lenses.full() and FORGE confirmed it.",
+    "Fail-open interaction confirmed against live state: data/committee/2026-07-01/AAPL/forge.json engine_score=100; with site/stockdata missing (prior audit) confluence=1.0/size_authority='up'/vetoes=[] is fabricated off one alt-data lens \u2014 so on degraded-data days SENTINEL would be shown 'confluence 1.00' precisely when the signal is least real.",
+    "Load-bearing: brain/committee.py:181-194 NEXUS's ONLY de-escalation authority (OPPOSE>=drop_bar->drop; OPPOSE->trim 0.5; CONDITIONAL->trim 0.66) is driven entirely by SENTINEL's stance+confidence. If the engine anchor biases SENTINEL toward SUPPORT/CONDITIONAL or lower OPPOSE confidence, the committee's only teeth are blunted.",
+    "NOVELTY confirmed: /tmp/mm_audit/evidence_digest.json SENTINEL lines are only (a) committee.py:57-58 narrow macro_regime whitelist (RC4 confidence-blindness) and (b) committee.py:143-146 subtract-only rescue (RC5); synthesis.md lists SENTINEL only as a bear-with-no-bull (RC3/S2). None flag the size_authority/confluence anchoring vector. Not a duplicate.",
+    "NOT fixed on branch: git diff master..fix/bot-orphans-arming -- brain/committee.py adds only adversary_diversity() same-model LABEL (#11); _sentinel_input is unchanged. The anchoring input is still fed.",
+    "LIVE-LATENCY caveat: production env MASTERMIND_RESEARCH_LLM=0; data/committee/2026-07-01/AAPL/debate.md shows 'SENTINEL: not run (no LLM available)' and NEXUS rubber-stamps FORGE. So the anchoring bites only when the committee LLM path is enabled \u2014 currently dark in prod, but arms the moment the seat is turned on."
+   ],
+   "severity_final": "medium",
+   "refinement": "Claim CONFIRMED at the code level and genuinely novel (not among the 5 prior SENTINEL/committee findings, not fixed on fix/bot-orphans-arming \u2014 the branch added only the same-model diversity LABEL, leaving _sentinel_input byte-identical). Three refinements: (1) The anchor is stronger than the claim states \u2014 size_authority is not merely 'a verdict shown alongside'; it is deterministically DERIVED from confluence (lenses.py:1022-1030), so the two fields are one correlated bull signal, and it is the same fail-open confluence=1.0 the prior audit proved fabricated on missing-stockdata days. So SENTINEL is primed with max-confluence exactly when the underlying signal is least trustworthy \u2014 the anchoring and the fail-open compound. (2) It is load-bearing, not cosmetic: NEXUS (committee.py:181-194) has NO authority except through SENTINEL's stance/confidence, so biasing SENTINEL away from high-confidence OPPOSE directly disarms the committee's only drop/trim teeth. (3) Severity capped at MEDIUM (not high) for a live-impact reason: production runs MASTERMIND_RESEARCH_LLM=0, so SENTINEL currently never fires ('not run \u2014 no LLM available' in the 2026-07-01 artifacts) and NEXUS rubber-stamps FORGE regardless of anchoring. The defect is latent \u2014 real and un-fixed, but it only manifests once the committee LLM seat is enabled. Maps to RC3 (firebreak/independent-check integrity) with an RC4 flavor (the fabricated-confluence intake corrupts the one adversarial reasoning seat). Falsification test as proposed is sound and cheap: run SENTINEL twice on ~30 confirmed names, once with engine_synthesis.{size_authority,confluence} stripped (leave lens rows + regime), compare OPPOSE/CONDITIONAL/SUPPORT distribution and mean confidence. Falsifier: if stripping the verdict does not shift the distribution toward OPPOSE or lower confidence, the anchoring is immaterial. Add a targeted variant: hold everything fixed but flip confluence 1.0->0.35 on the fail-open (missing-stockdata) names to isolate the fabricated-anchor effect specifically."
+  },
+  {
+   "id": "P6",
+   "title": "\u03b5-exploration can only re-try momentum-funnel rejects \u2014 structurally cannot explore a defensive/diversifying name, so the lone exploration signal entrenches the momentum bias",
+   "verdict": "confirmed",
+   "confidence": 0.9,
+   "severity_final": "medium",
+   "evidence": [
+    "portfolio/rejections.py:42 `_EXPLORE_STAGES = (\"committee_drop\", \"timing_withhold\")` is the SOLE eligibility gate; explore_buy() (lines 80-87) returns True only if `stage in _EXPLORE_STAGES`. Repo-wide grep confirms no other assignment/append to _EXPLORE_STAGES anywhere \u2014 the set is closed.",
+    "bot/phase2.py: both _maybe_explore call sites pass HARDCODED stage literals \u2014 line 420 \"timing_withhold\" and line 452 \"committee_drop\" \u2014 and both live inside `for c in sized:` (line 376). `sized` = conviction.build() survivors (phase2.py:282,488). Every explorable name has ALREADY cleared conviction+research-confirm; both stages are soft de-escalations of a would-be buy.",
+    "portfolio/conviction.py:107-128 candidates() universe = _us_standouts() \u222a _basket_top_picks() \u222a open theses \u222a _SHORTLIST(20 AI/MAG7) \u222a intake \u2014 i.e. the momentum/RS funnel. A defensive ETF (XLU/XLV/XLF/XLP) never enters candidates(), so it can never be classified committee_drop/timing_withhold and can never reach the explore set. The explore set is definitionally a SUBSET of the momentum funnel's own survivors \u2192 RC1.",
+    "Off-policy read is momentum-only by construction: rejections.py:249-253 scorecard `explored_cohort` grades ONLY action=='explored_buy' names, which come exclusively from the two momentum stages; the estimate can only answer 'should we have kept this momentum name?' never 'should we have diversified?' (design note docs/design/desk/OFF_POLICY_EXPLORATION.md, ref'd rejections.py:41).",
+    "LIVE LEDGER (data/shadow/rejections/ledger.jsonl, 398 rows): by_stage = conviction_veto 387, committee_drop 6, research_hold 5, timing_withhold 0. by_action = reject 398, explored_buy 0. 176 rows logged policy=epsilon_greedy (SELECTION_EXPLORE armed). The 6 committee_drop names (URI, ETN, UNP, PBF, ADAM, CBRS) are industrials/energy/rentals \u2014 momentum survivors, zero defensive diversifiers.",
+    "NOVELTY/NOT-FIXED: prior audit (/tmp/mm_audit/*) has ZERO mentions of exploration/epsilon/rejections/off-policy. git log master..fix/bot-orphans-arming -p shows no change to _EXPLORE_STAGES, explore_buy, or the two _maybe_explore call sites \u2014 the design is untouched on the fix branch."
+   ],
+   "refinement": "Structural claim CONFIRMED and permanent: the explore candidate set is a closed subset of the momentum funnel's own confirmed-then-dropped survivors; no code path can add a defensive/diversifying name, so the one exploration signal reinforces (never counteracts) the momentum funnel \u2014 RC1. Two empirical refinements narrow the LIVE impact (keeping severity at medium, not high): (1) MASTERMIND_TIMING_GATE is NOT set in prod, so timing_withhold never fires \u2014 the live explorable set is narrower still, committee_drop ONLY (ledger has 0 timing_withhold rows, 6 committee_drop). (2) The lever has produced 0 actual explored buys to date (398 rejects, action=explored_buy count = 0); it is ARMED (176 epsilon_greedy rows) but has bought nothing \u2014 only 6 committee_drop names have ever appeared and none crossed \u03b5. So the evidence phrase 'the system IS spending its exploration budget' overstates: this is a realized DESIGN defect (the budget, when it does fire, can only re-try a momentum name) rather than an already-observed behavior. The incentive-design flaw is real, permanent, and correctly RC1; realized-impact-to-date is near zero, which is why medium (arguably medium-low) is the right severity rather than high. Falsifier proposed in the candidate is well-formed and already answerable from the ledger: the explorable-stage cohort is 0% defensive/uncorrelated (all momentum-funnel industrials/energy), and _EXPLORE_STAGES is provably closed to funnel rejects."
+  },
+  {
+   "id": "NEW-A",
+   "title": "The loop/ backtest+promotion package is write-only: no discovery/promotion can change any live book, and the sole paper->live signal (forward_brier) is a permanent None stub with zero callers",
+   "verdict": "confirmed",
+   "confidence": 0.9,
+   "evidence": [
+    "loop/paper.py:21-28 forward_brier() \u2014 documented as 'the REAL judge (the only thing that flips paper->live)' (module docstring L1) \u2014 unconditionally `return None` (L28, comment: 'forward grading requires realized next-period returns the loop hasn't observed yet'). L24 loads the archive but L28 returns None regardless. So an enrolled sleeve can never mature to live sizing by construction.",
+    "grep 'forward_brier' across the main checkout (excluding .claude/worktrees and __pycache__): the ONLY hit is its own def at loop/paper.py:21. Zero callers \u2014 nothing consumes the promotion signal.",
+    "loop/paper.py:16 enroll() writes a signal_archive snapshot label=f'sleeve_{spec_hash[:8]}'; loop/paper.py:24 forward_brier() is the ONLY reader of that label. grep for load_archive('sleeve_ / 'sleeve_{' in the main checkout returns ONLY loop/paper.py:16 and :24. The unrelated 'sleeve_chip' hits (brain/theme_lens.py, brain/china_mcp.py, portfolio/safety.py) are the CN drawdown-radar gross-exposure multiplier \u2014 a different concept, not the sleeve archive. No live book/brain/sizing code reads the sleeve snapshots.",
+    "app/scheduler.py: grep for loop.iterate|factor_zoo|desk_levers|engine_backtest|single_name returns NOTHING. The daily _loop_maintenance_job (app/scheduler.py:186-294) advances only the PARALLEL substrate (portfolio.predictions/rejections, brain.student/distill/interim_marks, portfolio.shadow_books/desk_ab, brain.outcomes/outcome_ledger/scorer/calibration) \u2014 it never invokes any loop/ backtest or promotion module. iterate.iterate() is called only by tests/test_loop.py:20 and loop/iterate.py:111 (__main__).",
+    "loop artifact consumers in the main checkout: engine_verdict/factor_zoo/desk_levers appear only in (a) their own loop/ modules, (b) tests/, (c) app/web.py:1189-1198 /api/factor_zoo -> JSONResponse(factor_zoo.load()) DISPLAY, and (d) loop/fundamentals.py docstring. Written only by scripts/run_factor_zoo.py, scripts/run_desk_levers.py, scripts/run_engine_backtest.py (manual). data/backtest/{desk_levers,engine_verdict,factor_zoo}.json are all stale Jul-1 18:44 artifacts. No allocation/sizing/gate/brain code reads them.",
+    "portfolio/desk_ab.py (the LIVE desk-lever A/B) defines its OWN four inline lever policies (desk_ab.py:44-56), clones the live book (_clone_book_for, L199), and has ZERO references to loop.desk_levers or desk_levers.json. The loop's lever 'validation' is orphaned from the live experiment it is nominally validating \u2014 they share only a name.",
+    "Non-duplicate of the prior 47: the closest prior ids are no-learning-loop-from-benchmark-book (RC6, Self-Directed book invisibility \u2014 a different loop), sector-cycles-completely-ignored (regime intake), and subtract-only-gate-confirmation-bias (the gate). None trace the loop/ backtest package's outputs to a live consumer or flag forward_brier as a permanent None. Confirmed novel."
+   ],
+   "severity_final": "high",
+   "refinement": "CONFIRMED with a scoping correction to the title. The claim 'the ENTIRE self-improvement loop is write-only' over-reaches: the daily _loop_maintenance_job (scheduler.py:186-294) DOES advance a parallel forward-learning substrate (predictions, calibration, shadow_books, desk_ab, outcome_ledger, student/distill). What is write-only is specifically the loop/ backtest+promotion PACKAGE (iterate, factor_zoo, desk_levers, engine_backtest, paper). The candidate's own evidence draws exactly this line (it enumerates the substrate the maintenance job advances), so the body is correct; only the headline is loose. Precise statement: the loop/ discovery+promotion package cannot influence any live book \u2014 its outputs are read only by the /api/factor_zoo display endpoint and manual scripts/run_*.py, its enroll->promote path terminates in forward_brier()'s permanent `return None` (0 callers), and its 'validated' desk levers are never read by the live desk_ab A/B (which reimplements its own arms). Maps to RC6 (learning machinery decoupled from live behavior). Severity high (not critical): it is a large body of dead 'production-grade' scaffolding presented as the promotion authority, which masks that no autonomous discovery can ever change sizing \u2014 but it does not itself mis-size or lose money; it is inert. Falsification test (would refute): find ANY live decision path (bot/phase2, bot/daily, bot/autonomous, bot/heavyweight, bot/etf, engine sizing/gate/allocation, brain/*, portfolio/allocate|size) that imports or reads loop.promote/loop.paper/forward_brier/a 'sleeve_' archive/data/backtest/*.json for sizing or gating \u2014 OR find any scheduler/bot call to loop.iterate / *_iterate.iterate(dry_run=False) / factor_zoo.build / desk_levers.build. Expected: zero hits outside app/web.py display + scripts/run_* writers + tests; forward_brier has zero callers. Not fixed on fix/bot-orphans-arming (its two scheduler-touching commits are China-seam + VPS-sync; no loop wiring; its loop/ touches are single_name_iterate docstrings only)."
+  },
+  {
+   "id": "NEW-B",
+   "title": "desk_levers.json claims effective_n>1 and 'SURVIVES multiple-testing' but the emitted verdict has effective_n=1 (all 20 candidates one cluster) \u2014 the advertised DSR haircut never happened",
+   "verdict": "confirmed",
+   "confidence": 0.97,
+   "evidence": [
+    "EMITTED STATE (data/backtest/desk_levers.json .verdict): effective_n=1, n_candidates=20, clusters={'0': [all 20 lever names]} \u2014 every family/lever collapsed into a single cluster; best_dsr=1.0, best_dsr_verdict='SURVIVES multiple-testing (DSR>=0.95)', fdr_survivors=20, arm_a_passers=all 20. The advertised multiple-testing haircut demonstrably did not bite.",
+    "SELF-CONTRADICTION in the same object: verdict.effective_n_note = 'with 5 de-correlated baseline families the pool no longer collapses to one bet (the original momentum-only pool gave effective_n=1) - the DSR/PBO/BH-FDR haircut is now honest' sits at loop/desk_levers.py:467-469, emitted unconditionally as a hardcoded string literal directly beside 'effective_n': int(n_eff) (line 464, =1). Same for proxy_disclaimer (lines 417-433) asserting 'so the multiple-testing deflation is honest (effective_n > 1)' as achieved fact.",
+    "THE FAILURE THIS REWRITE CLAIMED TO CURE, verbatim: loop/desk_levers.py:11-15 \u2014 'effective_n == 1 ... The DSR re-deflation at n_trials=1 is then NOT a multiple-testing haircut at all - the headline \"we deflated for the trials\" was meaningless.' The rewrite reintroduced exactly this while emitting prose claiming it fixed it.",
+    "MECHANISM confirmed in code: all 5 families are constructed side='long', frac=0.10/0.05 top-decile equity baskets over the same universe (loop/desk_levers.py:96-97 _FRAC_BASE/_FRAC_CONC; :151-152 super().__init__(..., side='long', frac=..); families at :101-107 incl. reversal/lowvol are still LONG baskets, not spreads). Shared market beta => net-return series correlate >= RHO. RHO=0.90 (loop/factor_experiment.py:44). cluster.effective_n(pool, rho=fe.RHO) at loop/desk_levers.py:334 collapses them to 1.",
+    "UNDEFLATED DSR at n=1: loop/desk_levers.py:339 deflated_sharpe(..., n_trials=max(1, n_eff)) => n_trials=1; loop/budget.py:150-152 expected_max_sharpe returns 0.0 when n==1 ('With one trial the expected max = expected value of N(0,1) = 0'). So best_dsr=1.0 is a RAW, un-haircut Sharpe \u2014 the 'SURVIVES multiple-testing' verdict at desk_levers.py:472 (best_dsr_verdict) is emitted regardless of n_eff.",
+    "CONTRAST proving the collapse is construction-specific not machinery: data/backtest/factor_zoo.json effective_n=4 (of 16 cands); data/backtest/engine_verdict.json effective_n=5 (of 8) \u2014 same harness/cluster/RHO achieve n_eff>1 with genuinely de-correlated pools.",
+    "TEST does not guard it and corroborates the mechanism: tests/test_desk_levers.py:115 asserts every family book is long-only ('is long-only here, no negative weights'); :199-207 assert distinct held BOOKS (membership), but membership-distinctness does NOT bound net-return correlation, which is what RHO clustering measures. No test asserts effective_n>1 or that effective_n_note/best_dsr_verdict match the actual n_eff.",
+    "NOT a duplicate of the prior 47 (no desk/lever/DSR/effective-n id in /tmp/mm_audit/verdicts.json) and NOT touched on fix/bot-orphans-arming (git log master..fix -- loop/desk_levers.py data/backtest/desk_levers.json is empty). File authored 2026-06-23, after the prior audit's focus.",
+    "SCOPE bound (severity input): grep shows no brain/portfolio/app/bot code reads desk_levers.json \u2014 only tests/test_desk_levers.py and scripts/run_desk_levers.py consume it. This is a validation-loop (loop/) artifact that lies about its own statistical rigor; it does not yet gate live position sizing."
+   ],
+   "severity_final": "high",
+   "refinement": "Claim fully confirmed on the code and the persisted state \u2014 every cited file:line matches. The verdict object advertises 'SURVIVES multiple-testing (DSR>=0.95)' / best_dsr=1.0 / 'the haircut is now honest (effective_n>1)' while its own effective_n=1 and clusters={'0': all 20} prove the DSR deflation was a no-op (n_trials=1 => expected_max_sharpe=0 => zero haircut). Root cause is a real statistical-construction flaw the rewrite's docstring explicitly set out to fix: all 5 'de-correlated' families are long-only top-decile baskets of one universe, so their return series share market beta and cluster to n_eff=1 under RHO=0.90; the fix confused book-membership diversity (which the tests assert) with return-correlation diversity (which the DSR/PBO gauntlet requires). The self-congratulatory effective_n_note/proxy_disclaimer/honest_read are hardcoded string literals emitted unconditionally, never gated on the actual n_eff \u2014 so the artifact will keep printing 'honest' regardless of the number it emits. Maps to NEW-RC (validation machinery that misgrades its own rigor; a laundered claim, kin to RC3's fail-open confluence and the midterm-gate-laundering pattern). Severity held at HIGH not critical: no live brain/portfolio/app/bot path currently consumes desk_levers.json (only its test + runner), so it cannot yet size a trade \u2014 but it is the designated go/kill gate for whether the L2-concentration and L3-entry-timing desk levers are promoted, and it would greenlight all 20 as multiple-testing-honest edges when the haircut never applied, so any future wiring inherits a corrupted verdict. Recommended falsification test is sound and I would strengthen it: (1) assert verdict.effective_n == len(verdict.clusters) AND effective_n > 1, and refuse to emit 'SURVIVES multiple-testing' or the 'now honest' notes whenever effective_n==1 (condition the strings on the actual value); (2) the pool must contain at least one genuinely market-neutral lever (a long-short decile spread, side both), not just distinct long-only books, then confirm cluster.effective_n rises above 1 and best_dsr drops materially below 1.0 as the deflation finally bites. Add a regression test asserting effective_n>1 \u2014 the current suite (tests/test_desk_levers.py) checks book-membership distinctness but never the return-correlation collapse, which is precisely why this shipped."
+  },
+  {
+   "id": "NEW-C",
+   "title": "factor_zoo / desk_levers / factor_experiment score the 2022+ locked holdout with NO code-enforced one-shot burn (only iterate.py enforces it); every re-run silently re-peeks and overwrites the dashboard's out-of-sample verdict",
+   "verdict": "confirmed",
+   "confidence": 0.93,
+   "evidence": [
+    "loop/iterate.py:78-93 is the ONLY code path that enforces the one-shot rule: `touched = store.touched_set(con)` (78), `if passes_is and not exhausted and h not in touched:` (85), `holdout.touch(h, touched)` (87), `store.add_holdout_touch(con, h, HOLDOUT_START, ho_sharpe, now)` (91), `except holdout.HoldoutBurned: hconf = False` (92). holdout.py:30-44 `touch()` raises HoldoutBurned if spec_hash already in the persisted `touched` set.",
+    "loop/factor_zoo.py:315 scores the LOCKED holdout inline for every in-sample passer \u2014 `mh = harness.score(c, holdout, bill, n_eff=1, ...)` \u2014 with NO holdout.touch, NO store.touched_set load, NO store.add_holdout_touch persist. grep of the file for `store.|touched|HoldoutBurned|holdout.touch` = 0 hits. It never even imports loop.holdout.",
+    "loop/factor_experiment.py:368 does the same: `mh = harness.score(c, holdout, bill, n_eff=1, ...)` under a comment `# holdout \u2014 touched ONCE per spec_hash` that is aspirational \u2014 no touch/burn/persist call exists; its 2 `store.` hits (110) are `store.read('yahoo','SPY')` price reads. loop/desk_levers.py has zero burn-tracking (its one `touched` hit at :74 is prose in a docstring).",
+    "The modules self-document the gap. loop/factor_zoo.py:361-363 and loop/desk_levers.py:456-458 both carry the identical string: `holdout_discipline: one-shot per pool_fingerprint; re-running with a DIFFERENT fingerprint burns a fresh holdout (statistical discipline, NOT code-enforced \u2014 run deliberately)`. factor_zoo.py:343-345 says the fingerprint 'makes a re-run auditable rather than silent' but a repo-wide grep (lib/loop/bot/brain/scripts, excluding vendor) finds ZERO readers of `pool_fingerprint` or `holdout_burned` \u2014 the fingerprint is written to JSON and never read back, so nothing refuses or even counts a repeat peek.",
+    "scripts/run_factor_zoo.py:29-31 and scripts/run_desk_levers.py print `pool_fingerprint=... (holdout burned once for THIS pool; a different fingerprint = a fresh holdout)` and the docstrings claim 'it BURNS the one-shot holdout per spec' \u2014 but no persisted burn check runs; a second invocation on an unchanged pool recomputes holdout Sharpe with no error and overwrites the JSON.",
+    "These artifacts are surfaced as the dashboard's out-of-sample verdict: data/backtest/factor_zoo.json carries pool_fingerprint=378314e11ebb1874, holdout_burned=true, and verdict.holdout_confirmed=['lowvol_120d','maxret_low_1m','lowvol_60d','skew_low_6m','consistency_6m']; data/backtest/engine_verdict.json exposes holdout_confirms; desk_levers exposes arm_a_passers. The 'confirmed' list is regenerated (re-peeked) on every manual re-run with no counter increment.",
+    "Not a duplicate of the prior 47: /tmp/mm_audit verdicts/evidence contain no holdout/touched/factor_zoo/desk_levers entry (only holdout mentions are backtest/engine_verdict.json 'honest_read' prose). Not fixed on fix/bot-orphans-arming: `git log master..fix/bot-orphans-arming` touches predictions ledger, attribution, detectors D1/D2/D4, armory, china-seam, brain fused_risk prior, auth/deploy \u2014 nothing under loop/holdout burn enforcement."
+   ],
+   "severity_final": "medium",
+   "refinement": "CONFIRMED as stated, with two scope caveats that keep it at medium (not high). (1) The re-peek is human-driven, not an automated leak: the daily loop.iterate path DOES enforce the burn correctly (iterate.py:78-92 + store-backed touched set), and the three unguarded siblings are on-demand-only (scripts/run_*.py, explicitly 'run deliberately', heavy ~1-2 min, not wired into the scheduler). So the p-hacking exposure is 'an operator re-tunes a factor/lever and re-runs, silently consuming fresh looks at the same locked 2022+ slice and overwriting the dashboard verdict' \u2014 real, but requires a human in the loop, not a silent daily contamination. (2) The code is honest about it: the modules print 'NOT code-enforced' rather than claiming enforcement, so this is a discipline-vs-enforcement gap, not a hidden bug. Sharper framing for the writeup: the real defect is that the pool_fingerprint written into every artifact has ZERO readers (grep confirms), so the one mechanism that could make repeated peeks auditable ('auditable rather than silent', factor_zoo.py:343-345) is inert \u2014 the fingerprint is decorative. Maps to NEW-RC (loop-integrity / dashboard-contract). Falsification (definitive, read-only-safe on a scratch copy of the store): run `python scripts/run_factor_zoo.py` twice with an unchanged factor pool; assert (a) the second run completes with no HoldoutBurned/refusal, (b) it re-emits verdict.holdout_confirmed, and (c) no persisted burn counter increments (there is no schema row for these \u2014 contrast iterate.py which writes store.add_holdout_touch). Claim is REFUTED only if a second same-pool run raises or increments a persisted burn count \u2014 which the code cannot do since neither factor_zoo nor factor_experiment imports loop.holdout at all. Fix: route all three through the same store.touched_set/holdout.touch/add_holdout_touch/HoldoutBurned guard iterate.py uses, keyed on spec_hash (or pool_fingerprint for the composite), so a repeat peek raises and the dashboard verdict reflects a genuine one-shot out-of-sample read."
+  },
+  {
+   "id": "NEW-D",
+   "title": "The self-improvement loop's hypothesis space is static mixes and cross-sectional single-name factors only \u2014 it can never generate or validate a state-conditional defensive-rotation policy, i.e. the exact behavior the bot loses to",
+   "verdict": "confirmed",
+   "confidence": 0.9,
+   "evidence": [
+    "loop/candidates.py:18-54 \u2014 the ETF-sleeve generator produces only STATIC weight vectors on four price-agnostic axes (_EQUITY/_DURATION/_TECH/_LEV, lines 18-21). Candidate.materialize (lines 29-34) broadcasts one constant weight per ticker across ALL dates: `for t,w in self.spec['weights'].items(): W[t]=w` \u2014 no date/state dependence. Docstring line 2-3 states this outright: 'a candidate is a static multi-asset weight vector over a small liquid universe.'",
+    "loop/iterate.py:26 \u2014 UNIVERSE=['SPY','QQQ','IEF','TLT','XLK','XLF'] with SPY hardwired as col-0 benchmark; the whole ETF loop searches only weightings of these 6.",
+    "loop/factor_experiment.py:190-240 FactorCandidate.materialize \u2014 the single-name path IS time-varying in WHICH names (monthly rebalance, cross-sectional rank at each t), which refines the candidate's 'static weight vector' wording; BUT the position is ALWAYS fully-invested long (line ~228 `row[longs]=1.0/len(longs)` gross 1.0), SPY forced to 0 (line 234), and _signal (lines 168-188) reads ONLY price history \u2014 kind in {momentum,reversal,lowvol,high52w}. There is no cash/defensive-asset leg and no regime/cycle/state input; 'lowvol (defensive)' is a cross-sectional pick of low-vol NAMES, not a rotation-to-cash policy.",
+    "loop/llm_candidates.py:19-20 ALLOWED_KINDS={'momentum','reversal','lowvol','high52w'}, ALLOWED_SIDES={'long','ls'}; materialize_hypothesis (line 48-58) forces every LLM proposal into FactorCandidate \u2014 so even the LLM proposer cannot express a state-conditional allocation/rotation policy. The search space is bounded shut.",
+    "loop/desk_levers.py:100-235 \u2014 all families (mom/lowvol/quality/reversal/composite) are cross-sectional single-name rankers long the top frac (0.10/0.05); DeskLever subclasses FactorCandidate and reuses its long-only fully-invested materialize.",
+    "loop/fundamentals.py:241-300 regime_conditional_ic + _regime_labels \u2014 the ONLY regime-aware code in loop/ is a DIAGNOSTIC that buckets a factor's rank-IC by SPY-vs-200dMA risk_on/risk_off (line 247, 273). It measures whether a factor's edge is regime-dependent; it never turns regime into an allocation candidate. This supports the claim: the loop knows about regime as an analysis axis but cannot make it a policy.",
+    "harness.py:69-82 \u2014 beats_6040 (vs a STATIC 60/40, harness.sixty_forty_sharpe lines ~81-90) and beats_spy are the only 'allocation' hurdles; the things being judged against them are themselves static mixes / fully-invested factor baskets, so a dynamic defensive-timing policy is never in the pool to be judged.",
+    "Duplication check: prior audit ids momentum-only-candidate-sourcing, no-defensive-or-diversification-hypothesis-generator, no-learning-loop-from-benchmark-book all cite the LIVE decision path (portfolio/conviction.py, bot/phase2.py, portfolio/safety.py, firm_exposure.py, calibration.py) \u2014 NONE cite loop/. NEW-D is a distinct subsystem (the self-improvement search space). Fix-branch check: `git diff --stat master..fix/bot-orphans-arming -- loop/` is EMPTY \u2014 loop/ is untouched, so NEW-D is not fixed there."
+   ],
+   "severity_final": "medium",
+   "refinement": "Confirmed, distinct from the 47, and unaddressed on fix/bot-orphans-arming. One wording refinement: for the single-name path the weights are NOT static across dates \u2014 FactorCandidate.materialize (factor_experiment.py:190-240) rebalances monthly and rotates which names it holds. The correct framing is: every candidate is either a static multi-asset mix (candidates.py) OR a cross-sectional single-name factor that is always fully-invested long-only (gross 1.0, SPY/IEF=0) and conditioned ONLY on price history \u2014 never on a regime/cycle/transition_state input. The hypothesis space is closed by ALLOWED_KINDS/ALLOWED_SIDES (llm_candidates.py:19-20), so even the LLM proposer cannot express 'shift to XLU/XLV/XLP/SGOV when regime weakens.' The loop's sole regime touchpoint (fundamentals.py:273 regime_conditional_ic) is diagnostic bucketing, not a policy generator. Net effect (maps to RC5 + NEW): the outperforming 4-ETF defensive rotation is outside the loop's search space, so the self-improvement machinery cannot in principle discover, validate, or holdout-confirm the very fix RC5 needs \u2014 the discovery loop shares the live path's subtract-only blind spot. Severity medium (not high): it's a capability GAP in the research loop, not a live-capital error; nothing mis-sizes today because of it. Falsification test as proposed is sound and passed here by static reading: enumerate every Candidate/FactorCandidate subclass across candidates.py, factor_zoo.py, desk_levers.py, single_name_candidates.py, llm_candidates.py and confirm none accept a regime/cycle/state arg in materialize() that yields time-varying GROSS or a defensive-asset leg \u2014 all observed do not. The live-fire half (add one dynamic policy candidate and run it through the frozen harness) requires writing a new Candidate subclass whose materialize() sets weights to {XLU,XLV,XLP,SGOV} when a leakage-free WEAKENING/low-confidence signal fires and to the equity mix otherwise; that is not currently expressible without extending the Candidate contract and the UNIVERSE (SGOV/defensive ETFs are absent from iterate.py:26)."
+  },
+  {
+   "id": "CN-HK-1",
+   "title": "HK book runs on HKEX-closed holidays: mainland calendar + Yahoo stale-price blindspot",
+   "verdict": "confirmed",
+   "confidence": 0.9,
+   "evidence": [
+    "bot/hk.py:54,60: `from portfolio import china_calendar` then `out['trading_day'] = china_calendar.is_trading_day(today)` \u2014 the HK book's run cadence is driven by the mainland A-share calendar; there is NO HK-specific calendar. grep confirms no hk_calendar module anywhere in portfolio/ (portfolio has only market_calendar.py [US] and china_calendar.py [mainland]).",
+    "portfolio/china_calendar.py:36-69 _HOLIDAYS: docstring line 3-8 states the module is 'anchored to the mainland A-share session', 'rather than model all three [venues]'. The set contains only SSE/SZSE closures; 2026-07-01 (HK Establishment Day) is absent. RUNTIME CONFIRMED: china_calendar.is_trading_day(date(2026,7,1)) => True. Same True for 2026-05-25, 2026-09-21, 2026-10-26, 2026-12-25 (all HKEX-closed, mainland-open weekdays).",
+    "data_layer/feed_health.py:_yahoo()/status(): venue 'HK' resolves to yahoo_feed.feed_healthy(). data_layer/yahoo_feed.py:124-135 feed_healthy() returns `price_local('0700.HK') is not None`; price_local returns the cached last Yahoo close. On an HKEX holiday yfinance serves the previous session's close (non-None, stale), so feed_healthy=True => feed_health.status='up' => bot/hk.py:75 abort condition (`status=='down'`) is FALSE. Gate does not fire.",
+    "data_layer/china_freshness.py:36-58 expected_session() derives the expected session from china_calendar (mainland). RUNTIME CONFIRMED: expected_session(2026-07-01 16:00 CST) => date(2026,7,1). check(board='hk') compares hk_standouts data_through vs this. On an HK-closed/mainland-open day the asia-lane rebuilds the board off the fresh mainland session, so data_through >= expected => status='fresh' => bot/hk.py:93 defer condition (`status=='stale'`) is FALSE. Gate does not fire.",
+    "NOT a duplicate: none of the 51 prior verdict ids (verdicts.json) concern the trading calendar or HKEX holidays. The only HK-adjacent prior id 'hk-file-wrong-comment-allowed-venues' is about stale copy-pasted docstrings/comments (cosmetic), not calendar logic.",
+    "NOT already fixed: fix/bot-orphans-arming commit 3050592 ADDED china_freshness as step 0a in bot/hk.py and explicitly anchors it on china_calendar ('weekend/holiday-aware' = mainland only); it did NOT add an HK calendar. The commit's own verification note caught only the CN/HK as_of skew (a publish-lag defer), not the holiday-stale-price condition."
+   ],
+   "severity_final": "high",
+   "refinement": "Confirmed as written; the code and runtime tests substantiate every link in the chain (mainland calendar drives the HK gate; feed_health passes off stale non-None Yahoo closes; freshness passes off a mainland-fresh board). Two refinements: (1) The date list overcounts \u2014 2026-04-04 (Easter Saturday) and 2026-12-26 (Boxing Day) are Saturdays already caught by the weekday check, so the true HK-only-on-a-weekday count for 2026 is ~6, not 8. Still a recurring structural gap. (2) Materiality nuance: the concrete harm requires the HK book to actually be HOLDING positions and/or the asia-lane to publish a same-day HK board \u2014 on a clean fresh-board day both gates pass and held HK names mark off stale Yahoo closes while any new candidates return priceable=false (the same asymmetric-priceable-map that parked the CN book at 48% cash on 2026-06-22). If the asia-lane happens to lag (as the 3050592 verification observed), china_freshness would coincidentally defer, but that is luck, not protection against the holiday. Severity high is appropriate: it is a silent, recurring, several-times-per-year condition where the book trades/rebalances against a market that is closed, off a stale price map, with no gate designed to catch it. Fix as proposed: add an HK holiday set (new hk_calendar module or an hk_holidays overlay) and route bot/hk.py's run-gate + china_freshness expected_session(board='hk') through it. Falsification test to run before fixing: on an HKEX-holiday evening, assert china_calendar.is_trading_day(that date)==True AND feed_health.status('HK', asof)['status']=='up' AND china_freshness.check(board='hk')['status']!='stale' simultaneously \u2014 if all three hold, the HK Brain runs unprotected."
+  },
+  {
+   "id": "CN-HK-2",
+   "title": "HK book has zero reversal signal: validated HK edge absent from the candidate funnel",
+   "verdict": "refuted",
+   "confidence": 0.83,
+   "severity_final": "low",
+   "evidence": [
+    "MECHANICAL CLAIMS ALL TRUE. brain/china_intake.py:217 `_SOURCES = ('standout','alpha','reversal','hk')`; the only HK loader is `_from_hk()` (line 188), which reads hk_standouts.json (buy board). `_from_reversal()` (line 170) reads factordata/china_reversal.json. Ran the actual funnel: china_reversal.json holds 16 tickers, ALL A-share (*.SS/*.SZ), zero .HK. So the reversal leg contributes no HK names \u2014 confirmed empirically.",
+    "RAN THE PROPOSED TEST. `china_intake.build(500)` yields exactly 3 HK candidates (2628.HK, 0006.HK, 1038.HK), each with sources=['hk'], n_sources=1, corroboration bonus NEVER fires. Source set reaching HK = {'hk'} only. This matches the candidate's proposed_test prediction exactly.",
+    "VENUE FILTER MIS-CITED BUT REAL. Candidate cites 'china_intake.py line 286' for the venue filter; it is actually brain/hk_mcp.py:280 (`if not ALLOWED_VENUES or c.get('venue') in ALLOWED_VENUES`). Confirmed at runtime: hk_mcp.PORTFOLIO_ID='hk', ALLOWED_VENUES={'HK'}. A-share reversal names are filtered from the HK Brain's view. Mechanism exists, just wrong file/line.",
+    "CENTRAL CAUSAL CLAIM REFUTED BY THE CITED RESEARCH. The candidate frames this as 'the validated HK edge (reversal/low-vol) is absent.' The memory entry it cites (china-hk-stock-signals.md) says the OPPOSITE: 'HK reversal INVESTIGATED -> does NOT port... HK deep panel (73 names): within-sector reversal weak (Sharpe 0.15 1mo / 0.06 3mo), cross-sectional reversal NEGATIVE... HK is a momentum/trend market \u2014 the OPPOSITE of A-shares... the A-share reversal board must NOT be cloned to HK... DON'T build.' Low-vol on HK was likewise not shipped as a selection board. There is NO validated HK reversal/low-vol edge \u2014 the macro team deliberately declined to build one.",
+    "MACRO REPO CONFIRMS THE DELIBERATE DESIGN. No hk_reversal.json exists in vendor/macro/site/factordata/ (only china_reversal.json + cn_reversal_sleeve.json, both A-share). The HK research conclusion was: 'HK gets NO standout buy-list BY DESIGN (no selection edge per the 40y null) \u2014 its honest quality surface is the global-risk screener.' The absence of an HK reversal artifact is intentional, not a pipeline gap. hk_standouts.json (buy n=3: labels UPTREND / NEARING A LOW) IS the shipped HK surface.",
+    "PROPOSED FIX WOULD IMPORT A NON-VALIDATED SIGNAL. The candidate's fix (add hk_reversal.json or wire _from_hk_reversal() off hk_stocks data) would surface HK oversold names on an edge the macro repo's own deep-panel backtest found weak-to-negative \u2014 re-introducing the exact momentum-vs-reversal inversion the CN board was corrected to AVOID, but in the wrong direction for HK.",
+    "NOT A DUPLICATE / NOT FIXED. Prior audit ids cover intake-regime-nuance and hk-file-wrong-comment (docstrings), not HK reversal absence. Branch fix/bot-orphans-arming touches china_intake.py (+143) and hk_mcp.py (+63) but only adds the flag-gated CHINA_FUNNEL_PROFILE reversal-cap de-inversion and per-leg as_of skew \u2014 it does NOT add an HK reversal source; _from_hk remains the sole HK loader on that branch."
+   ],
+   "refinement": "The candidate's observation is mechanically correct \u2014 the HK book receives a single-source, momentum/timing-only candidate list (sources=['hk'], n_sources always 1, corroboration never fires) \u2014 but its DIAGNOSIS is wrong and its FIX is harmful. The claim rests on a misreading of the cited research: the macro repo explicitly backtested HK reversal (weak, Sharpe 0.15/0.06) and HK low-vol and DELIBERATELY declined to build an HK reversal board because HK is an institutional momentum/trend market, the opposite of retail A-shares. There is no 'validated HK edge' being withheld; the momentum-flavored hk_standouts board is the intended HK surface. Downgrade severity high->low: the funnel faithfully mirrors the macro team's HK design decision. DROP the proposed fix (adding hk_reversal.json would import a null/negative-edge signal). NEW ADJACENT BUG worth its own item (higher confidence than this one): the venue filter in hk_mcp.py:280 runs AFTER china_intake.build(limit) truncates to out[:limit] \u2014 at the default limit=25, A-share names (110 standout + 30 alpha + 16 reversal, all boosted by corroboration) saturate the top-25 and ALL 3 HK names fall off, so get_china_intake returns ZERO HK candidates to the HK Brain by default. That is a real defect (the HK Brain's own funnel is empty of tradeable-venue names at production limits) and maps to RC3-style firebreak/ordering rather than the claimed missing-edge thesis. Falsification for the adjacent bug: `[c for c in china_intake.build(25)['candidates'] if c['venue']=='HK']` returns [] \u2014 confirmed."
+  },
+  {
+   "id": "CN-HK-3",
+   "title": "CHINA_FUNNEL_PROFILE=edge-led not activated in production: CN book's reversal leg permanently demoted (and on master, hardcoded \u2014 no escape hatch)",
+   "verdict": "confirmed",
+   "confidence": 0.9,
+   "evidence": [
+    "brain/china_intake.py:49-53 (working tree, fix/bot-orphans-arming): _PROFILES = {'current': {'reversal_cap': 0.5, 'same_tape_independent': True}, 'edge-led': {'reversal_cap': 1.0, 'same_tape_independent': False}}. Verified verbatim.",
+    "brain/china_intake.py:57: `p = os.environ.get('CHINA_FUNNEL_PROFILE', 'current')...` \u2014 defaults to 'current' when unset. Empirically confirmed: with the env var popped, ci._profile() returns {'reversal_cap': 0.5, 'same_tape_independent': True}; CHINA_FUNNEL_PROFILE=edge-led returns reversal_cap 1.0.",
+    "Asymmetry confirmed by grep of min(max(...) calls: standout (line 134), alpha (line 164), hk (line 201) all cap at 1.0; ONLY reversal (line 182) caps at `cap` (=0.5 under 'current'). So the leg the research validates is the only one structurally held below the momentum legs.",
+    "brain/china_intake.py:34-46 in-code comment self-identifies the inversion: 'the cap re-encodes the exact edge INVERSION the macro dashboard is being fixed for: it structurally demotes the leg that actually predicts.'",
+    "Research corroboration \u2014 vendor/macro_src/research/CHINA_HK_STOCK_SIGNALS.md:45-46 ('the shipped momentum-leaders ranking overclaims; the validated read is reversal / mean-reversion') and :114-115 ('the validated A-share signal is 3-month within-sector reversal... It beats 1-month reversal, the killed momentum').",
+    "Consumption confirmed: china_intake.build() is exposed to the CN and HK Brains via the get_china_intake MCP read-tool (brain/hk_mcp.py:263-270, mirrored in brain/china_mcp.py). The capped ranking is what the Brains see, not dead code.",
+    ".env at /Users/chriswong/Documents/Cluade/Mastermind/.env: `grep -c CHINA_FUNNEL_PROFILE` = 0 (absent). Production env dump in task context also omits it. So production runs 'current'.",
+    "STRENGTHENING FACT the candidate missed: on `master` (git show master:brain/china_intake.py) there is NO profile mechanism at all \u2014 line 146 hardcodes `min(max(z/4.0, 0.0), 0.5)` with comment 'reversal alone is weak \u2014 capped'. The escape hatch (a3e2257) lives ONLY on fix/bot-orphans-arming, feat/china-book, and two claude/* branches. The running uvicorn (PID 62682) launched from the main checkout; whichever code it loaded, the operative reversal cap is 0.5."
+   ],
+   "severity_final": "medium",
+   "refinement": "CONFIRMED, not a duplicate (no china_intake/CHINA_FUNNEL_PROFILE hits in /tmp/mm_audit evidence; prior audit explicitly deferred CN/HK books) and not resolved on fix/bot-orphans-arming \u2014 commit a3e2257 built the profile *mechanism* but the activation step (adding CHINA_FUNNEL_PROFILE=edge-led to .env) was never done, so the fix branch is functionally identical to master in production: reversal capped at 0.5. Refine two points: (1) The candidate frames this as 'edge-led not activated,' implying the branch fixed it \u2014 it did not; the fix is inert without the env line. (2) The candidate understates blast radius by scoping to the intake queue rank \u2014 verify whether get_china_intake's ranked list actually gates CN/HK Brain sizing/selection or is context-only; if the Brains free-form-select off the whole board rather than strictly top-of-queue, the demotion is a soft prior rather than a hard exclusion, which is why medium (not high) is right. Severity floor is set by the fact that the SAME research the dashboard is being fixed for is being contradicted inside the bot, and the bot's own comment admits it. Falsification test to run before shipping the .env line: from a clean env, `python -c \\\"from brain import china_intake as ci; q=ci.queue(40); print([(c['ticker'],c['score'],c['sources']) for c in q if c['sources']==['reversal']][:10])\\\"` vs the same with CHINA_FUNNEL_PROFILE=edge-led \u2014 reversal-only names should rise from <=0.5 toward parity. Also confirm no other code path reads reversal_cap so the .env flip has no unintended sizing side effects. Fix is a one-line .env addition; low-risk given 'current' is byte-identical to today."
+  },
+  {
+   "id": "flagship-sell-asymmetry-zero-sells-ever",
+   "title": "Flagship paper account has structurally zero sells: buy-only queue/fill path never reaches rebalance in production; 36 zombie positions, pending buys dead on arrival at $14.72 cash",
+   "verdict": "confirmed",
+   "confidence": 0.97,
+   "severity_final": "critical",
+   "evidence": [
+    "bot/phase2.py:946-984: flagship execution branches on _market_open = market_calendar.is_open(). The ONLY sell-capable call, paper_account.rebalance(dict(_tw),...) (line 964), sits inside `if _market_open:`. The else branch (line 969 comment: 'market closed -> queue buys at the prev-close estimate... No sells.') calls queue_orders only.",
+    "Production cron app/scheduler.py:420 fires the flagship build at CronTrigger(hour=hour, minute=40) = 22:40 UTC. NYSE regular session is 13:30-20:00 UTC, so is_open() is False at 22:40 -> the market_open branch (the only path to rebalance/sells) is NEVER taken in the scheduled path. Confirmed: for the flagship portfolio_id, rebalance() has exactly one non-test/non-worktree caller (phase2.py:964), gated behind market_open. heavyweight.py:206 and settle.py:71 target OTHER books.",
+    "portfolio/paper_account.py:695-746 queue_orders(): docstring 'Only BUYS are queued (the desk does not sell while shut)'; loop emits only side='buy' orders (line 736). No sell/exit emission.",
+    "portfolio/paper_account.py:749-795 fill_pending(): only executes buys (buy = min(want, cash/px); appends side='buy' at 786-788). No sell branch, no exit logic for positions absent from the target.",
+    "app/scheduler.py:97-115 _settle_pending_job (15:00 UTC): flagship gets settle('flagship') -> fill_pending_now.py:103 fill_pending (buy-only). US Brain books get settle_us -> settle_target -> rebalance (bot/settle.py:71) = full target WITH sells. Bifurcation is documented in code comments paper_account.py:801-805: 'The flagship queues BUY orders when shut... The Brain books submit a COMPLETE target book (sells + trims + buys)' \u2014 only the Brain path got the full-target fix.",
+    "Empirical (data/portfolio/fills.jsonl): 63 fills total, 100% side='buy', 100% from_pending=True, ZERO sells across entire account history \u2014 matches the structural prediction exactly.",
+    "Empirical (account.json vs latest.json): cash=$14.72; 41 account positions vs 24 in the current book target => 36 zombie positions the engine intended to exit but never sold, worth ~$461,038 at avg_cost.",
+    "Simulation of fill_pending against the 18 queued buys (pending_orders.json, est_value $232,118, all side='buy') with $14.72 cash: max cash/px across all 18 orders = 0.26 shares; _quantize_buy_shares floors to whole shares (paper_account.py:104-110) => 0 shares fill on all 18. The 2026-06-30 MAG7/semis rotation is dead on arrival because the sold-position cash was never realized."
+   ],
+   "refinement": "CONFIRMED as a novel, structural critical bug \u2014 not a duplicate and not fixed on fix/bot-orphans-arming (that branch has zero paper_account/settlement/phase2 commits; its work is china-seam, detectors, attribution, predictions). Distinct from prior audit id 'overtrading-turnover-drag-unmeasured', which treated zero-sells as a window observation ('until sells appear the drag claim is not measurable') rather than tracing the full execution path to prove it is an architectural invariant.\n\nRoot cause mapping: this is a genuine NEW-RC (settlement-layer architectural split) with a secondary RC5 tie-in (all responses subtract-only / never rotate) \u2014 here the flagship cannot even subtract: it can ONLY add, and once cash hits zero it is frozen. The buy-only queue was a deliberate 'never sell while shut' safety rail (queue_orders docstring) that became an absolute bar because the 22:40 build is ALWAYS shut. The Brain books were migrated to save_pending_target/settle_target/rebalance (full target incl. sells) per the paper_account.py:801-805 comment; the flagship was left on the legacy buy-only queue_orders/fill_pending path and never unified.\n\nTwo refinements to the candidate's framing, both tightening not loosening it: (1) The 'zombie value $461K vs $14.72 cash' is not merely a cash-starvation coincidence \u2014 it is the mechanical consequence of the invariant: every buy that ever filled permanently consumed cash with no offsetting sell, so cash monotonically drains to ~0 and the book ratchets to fully-invested-and-frozen. Turnover drag is not just 'unmeasured' \u2014 it is structurally ZERO on the sell side and unbounded-accumulating on the buy side. (2) The one caveat to a 100% verdict: a human/manual run of phase2 with force + market open, or a manual scripts call to rebalance('flagship'), COULD inject sells \u2014 the invariant is on the SCHEDULED path, not physically impossible. The fills.jsonl evidence (0 sells ever) shows no such manual intervention has occurred in production history, so the practical effect is identical.\n\nFalsification test (production): re-check data/portfolio/fills.jsonl on 2026-07-03 after the 07-02 settle job. Prediction: still zero side='sell' entries, and the 18 pending buys still fill ~0 shares (cash unchanged at ~$14.72). If any sell appears or the rotation executes, the invariant is broken. Static falsifier already run: grep confirms flagship rebalance() reachable only via phase2 market_open branch, which the 22:40 cron never satisfies."
+  },
+  {
+   "id": "brain-books-settle-at-mid-session-not-open",
+   "title": "Brain books settle queued targets at ~11am ET intraday marks, not the 9:30 open (US); flagship correctly uses polygon.day_open",
+   "verdict": "confirmed",
+   "confidence": 0.9,
+   "evidence": [
+    "bot/settle.py:94-119 _price(): for USD Brain books (autonomous), the settle loop calls paper_account._current_price(t); the etf book calls etf_universe.price(t). Both resolve to yahoo_feed.",
+    "portfolio/paper_account.py:352-357 _current_price -> _live_price (line 355); paper_account.py:325-333 _live_price for a bare US ticker calls yahoo_feed.price_local(t) as the primary live mark.",
+    "data_layer/yahoo_feed.py:83-104 warm(): yf.download(want, period='7d', auto_adjust=False) then _CACHE[k]=float(s.iloc[-1]) \u2014 takes the LAST row of the Close column. When run intraday, yfinance's last daily bar is the current-day partial bar carrying the latest trade price, i.e. the ~11am print, not the 9:30 open.",
+    "yahoo_feed.py:11-14 docstring: the cache carries a 120s intraday TTL precisely so a book viewed 'mid-selloff shows the live drawdown' \u2014 confirming the pricer is designed to return a MOVING intraday mark, which is the wrong semantic for an open-fill.",
+    "app/scheduler.py:97-115 _settle_pending_job fires BOTH paths in one job: settle('flagship') via scripts.fill_pending_now (which uses polygon.day_open) AND _settle.settle_us() for the Brain books (which uses the yahoo_feed intraday mark). scheduler.py:399 settle_hour default = SETTLE_PENDING_UTC_HOUR '15' -> 15:00 UTC = ~11am ET, ~90 min after the 9:30 open (comment at scheduler.py:444-446 itself says '10-11am ET - mid US session').",
+    "scripts/fill_pending_now.py:29-40 _fill_price for USD uses polygon.day_open (data_layer/polygon.py:210-216 returns snapshot.day.o, the real regular-session OPEN) \u2014 the correct open-fill source that exists but was NOT wired into settle_open for Brain books.",
+    "bot/settle.py:7-9 and 122-125 docstrings claim fills happen 'at the live open marks' / 'at the live open marks', contradicting the implemented intraday pricer.",
+    "portfolio/etf_universe.py:203-204 price() also routes to yahoo_feed.price_local, so the etf Brain book inherits the same intraday-as-open defect. Not fixed on fix/bot-orphans-arming: git diff master..fix shows no changes to bot/settle.py or yahoo_feed.py's pricing path (only a serve-only network guard and asia-seam ordering)."
+   ],
+   "severity_final": "high",
+   "refinement": "Confirmed, not a duplicate of the 47 (closest priors \u2014 regime-intraday-lag, mark-timing-and-stale-nav-rows \u2014 concern regime intake and NAV marking, not fill-price source for queued Brain targets) and not touched on fix/bot-orphans-arming. The mechanism is exactly as claimed: settle_open prices via _current_price->_live_price->yahoo_feed.warm which returns close.iloc[-1] = the current partial-day bar (intraday last print) when run at 15:00 UTC, while the flagship's fill_pending uses polygon.day_open = snapshot.day.o (true 9:30 open). This is a genuine execution-integrity asymmetry: two books settling in the SAME scheduler job at the SAME instant use DIFFERENT fill-price semantics, so any cross-book NAV/attribution comparison (central to the user's 'no model beats our 4 defensive ETFs' question) is contaminated on gap days. Two refinements to the candidate's grading: (1) SCOPE \u2014 the ~90min gap is US-only (autonomous+etf, settle 15:00 UTC). The china/hk books settle at ASIA_SETTLE_UTC_HOUR=1, minute 35 -> 01:35 UTC = 09:35 CST, only ~5 min after the A-share 09:30 open, so their open-vs-fill gap is small; the defect is real for all four books but materially high-impact only for the two US books. (2) The candidate's SMH datapoint (autonomous 06-30 fill 649.67 vs parquet prior close 611.61) is CONSISTENT with an ~11am intraday mark but is NOT proof by itself \u2014 a large true open gap would show the same number; it only corroborates that the fill was not the prior close. Severity high (not critical): fills still land inside the session at a real traded price (no fabrication), and the drift only bites on gap-open days; but because it silently biases the very cross-book comparison the re-audit exists to answer, high is right. Maps to NEW-RC (execution/microstructure) and reinforces S6/RC6 (benchmark-book comparison integrity). Falsification test as proposed is sound and cheap: instrument settle_open to log the prices dict for autonomous/etf immediately before settle_target and diff against polygon.day_open() for the same symbols same day; a systematic >0.5% divergence on gap days confirms materiality. A one-line fix exists: route the USD leg of bot/settle._price through polygon.day_open (with the fill_pending_now fallback chain) instead of _current_price, mirroring the flagship. One residual uncertainty (why confidence 0.9 not higher): I did not execute yfinance to observe the live partial-bar behavior in this READ-ONLY pass; the intraday-bar claim rests on documented yfinance semantics + the yahoo_feed docstring's own stated intent, which is strong but not runtime-verified here."
+  },
+  {
+   "id": "zero-transaction-cost-model-measurable-slippage",
+   "title": "No transaction cost/commission/spread model exists; measured decision-to-fill slippage on buys is systematically positive (non-CBRS median +0.54%, mean +0.69%)",
+   "verdict": "partially-confirmed",
+   "confidence": 0.85,
+   "severity_final": "medium",
+   "evidence": [
+    "ZERO cost model: repo-wide grep (excluding vendor/ and .claude/worktrees) for commission|transaction_cost|slippage|market_impact|cost_model|bid_ask|haircut returns 0 price-model hits. All 18 'haircut' hits are position-SIZING or DSR statistical haircuts (portfolio/shadow_books.py:384 _RT_FLOOR, loop/desk_levers.py DSR/PBO), none applied to fill prices. Confirmed as claimed.",
+    "Fills booked at raw price, no friction: portfolio/paper_account.py:749-789 fill_pending() \u2014 L765 `px = prices.get(ticker)`, L776 `value = buy * px`, L777 `state['cash'] -= value`, L785-788 the fill record stores `'price': round(px,4)` verbatim. No commission deducted, no spread crossed, no impact term. Module docstring L2-3 'PAPER ONLY \u2014 never executes real trades'. rebalance() (L451-585) and queue_orders (L615-653) likewise book at raw px.",
+    "Empirical slippage reproduces the candidate's numbers exactly (fills.jsonl vs prior trading-day close in vendor/macro_src/data/yahoo/*.parquet): 2026-06-22 SMH +1.59%, XLK +0.91%, MTUM +1.44%, IWM +0.52%, IREN +1.20%; 2026-06-24 SMH +0.04%, XLK -0.07%, MTUM +0.25%, IWM +0.19%, CBRS -8.26%; 2026-06-26 CBRS -3.48%; 2026-06-29 SMH +0.56%, XLK +1.11%, MTUM +0.51%. All 63 fills are side=buy, from_pending=true (inception ramp).",
+    "Falsification test PASSES the fire condition: N=14 measurable buys, non-CBRS median slip +0.54% and mean +0.69% (all-in median +0.52%, mean -0.25% dragged by CBRS). Median |slip| on buys = 0.515% > the proposed 0.3% threshold \u2192 a synthetic -0.3% (or higher) buy haircut is warranted and would materially widen the gap vs the self-directed book.",
+    "REFINEMENT 1 \u2014 sample is ETF-heavy, understating true friction: 35 of the buy tickers (all single-name conviction names: ANET, APH, PH, PSA, CBRS's cohort, etc.) have NO parquet in the yahoo store, so slippage is measured only on the 4 liquid leadership ETFs + IREN + CBRS. Single-name conviction fills \u2014 where real spread/impact is largest \u2014 are UNMEASURABLE here, so ~+0.7% is a floor, not a ceiling.",
+    "REFINEMENT 2 \u2014 'NAV overstated vs self-directed' framing is imprecise: portfolio/self_directed.py:11-14 the benchmark book ALSO fills at the raw next-open price with the SAME frictionless accounting (no haircut). Friction-blindness is SYMMETRIC across both books, so it is not a one-sided measurement bias against the Brains. What is asymmetric is TURNOVER \u2014 Brains trade ~23 names/rotation vs a 4-ETF buy-and-hold benchmark \u2014 so a per-trade friction charge would penalize the churning Brains MORE, which strengthens (not manufactures) the self-directed-wins result.",
+    "NOT a duplicate and NOT fixed on branch: prior audit ids overtrading-turnover-drag-unmeasured (focused on cash-drag/attribution having no turnover term) and self-directed-book-no-current-prices (marks-at-avg_cost) never computed fill-vs-prior-close slippage nor flagged the absent cost model as its own problem. git log master..fix/bot-orphans-arming (commits d1f4c92, 615a8fb #17, ec2af3e #8, c8807e7 #31, 1602b24 #2/#11, plus china-seam work) touches none of the fill/pricing path."
+   ],
+   "refinement": "Confirmed core, downgrade high->medium. TRUE and novel: (1) no transaction-cost/commission/spread/impact model exists anywhere on the fill path (paper_account.py:749-789 books at raw px); (2) measured buy slippage vs prior close is systematically positive on the liquid sample (non-CBRS median +0.54%, mean +0.69%), exceeding the 0.3% test threshold; (3) not a dup of the two adjacent prior ids and untouched by the fix branch. Two refinements lower severity to medium: (a) the measurable sample is only ETFs+2 names \u2014 the 35 single-name conviction tickers lack parquet coverage, so the number is a floor but the *quantified* impact is thin; (b) the 'paper NAV overstated vs self-directed' sub-claim is imprecise because the self-directed benchmark uses IDENTICAL frictionless open-fill accounting \u2014 friction-blindness is symmetric, and the real asymmetry is turnover (which cuts in the claim's favor, not against it). Recommended framing: a friction model is genuinely absent and the effect is real, but its most defensible use is (i) as a per-trade turnover penalty that would further widen the churning Brains' underperformance vs the buy-and-hold self-directed book, and (ii) applied to the illiquid single-name conviction sleeve where impact is largest and currently unmeasured. Falsification: re-book all buy fills with a -0.3% haircut and re-run the NAV series vs self-directed; if the Brain-vs-benchmark gap widens by roughly (buys per rotation x position size x 0.3%)/NAV per cycle, the friction effect is confirmed on the Brains' side."
+  },
+  {
+   "id": "queue-orders-hardcodes-starting-nav-for-sizing",
+   "title": "Flagship queue_orders passes nav_base=_STARTING_NAV ($1M hardcoded) so market-closed buy sizing diverges from live NAV after P&L drift",
+   "verdict": "confirmed",
+   "confidence": 0.9,
+   "evidence": [
+    "bot/phase2.py:970-972 (market-CLOSED branch): `_pending_orders = paper_account.queue_orders(dict(_tw), _prices, asof, nav_base=paper_account._STARTING_NAV, fill_after=_next_open_day)`. This is the ONLY caller in the codebase that passes nav_base= at all (grep across bot/ portfolio/ finds exactly one nav_base= call site).",
+    "portfolio/paper_account.py:36 `_STARTING_NAV = 1_000_000.0` (module constant). queue_orders sizes off it at :727 `target_shares = (weight * nav_base) / px` and :729 `shares = _buyable_shares(target_shares - held, px, nav_base)` (the dust/min-notional floor is ALSO scaled by the wrong base).",
+    "The override is strictly wrong, not merely stale: queue_orders' OWN default (paper_account.py:706-710) computes `nav_base = state['cash'] + sum(pos['shares'] * est_prices.get(tk, pos['avg_cost']))` \u2014 the live marked NAV, identical to the public nav() at :413-420, and robust to missing quotes via the avg_cost fallback. phase2 passes _STARTING_NAV to suppress a default that is already correct; there is no NAV state or missing-price scenario where $1M is more accurate than the default.",
+    "Asymmetry confirmed: the market-OPEN path in the SAME phase2 block calls paper_account.rebalance() (bot/phase2.py:964), which computes current_nav live at paper_account.py:472-478 and never touches _STARTING_NAV. The Brain books (autonomous/etf/china/hk) do not call queue_orders at all \u2014 they use bot/settle.py execute_or_queue (paper_account.py:801 comment + settle.py:9), so the bug is isolated to the Flagship closed-session queue path.",
+    "Direction of error: NAV high (e.g. $1.2M) -> queue sizes off $1M -> under-buys ~17%; the surplus cash simply idles and fill_pending (paper_account.py:771 `buy = min(want, cash/px)`) only CAPS, never scales up, so it does not self-repair within the fill. NAV low (e.g. $800K) -> over-sizes ~25%; fill_pending's per-order cash cap prevents leverage but distorts RELATIVE allocation (dict-order-early tickers eat disproportionate cash before later ones are starved).",
+    "Magnitude now immaterial (candidate accurate): data/portfolio/account.json -> cash $14.72, 41 positions, NAV-at-avg-cost $1,000,074.62 = +0.0075% drift vs _STARTING_NAV. Latent: becomes material only after sustained P&L drift beyond ~10%.",
+    "Not a duplicate of the 47: prior audit id `mark-timing-and-stale-nav-rows` concerns NAV MEASUREMENT/marking staleness (nav_history duplicate rows, avg_cost mark fallback), not the queue_orders sizing base; maps.json's queue_orders mention only describes the 17-19h decision-to-fill LAG, not the nav_base parameter. Not fixed on fix/bot-orphans-arming: that branch's diff touches neither bot/phase2.py nor paper_account.queue_orders."
+   ],
+   "severity_final": "low",
+   "refinement": "CONFIRMED but downgrade severity medium -> low. The code defect is real, isolated, and strictly wrong (the hardcode overrides queue_orders' own correct live-NAV default), and it is genuinely novel vs the 47 and unfixed on the branch. But three factors cap real-world impact: (1) it fires ONLY on the market-CLOSED queue path, never on the open-market rebalance; (2) fill_pending is cash-bounded so it can never over-leverage the book, only mildly under-deploy or skew relative sizing; and (3) with the Flagship at $14.72 cash / ~$1.00M NAV the error is 0.0075% today and the account is effectively fully deployed so the queue path barely moves anything. Map: NEW-RC (execution & microstructure), adjacent to RC5 (subtract-only / capital-deployment discipline) since under-buying leaves capital idle. Fix is trivial and low-risk: delete the `nav_base=paper_account._STARTING_NAV` argument entirely so queue_orders' built-in live-NAV default (paper_account.py:706-710) fires, or equivalently pass `nav_base=paper_account.nav(_prices)`. Falsification test to promote severity: manually set data/portfolio/account.json cash+positions to a $1.2M NAV state, run the closed-session build once each with and without the hardcode, and diff queued est_value totals \u2014 the hardcoded version should queue ~17% fewer target dollars. If the delta is <1% of NAV under realistic drift the low grade stands."
+  },
+  {
+   "id": "P1-fixed-spy-benchmark-penalizes-defense",
+   "title": "Every US book benchmarks to a single fixed SPY \u2014 no regime-conditional benchmark, so de-grossing/defense is scored as underperformance in exactly the regime where it wins",
+   "verdict": "confirmed",
+   "confidence": 0.83,
+   "evidence": [
+    "portfolio/registry.py:35,46,56,69,106 \u2014 flagship/heavyweight/autonomous/etf/self_directed all carry \"benchmark\":\"SPY\"; benchmark() (L152-154) returns get(pid).get('benchmark') or _DEFAULT_BENCHMARK('SPY') with NO regime/quad/date argument. The comparator is a static per-book string.",
+    "brain/cio.py:248 \u2014 excess = (ret - spy_ret) computed unconditionally; spy0/spy1 read from row 'spy_nav' (L245); the sole NAV-vs-benchmark summary line is SPY with no regime branch.",
+    "portfolio/shadow_books.py:340-352 \u2014 spy_ret = last['spy_px']/first['spy_px']-1; vs_spy_pct = (ret - spy_ret)*100 off spy_px only; no XLV/XLU/SGOV or defensive-blend comparator exists.",
+    "CRITICAL escalation beyond the candidate: the fixed-SPY grade is not display-only \u2014 it is the LEARNING LABEL. brain/calibration.py:327,332-333 grades each holding via _label_name(tk,...,vs=benchmark) then rows.append(1 if rel_return>=0 else 0); comment L278-279 'A holding is right iff it beat its benchmark (rel_return>=0)'. brain/self_mirror.py:166-187 does the identical vs=benchmark grade. So fixed SPY mis-TEACHES the calibration multipliers, not just mis-reports.",
+    "grep of registry/cio/shadow_books/scorecard for regime|quad on the benchmark path returns nothing (only scorecard's unrelated 'regime' confluence dim) \u2014 regime-conditional benchmark is absent from the entire comparison surface.",
+    "Not fixed on fix/bot-orphans-arming: git log master..branch shows only China/HK seams, detectors D1/D2/D4, predictions-ledger revival, attribution counterfactual, armory arming \u2014 zero touch registry/cio/shadow_books/calibration benchmark logic."
+   ],
+   "severity_final": "high",
+   "refinement": "CONFIRMED and genuinely NOVEL vs the prior 47, with one escalation and one test caveat. (1) Not a duplicate: the prior audit's 'unfair-inception-and-benchmark-basis' is a basis-CONSISTENCY bug (different inceptions; self_directed's SPY line declared but never wired \u2014 registry.py:106 vs scheduler.py:300 exclusion), whose implied fix is 'wire a consistent SPY line.' P1 is orthogonal and upstream: even a perfectly-wired, same-inception SPY line still DEFINES defense as failure in risk-off. It is a mandate/incentive-design flaw, not a wiring flaw. Maps to RC6 but is a distinct facet. (2) Escalation the candidate under-stated: the fixed benchmark is the binary learning label in calibration.py:333 and self_mirror.py, feeding the seat-sizing multiplier \u2014 so it mis-teaches, not merely mis-measures. This is why 'high' holds despite cio.py being 'toothless/advisory.' (3) Test caveat that lowers confidence from ~0.9: the proposed 'replay 60 days of self_directed marks' is NOT directly runnable \u2014 data/portfolio/self_directed/ has account.json + 5 queued fills (inception 2026-06-22, ~9 days of history) and NO nav_history.jsonl (excluded from the mark loop). A valid test must RECONSTRUCT NAV from fills.jsonl + macro data/yahoo parquet, then compare (a) fixed-SPY excess vs (b) a fused_risk/quad-selected defensive-blend excess over the risk-off window, and assert the sign of 'excess' flips. Sound in principle; the '60 days of marks' premise is not backed by state on disk. Sharpest single fix: make benchmark() regime-aware (SPY in risk_on, defensive blend in risk_off keyed off the day's fused_risk/quad) and route the calibration grade through it, so 'beating the benchmark' can no longer punish correct defense."
+  },
+  {
+   "id": "P2-no-donothing-or-defensive-shadow-arm",
+   "title": "The shadow/desk A/B apparatus has no defensive arm and no do-nothing/carry-forward arm \u2014 all 11 policies are the same momentum-long book, so turnover drag and the value of inactivity are structurally unpriceable",
+   "verdict": "confirmed",
+   "confidence": 0.95,
+   "evidence": [
+    "portfolio/shadow_books.py:38-61 POLICIES = [prod, no_committee, no_calibration, engine_only, risk_tilt]. _policy_weight (line 90) returns 0.0 for any name where `not r.get('forge_confirmed')`, so EVERY policy sizes only off the prod momentum candidate set. risk_tilt is explicitly SUBTRACT-ONLY (desc lines 56-60; _risk_mult line 387-405 is capped min(1.0,...) with floor 0.30) \u2014 it shrinks prod's momentum names toward cash, it never rotates into a defensive sleeve. Confirmed as cited.",
+    "portfolio/desk_ab.py:49 _PROD_SIZING={committee:True,calibration:True,sizing:research} and POLICIES lines 51-70 = [prod, no_etf, concentrated_topN, timing_gated, autonomous_clone, desk_proxy]. Every non-clone lever is a FILTER over the same prod inputs (apply_no_etf/top_n/timing/desk_proxy all call S.apply_policy on a subset). autonomous_clone (lines 199-243) replays the US Brain's own submitted book \u2014 also a long book, not a defensive control. No hold/carry-forward/defensive-clone policy. Confirmed as cited.",
+    "grep -rniE 'do_nothing|carry_forward|buy_and_hold|frozen|inaction|defensive.*(book|arm|policy|clone)' over portfolio/ brain/ returns ZERO policy hits (only DEFENSIVE_ROTATION.md research docs, unrelated). No null-hypothesis / hold-book / defensive arm exists in either A/B framework.",
+    "No cost model: grep -rniE 'turnover|slippage|commission|capacity|transaction.?cost|trading.?cost' over shadow_books.py, desk_ab.py, cio.py, scorecard.py returns ZERO. The word 'cost' in shadow_books appears only in comments (avg_cost bookkeeping L165/196, 'committee cost/save' L12). _rebalance (L176-201) moves cash by exactly delta*px with no fee/spread \u2014 a book that re-trades daily is never penalized vs one that holds, so turnover drag is invisible and inactivity has no represented value.",
+    "Not a duplicate of prior audit: /tmp/mm_audit overtrading-turnover-drag-unmeasured (partially-confirmed, medium) cites ONLY brain/attribution.py:46/216-232, portfolio/scorecard.py, brain/posture.py:280 \u2014 the per-name credit-split path. It never names shadow_books.py or desk_ab.py. This finding is the distinct framework-level gap: the A/B leaderboard itself has no control arm. self_directed exists as a real portfolio (portfolio/registry.py:99-103) but is EXCLUDED from firm_exposure (firm_exposure.py:84-88) and absent from both leaderboards \u2014 the outperforming defensive book is invisible to the A/B machinery, reinforcing RC6.",
+    "Not fixed on fix/bot-orphans-arming: git diff master..fix/bot-orphans-arming touches neither portfolio/shadow_books.py nor portfolio/desk_ab.py; no defensive/do_nothing/turnover/slippage additions in the branch diff."
+   ],
+   "severity_final": "high",
+   "refinement": "Claim confirmed as written; keep severity HIGH. The framework can only ever rank flavors of the same momentum-long book against each other \u2014 with no do-nothing baseline and no defensive arm it is structurally incapable of surfacing \"trading less / going defensive would have won,\" which is exactly the empirical fact the user is reporting (4 defensive ETFs beat every Brain). Two nuances for the fix owner: (1) An empty-inputs HOLD already exists as a data-safety liquidation guard (shadow_books.py:441-447 `targets or _has_inputs`), but it is NOT a scored/leaderboarded policy \u2014 it only prevents wipeout on quiet days; the proposed 'hold' arm (carry prior positions every day) is genuinely absent. (2) The proposed test is cheap and correct: both 'hold' and 'defensive' (EW XLV/XLU/XLP/SGOV) are pure target-weight functions and reuse the existing isolated grader over data/shadow/inputs/*.json \u2014 no LLM, no leakage. Add a 5bps/side turnover cost inside _rebalance (proportional to sum|delta*px|) and re-run: if the ranking moves, drag was being ignored; if 'hold'/'defensive' out-returns 'prod' on any stored stretch, the framework was blind to it. Maps to RC6 (winning defensive book invisible to every learning loop); secondary S3."
+  },
+  {
+   "id": "P3-cio-navbooks-excludes-the-books-that-trade",
+   "title": "The weekly CIO accountability rollup grades only flagship + flagship_judgment; the five real trading brains and the winning self_directed book are absent from _NAV_BOOKS",
+   "verdict": "partially-confirmed",
+   "confidence": 0.9,
+   "evidence": [
+    "brain/cio.py:38-41 \u2014 `_NAV_BOOKS = [(\"flagship\", data/portfolio/nav_history.jsonl), (\"flagship_judgment\", data/portfolios/flagship_judgment/nav_history.jsonl)]`. Only two paths. Verified against portfolio/registry.py:29-99 which lists 7 book ids (flagship, heavyweight, autonomous, etf, china, hk, self_directed) \u2014 so heavyweight/autonomous/etf/china/hk/self_directed are all absent.",
+    "brain/cio.py:225-257 _nav_summary iterates ONLY _NAV_BOOKS; cio.py:380-385 renders 'Books \u2014 NAV vs SPY' solely from book_summary, so the US Brain, ETF Brain, China/HK/Heavyweight Brains can never appear. CONFIRMED as written.",
+    "NOVEL (not in prior audit): all 5 excluded Brain books DO have live, freshly daily-marked nav_history.jsonl on disk carrying the exact {nav, spy_nav} schema _nav_summary already parses (cio.py:245-248) \u2014 verified: data/portfolios/{autonomous,etf,china,hk,heavyweight}/nav_history.jsonl all updated 2026-07-01. app/scheduler.py:298 _MARK_BOOK_IDS=[flagship,autonomous,heavyweight,china,hk,etf] marks all six daily. So extending _NAV_BOOKS to these 5 needs ZERO new plumbing and would work immediately. Live data shows autonomous -0.87% vs SPY -0.13% and etf -1.87% on 07-01 \u2014 underperformance the CIO is structurally blind to.",
+    "NOVEL IRONY: flagship_judgment \u2014 one of only TWO books the CIO lists \u2014 has NO nav_history.jsonl on disk (data/portfolios/flagship_judgment/ contains only _pending_decision.json), so the CIO's summary lists a book that produces nothing while ignoring 5 books that produce grade-able NAV. Confirms candidate's 'would produce nothing' point but locates it on flagship_judgment, not (only) self_directed.",
+    "self_directed CONFIRMED to lack nav_history (data/portfolios/self_directed/ now holds only safety.json; its NAV is computed in-engine at portfolio/self_directed.py:464-508 summary(), never persisted as a series) \u2014 so it alone would need a writer, matching app/scheduler.py:299 comment 'self_directed is excluded: it is NOT a paper_account book (its own engine owns its NAV)'.",
+    "cio.py:342-345 whats_working/whats_broken derive ONLY from the four seats' reputation/calibration, never from book_summary/excess_pct \u2014 CONFIRMED. Falsification test passed: grep of brain/calibration.py, brain/reputation.py, brain/posture.py for self_directed/cross-book/excess_pct returns ZERO hits; the only consumer of cio.review() is app/web.py:1795-1796 (a display surface). The accountability\u2192adaptation loop is open exactly as claimed.",
+    "DUPLICATION FINDING: the core _NAV_BOOKS-excludes-books observation is NOT novel. Prior audit id 'no-learning-loop-from-benchmark-book' (verdicts.json) cites 'cio.py:38-41 _NAV_BOOKS=[flagship, flagship_judgment]' as evidence AND its refinement states verbatim the summary 'covers only flagship + flagship_judgment, not the 5 other Brains ... explicitly toothless/advisory.' Not fixed on fix/bot-orphans-arming (branch touches portfolio/predictions.py + heavyweight_outcomes.py; brain/cio.py is untouched)."
+   ],
+   "severity_final": "medium",
+   "refinement": "Every code-level fact in the candidate is TRUE and verified: _NAV_BOOKS lists only flagship + flagship_judgment (cio.py:38-41); _nav_summary/render iterate only those (225-257, 380-385); whats_working/broken derive purely from the four seats' calibration, never cross-book NAV (342-345); self_directed writes no nav_history; and no adaptation artifact consumes cross-book excess (grep zero). Not fixed on the fix branch (brain/cio.py untouched). So the mechanism is real and the loop is open.\n\nBut the headline claim is substantially a DUPLICATE, which is why this is partially-confirmed at MEDIUM (candidate proposed HIGH). Prior audit id 'no-learning-loop-from-benchmark-book' already cites cio.py:38-41 as evidence and its refinement explicitly says the summary 'covers only flagship + flagship_judgment, not the 5 other Brains ... explicitly toothless/advisory.' The candidate's 'why_first_pass_missed' rationale (that the first pass read cio as 'the weekly review' without auditing _NAV_BOOKS) is factually wrong \u2014 the first pass DID audit _NAV_BOOKS membership and named the exact exclusion.\n\nThe genuinely additive, non-duplicate increment is narrow but useful and I confirm it: (1) the 5 excluded Brain books carry populated, daily-marked nav_history in the exact {nav, spy_nav} schema _nav_summary already parses, so grading them is a two-line list edit with zero plumbing \u2014 and 07-01 data shows autonomous/etf already trailing SPY, invisible to the CIO; (2) flagship_judgment, one of the only two listed books, has NO nav_history on disk (only _pending_decision.json), so the CIO grades a phantom while ignoring 5 real books. That reframes the fix cost asymmetry: the 5 Brains are free to add; only self_directed needs a new writer (a yahoo-parquet-fallback mark, per the prior audit's synthesis.md).\n\nRecommend MERGING this into 'no-learning-loop-from-benchmark-book' as a sharpening addendum rather than logging it as a new problem: map to RC6, keep severity HIGH at the merged level (open benchmark/learning loop) but the standalone novelty here is medium. Concrete follow-up: extend cio.py:_NAV_BOOKS to the 5 Brain books immediately (no new code); drop flagship_judgment or gate it on file existence; then add the self_directed nav writer as the one real build item."
+  },
+  {
+   "id": "P4-no-kill-promote-rule-for-losing-books",
+   "title": "No kill/promote/retire rule for a consistently-losing book \u2014 books underperform SPY and self_directed indefinitely with zero capital or reputation consequence",
+   "verdict": "confirmed",
+   "confidence": 0.9,
+   "severity_final": "medium",
+   "evidence": [
+    "portfolio/registry.py:27-109 \u2014 PORTFOLIOS is a static hand-edited list. Every book carries only {id,name,tagline,kind,manager,starting_nav,benchmark,legacy,(currency/venues)}. There is NO 'active'/'retired'/'capital_weight' field. The only functions on the registry are ids/all_portfolios/get/is_known/data_dir/starting_nav(:148-149 returns fixed 1_000_000.0)/benchmark/currency/venues \u2014 none consumes NAV or can disable a book.",
+    "brain/cio.py:9-13 \u2014 the top of the P3 learning loop is 'deliberately toothless. It NEVER trades, NEVER touches a paper account, NEVER flips a flag, and NEVER mutates a seat's behavior. It only computes numbers ... and surfaces RECOMMENDATIONS ... which the user (or a flag) acts on.' Its outputs are per-SEAT tuning notes, not book-capital moves.",
+    "brain/reputation.py:1-31 and brain/posture.py:1-24 \u2014 reputation adjusts SEAT influence multipliers in [0.5,1.0] (subtract-only, capped, per docstring); posture derives a glance-able label per book. Neither touches book-level capital, an active flag, or a build decision.",
+    "The two natural refuters both fail: portfolio/shadow_books.py:1-20 runs A/B POLICY arms (prod/no_committee/no_calibration/engine_only) WITHIN the flagship stack \u2014 not the actual portfolio books \u2014 and portfolio/bandit.py:1-16 ranks those same policy arms but 'NEVER controls real sizing ... not an auto-switch.' No code path maps any book's NAV/excess to a capital weight, active flag, or build decision.",
+    "STRONGER than claimed: the winning defensive book is architecturally invisible to every cross-book loop. firm_exposure.py:84-88 excludes self_directed by id; brain/calibration.py:544-549 grades book reliability ONLY for autonomous/heavyweight/china/hk (self_directed absent); cio.py _NAV_BOOKS = [flagship, flagship_judgment] only (self_directed absent); app/scheduler.py:300 'self_directed is excluded: it is NOT a paper_account book.'",
+    "Not fixed on fix/bot-orphans-arming: git diff master..fix/bot-orphans-arming --stat over registry.py, cio.py, shadow_books.py, reputation.py, posture.py returns empty (all untouched). Not a duplicate of the 47: prior RC6 framed self_directed invisibility at the seat/calibration/single-book-learning altitude; this is the portfolio-of-books capital-allocation altitude."
+   ],
+   "refinement": "CONFIRMED and slightly under-scoped in the candidate. The candidate ties self_directed's exclusion to NAV visibility (P3), but the exclusion is deeper: self_directed is dropped from firm_exposure (firm_exposure.py:88), from calibration book-reliability grading (calibration.py:544-549 \u2014 only 4 Brain books graded), and from the CIO NAV summary (cio.py _NAV_BOOKS at :38-40). So the winner isn't just un-promoted \u2014 it is not even measured by the loops that would surface it. Two would-be selection mechanisms exist but neither closes the gap: shadow_books/bandit select over decision-POLICY layers inside the flagship stack, and bandit.py explicitly 'NEVER controls real sizing.' Severity: agree MEDIUM (paper books, fixed 1M each, no real capital fungibility today), but it is the load-bearing control gap behind the user's core complaint \u2014 'no model has beat our self-directed book' has no consequence because nothing at the book granularity acts on that fact. Maps to NEW-RC (no strategy-level survival/allocation selection across books) and reinforces RC6. Falsification test as proposed is correct and cheap: grep the tree for any assignment where book NAV/excess feeds a capital weight / active flag / build gate \u2014 expected result is zero hits (confirmed for registry, cio, reputation, posture, shadow_books, bandit); if any is found the claim is refuted. Confidence 0.9 rather than higher only because I verified the primary decision modules (registry/cio/reputation/posture/shadow_books/bandit/firm_exposure/calibration/scheduler) but did not exhaustively read every bot/*.py builder; the docstrings and scheduler wiring make a hidden book-capital allocator very unlikely."
+  },
+  {
+   "id": "P5-heavyweight-universe-hardgated-to-flagship-forbids-diversification",
+   "title": "Mandate overlap is a single bet, not a portfolio of strategies \u2014 Heavyweight's universe is hard-gated to Flagship's current holdings, so it is structurally forbidden from diversifying and can only amplify",
+   "verdict": "refuted",
+   "confidence": 0.83,
+   "evidence": [
+    "CODE FACTS ALL TRUE (verified independently): bot/heavyweight.py:50-72 _flagship_universe() builds the allowed set solely from Flagship latest.json positions[] \u222a pending_orders[]; :92 _enforce() step 1 'if not t or t not in allowed: ... continue' drops any name not in Flagship's book as out_of_universe; :266-283 _PERSONA 'Your tradable universe is FLAGSHIP'S CURRENT HOLDINGS \u2014 period... one-up it by concentrating... graded on realized NAV vs the S&P 500 \u2014 and vs Flagship itself.'",
+    "REGISTRY FACT TRUE: portfolio/registry.py:41 tagline 'Concentrated \u00b7 presses Flagship's best'; :46 benchmark 'SPY'; flagship(:35)/heavyweight(:46)/autonomous(:56) all benchmark SPY.",
+    "CONVICTION-POOL FACT TRUE: portfolio/conviction.py:19-20 _SHORTLIST = 20 AI/MAG7 names (AVGO/NVDA/AMD/MU/GEV/PLTR/DELL/TSM/AMAT/MRVL/ORCL/VST/BWXT/ANET/LRCX/KLAC/MSFT/GOOGL/META/AAPL); :128 candidates() = _SHORTLIST \u222a universe() \u222a open theses \u222a intake \u2212 _MANUAL_EXCLUDE \u2014 no defensives fed in.",
+    "EMPIRICAL TEST 1 (proposed test) RUN and passes: reproducing _flagship_universe() on the live data/portfolio/latest.json gives 24 names; intersect with etf_universe.DEFENSIVE (TLT/IEF/SGOV/BIL/SHV/SHY/GLD/USMV/XLP/XLU, per portfolio/etf_universe.py:110-120) = EMPTY. Heavyweight literally cannot hold a defensive.",
+    "EMPIRICAL TEST 2 (proposed test) RUN: 60d NAV-return corr flagship~heavyweight=0.87, flagship~autonomous=0.86, heavyweight~autonomous=0.94 \u2014 but on only 8-9 overlapping days (all books inception ~2026-06-18..21), so rho is directionally supportive, not the rho>0.9 the test asserted for flagship~heavyweight.",
+    "DUPLICATE OF CONFIRMED PRIOR PROBLEM: /tmp/mm_audit evidence_digest.json id 'heavyweight-downstream-amplifier' (severity HIGH) already cites the identical bot/heavyweight.py:50-72 gate, :75-95 _enforce drop, :250-273 _PERSONA, the corr(flagship,heavy)=0.871 number, AND the exact observation 'Heavyweight discarded Flagship's defensives (ABBV, MRK, BIIB, GPC)'.",
+    "SECOND OVERLAP: prior 'illusory-diversification-one-factor' (HIGH) states verbatim 'Heavyweight is structurally UNABLE to diversify away from Flagship'; prior 'no-cross-book-diversification-mandate' (HIGH) cites heavyweight.py:50-73 'This actually FORCES overlap with Flagship rather than diversifying away'; prior 'unfair-inception-and-benchmark-basis' (HIGH) already covers the benchmark-basis / edge-definition defect.",
+    "NOT FIXED on fix/bot-orphans-arming (git log master..branch): commits touch china-seam, detectors D1/D2/D4, attribution, predictions, armory, fused_risk prior \u2014 none touch heavyweight universe gating; so the code is live as described, but that only means the DUPLICATE prior finding is still open."
+   ],
+   "severity_final": "medium",
+   "refinement": "REFUTED AS NOVEL \u2014 the underlying code is real and I verified every cited file:line plus ran both proposed tests (the DEFENSIVE-intersection = empty proof passes cleanly; the correlation proof is directionally right but rests on only 8-9 days). The problem itself is genuine, but it is a re-framing, not a new problem: the prior audit already CONFIRMED it under three HIGH-severity ids \u2014 'heavyweight-downstream-amplifier' (same gate/enforce/persona lines, same 0.871 corr, same 'discarded defensives' observation), 'illusory-diversification-one-factor' ('structurally UNABLE to diversify away from Flagship'), and 'unfair-inception-and-benchmark-basis' (the benchmark/edge-definition angle). The candidate's claimed novelty \u2014 'benchmark & edge definition' vs 'concentration/firebreak' \u2014 is a lens on the identical facts, not a distinct defect: the mandate-design flaw (universe = Flagship's book, tagline 'presses Flagship's best', all three books benchmark SPY, zero decorrelation mandate) is exactly what the amplifier finding describes. The one empirically additive artifact \u2014 the mechanical DEFENSIVE \u2229 universe = \u2205 assertion \u2014 reaches the same conclusion the amplifier finding already stated in prose. Recommended disposition: fold into 'heavyweight-downstream-amplifier' as a supplementary empirical exhibit (the DEFENSIVE-intersection script + a note that the mandate/benchmark design, not just the theme cap, is the root); do NOT count as a novel problem. Severity if it were novel would be HIGH to match its parents, not the candidate's medium; but as a duplicate the net-new severity is medium at most (adds only the mechanical proof). Root cause link RC3 is correct and matches the parents."
+  }
+ ],
+ "novel_unverified": [
+  {
+   "id": "P6-four-us-books-cannot-buy-defense-at-all",
+   "title": "Four of six US books cannot express the winning trade \u2014 Flagship, Heavyweight, US Brain and conviction sleeve have no path to buy SGOV/TLT/XLV/XLU/XLP; the defensive universe lives only in the ETF Brain",
+   "severity": "high",
+   "evidence": [
+    "portfolio/etf_universe.py:11-14,42,110-167 \u2014 a DEFENSIVE bucket (TLT/IEF/SGOV/BIL/SHV/SHY + USMV/XLP/XLU) exists and is_defensive() is defined, but etf_universe is enforced ONLY for the ETF Brain (registry.py:60-71 comment: 'ETF-only allowlist enforced \u2026 via portfolio.etf_universe').",
+    "portfolio/conviction.py:19 _SHORTLIST is entirely offensive (AVGO/NVDA/AMD/MU/GEV/PLTR/DELL/TSM/AMAT/MRVL/\u2026); universe() (line 106-108) = us_stocks standouts \u222a basket top picks \u2014 a momentum feed with no defensive ETFs; grep of conviction.py for SGOV/TLT/XLV/XLU/XLP returns nothing.",
+    "DOCTRINE.md:43 leadership sleeve = narrative_rotation.allocate() '200d-trend gated' \u2014 it can only select sectors that have already gone UP, so it will never rotate into a lagging defensive sector as a defensive act.",
+    "bot/heavyweight.py:50-95 Heavyweight is confined to Flagship's holdings (P5), which contain no defensives \u2192 transitively cannot hold defense.",
+    "defensive_playbook (prior audit RC5) is 'ADVISORY \u2026 the desk NEVER auto-buys a defensive' \u2014 even the advisory favor-list is non-executing."
+   ],
+   "root_cause_link": "RC5",
+   "why_first_pass_missed": "The first pass established (RC5) that responses are 'subtract-only, de-gross to cash never rotate' and that defensive_playbook never auto-buys. It did NOT enumerate, per book, whether the defensive INSTRUMENTS are even in the reachable universe. The novel, concrete finding is a universe-membership audit: the defensive bucket is walled off inside etf_universe and reachable by exactly one book (ETF Brain), so for Flagship/Heavyweight/US-Brain/conviction the inability to go defensive is not a policy choice that could be flipped by arming a flag \u2014 it is an instrument-set exclusion. Combined with P1 (no benchmark rewards defense), the system both cannot buy and would not be credited for the trade that is beating it.",
+   "proposed_test": "For each book, materialize its reachable candidate set (conviction.candidates() for Flagship; bot/heavyweight._flagship_universe() for Heavyweight; the autonomous MCP tool-allowed tickers for US Brain) and intersect with etf_universe.DEFENSIVE. Assert the intersection is empty for flagship/heavyweight/autonomous/conviction and non-empty only for etf. Then simulate injecting SGOV+XLV into Flagship's conviction candidate pool and re-running build() to confirm the gate would even size them (it will not \u2014 no confluence/RS signal), proving the exclusion is structural, not incidental.",
+   "dimension": "benchmark & edge definition \u2014 'what would beating the defensive book even require?'"
+  },
+  {
+   "id": "P-NEW-1",
+   "title": "risk_prior consumes shadow-labeled fused_risk (label=risk-on) while the non-shadow risk_radar (state=caution, H21 drawdown-prob=19%) is never read",
+   "severity": "high",
+   "evidence": [
+    "brain/risk_prior.py:67-90: reads data/regime/regime_one.json -> fused_risk.label and maps it to bot 3-state. Today fused_risk.label='risk-on'.",
+    "vendor/macro/data/regime/regime_one.json: fused_risk.passport.validation.status='shadow'; fused_risk.note='SHADOW \u2014 no live consumer flips this wave (risk-vocabulary unification is P2-B')'.",
+    "vendor/macro/data/regime/latest.json: risk_radar.state='caution', risk_radar.dominant_label_en='Growth scare / defensive rotation', risk_radar.drawdown_prob.h21=0.19 (19% probability of >=5% SPY pullback in 21 days), risk_radar.top_score=82.8.",
+    "grep -rn 'risk_radar' brain/ bot/ portfolio/ -> zero hits (only vendor/macro_src tests reference it).",
+    "risk_prior.py has no check on fused_risk.passport.validation.status \u2014 it does not detect the SHADOW flag and treats the shadow artifact as authoritative.",
+    "Result: the bot's dashboard prior says risk_on while the dashboard's own non-shadow risk signal says caution with near-1-in-5 H21 drawdown probability."
+   ],
+   "root_cause_link": "RC4",
+   "why_first_pass_missed": "Prior audit confirmed 'fused-risk-shadow-not-wired' as partially-confirmed (no live consumer of fused_risk). The in-flight branch d1f4c92 then wired it \u2014 but wired it WITHOUT checking the shadow flag, so the fix introduced a new form of the same problem: the bot now actively trusts a shadow artifact while the richer non-shadow risk_radar sits unread. The original problem was 'not wired'; the new residual is 'wired to wrong artifact'.",
+   "proposed_test": "Read latest.json:risk_radar.state and regime_one.json:fused_risk.label on the same day. Log the bot's effective prior (risk_prior.prior()) and the risk_radar verdict. Assert that when fused_risk.passport.validation.status='shadow', the bot either (a) ignores fused_risk and uses risk_radar directly, or (b) logs a visible override-warning. Today's values (fused_risk=risk-on vs risk_radar=caution) make this an immediately observable divergence.",
+   "dimension": "Dashboard-contract coverage matrix: which vendor/macro artifacts the bot reads, which it ignores, and the highest-value gaps"
+  },
+  {
+   "id": "P-NEW-2",
+   "title": "us_standouts.gate_go ignored: bot reads the buy[] list and adds names even when the dashboard's own statistical gate says NEUTRAL/STOP",
+   "severity": "high",
+   "evidence": [
+    "vendor/macro/site/factordata/us_standouts.json: gate_go=false, stock_conviction_gate.json: US='NEUTRAL'.",
+    "portfolio/conviction.py:41-43 (_us_standouts): reads only buy[] tickers, ignores gate_go.",
+    "brain/intake.py:96-106 (_from_standouts): reads buy[], conviction, label, state \u2014 gate_go field not read.",
+    "portfolio/risk_sizing.py:37: reads us_standouts.json for sizing multipliers but never checks gate_go.",
+    "gate_go=false/NEUTRAL means: the deep-CI Phase-0 walk-forward has NOT confirmed positive IC for US names; scores are marked 'uncalibrated' (engine/stock_score.py:1322: validation_status='positive_ic' if gate_go else 'neutral_ic').",
+    "The dashboard's risk_brain.py:208 explicitly reads gate_go as an evidence flag ('E7'). The bot reads from the same file but skips this field entirely."
+   ],
+   "root_cause_link": "RC4",
+   "why_first_pass_missed": "Prior audit documented that sector_cycles.json was unconsumed and that the bot reads standouts for tickers; it did not enumerate the gate_go top-level field. gate_go is not a per-row filter (it would have been visible in row scanning) but a board-level gate that the bot has never checked.",
+   "proposed_test": "Assert that conviction.py reads us_standouts.gate_go before calling _us_standouts(). When gate_go=false, all standout-sourced names should be tagged as 'uncalibrated' and either excluded from new buys or down-weighted by the dispersion_regime.gross_mult (also ignored, currently 1.0 for neutral state). Falsifier: if IC of buys made when gate_go=false is positive, the gate carries no information and can be ignored.",
+   "dimension": "Dashboard-contract coverage matrix: which vendor/macro artifacts the bot reads, which it ignores, and the highest-value gaps"
+  },
+  {
+   "id": "P-NEW-3",
+   "title": "us_standouts entry_signal fields (buy_zone, stop, entry_grade, urgency, timing) are fully ignored: bot buys at spot price with no entry discipline",
+   "severity": "medium",
+   "evidence": [
+    "vendor/macro/site/factordata/us_standouts.json buy[0] (FCN): entry_signal.stop=140.4, entry_signal.buy_zone={'low':144.2,'high':149.0,'pct_from_spot':-1.6}, entry_signal.entry_z=64.1, entry_signal.entry_grade='strong', entry_signal.urgency='now'.",
+    "Of 25 buy candidates: 13 have urgency='hold', 5='later', 5='now', 2='imminent', 1='buy_now'. Only 3 are 'buy_now' or 'imminent'; the rest the dashboard itself says to hold or wait.",
+    "bot/phase2.py:384-385: entry price = site/stockdata/{t}.json -> tech.price (spot). stockdata/ is empty in vendor/macro (0 files on origin/main) so price=None for all names in production \u2014 confirmed by data/shadow/inputs/2026-07-01.json showing price=None for all 24 names.",
+    "portfolio/conviction.py:80-82 (_sector_of): reads stockdata for sector lookup, also degrading silently to Unknown when absent.",
+    "The dashboard computed per-name stop levels and buy-zone coordinates are published in the same file the bot already reads \u2014 the connection is one dict lookup away."
+   ],
+   "root_cause_link": "RC4",
+   "why_first_pass_missed": "Prior audit documented the stockdata gap (C1, highest priority) and equal-weight fail-open (confluence=1.0 on missing stockdata). The entry_signal sub-object within the already-consumed us_standouts.json was not enumerated separately. This is a distinct problem: even if stockdata were available, the bot would still use raw spot price instead of the computed buy-zone/stop/urgency fields.",
+   "proposed_test": "Add entry_signal parsing to intake._from_standouts() and conviction.py. Use entry_signal.urgency to gate new buys (drop 'hold'/'later' unless the position is already open). Use buy_zone.low as the limit-order price rather than spot. Measure fill rate and entry-point quality (entry vs subsequent high-water mark) over 30 days. Falsifier: if names bought at buy_zone outperform names bought at spot by less than the ATR, the field adds no value.",
+   "dimension": "Dashboard-contract coverage matrix: which vendor/macro artifacts the bot reads, which it ignores, and the highest-value gaps"
+  },
+  {
+   "id": "P-NEW-4",
+   "title": "anticipationdata/ per-name risk cones (NVDA: dd_tail=-38%, index=81.5 extreme) are published as standalone files but lenses.py reads them from the absent stockdata/ path",
+   "severity": "medium",
+   "evidence": [
+    "portfolio/lenses.py:497: d = _load('site/stockdata/{t}.json'); lines 559-569: reads d['anticipation.horizons.medium.mfe_med/dd_avg/dd_tail/p_up/thin'] \u2014 these live in the stockdata blob.",
+    "vendor/macro/site/stockdata/ contains 0 files (0 on origin/main).",
+    "vendor/macro/site/anticipationdata/ contains 49 files (anticipation.json + 48 per-name). NVDA.json: anticipation_index=81.5 (extreme band), dd_tail=-38.11% (21-63d), p_up=0.58, mfe_med=14.96%.",
+    "bot_mcp.py:467: get_anticipation reads anticipationdata/{t}.json directly via MCP tool. lenses.py (deterministic path) does NOT read anticipationdata/ at all.",
+    "Result: the asymmetry/risk_drawdown lens rows in _name_rows() always degrade to 'missing' in production (all None) because both the stockdata path and the standalone anticipationdata path are unread in the deterministic lenses. Only an LLM-armed bot_mcp call would reach this data."
+   ],
+   "root_cause_link": "RC3",
+   "why_first_pass_missed": "Prior audit confirmed the stockdata gap (C1) as a structural missing-from-origin-main problem. The anticipationdata/ directory was not separately enumerated. The NEW finding is the specific path mismatch: anticipationdata/ exists and is populated on origin/main (49 files), but lenses.py reads from stockdata/{T}.json which is absent. The fix is a single additional fallback in lenses._name_rows().",
+   "proposed_test": "Add to lenses._name_rows(): after loading d = _load('site/stockdata/{t}.json'), if d is None or 'anticipation' not in d, attempt _load('site/anticipationdata/{t}.json') and merge its horizons dict at d['anticipation']. Verify with NVDA: before fix, asymmetry row = missing; after, asymmetry = 14.96/|-4.17| = 3.6 (strongly bull). Falsifier: if the anticipation index correlates < 0.3 with subsequent 21-63d return in a holdout, the cone is uninformative.",
+   "dimension": "Dashboard-contract coverage matrix: which vendor/macro artifacts the bot reads, which it ignores, and the highest-value gaps"
+  },
+  {
+   "id": "NEW-SIZE-1",
+   "title": "risk_sizing.apply() renormalizes to full budget, silently erasing the 0.7 initial-size catalyst haircut (and pinning thin books to the name cap)",
+   "severity": "high",
+   "evidence": [
+    "portfolio/conviction.py:270-273 sizes each passer base=min(confluence/tot*budget, name_cap) then weight=base*mult where mult=_INITIAL_SIZE_FRACTION=0.7 for un-confirmed 'initial' names (conviction.py:73,271).",
+    "portfolio/conviction.py:286 then calls risk_sizing.apply(sized, budget, name_cap) as the LAST sizing step.",
+    "portfolio/risk_sizing.py:93 target = budget * selection_gross(); risk_sizing.py:95 w = min(raw[id(p)]/tot*target, name_cap) \u2014 this renormalizes the post-haircut weights back up to the FULL budget, undoing the *0.7.",
+    "Isolation run (/tmp/mm_reaudit): 3 names entered at 0.0105 (post *0.7) came out of apply() at 0.08 each (the name_cap) \u2014 a 7.6x scale-up; the initial-size discipline is fully erased.",
+    "Live proof: every conviction name in data/portfolio/latest.json is size_stage='initial' yet sized at base*1.0 (0.0153 = budget/20 * research_mult approx 1.02), NOT base*0.7 (which would be ~0.0107)."
+   ],
+   "root_cause_link": "NEW-RC (sizing-pipeline order-of-operations defect); compounds RC3 (fail-open confluence=1.0 makes the renormalization pure equal-weight)",
+   "why_first_pass_missed": "The prior audit focused on membership/veto/gate correctness (RC1-RC3) and treated risk_sizing as the doc claims \u2014 an 'additive, graceful, never changes gross' lever. No pass traced the numeric weight through the two-stage size then renormalize sequence to see that the second stage mathematically cancels the first.",
+   "proposed_test": "Unit test: feed apply() a 3-name book at weights [0.0105]*3 (post-0.7-haircut) with budget=0.30; assert sum(out) stays ~0.0315 (haircut preserved) \u2014 it currently returns 0.24 (renormalized to budget, each pinned to name_cap 0.08). Fix: apply() must preserve the incoming gross (scale vol_mults relative to the CURRENT invested total, not to budget), or the initial-size haircut must be applied AFTER risk_sizing.",
+   "dimension": "risk & sizing math correctness"
+  },
+  {
+   "id": "NEW-SIZE-2",
+   "title": "Vol-managed sizing is inert on the live book: 0/20 conviction names are on the size_mult board (universe-key mismatch, not the doc's 'field not shipped' fallback)",
+   "severity": "high",
+   "evidence": [
+    "vendor/macro/site/factordata/us_standouts.json DOES carry the fields the doc claims are missing: 61 tickers across buy/watch/laggards all carry risk_sizing.size_mult (range 0.4-1.94, median 0.65) and dispersion_regime={state:'neutral', gross_mult:1.0} is present.",
+    "portfolio/risk_sizing.py:56-59 vol_mult(ticker) returns _CACHE['mult'].get(ticker, 1.0) \u2014 defaults to 1.0 for any ticker not on the board.",
+    "Live: data/portfolio/latest.json conviction book = [AAL,AAPL,ABBV,AMD,BIIB,DAL,DELL,ENTG,ETN,FITB,GEV,GLW,GOOGL,HOOD,HUBB,META,MSFT,ORCL,TSM,VST]; intersection with the 61-name board = {ETN} only. Every other name silently gets vol_mult=1.0.",
+    "The board's BUY list (the candidates fed to conviction per conviction.py:42-43) is defensive/value/utility (FCN,LKQ,PRGO,XEL,NI,WMB...) \u2014 disjoint from the AI/semis/MAG7 book that actually got built via the fail-open + _SHORTLIST path. So the sizing lens and the selection are keyed to different universes.",
+    "risk_sizing.py:1-16 docstring sells this as a validated +0.10-0.15 Sharpe lever; in production it applies to ~1/20 of the book."
+   ],
+   "root_cause_link": "NEW-RC (vol-lever universe mismatch); interacts with RC2 (_SHORTLIST hardcode) and RC3 (fail-open book is off-board)",
+   "why_first_pass_missed": "Prior audit accepted the module docstring's framing ('graceful: defaults to 1.0 until the macro side ships those fields') and did not check that the macro side HAS shipped them, nor that the built book's tickers don't intersect the board that carries them.",
+   "proposed_test": "At build time compute coverage = |conviction_book \u2229 board_size_mult_keys| / |conviction_book|; assert > 0.5. On the live book it is 1/20 = 0.05. If coverage is chronically ~0, either widen the board's size_mult coverage to the full candidate universe or fall back to an on-the-fly inverse-vol estimate from the price series safety.py already loads, rather than silently degrading to 1.0.",
+   "dimension": "risk & sizing math correctness"
+  },
+  {
+   "id": "NEW-SIZE-3",
+   "title": "apply() is a pathological equal-weighter under uniform inputs: confluence dispersion is discarded, so the fail-open book gets zero conviction differentiation",
+   "severity": "medium",
+   "evidence": [
+    "portfolio/risk_sizing.py:89 raw = weight * vol_mult, then :95 w = raw/tot*target \u2014 the per-name RELATIVE weight is fully determined by weight*vol_mult; the original confluence enters only through 'weight', which conviction.py:270 already set proportional to confluence.",
+    "But under the RC3 fail-open every conviction name has confluence=1.0 (verified: all 20 live names show confluence=1.0 in latest.json), so 'weight' is uniform, vol_mult is uniform (1.0, per NEW-SIZE-2), and apply() therefore emits pure equal weight \u2014 no risk or conviction dispersion survives.",
+    "Live book: 17 of 20 names at identical 0.0153; the only variation (BIIB 0.0101, one name 0.0078) comes from phase2's downstream research size_mult, NOT from risk_sizing.",
+    "The module's stated purpose (risk_sizing.py:6-8 'bet LESS on high-vol names, MORE on calm ones') cannot manifest when both its inputs are constant."
+   ],
+   "root_cause_link": "RC3 (fail-open uniform confluence) x NEW-RC (vol lever inert) \u2014 the two combine into equal-weight",
+   "why_first_pass_missed": "RC3 established that confluence collapses to 1.0, but the downstream consequence for the SIZING math (that equal confluence + equal vol_mult -> mechanically equal weight, so the entire risk/conviction sizing apparatus is a no-op) was not traced.",
+   "proposed_test": "On any build where >80% of conviction names share an identical confluence, assert the sizing engine emits a diagnostic (it is operating in degenerate equal-weight mode). Re-run the 2026-07-01 build with the NEW-SIZE-2/RC3 fixes and confirm the resulting weight vector has non-trivial dispersion (coeff. of variation > 0.1).",
+   "dimension": "risk & sizing math correctness"
+  },
+  {
+   "id": "NEW-SIZE-4",
+   "title": "Risk-sized weights (and the sector cap) are overwritten downstream by a return-flavored research size_mult, so the sizing pipeline's risk math is silently discarded",
+   "severity": "medium",
+   "evidence": [
+    "portfolio/conviction.py:286-292: risk_sizing.apply() then _apply_sector_cap() produce the final per-name 'weight'.",
+    "bot/phase2.py:434 scaled = round(min(name_cap, c['weight'] * breakdown['size_mult']), 4) \u2014 multiplies that risk-sized weight by research_paper size_mult, and phase2.py:467-470 persists entry={**c,'weight':scaled}. The risk-sizing/sector-cap output is thus re-scaled by an alpha score AFTER the fact.",
+    "brain/research_paper.py:144 size_mult = clamp(0.5 + (combined-60)/40, 0.5, 1.3): combined = 0.5*engine_score + 0.5*research_score (research_paper.py:127) \u2014 a conviction/return score, ranging 0.5x..1.3x. A RETURN signal directly rescales a RISK-controlled weight (the assignment's 'risk number silently becomes / is overridden by a return signal').",
+    "Because the multiply happens after conviction.py's SECTOR_MAX_FRACTION cap (conviction.py:298-322) and after the name_cap clamp inside apply(), a name the sector cap trimmed can be re-inflated by up to 1.3x here; the only backstop is the min(name_cap,...) on the single name \u2014 the SECTOR-level cap invariant is not re-checked after the multiply.",
+    "Evidence the multiply is live: BIIB persisted at 0.0101 vs the uniform 0.0153 (research size_mult ~0.66); another name at 0.0078."
+   ],
+   "root_cause_link": "NEW-RC (sizing pipeline layering: risk sizing overridden by an un-recapped alpha multiplier); touches RC3 (sector cap defeated)",
+   "why_first_pass_missed": "The prior audit traced the sector/name cap defeat (RC3) at the conviction.py layer but did not follow the weight into phase2.py:434 to see that a post-cap alpha multiply can re-breach the sector-level invariant and that risk-sized weights are not the weights actually persisted.",
+   "proposed_test": "After phase2 applies research size_mult, re-run _apply_sector_cap on the FINAL confirmed_sized weights and assert no sector exceeds SECTOR_MAX_FRACTION*budget; today the cap is enforced pre-multiply only. Also assert that scaling a risk-sized book by a return score cannot push any sector back over cap \u2014 construct a 2-name single-sector book at the cap, give both size_mult=1.3, and confirm the sector re-breaches (it does).",
+   "dimension": "risk & sizing math correctness"
+  },
+  {
+   "id": "SBI-1",
+   "title": "Tests delete production bot.db, permanently breaking the same-day rebuild dedup gate",
+   "severity": "high",
+   "evidence": [
+    "tests/test_daily.py:10-14: `def _clean(): for p in (_DB, _SCHED): if p.exists(): p.unlink()` \u2014 _DB resolves to data/bot.db (the live production file, not a tmp copy)",
+    "tests/test_phase2.py:12-14: `def _fresh(): if _DB.exists(): _DB.unlink()` \u2014 same path, same live file",
+    "tests/test_daily.py:28,35: _clean() is called both at the START and END of test_scheduler_registers_daily_job, so bot.db is left empty after the test suite",
+    "data/bot.db mtime Jul 1 22:11 UTC (AFTER latest.json at 21:41) confirms tests ran after the production build and wiped the runs table",
+    "bot.db verified empty: all tables show 0 rows \u2014 `SELECT count(*) FROM runs` returns 0",
+    "brain/gate.py:33: `if prev_run is None: triggers.append('first_run')` \u2014 with 0 rows, last_run() returns None, gate always fires 'first_run' regardless of unchanged state"
+   ],
+   "root_cause_link": "NEW-RC",
+   "why_first_pass_missed": "Prior audit focused on the gate logic itself, not on side-effects of the test suite running against live data/bot.db. The conftest.py isolates positions_ledger and runlog but not bot.db.",
+   "proposed_test": "After running `pytest tests/test_daily.py`, verify `data/bot.db` runs table still has its pre-test rows (currently impossible \u2014 the test deletes them). Fix: redirect _DB in conftest.py to a tmp_path copy, or use pytest `tmp_path` fixture in test_daily/test_phase2 instead of the module-level hardcoded path.",
+   "dimension": "state & bookkeeping integrity"
+  },
+  {
+   "id": "SBI-2",
+   "title": "Flagship never executes sell orders \u2014 ghost positions ($461k, 46% of NAV) accumulate indefinitely",
+   "severity": "critical",
+   "evidence": [
+    "portfolio/paper_account.py:697: `def queue_orders: ... Only BUYS are queued (the desk does not sell while shut)` \u2014 explicit design comment",
+    "bot/phase2.py:969-972: when `not _market_open`, only `paper_account.queue_orders()` is called (buys only); `rebalance()` which processes sells is at line 964 behind `if _market_open`",
+    "app/scheduler.py:107-109: `_settle_pending_job` calls `fill_pending_now.settle('flagship')` which calls `paper_account.fill_pending()` \u2014 fills queued buys only, no rebalance, no sells",
+    "scripts/fill_pending_now.py:103: `filled = paper_account.fill_pending(fill_prices, asof, portfolio_id=pid)` \u2014 only BUYS",
+    "data/portfolio/pending_orders.json: 18 pending buy orders, 0 sell orders queued",
+    "Measured gap: 36 positions in account.json are closed in positions_ledger (still_open=False) but still held in paper account with combined avg-cost book value of $461,038",
+    "data/portfolio/account.json: cash=$14.72 \u2014 all cash is exhausted, so the 18 pending buys (est. $232k) will fill $0 at the 07-02 open settle (min(want, cash/px) bounds every order to 0 shares)",
+    "app/scheduler.py:163-165: settle_us() covers only autonomous+etf via full rebalance; flagship is handled separately via fill_pending only"
+   ],
+   "root_cause_link": "RC5",
+   "why_first_pass_missed": "Prior audit (RC5) noted that the bot 'de-grosses to cash, never rotates' but attributed this to the brain's de-risk logic. The specific mechanism \u2014 queue_orders queues only buys, settle fills only buys, rebalance (sells) only runs at market-open builds that never occur on the scheduled 22:40 UTC cadence \u2014 was not traced to the paper_account settle split.",
+   "proposed_test": "Run `python3 -c \"from portfolio import paper_account; import json; acct=json.load(open('data/portfolio/account.json')); assert acct['cash'] > 50000, f'cash exhausted: {acct[\"cash\"]}'\"`. Should fail on live data. Fix: either (a) add an explicit sell pass in fill_pending_now.settle() that liquidates positions absent from latest.json's target book, or (b) switch flagship to the Brain-style settle_target() full-rebalance path.",
+   "dimension": "state & bookkeeping integrity"
+  },
+  {
+   "id": "SBI-3",
+   "title": "nav_history.jsonl rows written in insertion order, not date order \u2014 corrupts last-row readers",
+   "severity": "medium",
+   "evidence": [
+    "data/portfolio/nav_history.jsonl confirmed out-of-order: row 11 = date=2026-07-01, row 12 = date=2026-06-30 (07-01 written BEFORE 06-30); also row 3 = date=2026-06-18 appears after rows dated 2026-06-22",
+    "portfolio/paper_account.py:912-926: mark() reads all rows, removes any with matching date, then appends new row at end \u2014 insertion-ordered, never sorted",
+    "Race mechanism: _daily_mark_job writes asof=system_date ('2026-07-01') at 22:35 UTC. phase2.run() at 22:40 UTC reads asof from regime['date'] ('2026-06-30') and calls mark(_prices, '2026-06-30'), appending 06-30 AFTER 07-01",
+    "portfolio/paper_account.py:1017: `latest = realized_rows[-1]` \u2014 current_nav is taken from the LAST file row, which is 06-30 (wrong, should be 07-01)",
+    "portfolio/paper_account.py:1045-1046: day_change_pct computes `realized_rows[-2]` vs `[-1]` in file order \u2014 with reversed rows, this is 07-01 vs 06-30 (same NAV by coincidence here, but wrong reference)",
+    "portfolio/paper_account.py:1101-1109: offline fallback (no SPY data) emits series in raw file order \u2014 chart shows non-monotonic date sequence"
+   ],
+   "root_cause_link": "NEW-RC",
+   "why_first_pass_missed": "Prior audit did not examine the interaction between the daily_mark_job (which uses system date) and phase2.run() (which uses regime['date'], a lagging data date). The race only manifests when these two dates differ, which happens the morning after a date change when the regime file hasn't been refreshed.",
+   "proposed_test": "Assert `sorted(r['date'] for r in rows) == [r['date'] for r in rows]` on nav_history.jsonl. Currently fails. Fix: mark() should sort rows by date before writing, or performance() should sort realized_rows before indexing by -1/-2.",
+   "dimension": "state & bookkeeping integrity"
+  },
+  {
+   "id": "CN-HK-4",
+   "title": "bot/hk.py emits 'China book' as decision subject: mislabels HK decisions in dashboard and decision log",
+   "severity": "low",
+   "evidence": [
+    "bot/hk.py line 363: `decisions.append({'subject': 'China book', 'lean': summary, ...})` \u2014 hardcoded string 'China book' in the HK bot, copied verbatim from bot/china.py line 366.",
+    "app/web.py line 1382: `subject = d.get('subject', '?')` is surfaced in the dashboard decisions panel, so every HK book decision is displayed with the label 'China book'.",
+    "bot/hk.py lines 1-18 (module docstring): entire docstring is the china.py docstring un-edited \u2014 says 'portfolio_id=\"china\"', 'marks NAV in CNY vs FXI (marked in CNY)', 'The universe is ALL of Greater China: mainland A-shares (*.SS / *.SZ)', 'Run: python -m bot.china'. None of these are true for bot/hk.py.",
+    "bot/hk.py lines 40-43 comment: `CURRENCY = _registry.currency(PORTFOLIO_ID) # 'CNY'` and `ALLOWED_VENUES = set(_registry.venues(PORTFOLIO_ID)) # {'A-share'}` \u2014 both inline comments are wrong (runtime values are HKD and {'HK'} respectively, confirmed via registry.currency('hk') = 'HKD').",
+    "brain/hk_mcp.py line 34 comment: `ALLOWED_VENUES = set(_registry.venues(PORTFOLIO_ID)) # {'A-share'}` \u2014 same stale comment, wrong for the HK book.",
+    "No runtime bug: registry resolves correctly at load time, so trades/NAV/pricing are correct. The only live effect is that the 'subject' field in decisions.jsonl and the dashboard decision log reads 'China book' for all HK book entries."
+   ],
+   "root_cause_link": "NEW-RC (copy-paste from china.py not updated for hk.py; cosmetic but degrades observability and confuses the decision log)",
+   "why_first_pass_missed": "Prior audit did not read bot/hk.py in detail. Stale comments/labels are low-severity and easy to overlook.",
+   "proposed_test": "Read data/portfolios/hk/decisions.jsonl: `python3 -c \"import json; [print(json.loads(l).get('asof'), json.loads(l).get('summary','')[:30]) for l in open('data/portfolios/hk/decisions.jsonl')]\"; then check the 'subject' field in the latest.json 'decisions' list` \u2014 it will read 'China book'. Fix: change bot/hk.py line 363 to `{'subject': 'HK book', ...}` and update the module docstring and inline comments to reflect HK reality.",
+   "dimension": "CN + HK books"
+  },
+  {
+   "id": "SBI-4",
+   "title": "Literal file `{_DB}` at repo root created by unquoted shell command; gitignore does not cover repo root *.db",
+   "severity": "low",
+   "evidence": [
+    "File `/Users/chriswong/Documents/Cluade/Mastermind/{_DB}` exists: 0 bytes, mtime 2026-07-01 19:44, untracked (shown as `?? {_DB}` in git status)",
+    "data_layer/store.py:14: `_DB = Path(__file__).resolve().parent.parent / 'data' / 'bot.db'` \u2014 the Python variable, never used as a string literal in any code path",
+    "In bash, `{_DB}` is not valid brace expansion (no comma or range) so it remains the literal string `{_DB}`. Running `sqlite3 {_DB}` from the repo root creates an empty file named `{_DB}` at cwd",
+    ".gitignore line 16: `data/*.db` \u2014 covers data/bot.db but NOT a *.db at the repo root, so `{_DB}` is untracked rather than ignored",
+    "No Python or shell source file contains the literal string `'{_DB}'` as a path argument \u2014 confirmed by grep"
+   ],
+   "root_cause_link": "NEW-RC",
+   "why_first_pass_missed": "An artifact of developer shell tooling during the active fix/bot-orphans-arming session, not a code defect. No prior audit checks for stray files at repo root.",
+   "proposed_test": "The file is inert (empty, untracked). Falsify by deleting it and confirming no code path recreates it: `rm '{_DB}' && pytest && python3 -m bot.daily --help` \u2014 `{_DB}` should not reappear. Fix: add `{_DB}` to .gitignore or delete the file; optionally add `*.db` at repo root to .gitignore.",
+   "dimension": "state & bookkeeping integrity"
+  }
+ ],
+ "impact_grades": [
+  {
+   "cluster": "RC1-mind",
+   "grades": [
+    {
+     "id": "flagship-all-flags-off",
+     "pnl_impact": 8,
+     "urgency": 8,
+     "effort": "M",
+     "verdict_change": "promote \u2014 live PID env dump confirms FLAGSHIP_JUDGMENT/RISK_OFFICER dark while the book went ~100% invested ($14.72 cash/$1M, 41 positions) with 23 MAG7/semis buys queued for 07-02; not touched by fix/bot-orphans-arming",
+     "note": "Canonical work item for the cluster: arm judgment via shadow week then live. judgment_book.py stitch proves the seat is ADDITIVE (PM-added novel names, SENTINEL-vetoable) \u2014 one flag buys an independent mind with existing guardrails; the 07-01 pending-decision artifact shows it would have trimmed semis/held 29% cash."
+    },
+    {
+     "id": "judgment-layer-dark-in-production",
+     "pnl_impact": 8,
+     "urgency": 7,
+     "effort": "S",
+     "verdict_change": "demote-as-duplicate \u2014 merge into flagship-all-flags-off; its confidence caveat (launch.json vs real prod runner) is now RESOLVED by the live uvicorn env dump, so evidence upgrades but the fix is identical",
+     "note": "Same flag, same fix. Do not double-count in the masterplan ranking; its remaining unique value is the artifact audit (no _FLAGSHIP/strategist.json on live dates) as the arming-success metric."
+    },
+    {
+     "id": "subtract-only-gate-confirmation-bias",
+     "pnl_impact": 5,
+     "urgency": 3,
+     "effort": "L",
+     "verdict_change": "demote partially \u2014 subtract-only veto seats (committee/gate_officer/research_paper) are defensible-by-design risk controls per DOCTRINE; the additive gap is covered by arming judgment (superset fix, PM injects novel names past the pool while gate_officer's never-inject invariant still holds). Also brain/panel.py (cited evidence panel.py:41) was DELETED on fix/bot-orphans-arming",
+     "note": "Marginal P&L after arming judgment is modest; rewiring every seat to be bidirectional is L-effort and weakens a legitimate risk invariant. The residual worth keeping: the deterministic path (judgment OFF or degrade-safe fallback) still discards intake's bearish lean (conviction.py:164 entry_ok long-only) \u2014 fold that into the defensive-rotation item, not a seat rewrite."
+    },
+    {
+     "id": "no-defensive-or-diversification-hypothesis-generator",
+     "pnl_impact": 8,
+     "urgency": 6,
+     "effort": "M",
+     "verdict_change": "promote \u2014 this is the single most benchmark-relevant gap: the winning self-directed book IS a defensive rotation (XLU/XLV/XLF/XLP), and no code path (armed or not) can rotate INTO defensives \u2014 every control de-grosses to ~4% cash at best. Not touched by fix/bot-orphans-arming (risk_prior only blocks gross increases on degraded reads)",
+     "note": "Effort is M not L: defensive_playbook.py already carries an advisory favor list with an explicit 'NEVER auto-buys' invariant \u2014 a flag-gated deterministic defensive sleeve (buy favor list when risk state degrades, LLM-independent) is a bounded change and works even when the judgment seat fails/degrades to engine path. Directly attacks the 60d benchmark question rather than proxying it through cash."
+    },
+    {
+     "id": "flagship-has-no-independent-contrarian-mind",
+     "pnl_impact": 7,
+     "urgency": 6,
+     "effort": "M",
+     "verdict_change": "demote-as-umbrella \u2014 architectural restatement of ids 1/2/7 plus 4; keep as the cluster narrative, rank the concrete children",
+     "note": "Its one unique residual: the leadership sleeve (phase2.py:256, deterministic top-4 RS sort, ~50% of the book) has no brake and is untouched by BOTH fixes above \u2014 judgment reshapes conviction 'sized', and apply_risk_state scales conviction only (leadership cap-exempt = RC3). The masterplan should note that arming judgment does NOT govern half the book."
+    },
+    {
+     "id": "all-defense-flags-off-by-default",
+     "pnl_impact": 5,
+     "urgency": 5,
+     "effort": "S",
+     "verdict_change": "demote partially \u2014 env dump settles it (MACRO_RISK+FAST_DERISK armed; GOVERNOR+JUDGMENT dark), and the refinement's 'cap inert because gross ~0.20' is now STALE: book is ~100% invested so a caution cap=0.7 would bite hard \u2014 the cap is inert solely because state reads risk_on (RC4 territory, partially in-flight via risk_prior d1f4c92, which is asymmetric and cannot flip a wrong risk_on)",
+     "note": "Residual unique work is small: arm RISK_GOVERNOR (prompt prose, weakest teeth) and add a startup assertion logging the four flags so dormancy is loud. The JUDGMENT half double-counts id 1; the state-read half belongs to the RC4 cluster."
+    },
+    {
+     "id": "flagship-judgment-book-diverges-correctly-but-not-executed",
+     "pnl_impact": 7,
+     "urgency": 5,
+     "effort": "S",
+     "verdict_change": "promote-as-evidence then merge into flagship-all-flags-off \u2014 same fix (the wiring already exists and is test-covered; only the flag is off), but its 07-01 artifact is the sharpest live counterfactual in the whole audit",
+     "note": "_pending_decision.json (Jul 1 18:44: trim SMH/XLK/MTUM, ~29% cash) vs the executed book (fully invested, 23 semis/MAG7 buys queued) is a ready-made A/B: track both forward from 07-02 and you get the arming decision's expected P&L for free before touching production. Caution: verify the artifact came from a dryrun script, and that the armed PM diverges consistently, not just on this date."
+    }
+   ]
+  },
+  {
+   "cluster": "RC2-momentum",
+   "grades": [
+    {
+     "id": "leadership-sleeve-no-extension-veto",
+     "pnl_impact": 8,
+     "urgency": 8,
+     "effort": "M",
+     "verdict_change": "none",
+     "note": "Biggest lever in the cluster: 40-60% of NAV mechanically buys the extended top-RS sector (SMH 12.5%, vol 39/beta 2.03, largest risk_contribution) with zero entry-quality brake, exempt from name cap and untouched by the fix branch (D2 arming is conviction-only, phase2.py:633); the exact guard exists in etf.py G4 \u2014 porting it is the single highest-odds change for any Brain to stop bleeding vs the defensive book in a WEAKENING regime."
+    },
+    {
+     "id": "extension-trim-in-etf-book-not-flagship",
+     "pnl_impact": 7,
+     "urgency": 7,
+     "effort": "S",
+     "verdict_change": "none",
+     "note": "Same underlying fix as leadership-sleeve-no-extension-veto \u2014 G4/G5 already coded, tested, and citing the 06-22 SMH post-mortem in etf.py; wiring them into phase2's leadership path is small and fixes both ids at once (merge these two into one masterplan work item); note prod MASTERMIND_MACRO_RISK=1 makes the conviction gross cap live, so the residual gap is purely the leadership sleeve."
+    },
+    {
+     "id": "leadership-sleeve-blind-to-regime-quality",
+     "pnl_impact": 7,
+     "urgency": 7,
+     "effort": "S",
+     "verdict_change": "none",
+     "note": "lead_budget is hardwired to the 0.50 midpoint with zero reads of confidence=0.327/WEAKENING/contradicting[] (grep-confirmed), and the in-flight fused_risk prior (d1f4c92) reaches macro_risk.risk_state but never lead_budget \u2014 an interp of budget to the 0.40 lower bound on low-confidence/WEAKENING is a few lines and directly frees gross toward cash exactly when the defensive benchmark wins; pairs with the extension port for compounding effect."
+    },
+    {
+     "id": "extension-hard-veto-parabolic-flag-only",
+     "pnl_impact": 6,
+     "urgency": 9,
+     "effort": "S",
+     "verdict_change": "promote \u2014 cheapest live lever and time-critical",
+     "note": "The +30%-vs-200dma withhold is fully coded (phase2.py:416 via watchlist.timing_withhold) but MASTERMIND_TIMING_GATE is confirmed unset in the prod env \u2014 a one-line env flip, and 23 MAG7/semis buys (AMD@580.91, DELL@431.46 pattern) are queued for the 07-02 open; the fix branch's D2 arming does NOT cover this (post-entry trim, conviction-only, dormant until 20 graded firings), so no demote for in-flight work."
+    },
+    {
+     "id": "hardcoded-shortlist-ai-bias",
+     "pnl_impact": 6,
+     "urgency": 6,
+     "effort": "S",
+     "verdict_change": "none",
+     "note": "8/25 (32%) of the live conviction sleeve exists solely via the hardcode, several as momentum laggards the feed would never surface (ORCL -40.9% 20d-rank 673); removing/regime-gating it is trivial and frees sleeve slots for the bottoming-alignment board that already surfaces Utilities/Industrials/Financials \u2014 the exact sectors of the winning self-directed book \u2014 so the benchmark link is unusually direct for an S-effort fix."
+    },
+    {
+     "id": "momentum-only-candidate-sourcing",
+     "pnl_impact": 3,
+     "urgency": 3,
+     "effort": "M",
+     "verdict_change": "demote \u2014 verifier's medium is right; mostly subsumed",
+     "note": "The headline was refuted (us_standouts is bottoming-ranked and demonstrably injects washed-out laggards like LKQ/REZI into candidates()); the two real kernels \u2014 RS-locked leadership sleeve and ret_20d basket leg \u2014 are already covered by the leadership items and the shortlist fix, so as a standalone masterplan line it buys little; the residual worth checking is whether conviction's leadership_ok gate vetoes the bottoming names it receives (a different, unfiled problem)."
+    },
+    {
+     "id": "no-forward-pe-valuation-on-leadership",
+     "pnl_impact": 3,
+     "urgency": 2,
+     "effort": "M",
+     "verdict_change": "none",
+     "note": "Real gap (leadership legs bypass lenses.full() entirely; valuation is one growth-muted bloc vote that reads bull on high-CAGR AI names), but valuation is a weak timing signal on a rolling-60d horizon and the extension port covers the same late-cycle exposure more directly \u2014 fund it only after the extension/regime-quality fixes land; do not spend a forward-PE data-feed build ahead of them."
+    },
+    {
+     "id": "static-seed-tech-bias",
+     "pnl_impact": 1,
+     "urgency": 1,
+     "effort": "S",
+     "verdict_change": "demote \u2014 dead code path, close as re-filed under shortlist",
+     "note": "The seed fires only on total source blackout (all 5 artifacts populated + 30 open theses live), scores 0.3 below the 0.4 mechanical floor, and renders as '?' not BUY to the LLM \u2014 inert in every live path; the binding static-tech default is conviction._SHORTLIST (already graded above), so fold this into that item and spend zero standalone engineering time."
+    }
+   ]
+  },
+  {
+   "cluster": "RC3-firebreaks",
+   "grades": [
+    {
+     "id": "missing-stockdata-degenerate-confluence",
+     "pnl_impact": 9,
+     "urgency": 10,
+     "effort": "S",
+     "verdict_change": "promote \u2014 no longer a transient publish gap: macro commit 2e379484a3 gitignored site/stockdata (0 entries on BOTH origin/main and local main; 1,684 files exist only on disk, served from R2), so the vendor checkout can never self-heal; nothing on fix/bot-orphans-arming touches lenses.py/conviction.py",
+     "note": "Single highest-leverage fix in the whole audit: repointing lenses._V to the sibling-repo disk path (or R2) + a fail-closed guard re-arms ALL four vetoes, real confluence differentiation, and the Unknown-exempt sector cap at once \u2014 directly blocks the chase-buys (23 MAG7/semis queued for 07-02 open all cleared the gate at degenerate confluence=1.0) that are losing to the defensive benchmark."
+    },
+    {
+     "id": "all-conviction-names-1-of-1-altdata-only",
+     "pnl_impact": 7,
+     "urgency": 8,
+     "effort": "S",
+     "verdict_change": "demote to companion of missing-stockdata \u2014 same mechanism, same fix; do not double-count in the ranking",
+     "note": "Residual standalone value is the fail-closed insurance: synthesize() should require stockdata-present AND n_scored>=3 before size_authority='up' (lenses.py:1022-1030) so the NEXT feed outage degrades to hold, not to 26 equal-weight buys off one altdata vote."
+    },
+    {
+     "id": "theme-cap-defeated-by-per-name-theme-id",
+     "pnl_impact": 8,
+     "urgency": 7,
+     "effort": "M",
+     "verdict_change": "promote \u2014 the ETF book's G5 cluster cap (etf.py:282-306 + etf_strategy.yml megacap_growth_semis 0.40, live and binding) is an in-repo proven template, so fix ROI is higher than first-pass assumed",
+     "note": "Even with lenses fixed, the leadership sleeve (50% of book) stays a pure top-RS momentum bet with theme_id=ticker (phase2.py:266) and is cap-exempt (sleeves.py:30-31); SMH+XLK+MTUM=0.375 correlated cluster with zero cap firing and safety.json silent at 42.6% IT \u2014 porting cluster-keyed caps is the second lever that actually forces non-tech diversification."
+    },
+    {
+     "id": "no-cross-book-diversification-mandate",
+     "pnl_impact": 2,
+     "urgency": 3,
+     "effort": "L",
+     "verdict_change": "demote \u2014 defensible-by-design: firm_exposure.py:9-13 explicitly scopes the hard firm allocator out of v1, and books are graded per-book, so a cross-book cap changes aggregate paper risk, not any single book's odds vs the defensive benchmark",
+     "note": "Per-book cluster caps (theme-cap fix) deliver ~all the benchmark-relevant value; keep firm_exposure as the acceptance-test surface, build the allocator only after per-book brakes exist."
+    },
+    {
+     "id": "heavyweight-downstream-amplifier",
+     "pnl_impact": 4,
+     "urgency": 5,
+     "effort": "M",
+     "verdict_change": "demote \u2014 largely defensible-by-design (persona is explicitly 'concentrate within Flagship's holdings, graded vs Flagship', heavyweight.py:250-273); also partially addressed in flight: fix/bot-orphans-arming wires the previously-orphaned sizing-skill outcomes ledger (heavyweight_outcomes.grade + prompt_line) into run_heavyweight",
+     "note": "Its benchmark odds are bounded by Flagship's universe by construction \u2014 fix upstream (lenses + cluster caps) and Heavyweight inherits it; independent-universe surgery is a mandate change, not a bug fix. corr 0.871 / beta ~1.18 / -1.70% vs -0.12% confirms it's a leveraged echo."
+    },
+    {
+     "id": "heavyweight-book-mirrors-flagship-after-rotation",
+     "pnl_impact": 5,
+     "urgency": 7,
+     "effort": "S",
+     "verdict_change": "demote-merge into heavyweight-downstream-amplifier as its live instance \u2014 but keep the concrete fix ranked: _enforce() (heavyweight.py:75-95) has NO theme/cluster cap step, and the in-flight branch does not add one",
+     "note": "Cheapest real brake in the cluster: add a cluster-gross cap to _enforce so 40% semis at SMH-99th-pctile can't recur; consistent with the mandate ('asymmetric winners' \u2260 40% in one correlated ETF cluster), and urgent because this is the highest-vol book (1.70%/d) and it will mirror the 07-02 rotation."
+    },
+    {
+     "id": "illusory-diversification-one-factor",
+     "pnl_impact": 6,
+     "urgency": 5,
+     "effort": "L",
+     "verdict_change": "demote to umbrella/acceptance-test \u2014 partially-confirmed (ETF book with its binding cluster cap disproves the all-books claim) and its fix fully decomposes into missing-stockdata + theme-cap + heavyweight-enforce items",
+     "note": "Don't rank as a work item: make it the DoD metric \u2014 after the three fixes land, a cross-book factor-cluster exposure report (firm_exposure surface) should show no book >40% in megacap_growth_semis; the ETF book is the existence proof of the target state."
+    }
+   ]
+  },
+  {
+   "cluster": "RC4-regime",
+   "grades": [
+    {
+     "id": "sector-cycles-completely-ignored",
+     "pnl_impact": 9,
+     "urgency": 7,
+     "effort": "M",
+     "verdict_change": "promote \u2014 this is the crux of the user's complaint and the direct path to matching the winning defensive book",
+     "note": "sector_cycles.json (1.9MB, asOf=2026-07-01) says Tech=Topping/SELL, Utilities/Comm/Disc=Bottoming/BUY, Fin/HC/Ind=Trending \u2014 i.e. the dashboard already prescribes ~the self-directed benchmark book \u2014 and zero code in brain/bot reads it while 23 MAG7/semi buys are queued for 07-02 open; highest-pnl single fix in the cluster."
+    },
+    {
+     "id": "cycle-signals-not-consumed",
+     "pnl_impact": 8,
+     "urgency": 6,
+     "effort": "M",
+     "verdict_change": "none \u2014 but merge with sector-cycles-completely-ignored; one fix (cycle-phase brake in the phase2.py:256 leadership selector + conviction context) closes both",
+     "note": "Leadership sleeve is pure top-RS + 200d trend (phase2.py:254-257): a Topping/SELL sector (SMH rank1, 99.2 pctile) is indistinguishable from a Trending/BUY one; near-duplicate id of the file-never-read problem, grade as one work item."
+    },
+    {
+     "id": "macro-risk-state-flip-on-day-of-soxx-crash",
+     "pnl_impact": 7,
+     "urgency": 9,
+     "effort": "M",
+     "verdict_change": "promote \u2014 prior grade assumed flags dark; with MASTERMIND_MACRO_RISK=1 live this stateless scorer is now the actual gatekeeper and it failed ON the stress day",
+     "note": "risk_state() (macro_risk.py:444-464) has zero hysteresis: dealer-gamma axis collapsed 0.80\u21920.15 on a +0.16% dist-to-flip and cleared a 4-day CAUTION to RISK_ON on the SOXX -6.4% day, lifting gross_cap 0.7\u21921.0 and neutering the fired severity-2 tripwire (derisk.py:268-271 returns hold); fix = 2-day confirmation to loosen + never raise the cap on a day a tripwire fires; branch added only the degraded-prior block, not hysteresis."
+    },
+    {
+     "id": "caution-gross-cap-not-enforced-on-flagship",
+     "pnl_impact": 7,
+     "urgency": 7,
+     "effort": "S",
+     "verdict_change": "split \u2014 flag-off leg resolved by production env (MASTERMIND_MACRO_RISK=1); promote the sleeve-exemption leg as the remaining binding gap",
+     "note": "phase2.py:750-765 still splits _conv/_other and caps conviction only: Leadership $524k (52.5% NAV, SMH/XLK/MTUM/IWM) is exempt, and conviction gross ~0.20 < cap 0.70 means even a correct CAUTION caps nothing \u2014 the cap must compare/apply at BOOK level to ever bind; small diff, unfixed on the branch."
+    },
+    {
+     "id": "macro-risk-gross-cap-off",
+     "pnl_impact": 2,
+     "urgency": 5,
+     "effort": "S",
+     "verdict_change": "demote \u2014 resolved-by-environment: live uvicorn PID has MASTERMIND_MACRO_RISK=1; residual is persistence only",
+     "note": "Flag lives only in the running process env (nothing in .env/config/systemd sets it \u2014 audit confirmed), so any restart from a bare shell silently disarms the entire defense layer; fix = persist the arming flags to .env, trivial but genuinely urgent as a silent-failure trap."
+    },
+    {
+     "id": "intake-regime-nuance-dropped",
+     "pnl_impact": 6,
+     "urgency": 5,
+     "effort": "M",
+     "verdict_change": "none",
+     "note": "quad=Q1 at confidence=0.327 + transition_state=WEAKENING + 3 contradicting legs are stripped by five byte-identical _regime_dict copies and the strategist/SENTINEL whitelists \u2014 the committee's blind adversary literally cannot see the bear case; plumbing is S, using confidence to scale leadership budget is the M part and is what moves P&L."
+    },
+    {
+     "id": "regime-stale-propagates-to-all",
+     "pnl_impact": 4,
+     "urgency": 4,
+     "effort": "S",
+     "verdict_change": "demote to merge \u2014 staleness claim refuted (file is fresh); the surviving kernel (confidence-blind leadership selector, gate.py:12-19 signature ignores confidence/transition) is absorbed by the intake-nuance + cycle-brake fixes",
+     "note": "Not a distinct work item: fixing intake-regime-nuance-dropped + the leadership cycle/confidence brake fully covers it; keep as evidence, not as a ranked slot."
+    },
+    {
+     "id": "intake-regime-stale-anchor-gap",
+     "pnl_impact": 2,
+     "urgency": 6,
+     "effort": "S",
+     "verdict_change": "none",
+     "note": "2 of 3 anchors (site/stockdata/SPY.json, NVDA.json) can never resolve on origin/main \u2014 single-anchor SPOF on us_standouts.json as_of, and unknown\u2192is_stale()=None\u2192trade anyway; pure silent-failure insurance with near-zero direct alpha; also partially fixable macro-side by publishing stockdata (provenance now resolved)."
+    },
+    {
+     "id": "regime-staleness-soft-block",
+     "pnl_impact": 2,
+     "urgency": 5,
+     "effort": "S",
+     "verdict_change": "none",
+     "note": "MACRO_STALE_BLOCK defaults 0, set nowhere incl. the dumped production env, and bot/daily.py:25-34 bare-except swallows the RuntimeError so phase2.run proceeds even if enabled \u2014 blocker is decorative; the branch's china_freshness conservative-defer pattern is the ready-made template to copy, so effort is genuinely S."
+    },
+    {
+     "id": "fused-risk-shadow-not-wired",
+     "pnl_impact": 3,
+     "urgency": 3,
+     "effort": "S",
+     "verdict_change": "demote \u2014 already-fixed-in-flight: d1f4c92 on fix/bot-orphans-arming is exactly this wiring (risk_prior.py + STATE_MAP_5_TO_3 + override/reconciliation ledgers + degraded defer, with tests)",
+     "note": "Residuals to verify, not build: (a) prior() consumes a passport.status='shadow' artifact with no validation-status guard, (b) reconciliation ledger has only test rows \u2014 needs first live turns confirmed after server restart (uvicorn has no --reload, so the running PID may predate the commit), (c) dashboard gross_factor informs state only via the degraded path, not sizing."
+    }
+   ]
+  },
+  {
+   "cluster": "RC56-S4-misc",
+   "grades": [
+    {
+     "id": "flagship-positions-pre-rotation-state",
+     "pnl_impact": 8,
+     "urgency": 9,
+     "effort": "M",
+     "verdict_change": "promote \u2014 not descriptive: Flagship has NO sell path on its cadence (queue_orders buy-only paper_account.py:697; morning settle=fill_pending buy-only :771-774; sell-capable rebalance() phase2.py:964 only fires if the 22:40 UTC build runs mid-session, never). 18 queued buys $232k vs $14.72 cash, 0 sells ever (63/63 fills=buy) \u2014 the 06-30 rotation is unfunded and silently dead; account is a frozen buy-ratchet while latest.json publishes fiction.",
+     "note": "Fix = give flagship the Brain books' settle_target full-rebalance discipline (bot/settle.py already does it for autonomous/etf); until then every rotation/regime fix in this cluster cannot express in the account being benchmarked."
+    },
+    {
+     "id": "self-directed-outperformance-gap",
+     "pnl_impact": 9,
+     "urgency": 6,
+     "effort": "M",
+     "verdict_change": "none",
+     "note": "The direct mechanism the benchmark won by: defensive favor list is advisory-by-design (defensive_playbook.py:165-166,202 'the subtract-only desk never auto-buys it'); making favor buyable under the existing cap/gross machinery is the single highest-odds lever to beat the defensive book. d1f4c92 (fused_risk prior) improves intake, not rotation \u2014 not fixed in flight."
+    },
+    {
+     "id": "autonomous-book-sold-smh-on-soxx-crash-day",
+     "pnl_impact": 6,
+     "urgency": 6,
+     "effort": "M",
+     "verdict_change": "none",
+     "note": "The off-ramp already exists and worked (autonomous trimmed SMH 07-01 on the overnight tape); extending _RUNNERS (overnight.py:22) to Flagship/Heavyweight is a copy of a proven path \u2014 but its value is gated on the flagship unfunded-execution fix (revised targets still can't sell today)."
+    },
+    {
+     "id": "s4-conviction-sleeve-wholesale-rotation-trigger",
+     "pnl_impact": 7,
+     "urgency": 6,
+     "effort": "M",
+     "verdict_change": "none",
+     "note": "Binary confluence (all 16 dropped names 0.0, all 15 new +1.00, price=None) defeats the wired hysteresis floor (0.05 is meaningless when the score collapses to exactly 0) and smells of the RC3 fail-open lens; wholesale nightly rotation into extended MAG7/semis after a -6.4% SOXX day is momentum-chasing at the top \u2014 fix the degenerate scorer + a real hold band."
+    },
+    {
+     "id": "regime-intraday-lag",
+     "pnl_impact": 6,
+     "urgency": 5,
+     "effort": "L",
+     "verdict_change": "none",
+     "note": "Real RC5 core (one 22:40 UTC decision/day; 3h macro refresh triggers nothing), but the cheaper 80% is the autonomous-style overnight re-decide extension above; a full intraday rebuild path is L-effort and shares the execution gate."
+    },
+    {
+     "id": "conviction-rebuild-daily-churn",
+     "pnl_impact": 5,
+     "urgency": 4,
+     "effort": "M",
+     "verdict_change": "demote \u2014 partially-confirmed as graded: 'full replacement daily' was overstated (hysteresis wired, rebuild_interval_days=1 is the driver); and with zero account sells the churn is ledger-only, not realized drag. Merge into s4-conviction-sleeve-wholesale-rotation-trigger \u2014 same fix (interval>1 or state-change-only + non-degenerate confluence).",
+     "note": "Duplicate engineering surface with the rotation-trigger item; grade them as one workstream."
+    },
+    {
+     "id": "regime-gate-blind-to-name-breakdown",
+     "pnl_impact": 5,
+     "urgency": 4,
+     "effort": "M",
+     "verdict_change": "none",
+     "note": "gate.py:12-14 signature is quad|band|liquidity|top_sector only \u2014 a -6% leadership-name day can't force a rebuild; adding a name-level breakdown term to state_signature is cheap, but value again partially gated on execution + the intraday path."
+    },
+    {
+     "id": "no-learning-loop-from-benchmark-book",
+     "pnl_impact": 5,
+     "urgency": 3,
+     "effort": "M",
+     "verdict_change": "none",
+     "note": "RC6 as charged (firm_exposure.py:88 excludes self_directed; zero hits in brain//loop/); prerequisite is boringly small \u2014 write nav_history + decisions.jsonl for self_directed so calibration/attribution can even see it \u2014 but the loop only pays off via later policy changes, so indirect P&L."
+    },
+    {
+     "id": "self-directed-book-no-current-prices",
+     "pnl_impact": 2,
+     "urgency": 6,
+     "effort": "S",
+     "verdict_change": "none",
+     "note": "Benchmark book marks at avg_cost (self_directed.py:461) \u2192 its stated return is 0.00% in every state file; one S-effort yahoo-parquet fallback in _current_price (or the macro side pushing site/stockdata, provenance now resolved) makes the winning book measurable \u2014 prerequisite for RC6 and the fair leaderboard."
+    },
+    {
+     "id": "unfair-inception-and-benchmark-basis",
+     "pnl_impact": 2,
+     "urgency": 5,
+     "effort": "S",
+     "verdict_change": "none",
+     "note": "Different inceptions (06-19 vs 06-22), synthetic pre-inception flat row, and no SPY line at all for self_directed \u2014 the headline 'benchmark beats all Brains' the user is steering the program by is computed on an inconsistent basis; cheap to normalize, high decision-quality value even though it moves no P&L."
+    },
+    {
+     "id": "mark-timing-and-stale-nav-rows",
+     "pnl_impact": 1,
+     "urgency": 5,
+     "effort": "S",
+     "verdict_change": "none",
+     "note": "Confirmed out-of-order duplicate 06-30 row written after 07-01 (identical nav+spy_nav) with cio._nav_summary reading rows in file order \u2014 silently corrupts day-change/perf comparisons; S-effort sort+dedupe in _load_jsonl/mark()."
+    },
+    {
+     "id": "s4-conviction-close-is-silent-rebuild",
+     "pnl_impact": 3,
+     "urgency": 5,
+     "effort": "S",
+     "verdict_change": "none",
+     "note": "position_log.py:141-149 leave-the-book close writes NO reason and ledger stamps everything 'exited (left book)' \u2014 worse now that we know the closes never even generate account sells; a reason enum (rebuild-rotation vs risk-exit vs veto) is S-effort and prerequisite for any exit attribution."
+    },
+    {
+     "id": "overtrading-turnover-drag-unmeasured",
+     "pnl_impact": 3,
+     "urgency": 3,
+     "effort": "M",
+     "verdict_change": "demote \u2014 the realized-account premise is weaker than graded: 63 buys/0 sells means actual flagship turnover cost so far is ~nil (the churn lives in the decided book, not fills). Still worth a turnover/cash-drag term in attribution.py before the sell path lands and churn becomes real.",
+     "note": "Sequence AFTER the flagship sell-path fix \u2014 that's when turnover starts costing money and the measurement earns its keep."
+    },
+    {
+     "id": "shadow-leaderboard-zero-resolved-theses",
+     "pnl_impact": 2,
+     "urgency": 1,
+     "effort": "S",
+     "verdict_change": "demote \u2014 already-fixed-in-flight: ec2af3e on fix/bot-orphans-arming rewires _load_panel to the survivor _closes_cache + loud blocked/stale/ok data_contract; verified in commit msg 497 rows resolve from 0. Residual = leaderboard theses are merely young (inception 06-21) and a PIT panel awaits the macro side vendoring _closes_deep/_closes_delisted.",
+     "note": "Only residual work: land the deep+delisted panel on the macro side so frame='pit' activates; no Mastermind engineering needed now."
+    },
+    {
+     "id": "hk-file-wrong-comment-allowed-venues",
+     "pnl_impact": 0,
+     "urgency": 1,
+     "effort": "S",
+     "verdict_change": "demote \u2014 defensible runtime (registry resolves HKD/['HK'] correctly); pure copy-paste doc rot in bot/hk.py:1-43 and brain/hk_mcp.py:34.",
+     "note": "5-minute docstring fix; only risk is a future editor trusting the China-book comments \u2014 batch it into any hk.py touch, don't spend a masterplan slot."
+    }
+   ]
+  }
+ ]
+}
