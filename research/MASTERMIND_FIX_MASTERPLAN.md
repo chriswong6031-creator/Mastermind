@@ -91,7 +91,7 @@ Model-tier routing per house policy: **Sonnet** for well-specified code, **Opus*
 | Close-reason taxonomy: `position_log.update(close_reasons=…)` + phase2 3-bucket classifier (rotation vs floor vs hard-exit) — S4 can never recur as a mystery | ✅ + 15 tests |
 | Staleness tripwire: 3 real anchors (us_standouts `as_of` / regime `date` / sector_cycles `meta.asOf`), min-date semantics, `anchors_report()`, `data_gaps` incl. permanent stockdata-gap surfacing | ✅ + 22 tests |
 | hk.py docstrings; record_run regression test (wiring was correct — tests were wiping prod bot.db) | ✅ |
-| **Sell-path fix**: queue sells while closed, fill sells-before-buys at day-open, real-NAV sizing (kills #1 + #4; account converges to target over subsequent builds) + conftest `store._DB` isolation (kills SBI-1) | 🔄 in flight this session |
+| **Sell-path fix**: queue sells while closed, fill sells-before-buys at day-open, real-NAV sizing (kills #1 + #4; account converges to target over subsequent builds) + conftest `store._DB` isolation (kills SBI-1) | ✅ + 7 tests |
 
 ### W1 — Risk spine + execution integrity (next session; mostly Sonnet, Opus on the state machine)
 1. **`brain/regime_frame.py`** — the single reader replacing 13 slice sites; golden-output test (`lens_row()` byte-identical to today's 3-field dict). *(Sonnet, mechanical-with-golden-test)*
@@ -157,4 +157,4 @@ Model-tier routing per house policy: **Sonnet** for well-specified code, **Opus*
 
 ## 5. Status log
 
-- **2026-07-02 (this session, Fable):** Program created. Re-audit done (20 novel problems verified, 3 empirical resolutions, 47 impact-graded). Architecture + 5 judged solution designs done. **W0 shipped** on `fable/w0-critical-fixes`: fail-closed+freeze, close reasons, tripwire anchors, hk/record_run, phase2 test guards; sell-path fix + conftest DB isolation in flight. Docs: audit, architecture, register, re-audit bundle, this masterplan.
+- **2026-07-02 (this session, Fable):** Program created. Re-audit done (20 novel problems verified, 3 empirical resolutions, 47 impact-graded). Architecture + 5 judged solution designs done. **W0 shipped** on `fable/w0-critical-fixes`: fail-closed+freeze, close reasons, tripwire anchors, hk/record_run, phase2 test guards; sell-path fix + conftest DB isolation shipped same-branch; ff-merged to master as dc6142c. NOTE: production checkout (fix/bot-orphans-arming) has NOT rebased onto this master yet — coordinate rebase + app restart with that session. Docs: audit, architecture, register, re-audit bundle, this masterplan.
