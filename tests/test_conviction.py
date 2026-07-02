@@ -117,7 +117,10 @@ def test_normal_full_coverage_build_unchanged(monkeypatch):
 
 
 def test_candidate_pool_includes_open_proposals(monkeypatch):
-    monkeypatch.setattr(conviction, "_SHORTLIST", [])
+    # W2.3: _SHORTLIST is gone; the seed is now the derived regime_seed(). Neutralise the other
+    # sources so the assertion isolates the open-proposal path.
+    monkeypatch.setattr(conviction, "regime_seed", lambda: [])
+    monkeypatch.setattr(conviction, "universe", lambda: [])
     # an open ledger thesis (Claude's proposal) becomes a conviction candidate
     monkeypatch.setattr("brain.ledger.all_theses",
                         lambda: [{"subject": "PLTR", "status": "open"}])
@@ -127,11 +130,143 @@ def test_candidate_pool_includes_open_proposals(monkeypatch):
 def test_manual_exclude_keeps_reversed_names_out(monkeypatch):
     # operational hold-out: names manually reversed out of the book (the AVGO/NVDA override
     # post-mortem) must NOT be auto-re-added as candidates — even via an open proposal OR the
-    # leadership shortlist — so the daily rebalance can't silently re-buy them.
-    monkeypatch.setattr(conviction, "_SHORTLIST", ["NVDA", "AVGO"])
+    # DERIVED regime seed — so the daily rebalance can't silently re-buy them.
+    monkeypatch.setattr(conviction, "regime_seed", lambda: ["NVDA", "AVGO"])
+    monkeypatch.setattr(conviction, "universe", lambda: [])
     monkeypatch.setattr("brain.ledger.all_theses",
                         lambda: [{"subject": "AVGO", "status": "open"},
                                  {"subject": "NVDA", "status": "open"}])
     cands = conviction.candidates()
     assert "NVDA" not in cands and "AVGO" not in cands
     assert conviction._MANUAL_EXCLUDE == {"NVDA", "AVGO"}
+
+
+def test_no_hardcoded_shortlist_ticker_literals_remain():
+    # W2.3: the hardcoded 20-name AI/MAG7 _SHORTLIST is DELETED — the module must carry NO leadership
+    # ticker literals (the frozen-cohort crowding failure). _MANUAL_EXCLUDE (an operational hold-out,
+    # not a leadership bet) is the ONLY ticker set that legitimately survives.
+    import inspect
+    assert not hasattr(conviction, "_SHORTLIST")
+    src = inspect.getsource(conviction)
+    # the old shortlist-only names must not appear as bare string literals anywhere in the module
+    # source. (NVDA/AVGO are DELIBERATELY excluded from this list — they legitimately survive in
+    # _MANUAL_EXCLUDE, which is an operational do-not-auto-re-add hold-out, not a leadership bet.)
+    for tok in ("MRVL", "LRCX", "KLAC", "ANET", "BWXT", "\"MSFT\"", "\"GOOGL\"", "\"META\"", "\"AMAT\""):
+        assert tok not in src, f"stray leadership ticker literal {tok!r} still in conviction.py"
+
+
+# ================= W2.3 REGIME SEED (replaces the dead _SHORTLIST) =========================
+# Fully offline: `_load` (baskets) and `regime_frame.cycles` are monkeypatched so the seed's
+# response to cycle phase is deterministic and does not depend on live vendor data.
+
+# Two synthetic baskets in DIFFERENT sectors, so the cycle filter can include one and exclude the
+# other. TECHB → XLK (we drive it to Peak = not entry-favored); POWERB → XLU (Trough = favored).
+_SEED_BASKETS = {
+    "baskets": [
+        {"id": "techb", "reference": {"label": "SMH"},            # SMH → XLK via the coarse map
+         "perf": {"20d": {"rel": 0.50}},
+         "members": [{"symbol": "TCHA", "ret_20d": 0.9, "last": 100.0},
+                     {"symbol": "TCHB", "ret_20d": 0.5, "last": 100.0}]},
+        {"id": "powerb", "reference": {"label": "XLU"},           # a bare sector ETF → itself
+         "perf": {"20d": {"rel": 0.10}},
+         "members": [{"symbol": "PWRA", "ret_20d": 0.8, "last": 100.0},
+                     {"symbol": "PWRB", "ret_20d": 0.4, "last": 100.0}]},
+    ]
+}
+
+
+def _patch_seed(monkeypatch, *, cyc):
+    monkeypatch.setattr(conviction, "_load",
+                        lambda rel: _SEED_BASKETS if "baskets.json" in rel else None)
+    monkeypatch.setattr("brain.regime_frame.cycles", lambda: cyc)
+
+
+def test_regime_seed_excludes_peak_sector_but_keeps_favored(monkeypatch):
+    # XLK Peak (not entry-favored) → its basket's names are ABSENT; XLU Trough (favored) → present.
+    _patch_seed(monkeypatch, cyc={
+        "XLK": {"phase": "Peak", "entry_favored": False},
+        "XLU": {"phase": "Trough", "entry_favored": True},
+    })
+    seed = conviction.regime_seed()
+    assert "PWRA" in seed and "PWRB" in seed          # favored sector → included
+    assert "TCHA" not in seed and "TCHB" not in seed  # Peak sector → excluded (ENTRY tilt only)
+
+
+def test_regime_seed_responds_to_a_phase_flip(monkeypatch):
+    # flip XLK to Recovery (favored): the same tech names now APPEAR — the seed tracks the cycle.
+    _patch_seed(monkeypatch, cyc={
+        "XLK": {"phase": "Recovery", "entry_favored": True},
+        "XLU": {"phase": "Trough", "entry_favored": True},
+    })
+    seed = conviction.regime_seed()
+    assert "TCHA" in seed and "PWRA" in seed
+
+
+def test_regime_seed_stale_cycles_degrades_to_unfiltered(monkeypatch):
+    # cycles() == {} (the stale/absent degrade) → the filter is a NO-OP → ALL basket leaders seed,
+    # including the (would-be-excluded) Peak-sector names. Staleness may only remove a filter.
+    _patch_seed(monkeypatch, cyc={})
+    seed = conviction.regime_seed()
+    assert {"TCHA", "TCHB", "PWRA", "PWRB"}.issubset(set(seed))
+
+
+def test_regime_seed_unmapped_sector_is_allowed(monkeypatch):
+    # a basket whose reference maps to NO cycle row (IBIT/crypto here) is UNMAPPED → allowed, never
+    # blocked on missing data — even while a real Peak sector IS filtered out.
+    baskets = {"baskets": [
+        {"id": "cryptob", "reference": {"label": "IBIT"}, "perf": {"20d": {"rel": 0.9}},
+         "members": [{"symbol": "COINX", "ret_20d": 0.9, "last": 50.0}]},
+        {"id": "techb", "reference": {"label": "SMH"}, "perf": {"20d": {"rel": 0.5}},
+         "members": [{"symbol": "TCHA", "ret_20d": 0.9, "last": 100.0}]},
+    ]}
+    monkeypatch.setattr(conviction, "_load",
+                        lambda rel: baskets if "baskets.json" in rel else None)
+    monkeypatch.setattr("brain.regime_frame.cycles",
+                        lambda: {"XLK": {"phase": "Peak", "entry_favored": False}})
+    seed = conviction.regime_seed()
+    assert "COINX" in seed        # unmapped (IBIT) → allowed
+    assert "TCHA" not in seed     # XLK Peak → excluded
+
+
+def test_regime_seed_respects_max_names_cap(monkeypatch):
+    # a wide basket in a favored sector is truncated to regime_seed.max_names.
+    members = [{"symbol": f"N{i:02d}", "ret_20d": 1.0 - i * 0.01, "last": 100.0} for i in range(60)]
+    baskets = {"baskets": [
+        {"id": "wide", "reference": {"label": "XLU"}, "perf": {"20d": {"rel": 0.5}},
+         "members": members},
+    ]}
+    monkeypatch.setattr(conviction, "_load",
+                        lambda rel: baskets if "baskets.json" in rel else None)
+    monkeypatch.setattr("brain.regime_frame.cycles",
+                        lambda: {"XLU": {"phase": "Trough", "entry_favored": True}})
+    monkeypatch.setattr(conviction, "_seed_cfg",
+                        lambda: {"max_names": 5, "leader_top_n_per_basket": 50, "liquidity_min_last": 0.0})
+    seed = conviction.regime_seed()
+    assert len(seed) == 5
+
+
+def test_regime_seed_never_touches_held_peak_name(monkeypatch):
+    # THE REFUTED-VETO ANCHOR (masterplan §0): the cycle read is an ENTRY tilt ONLY. A HELD name in a
+    # Peak sector must be UNAFFECTED — not exited, not trimmed, not filtered from the book. The seed
+    # only feeds NEW candidates; it has no exit authority. We prove build() holds a Peak-sector name
+    # even though the seed would never re-source it.
+    _patch_seed(monkeypatch, cyc={"XLK": {"phase": "Peak", "entry_favored": False}})
+    # TCHA (Peak-sector, seed-excluded) is HELD; feed it directly to the gate as a candidate and give
+    # it a clean 'up' read → it must be RETAINED (held), independent of the cycle phase of its sector.
+    monkeypatch.setattr(conviction, "candidates", lambda: ["TCHA"])
+    monkeypatch.setattr(lenses, "full", lambda t, kind="name": _fake_full(
+        size_authority="up", confluence=0.5))
+    sized, _rej = conviction.build(0.30, name_cap=0.08, held={"TCHA"})
+    assert "TCHA" in {p["ticker"] for p in sized}     # held Peak-sector name is NOT exited/vetoed
+
+    # and the seed itself would never re-add it (entry-tilt exclusion) — the two facts coexist.
+    assert "TCHA" not in conviction.regime_seed()
+
+
+def test_candidates_seed_respects_manual_exclude(monkeypatch):
+    # a seed name on the operational hold-out list is still filtered out of candidates().
+    monkeypatch.setattr(conviction, "regime_seed", lambda: ["NVDA", "GOODX"])
+    monkeypatch.setattr(conviction, "universe", lambda: [])
+    monkeypatch.setattr("brain.ledger.all_theses", lambda: [])
+    cands = conviction.candidates()
+    assert "NVDA" not in cands and "GOODX" in cands

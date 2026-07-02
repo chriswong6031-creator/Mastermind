@@ -138,11 +138,33 @@ def _entry_tech_fields(ticker: str) -> dict:
 
 
 def _timing_gate_enabled() -> bool:
-    """The L3 entry-timing gate (subtract-only WITHHOLD on poor entry technicals) runs ONLY when
-    explicitly enabled. Default OFF — so the live buy path is BYTE-IDENTICAL to today until the user
-    opts in. Enable with env MASTERMIND_TIMING_GATE in {1, true, yes, on}; anything else is OFF.
-    (Mirrors the MASTERMIND_COMMITTEE env-flag pattern, but defaults OFF, not on.)"""
-    return os.environ.get("MASTERMIND_TIMING_GATE", "0").strip().lower() in ("1", "true", "yes", "on")
+    """The L3 entry-timing gate (subtract-only WITHHOLD on poor entry technicals — extended /
+    weak-RS / 'avoid' / parabolic / weak-eq → park on the watchlist instead of chasing a bad entry).
+
+    W2.2 ('arm the coded withhold'): the DEFAULT is now ON. This brake was built, tested, and dark
+    for weeks while the book kept BUYING extended names at bad entries — the exact failure it was
+    written to stop. It is subtract-only (it can only DROP a would-be NEW add, never add/resize/exit
+    a held name), so arming it can only make the book more disciplined. It is now OPT-OUT: set env
+    MASTERMIND_TIMING_GATE to a falsy value ({0, false, no, off}) to restore the pre-W2 buy path.
+    Anything unset or truthy ({1, true, yes, on, or any other non-falsy string}) is ON."""
+    return os.environ.get("MASTERMIND_TIMING_GATE", "1").strip().lower() not in ("0", "false", "no", "off", "")
+
+
+def _is_parabolic_withhold(tech: dict | None) -> bool:
+    """True iff a timing withhold is driven by a PARABOLIC entry (the parabolic flag set OR the
+    entry-quality grade is literally 'parabolic'). A parabolic entry is a hard-veto class — the
+    ε-exploration channel must NOT resurrect it (see the timing-gate block). Reads the SAME
+    _entry_tech_fields dict the withhold predicate reads, so the two never diverge. Pure; never
+    raises — a malformed/None snapshot returns False (fail-open: only ever a NON-parabolic reason,
+    which stays explorable — it can never manufacture a parabolic block out of missing data)."""
+    if not isinstance(tech, dict):
+        return False
+    try:
+        if bool(tech.get("parabolic")):
+            return True
+        return str(tech.get("eq_grade") or "").strip().lower() == "parabolic"
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _judgment_enabled() -> bool:
@@ -297,7 +319,29 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
         research_out = research_desk.daily_research_and_ingest(asof)
 
     # ———— LEADERSHIP sleeve ————
-    lead_budget = sum(cfg["sleeves"]["leadership_target"]) / 2
+    # W2.4 — the leadership BUDGET comes from the ONE budget equation (regime_frame.budget()), not the
+    # hardwired midpoint (which ignored regime quality entirely). confidence × transition × flip-margin
+    # is consumed EXACTLY ONCE, here; a missing/stale frame degrades to the 0.50 midpoint = today's
+    # behaviour (invariant: missing data can only shrink toward neutral, never inflate to the ceiling).
+    try:
+        from brain import regime_frame as _rf
+        _budget_out = _rf.budget("us")
+        lead_budget = float(_budget_out["lead_budget"])
+        _budget_inputs = _budget_out.get("inputs") or {}
+    except Exception:  # noqa: BLE001 — degrade to the doctrine midpoint on any budget-read failure
+        _budget_out = None
+        _budget_inputs = {}
+        lead_budget = sum(cfg["sleeves"]["leadership_target"]) / 2
+    _rl_log(_run_id, "book_step", "leadership budget (one equation)",
+            f"lead_budget={lead_budget:.4f} confidence={_budget_inputs.get('confidence')} "
+            f"transition={_budget_inputs.get('transition_state')} "
+            f"flip_margin={_budget_inputs.get('flip_margin')} "
+            f"T={_budget_inputs.get('T')} F={_budget_inputs.get('F')}",
+            lead_budget=round(lead_budget, 4),
+            confidence=_budget_inputs.get("confidence"),
+            transition_state=_budget_inputs.get("transition_state"),
+            flip_margin=_budget_inputs.get("flip_margin"),
+            T=_budget_inputs.get("T"), F=_budget_inputs.get("F"))
     leaders = [s for s in secrs[:6] if s.get("above_200d_trend")][:4]
     lw = round(lead_budget / max(1, len(leaders)), 4)
     book = []
@@ -314,6 +358,32 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
         _rl_log(_run_id, "trade", f"sized {s['ticker']} leadership",
                 f"ticker={s['ticker']} weight={lw} rs_pctile={s['pctile_252d']} price={ldr_px}",
                 ticker=s["ticker"], sleeve="leadership", weight=lw, verdict="hold")
+
+    # ———— W2.1 LEADERSHIP CAPS (per-leg brake stack, subtract-only) ————
+    # Apply the shared apply_leadership_caps() to the just-built leadership legs, RIGHT after they are
+    # sized and BEFORE the conviction sleeve is appended: each leg's weight is scaled by
+    # MIN(overextension clamp off etf_board.etf_trend pct_vs_200d — outage-independent of stockdata —,
+    # cycle multiplier — late_cycle sector NEW legs halved). Freed weight goes to CASH (never
+    # redistributed). Degrades to a no-op on missing extension/cycle data (today's behaviour).
+    try:
+        from portfolio import sleeves as _sleeves
+        # held leadership tickers (authoritative for the cycle-halving exemption: a HELD leader in a
+        # now-late-cycle sector is NEVER halved — the walk-forward refuted the held-sector veto). A leg
+        # NOT in this set is a genuinely NEW leadership addition and IS eligible for the late_cycle brake.
+        _held_lead = {hp["ticker"].upper() for hp in position_log.open_positions()
+                      if hp.get("sleeve") == "leadership"}
+        _lead_cap = _sleeves.apply_leadership_caps(book, held=_held_lead)
+        if _lead_cap.get("brakes"):
+            _rl_log(_run_id, "book_step", "leadership caps applied",
+                    f"freed_to_cash={_lead_cap['freed_to_cash']} brakes={_lead_cap['brakes']}",
+                    freed_to_cash=_lead_cap["freed_to_cash"])
+            for _b in _lead_cap["brakes"]:
+                _rl_log(_run_id, "decision", f"leadership cap {_b['ticker']}",
+                        f"reason={_b['reason']} {_b['from']}→{_b['to']} "
+                        f"ext_mult={_b['ext_mult']} cycle_mult={_b['cycle_mult']}",
+                        ticker=_b["ticker"], sleeve="leadership")
+    except Exception as _e:  # noqa: BLE001 — caps are subtract-only; a failure degrades to un-capped legs
+        _rl_log(_run_id, "decision", "leadership caps error", f"{_e!r}"[:160])
 
     # ———— CONVICTION sleeve ————
     from portfolio import conviction
@@ -460,17 +530,27 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
             # When the flag is OFF this branch is inert → behavior is byte-identical to before.
             if is_new and _timing_gate_enabled():
                 from portfolio import watchlist as _watchlist
-                _twreason = _watchlist.timing_withhold(_entry_tech_fields(t))
+                _tech = _entry_tech_fields(t)
+                _twreason = _watchlist.timing_withhold(_tech)
                 if _twreason:
-                    if _maybe_explore(t, c, breakdown, research_block, "timing_withhold", _twreason,
-                                      price=px, is_new=is_new):
-                        continue
+                    # PARABOLIC withhold is NON-EXPLORABLE. ε-exploration is an intended off-policy
+                    # channel that re-tries a timing-withheld name to make its forward value estimable
+                    # — but a PARABOLIC entry is the one class the doctrine treats as a hard veto (a
+                    # blow-off top you never chase), so it must NEVER be resurrected by the ε-draw.
+                    # (This mirrors the extension hard veto: most parabolic names are already blocked
+                    # upstream in lenses; this closes the residual grade='parabolic' / flag path where
+                    # a name reaches the timing gate un-vetoed.) A non-parabolic withhold (extended /
+                    # weak-RS / 'avoid' / weak-eq) is still explorable exactly as before.
+                    if not _is_parabolic_withhold(_tech):
+                        if _maybe_explore(t, c, breakdown, research_block, "timing_withhold", _twreason,
+                                          price=px, is_new=is_new):
+                            continue
                     research_held.append({"ticker": t, "reason": "timing withhold: " + _twreason,
                                           **research_block})
                     _emit_shadow(t, c, breakdown, forge_confirmed=True, weight_prod=0.0,
                                  committee_block=None, sentinel=None, price=px, is_new=is_new)
                     try:
-                        _watchlist.append(t, asof, _twreason, tech=_entry_tech_fields(t),
+                        _watchlist.append(t, asof, _twreason, tech=_tech,
                                           combined=breakdown.get("combined"))
                     except Exception:  # noqa: BLE001 — watchlist logging never blocks the gate
                         pass
@@ -530,6 +610,20 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
                     f"reason={breakdown['reason']} combined={breakdown['combined']} "
                     f"viab={breakdown['viability']}",
                     ticker=t, **research_block)
+    # ── NEW-SIZE-4: re-assert the BOOK-CAP invariant AFTER the return-flavored multiply ──────────
+    # phase2:511 multiplies conviction.build()'s already risk-sized + sector-capped weight by the
+    # research size_mult (0.5x..1.3x — a RETURN/conviction score, brain/research_paper.py:144). A
+    # >1.0 size_mult can therefore RE-INFLATE a name the sector firebreak just trimmed, breaching the
+    # SECTOR_MAX_FRACTION invariant that conviction.build enforced PRE-multiply (there is no re-cap
+    # after the multiply — only the per-name min(name_cap,...) clamp at :511). We re-run the existing,
+    # already-subtract-only _apply_sector_cap on the FINAL persisted book so no sector exceeds
+    # SECTOR_MAX_FRACTION*budget after the return-flavored multiply — preserving the mandated
+    # composition order (budget -> per-leg -> BOOK caps). It is a no-op on the common case (all
+    # size_mult <= 1.0 leave the sector at/under the cap it was already at → nothing to scale down).
+    try:
+        conviction._apply_sector_cap(confirmed_sized, conv_budget)
+    except Exception:  # noqa: BLE001 — subtract-only re-cap is defensive; never break the build
+        pass
     sized = confirmed_sized
     # ── FLAGSHIP DEEP-REASONING JUDGMENT LAYER (flag-gated, default OFF) ───────────────────
     # When MASTERMIND_FLAGSHIP_JUDGMENT is OFF this branch is inert → the engine path below is
@@ -650,6 +744,22 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
     # ———— cross-sleeve firebreaks ————
     capped = enforce_book_caps(book)
     book = capped["positions"]
+
+    # ———— W2 GUARD-RAIL: offensive-gross floor tripwire (architecture Stage 6.5) ————
+    # After ALL brakes (leadership caps + cross-sleeve firebreaks), the offensive (leadership) gross must
+    # stay >= floor_frac · lead_budget unless a parabolic hard veto fired — otherwise the compounding-
+    # shrink stack has permanently under-invested the book. We EMIT A LOUD TRIPWIRE ('over_degross')
+    # rather than scale the brakes back: the brakes are subtract-only SAFETY caps whose whole point is
+    # that an over-extended / late-cycle leg is unsafe at size, so mechanically un-shrinking them to hit
+    # a gross floor would re-inflate the very risk they removed. The tripwire makes it auditable.
+    try:
+        from portfolio import sleeves as _sleeves_tw
+        _tw = _sleeves_tw.offensive_gross_tripwire(book, lead_budget, parabolic_veto_fired=False)
+        if _tw.get("breached"):
+            _rl_log(_run_id, "decision", "TRIPWIRE over_degross",
+                    _tw["reason"], offensive_gross=_tw["offensive_gross"], floor=_tw["floor"])
+    except Exception as _e:  # noqa: BLE001 — a monitoring tripwire must never break the build
+        _rl_log(_run_id, "decision", "over_degross tripwire error", f"{_e!r}"[:160])
 
     # ———— D5 dead-capital time-stop — an ACTUAL exit (doctrine: D5/self is a hard sizing veto) ——
     # Flag conviction lots that are past their time_stop_by AND flat/negative since entry AND lagging

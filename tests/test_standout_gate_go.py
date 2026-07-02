@@ -65,7 +65,7 @@ def test_conviction_candidates_excludes_standout_only_names_when_gated(monkeypat
     fix = _load_fixture("us_standouts_gate_false.json")
     monkeypatch.setattr(conviction, "_load", lambda rel: fix if "us_standouts" in rel else None)
     # neutralise the other candidate sources so only the standout board could contribute WDAY/SNOW
-    monkeypatch.setattr(conviction, "_SHORTLIST", [])
+    monkeypatch.setattr(conviction, "regime_seed", lambda: [])   # W2.3: replaced the dead _SHORTLIST
     monkeypatch.setattr(conviction, "_basket_top_picks", lambda n=100: [])
     monkeypatch.setattr("brain.ledger.all_theses", lambda: [])
     monkeypatch.setattr("brain.intake.tickers", lambda limit=60, min_score=0.4: [])

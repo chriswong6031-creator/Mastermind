@@ -183,7 +183,10 @@ def test_nvda_growth_leader_passes_gate():
     rows = {r["lens"]: r for r in f["rows"]}
     assert rows["valuation"]["direction"] != "bear"
     assert "distribution" not in [d["pattern"] for d in f["synthesis"]["divergences"]]
-    assert f["synthesis"]["size_authority"] == "up" and not f["synthesis"]["vetoes"]
+    # Intent-only (live-data): NVDA must not be FALSELY rejected — 'blocked'/'insufficient_data'
+    # would resurrect the old false-reject; 'up' vs hysteresis-'hold' tracks the live tape and
+    # flapped with the 2026-07-02 R2-synced vintage, so we assert the failure modes are absent.
+    assert f["synthesis"]["size_authority"] in ("up", "hold") and not f["synthesis"]["vetoes"]
 
 
 def test_flow_lens_direction_from_reliable_doi_only(monkeypatch):

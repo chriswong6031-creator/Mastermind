@@ -35,6 +35,59 @@ caps:
   name_cap: 0.08                         # keep OUR tighter value (vs doctrine 0.10-0.15)
   leadership_pos_cap_of_sleeve: 0.30     # narrative_rotation.POS_CAP, per-theme of the sleeve
 
+# ---- W2.2 GRADED EXTENSION SCHEDULE (portfolio/conviction.py entry brake) ----
+# A NEW conviction add is SIZE-BRAKED (never flipped, never exited) by how far it has run above its
+# 200dma — the proven G4/G5 overextension lever, ported as a graded multiplier on ENTRY size only.
+# The parabolic hard veto is UNCHANGED and lives upstream (lenses._hard_vetoes → size_authority
+# 'blocked'); this schedule is the softer, graded step BELOW that veto. HELD names are exempt — an
+# extension read is an entry-timing brake, not an exit signal (masterplan §0: no exit/veto on a
+# held/leading name). Missing extension data → ext_mult 1.0 (the W0 fail-closed gate already blocks
+# truly-degraded names; do not double-punish partial data). All thresholds heuristic starting points.
+extension_schedule:
+  moderate_pct_vs_200dma: 30.0   # (unverified-prior) >= this % above 200dma → NEW add sized at initial-only
+  no_add_pct_vs_200dma: 45.0     # (unverified-prior) >= this % above 200dma → NEW add sized to 0.0 (held names untouched)
+
+# ---- W2.1 SHARED LEADERSHIP CAPS (portfolio/sleeves.apply_leadership_caps) ----
+# The per-leg brake stack on the LEADERSHIP sleeve (Stage 6.1), ported from the PROVEN ETF-book G4
+# overextension guardrail so BOTH books read ONE definition of "how extended is too extended". Each
+# leadership leg's weight is scaled by MIN(extension clamp, cycle multiplier):
+#   * OVEREXTENSION (G4): an ETF more than `overextension.pct_vs_200d_cap`% above its 200d is a
+#     parabola; its leg weight is CLAMPED to `overextension.max_weight` (the 06-22 SMH +60%/held-at-
+#     12.5% failure). The read comes from brain.etf_board.etf_trend() — the engine price store, which
+#     is OUTAGE-INDEPENDENT of site/stockdata (so the brake still bites during a stockdata gap).
+#   * CYCLE (late_cycle): a NEW leg in a late-cycle sector (regime_frame.cycles() late_cycle=True) is
+#     HALVED by `late_cycle_mult` (0.5) — an ENTRY-size brake on new leadership legs, NEVER an exit
+#     (the walk-forward REFUTED the cycle veto on held/leading sectors — masterplan §0). An unmapped
+#     / stale-cycle sector is un-shrunk (multiplier 1.0): a missing mapping only ever REMOVES a shrink.
+# SUBTRACT-ONLY: the cap can only reduce a leg's weight; the freed weight goes to CASH, never
+# redistributed (doctrine A6). Missing extension data → no clamp (degrade to today's weight). These
+# MIRROR config/etf_strategy.yml's guardrails.overextension — the drift-check test
+# (tests/test_leadership_caps.py) fails the build if the two definitions diverge.
+leadership_caps:
+  overextension:
+    pct_vs_200d_cap: 40        # (unverified-prior) >this % above 200d → clamp the leg weight (mirror of etf_strategy.yml)
+    max_weight: 0.08           # (unverified-prior) an over-extended leadership leg is clamped to this NAV fraction (proven ETF G4)
+  late_cycle_mult: 0.5         # (unverified-prior) a NEW leg in a late_cycle sector is halved (entry brake, never an exit)
+  # OFFENSIVE-GROSS FLOOR (guard-rail against the compounding-shrink stack — architecture Stage 6.5):
+  # after ALL brakes, offensive (leadership) gross must stay >= this fraction of lead_budget unless a
+  # parabolic hard veto fired. Enforced as a LOUD runlog tripwire ('over_degross'); see the design note
+  # in portfolio/sleeves.apply_leadership_caps for why this is a tripwire, not a proportional scale-back.
+  offensive_gross_floor_frac: 0.5   # (unverified-prior) post-brake leadership gross floor as a fraction of lead_budget
+
+# ---- W2.3 REGIME SEED (portfolio/conviction.py — replaces the hardcoded _SHORTLIST) ----
+# The 20-name AI/MAG7 _SHORTLIST is DEAD. The leadership seed is now DERIVED: the doctrine
+# bottleneck-chain order-layer baskets (bottleneck.chains above) + top-liquidity basket leaders,
+# FILTERED to sectors whose sector-cycle phase is entry-favored (Trough / Recovery / Expansion — the
+# ONLY walk-forward-defensible cycle use per masterplan §0; NEVER an exit/veto on a held name).
+# Invariant-safe: an unmapped/unknown sector is ALLOWED (never blocked on missing data); a stale
+# sector_cycles file (empty cycles) degrades to the UNFILTERED basket leaders.
+regime_seed:
+  max_names: 20                  # (unverified-prior) cap on the derived leadership seed
+  leader_top_n_per_basket: 3     # (unverified-prior) top-N members (by 20d return) taken from each seed basket
+  liquidity_min_last: 0.0        # (unverified-prior) price floor proxy for the liquidity floor; 0 = no-op
+                                 # (baskets.json carries no turnover/mcap, so the numeric floor is inert;
+                                 # the seed's liquidity intent is preserved by sourcing from curated baskets)
+
 cash:
   # binding cash = max(macro_implied, rotation_floor) — rotation floor is ORTHOGONAL to macro_risk
   rotation_floor: 0.05                   # the operator's failure was 0% cash in a benign tape
@@ -125,6 +178,37 @@ safety:
 derisk_severity_caps:
   2: 0.70   # confirmed unwind signal (risk_off OR gex_flip OR theme_day ≥ 2 confirmations)
   3: 0.55   # maximum severity (all channels lit; equiv. macro risk_off cap)
+
+# ---- ONE leadership budget equation (architecture Stage 2 — W2) ----
+# The single, non-double-counting budget for the leadership sleeve. Confidence × transition ×
+# flip-fragility is consumed EXACTLY ONCE here (both the offense-brakes cluster's lead_budget flex
+# and the regime-spine cluster's budget_scale were the SAME signal — shipping both double-counts).
+#   lead_budget = clamp( base + slope · clamp(confidence,0,1) · T · F ,  floor, ceil )
+#     T = transition multiplier {WEAKENING: 0.6, ROLLING/DETERIORATING: 0.4, else 1.0}
+#     F = 0.75 if flip_margin < flip_margin_min else 1.0
+#     any missing regime field → the equation is skipped and lead_budget = midpoint (today's behavior)
+# INVARIANT: this equation can only SHRINK the leadership budget below the ceiling toward the floor;
+# a missing/stale/ambiguous frame degrades to the midpoint, never to the ceiling. All constants are
+# heuristic priors sized by the E5 regression — re-calibrate, do not treat as validated.
+budget:
+  base:            0.40   # (unverified-prior) budget floor (also the clamp floor)
+  slope:           0.20   # (unverified-prior) confidence-scaled flex above the floor
+  floor:           0.40   # (unverified-prior) clamp lower bound
+  ceil:            0.60   # (unverified-prior) clamp upper bound
+  midpoint:        0.50   # (unverified-prior) missing-field degrade target (= base + 0.5·slope)
+  flip_margin_min: 0.15   # (unverified-prior) flip_margin below this earns the F=0.75 fragility damp
+  transition_mult:        # (unverified-prior) T by transition_state (unlisted/None -> 1.0)
+    WEAKENING:     0.6
+    ROLLING:       0.4
+    DETERIORATING: 0.4
+
+# ---- sector-cycle read freshness (regime_frame.cycles() — W2) ----
+# cycles() is the ONLY consumer of vendor/macro/site/sectordata/sector_cycles.json. When meta.asOf
+# is older than this many NYSE trading days, cycles() returns {} and every downstream consumer
+# (the entry-tilt seed, the late_cycle new-leg halving) degrades to a no-op. Stale cycle data may
+# only REMOVE a tilt/shrink — never impose one — per the master invariant.
+cycles:
+  stale_after_trading_days: 5   # (unverified-prior) meta.asOf older than this -> cycles() == {}
 
 # ---- us_standouts board gate (P-NEW-2) ----
 # The dashboard's standout BUY board publishes its OWN Phase-0 gate verdict, `gate_go`. When it is

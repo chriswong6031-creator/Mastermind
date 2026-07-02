@@ -108,34 +108,88 @@ def test_predicate_matches_shadow_lever_on_same_signals():
         assert lever_keeps == (not gate_withholds)             # keep iff not withheld — identical
 
 
-# ── the env flag: DEFAULT OFF, behavior byte-identical until enabled ──────────
-def test_flag_defaults_off(monkeypatch):
+# ── the env flag: DEFAULT ON (W2.2 'arm the coded withhold'), OPT-OUT to disable ──────────
+def test_flag_defaults_on(monkeypatch):
+    # W2.2: the brake is now armed by default (it was built, tested and dark while the book bought
+    # extended names). Unset env → ON.
     from bot import phase2
     monkeypatch.delenv("MASTERMIND_TIMING_GATE", raising=False)
-    assert phase2._timing_gate_enabled() is False              # default OFF → gate inert
+    assert phase2._timing_gate_enabled() is True               # default ON → gate active
 
 
-def test_flag_on_only_for_truthy_values(monkeypatch):
+def test_flag_is_opt_out(monkeypatch):
     from bot import phase2
-    for v in ("1", "true", "TRUE", "yes", "on"):
-        monkeypatch.setenv("MASTERMIND_TIMING_GATE", v)
-        assert phase2._timing_gate_enabled() is True
-    for v in ("0", "false", "no", "off", "", "maybe"):
+    # explicit falsy values (and empty) DISABLE — the opt-out escape hatch back to the pre-W2 path.
+    for v in ("0", "false", "FALSE", "no", "off", ""):
         monkeypatch.setenv("MASTERMIND_TIMING_GATE", v)
         assert phase2._timing_gate_enabled() is False
+    # anything else (truthy or arbitrary) leaves the default-ON brake ARMED.
+    for v in ("1", "true", "TRUE", "yes", "on", "maybe"):
+        monkeypatch.setenv("MASTERMIND_TIMING_GATE", v)
+        assert phase2._timing_gate_enabled() is True
 
 
-def test_flag_off_path_withholds_nothing(monkeypatch):
-    """With the flag OFF, the gate branch in phase2 is never entered. We model that here: the gate
-    only acts when `is_new and _timing_gate_enabled()` — so OFF means NO withhold regardless of how
-    extended the entry is. Asserts the byte-identical-to-today invariant at the decision level."""
+def test_opt_out_path_withholds_nothing(monkeypatch):
+    """With the flag explicitly OFF, the gate branch in phase2 is never entered: OFF means NO withhold
+    regardless of how extended the entry is — the escape hatch back to the pre-W2 buy path."""
     from bot import phase2
-    monkeypatch.delenv("MASTERMIND_TIMING_GATE", raising=False)
+    monkeypatch.setenv("MASTERMIND_TIMING_GATE", "0")
     gate_active = phase2._timing_gate_enabled()
-    # even a maximally-extended name is not withheld when the flag is off
     extended = _tech(parabolic=True, rs=5.0, pct_vs_200dma=99.0, urgency="avoid", eq_grade="weak")
     would_withhold = gate_active and (watchlist.timing_withhold(extended) is not None)
     assert would_withhold is False                             # flag OFF → nothing withheld
+
+
+# ── the parabolic explore guard (W2.2): ε-exploration must NEVER resurrect a parabolic withhold ──
+def test_parabolic_withhold_is_non_explorable():
+    from bot import phase2
+    # the parabolic flag OR a literal 'parabolic' entry-quality grade marks a NON-explorable withhold.
+    assert phase2._is_parabolic_withhold(_tech(parabolic=True)) is True
+    assert phase2._is_parabolic_withhold(_tech(eq_grade="parabolic")) is True
+
+
+def test_non_parabolic_withhold_stays_explorable():
+    from bot import phase2
+    # every OTHER withhold class (extended / weak-RS / 'avoid' / weak-eq) remains explorable.
+    assert phase2._is_parabolic_withhold(_tech(pct_vs_200dma=99.0)) is False
+    assert phase2._is_parabolic_withhold(_tech(rs=5.0)) is False
+    assert phase2._is_parabolic_withhold(_tech(urgency="avoid")) is False
+    assert phase2._is_parabolic_withhold(_tech(eq_grade="weak")) is False
+    assert phase2._is_parabolic_withhold(_tech(eq_grade="stretched")) is False   # extended != parabolic
+
+
+def test_parabolic_guard_fails_open_on_bad_input():
+    from bot import phase2
+    # a malformed/None snapshot returns False — it can never manufacture a parabolic block out of
+    # missing data (the guard only ever KEEPS the explorable path for a non-parabolic reason).
+    assert phase2._is_parabolic_withhold(None) is False
+    assert phase2._is_parabolic_withhold({}) is False
+    assert phase2._is_parabolic_withhold({"parabolic": None, "eq_grade": None}) is False
+
+
+def test_explore_gate_composition_skips_parabolic_only():
+    """The load-bearing composition in the phase2 timing-withhold block is:
+        if not _is_parabolic_withhold(tech):
+            if _maybe_explore(...): continue
+    i.e. exploration is consulted for a withheld name IFF the withhold is NOT parabolic. Model that
+    decision here (with _maybe_explore stubbed to 'always explores when consulted') and assert a
+    parabolic withhold is NEVER explored while every other withhold class still is."""
+    from bot import phase2
+
+    def _would_explore(tech):
+        # exact mirror of the guarded branch: explore only when NOT a parabolic withhold.
+        consulted = not phase2._is_parabolic_withhold(tech)
+        maybe_explore_result = True                       # stub: exploration always fires WHEN consulted
+        return consulted and maybe_explore_result
+
+    # parabolic withholds → never explored
+    assert _would_explore(_tech(parabolic=True)) is False
+    assert _would_explore(_tech(eq_grade="parabolic")) is False
+    # every other withhold class → explorable (the intended off-policy channel is preserved)
+    assert _would_explore(_tech(pct_vs_200dma=99.0)) is True
+    assert _would_explore(_tech(rs=5.0)) is True
+    assert _would_explore(_tech(urgency="avoid")) is True
+    assert _would_explore(_tech(eq_grade="weak")) is True
 
 
 # ── the watchlist log: idempotent per (ticker, date), readable for re-review ───

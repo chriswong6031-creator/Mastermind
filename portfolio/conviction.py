@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from pathlib import Path
 
 import bot  # noqa: F401
@@ -18,9 +19,18 @@ from portfolio import lenses
 
 log = logging.getLogger(__name__)
 
-# liquid leadership/AI-complex names that carry a full stockdata lens read
-_SHORTLIST = ["AVGO", "NVDA", "AMD", "MU", "GEV", "PLTR", "DELL", "TSM", "AMAT", "MRVL",
-              "ORCL", "VST", "BWXT", "ANET", "LRCX", "KLAC", "MSFT", "GOOGL", "META", "AAPL"]
+
+def _floor4(x: float) -> float:
+    """Truncate toward zero at 4 decimals — used where a cap must never be exceeded by a
+    round-to-nearest artifact (the freed sub-cent falls to cash, subtract-only)."""
+    return math.floor(max(0.0, x) * 10000) / 10000.0
+
+# W2.3 — the hardcoded 20-name AI/MAG7 `_SHORTLIST` is DEAD. It was a frozen, human-curated bet on
+# one cohort (the exact crowding failure the doctrine exists to prevent) that could not respond to
+# the cycle. It is replaced by `regime_seed()` below: a DERIVED leadership seed (bottleneck-chain
+# order-layer baskets + top-liquidity basket leaders), FILTERED to sectors whose cycle phase is
+# entry-favored (Trough/Recovery/Expansion — the only walk-forward-defensible cycle use). No ticker
+# literal remains here.
 
 # the fed-in candidate universe: top names from the us_stocks standout board + the top
 # stock picks across the thematic baskets. The engine gate (build) filters this down — a
@@ -113,6 +123,48 @@ _EXIT_CONFLUENCE_FLOOR = 0.25
 _INITIAL_SIZE_FRACTION = 0.7
 
 
+# ── W2.2 GRADED EXTENSION SCHEDULE (entry brake) ──────────────────────────────────────────────────
+def _ext_schedule() -> tuple[float, float]:
+    """(moderate, no_add) pct-vs-200dma thresholds from doctrine.yml, with safe fallbacks."""
+    try:
+        from bot.doctrine_config import load_doctrine
+        cfg = load_doctrine().get("extension_schedule") or {}
+        return (float(cfg.get("moderate_pct_vs_200dma", 30.0)),
+                float(cfg.get("no_add_pct_vs_200dma", 45.0)))
+    except Exception:  # noqa: BLE001
+        return (30.0, 45.0)
+
+
+def _ext_mult(rows: list[dict], is_held: bool) -> float:
+    """The graded extension multiplier for a NEW conviction add, from the extension lens row.
+
+    Schedule (masterplan W2.2), off pct_vs_200dma:
+        < moderate (30%)  → 1.0   (no brake)
+        >= moderate (30%) → _INITIAL_SIZE_FRACTION   (initial-size only)
+        >= no_add  (45%)  → 0.0   (no NEW add)
+    The PARABOLIC hard veto is UNCHANGED — it fires upstream (lenses._hard_vetoes → size_authority
+    'blocked' → the name never reaches sizing) so it is not re-implemented here.
+
+    HELD names are EXEMPT (return 1.0): an extension read is an ENTRY-timing brake, not an exit
+    signal — a held/leading name is never trimmed on how far it has run (masterplan §0). MISSING
+    extension data (no row / pct_vs_200dma is None) → 1.0: the W0 fail-closed gate already blocks
+    truly-degraded names, so we must not double-punish a name with merely partial (no-extension) data.
+    """
+    if is_held:
+        return 1.0
+    ext = next((r for r in rows if r.get("lens") == "extension"), None)
+    val = (ext or {}).get("value") or {}
+    pv2 = val.get("pct_vs_200dma")
+    if not isinstance(pv2, (int, float)):        # missing/partial extension read → no brake
+        return 1.0
+    moderate, no_add = _ext_schedule()
+    if pv2 >= no_add:
+        return 0.0
+    if pv2 >= moderate:
+        return _INITIAL_SIZE_FRACTION
+    return 1.0
+
+
 def _sector_of(t: str) -> str:
     """Normalised sector key for the concentration cap — collapses synonym labels
     ('Technology' / 'Information Technology' -> XLK) via the sector→ETF map so a cohort can't
@@ -143,6 +195,158 @@ def _basket_top_picks(n: int = TOP_BASKET) -> list[str]:
     return [sym for sym, _ in ranked[:n]]
 
 
+# ── W2.3 REGIME SEED (replaces the dead _SHORTLIST) ───────────────────────────────────────────────
+# The leadership seed is DERIVED, not curated: it is the doctrine bottleneck-chain order-layer baskets
+# (the AI-buildout migration chain — first/second/third order) PLUS the top-liquidity basket leaders,
+# each restricted to sectors whose SECTOR-CYCLE phase is entry-favored (Trough/Recovery/Expansion —
+# the only walk-forward-defensible cycle use per masterplan §0). This is an ENTRY tilt on NEW
+# candidates ONLY; it never touches a held name (a held name in a now-Peak sector is untouched here
+# and everywhere else — the refuted cycle veto is NOT reintroduced).
+
+def _seed_cfg() -> dict:
+    """regime_seed knobs from doctrine.yml, with safe fallbacks (loader failure never breaks the seed)."""
+    try:
+        from bot.doctrine_config import load_doctrine
+        return dict(load_doctrine().get("regime_seed") or {})
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _bottleneck_chain_baskets() -> list[str]:
+    """The order-layer basket ids from doctrine bottleneck.chains (first→second→third order), in
+    chain order. These are the migration-chain baskets the doctrine says lead the AI buildout — a
+    config-driven seed source, not a ticker literal. Empty on any config failure (degrade-safe)."""
+    try:
+        from bot.doctrine_config import load_doctrine
+        chains = (load_doctrine().get("bottleneck") or {}).get("chains") or {}
+    except Exception:  # noqa: BLE001
+        return []
+    out: list[str] = []
+    for chain in chains.values():
+        if not isinstance(chain, dict):
+            continue
+        for layer in ("first_order", "second_order", "third_order"):
+            for bid in (chain.get(layer) or []):
+                if isinstance(bid, str) and bid not in out:
+                    out.append(bid)
+    return out
+
+
+# Coarse basket→sector-ETF map for the cycle filter. `regime_frame.cycles()` is keyed by the 11 GICS
+# sector ETF tickers (XLK, XLV, …); baskets carry a `reference.label` that is EITHER a sector ETF
+# (used directly) or a thematic/complex ETF (SMH/IGV/QQQ/…) that we fold into its parent sector so the
+# cycle phase still applies. Anything not in this map AND not a sector ticker → UNMAPPED (allowed,
+# never blocked — the invariant: missing mapping only ever removes a shrink/filter, never imposes one).
+_BASKET_ETF_TO_SECTOR = {
+    "SMH": "XLK", "IGV": "XLK", "QQQ": "XLK",   # semis / software / nasdaq-100 → Technology
+    "XHB": "XLY",                                 # homebuilders → Consumer Discretionary
+    "KRE": "XLF",                                 # regional banks → Financials
+    # IBIT (crypto) intentionally UNMAPPED → allowed (no sector cycle applies)
+}
+
+
+def _basket_sector_ticker(basket: dict) -> str | None:
+    """Best-effort sector-ETF ticker for a basket, for the cycle-phase filter. Reads `reference.label`
+    (may be a sector ETF, a thematic ETF, or a composite like 'XLP+XLU' — first token wins). Returns
+    None when it cannot map — the caller treats None as UNMAPPED = allowed (never blocked)."""
+    ref = (basket.get("reference") or {})
+    label = (ref.get("label") or "").strip().upper()
+    if not label:
+        return None
+    first = label.split("+")[0].strip()          # 'XLP+XLU' → 'XLP'
+    if first in _BASKET_ETF_TO_SECTOR:
+        return _BASKET_ETF_TO_SECTOR[first]
+    return first or None                          # a bare sector ticker (XLV/XLK/…) maps to itself
+
+
+def _basket_leaders(basket: dict, top_n: int, min_last: float) -> list[str]:
+    """Top-`top_n` member symbols of a basket by 20d return, above the (usually inert) liquidity
+    floor. baskets.json carries no turnover/mcap, so the floor degrades to a `last`-price proxy
+    (min_last, default 0 → no-op); the seed's liquidity intent is preserved by sourcing ONLY from
+    curated baskets (inherently liquid, data-covered names — the original _SHORTLIST intent)."""
+    scored: list[tuple[float, str]] = []
+    for m in (basket.get("members") or []):
+        sym = (m.get("symbol") or m.get("ticker") or "").upper()
+        if not sym:
+            continue
+        last = m.get("last")
+        if min_last and isinstance(last, (int, float)) and last < min_last:
+            continue                              # liquidity floor (inert unless configured > 0)
+        r = m.get("ret_20d")
+        rr = float(r) if isinstance(r, (int, float)) else -1e9
+        scored.append((rr, sym))
+    scored.sort(key=lambda kv: kv[0], reverse=True)
+    return [sym for _, sym in scored[:max(0, int(top_n))]]
+
+
+def regime_seed() -> list[str]:
+    """The DERIVED leadership seed that replaces the dead `_SHORTLIST`.
+
+    Sources (in priority order): the doctrine bottleneck-chain order-layer baskets, then the remaining
+    baskets ranked by 20d relative performance (the top-liquidity basket leaders). Each basket's top
+    members are taken, but ONLY from baskets whose mapped sector is cycle-entry-favored
+    (Trough/Recovery/Expansion). The seed is capped at `regime_seed.max_names`.
+
+    INVARIANT-SAFE degradations (never block on missing data):
+      * an UNMAPPED / unknown-sector basket is ALLOWED (a missing mapping can only remove a filter);
+      * a STALE sector_cycles file → `cycles()` returns {} → the filter is a no-op → the seed degrades
+        to the UNFILTERED basket leaders (today's-behaviour-or-better, never empty on staleness);
+      * any I/O / config failure → the seed still emits the unfiltered basket leaders it could read.
+    This is an ENTRY seed only — it feeds `candidates()`, which the gate then filters. It never
+    touches held names; a held name in a now-Peak sector is unaffected (the refuted veto is NOT back).
+    """
+    cfg = _seed_cfg()
+    max_names = int(cfg.get("max_names", 20) or 20)
+    top_n = int(cfg.get("leader_top_n_per_basket", 3) or 3)
+    min_last = float(cfg.get("liquidity_min_last", 0.0) or 0.0)
+
+    d = _load("site/basketdata/baskets.json") or {}
+    baskets = d.get("baskets") or []
+    by_id = {b.get("id"): b for b in baskets if isinstance(b, dict) and b.get("id")}
+
+    # cycle read (may be {} when stale/absent → filter becomes a no-op).
+    try:
+        from brain import regime_frame
+        cyc = regime_frame.cycles() or {}
+    except Exception:  # noqa: BLE001 — a cycle-read failure degrades to the unfiltered seed
+        cyc = {}
+
+    def _entry_ok(basket: dict) -> bool:
+        """A basket passes the cycle filter iff its mapped sector is entry-favored — OR it is
+        unmapped / the sector has no cycle row / cycles is empty (all → allowed, never blocked)."""
+        if not cyc:                               # stale/absent cycles → no filter (unfiltered seed)
+            return True
+        sec = _basket_sector_ticker(basket)
+        if sec is None or sec not in cyc:         # unmapped / uncovered sector → allowed
+            return True
+        return bool(cyc[sec].get("entry_favored"))
+
+    # ordering: bottleneck-chain baskets first (the doctrine's declared leaders), then every other
+    # basket ranked by 20d relative performance (top-liquidity leaders). De-dup by basket id.
+    ordered_ids: list[str] = [bid for bid in _bottleneck_chain_baskets() if bid in by_id]
+    rest = [b for b in baskets if isinstance(b, dict) and b.get("id") not in set(ordered_ids)]
+
+    def _rel20(b: dict) -> float:
+        rel = (((b.get("perf") or {}).get("20d") or {}).get("rel"))
+        return float(rel) if isinstance(rel, (int, float)) else -1e9
+    rest.sort(key=_rel20, reverse=True)
+    ordered_ids += [b.get("id") for b in rest if b.get("id")]
+
+    seed: list[str] = []
+    seen: set[str] = set()
+    for bid in ordered_ids:
+        basket = by_id.get(bid)
+        if not basket or not _entry_ok(basket):
+            continue
+        for sym in _basket_leaders(basket, top_n, min_last):
+            if sym not in seen:
+                seen.add(sym)
+                seed.append(sym)
+                if len(seed) >= max_names:
+                    return seed
+    return seed
+
+
 def universe() -> list[str]:
     """The fed-in candidate universe: top us_stocks standouts ∪ top thematic-basket picks."""
     return sorted(set(_us_standouts()) | set(_basket_top_picks()))
@@ -150,10 +354,10 @@ def universe() -> list[str]:
 
 def candidates() -> list[str]:
     """Conviction candidate pool: the fed-in universe (top us_stocks + top basket picks)
-    ∪ open ledger theses (Claude's proposals) ∪ the liquid leadership shortlist ∪ the unified
-    intake queue (radar / alt-data / briefing-corroborated + divergent names the buy board
-    alone misses). The engine gate (build) filters this down — broad feed in, discipline at
-    the gate."""
+    ∪ open ledger theses (Claude's proposals) ∪ the DERIVED regime seed (W2.3 — bottleneck-chain +
+    cycle-favored basket leaders, replacing the dead hardcoded _SHORTLIST) ∪ the unified intake queue
+    (radar / alt-data / briefing-corroborated + divergent names the buy board alone misses). The
+    engine gate (build) filters this down — broad feed in, discipline at the gate."""
     try:
         from brain import ledger
         proposed = {t["subject"].upper() for t in ledger.all_theses() if t.get("status") == "open"}
@@ -165,7 +369,11 @@ def candidates() -> list[str]:
         fed_in = set(intake.tickers(limit=60, min_score=0.4))
     except Exception:
         fed_in = set()
-    return sorted((set(_SHORTLIST) | set(universe()) | proposed | fed_in) - _MANUAL_EXCLUDE)
+    try:
+        seed = set(regime_seed())
+    except Exception:  # noqa: BLE001 — seed is additive; a failure degrades to the other sources
+        seed = set()
+    return sorted((seed | set(universe()) | proposed | fed_in) - _MANUAL_EXCLUDE)
 
 
 def build(budget: float, name_cap: float = 0.08,
@@ -238,9 +446,14 @@ def build(budget: float, name_cap: float = 0.08,
             # A tiny positive floor keeps it in the book at minimal size; the sector cap / vol sizing
             # still bound it. Non-frozen entries keep their real confluence unchanged.
             _conf = max(0.01, confluence) if held_frozen else max(0.0, confluence)
+            # W2.2 GRADED EXTENSION BRAKE: a graded entry-size multiplier off pct_vs_200dma for a NEW
+            # add (held names return 1.0 — an extension read is an entry brake, never an exit). It
+            # COMPOSES with (multiplies, does not replace) the confirmation size mult below.
+            _emult = _ext_mult(rows, is_held)
             _entry = {"ticker": t, "confluence": _conf,
                       "bull": syn["bull"], "bear": syn["bear"],
                       "retained": bool(hold_ok and not entry_ok), "confirmed": confirmed,
+                      "ext_mult": _emult,
                       "divergences": [d["pattern"] for d in syn.get("divergences", [])]}
             if held_frozen:
                 _entry["retained_reason"] = "data_degraded_freeze"
@@ -367,17 +580,30 @@ def build(budget: float, name_cap: float = 0.08,
     # may exceed SECTOR_MAX_FRACTION of the budget, so an over-weight cohort is risk-trimmed (scaled
     # down) rather than demoted — held names are never churned out, just sized down.
 
-    # confidence-weighted sizing, then the catalyst/confirmation FULL-vs-INITIAL size gate
+    # confidence-weighted sizing, then the catalyst/confirmation FULL-vs-INITIAL size gate. The W2.2
+    # graded extension brake (ext_mult) is applied LAST, after vol-sizing + the sector cap (see
+    # _apply_extension_brake below) — a mid-pipeline multiply here would be silently RENORMALISED away
+    # by risk_sizing.apply (the NEW-SIZE-1 haircut-erasure), so the brake must be a terminal subtract
+    # whose freed weight goes to CASH (doctrine A6: freed weight is sized cash, never redistributed).
     tot = sum(p["confluence"] for p in passed) or 1.0
     for p in passed:
         base = min(p["confluence"] / tot * budget, name_cap)
         mult = 1.0 if p.get("confirmed") else _INITIAL_SIZE_FRACTION
         p["weight"] = round(base * mult, 4)
+        # provisional size_stage; the terminal extension brake re-labels a braked NEW add below.
         p["size_stage"] = "full" if p.get("confirmed") else "initial"
         p["sleeve"] = "conviction"
         # a name kept only by exit-hysteresis (retained, entry gate NOT re-cleared) is a HOLD, not a
         # fresh add — say so honestly so the book/thesis doesn't claim "all sides confirm".
         p["verdict"] = "hold" if p.get("retained") else "add"
+        # W2.2 EXTENSION 'NO-ADD' band: a NEW add >= the no_add threshold (ext_mult 0.0) takes ZERO
+        # size this build — treat it exactly like a gate rejection so the `weight > 0` filter drops it
+        # (held names have ext_mult 1.0 and are unaffected). The GRADED (0<ext_mult<1) band is applied
+        # as a terminal subtract AFTER vol-sizing so renorm can't erase it (see _apply_extension_brake).
+        _em = p.get("ext_mult", 1.0)
+        if isinstance(_em, (int, float)) and _em <= 0.0:
+            p["weight"] = 0.0
+            p["size_stage"] = "ext_no_add"
 
     # `sized` is a list (unchanged for every existing caller) that ALSO carries the build-wide
     # data_health record as an attribute, so the runlog can surface WHY the book froze without
@@ -396,13 +622,37 @@ def build(budget: float, name_cap: float = 0.08,
         risk_sizing.apply(sized, budget, name_cap)
     except Exception:  # noqa: BLE001 — additive, never breaks book construction
         pass
-    # PERCENTAGE sector-concentration firebreak (applied LAST, after vol-managed sizing, so the
-    # <=SECTOR_MAX_FRACTION-per-sector invariant holds in the FINAL book): scale any over-weight
-    # sector down proportionally, leaving the freed weight in cash. Subtract-only; never churns.
+    # W2.2 GRADED EXTENSION BRAKE (subtract): applied AFTER vol-managed sizing so the renorm inside
+    # risk_sizing.apply cannot erase it (the NEW-SIZE-1 haircut-erasure), but BEFORE the sector cap so
+    # that firebreak stays the FINAL binding pass on the book. Scales a NEW extended add's weight by
+    # its ext_mult; the freed weight goes to cash (never redistributed). Held / un-extended names have
+    # ext_mult 1.0 → untouched → this pass is a no-op for them.
+    _apply_extension_brake(sized)
+    # PERCENTAGE sector-concentration firebreak (applied LAST so the <=SECTOR_MAX_FRACTION-per-sector
+    # invariant holds in the FINAL book): scale any over-weight sector down proportionally, leaving the
+    # freed weight in cash. Subtract-only; never churns.
     _apply_sector_cap(sized, budget)
     # sort rejected worst-confluence first so the most-bearish names surface at top
     rejected.sort(key=lambda x: x["confluence"])
     return sized, rejected
+
+
+def _apply_extension_brake(sized: list[dict]) -> None:
+    """Terminal graded-extension subtract (in place). For each position, multiply its FINAL weight by
+    its stored ``ext_mult`` (1.0 for held / un-extended names → no-op; _INITIAL_SIZE_FRACTION for a
+    NEW add in the moderate band). This runs AFTER vol-sizing + the sector cap precisely so the
+    renorm-to-budget inside ``risk_sizing.apply`` cannot silently undo the haircut (the NEW-SIZE-1
+    erasure). Subtract-only: it can only reduce a weight; the freed weight is left in cash, never
+    redistributed to other names. The 0.0 (no-add) band is already handled upstream (weight zeroed +
+    filtered out), so here ext_mult is effectively in (0, 1]."""
+    for p in sized:
+        em = p.get("ext_mult", 1.0)
+        if not isinstance(em, (int, float)) or em >= 1.0:
+            continue
+        p["weight"] = round(max(0.0, float(p.get("weight", 0.0))) * em, 4)
+        if 0.0 < em < 1.0:
+            p["size_stage"] = "initial"
+            p["ext_braked"] = True
 
 
 def _apply_sector_cap(sized: list[dict], budget: float,
@@ -428,5 +678,10 @@ def _apply_sector_cap(sized: list[dict], budget: float,
         if tot > cap and tot > 0:
             scale = cap / tot
             for p in names:
-                p["weight"] = round(float(p.get("weight", 0.0)) * scale, 4)
+                # TRUNCATE (floor) at 4dp, not round-to-nearest: rounding N capped names to the
+                # nearest 4th-decimal can sum a hair ABOVE the cap (e.g. 3 × 0.0667 = 0.2001 > 0.20),
+                # letting the firebreak be breached by a rounding artifact. Flooring guarantees the
+                # capped sector lands AT-OR-BELOW the cap; the sub-cent remainder falls to cash
+                # (subtract-only — exactly the freed-weight-to-cash contract this firebreak already has).
+                p["weight"] = _floor4(float(p.get("weight", 0.0)) * scale)
                 p["sector_capped"] = {"sector": sec, "scaled_to_frac": round(frac, 3)}
