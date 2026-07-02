@@ -67,8 +67,14 @@ from typing import NamedTuple
 _ROOT = Path(__file__).resolve().parent.parent
 _SRC = _ROOT / "vendor" / "macro_src"            # the dedicated checkout (gitignored)
 _REMOTE = "https://github.com/chriswong6031-creator/macro.git"
-# cone-mode sparse set: `site` alone misses data/regime/latest.json (anchor 2)
-_SPARSE_PATHS = ("site", "data/regime")
+# cone-mode sparse set: `site` alone misses data/regime/latest.json (anchor 2).
+# engine/ + lib/ are LOAD-BEARING: the bot imports the macro analyzer as a library
+# (CLAUDE.md contract; loop/harness.py does `from engine import active_alloc, validation`,
+# lib/store.py is the parquet reader). Narrowing the set to site+regime alone (the R2
+# migration) silently broke every engine import in loop/ and the test_smoke canary —
+# keep the code trees in the checkout; they are small text. data/yahoo (~250 curated
+# parquets) is the engine price store — loop/harness backtests and test_smoke need it.
+_SPARSE_PATHS = ("site", "data/regime", "engine", "lib", "data/yahoo")
 
 _MAX_AGE_DAYS = 2
 

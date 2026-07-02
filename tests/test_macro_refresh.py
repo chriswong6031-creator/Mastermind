@@ -486,7 +486,7 @@ def test_stockdata_anchor_governs_asof(monkeypatch, tmp_path):
 
 
 def test_refresh_wires_sparse_set_and_r2(monkeypatch):
-    """refresh() must self-migrate the sparse set (site + data/regime) and run the R2 leg."""
+    """refresh() must self-migrate the FULL sparse set (site, regime, engine, lib, yahoo) and run the R2 leg."""
     import types
     run_calls: list[list[str]] = []
     monkeypatch.setattr(mr, "ensure_clone", lambda: True)
@@ -498,4 +498,4 @@ def test_refresh_wires_sparse_set_and_r2(monkeypatch):
     monkeypatch.setattr(mr, "asof", lambda: "2026-07-01")
     assert mr.refresh() == "2026-07-01"
     assert synced, "refresh() must invoke the R2 leg"
-    assert ["git", "sparse-checkout", "set", "site", "data/regime"] in run_calls
+    assert ["git", "sparse-checkout", "set", *mr._SPARSE_PATHS] in run_calls  # pin to the constant, not a copy
