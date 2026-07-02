@@ -28,6 +28,17 @@ TOP_BASKET = 100    # top-N single-name picks across all thematic baskets (by 20
 _V = Path(__file__).resolve().parent.parent / "vendor" / "macro"
 
 
+class _SizedBook(list):
+    """A plain list of sized-position dicts that ALSO carries a `data_health` attribute.
+
+    build() historically returns (sized_list, rejected_list); every caller unpacks that tuple and
+    iterates `sized` as a list. To surface the build-wide data-health / fail-closed record WITHOUT
+    breaking that contract (add fields, never rename — house rule), `sized` is this list subclass:
+    `isinstance(sized, list)` and all list behaviour is unchanged, and `sized.data_health` exposes
+    the coverage record for the runlog."""
+    data_health: dict | None = None
+
+
 def _load(rel: str):
     p = _V / rel
     try:
@@ -140,6 +151,8 @@ def build(budget: float, name_cap: float = 0.08,
     held = {h.upper() for h in (held or set())}
     passed = []
     rejected: list[dict] = []
+    n_evaluated = 0
+    n_degraded = 0
 
     for t in candidates():
         try:
@@ -153,14 +166,32 @@ def build(budget: float, name_cap: float = 0.08,
         confluence: float = syn.get("confluence", 0.0)
         sa = syn.get("size_authority")
         is_held = t.upper() in held
+        # DATA-DEGRADED (fail-closed): the per-name stockdata was absent OR < 2 lenses voted, so the
+        # synthesis flagged size_authority='insufficient_data'. Track coverage across the whole build
+        # for the >80%-degraded circuit breaker (f). (Also read the explicit flag so a future
+        # authority value can't silently bypass this.)
+        degraded = (sa == "insufficient_data") or bool(syn.get("data_degraded"))
+        n_evaluated += 1
+        if degraded:
+            n_degraded += 1
 
         # HARD exits — a held name is dropped IMMEDIATELY on any of these (no hysteresis for a
         # genuinely broken name): a hard veto (parabolic / Altman / cycle-blocked), a CONFIRMED
         # structural downtrend, or size_authority blocked. A fresh falling-knife or a softened
         # sector is NOT a hard exit, so a name we already own rides through a rough week.
-        hard_exit = bool(vetoes) or bool(syn.get("price_downtrend")) or sa == "blocked"
-        entry_ok = (sa == "up") and not vetoes
-        hold_ok = is_held and not hard_exit and confluence > _EXIT_CONFLUENCE_FLOOR
+        # CRITICAL FREEZE SEMANTICS: a data outage is NOT a hard exit. Missing data must NEVER
+        # liquidate the book (the inverse disaster of the fail-open bug). When degraded we suppress
+        # price_downtrend as an exit trigger — there is no real price read to trust — so a held name
+        # FREEZES (hold, don't churn) rather than being dropped on a phantom/stale signal.
+        hard_exit = (bool(vetoes)
+                     or (bool(syn.get("price_downtrend")) and not degraded)
+                     or (sa == "blocked"))
+        entry_ok = (sa == "up") and not vetoes and not degraded    # sa=='up' already implies not-degraded; belt-and-suspenders
+        # FREEZE-ON-DEGRADE: a HELD name with degraded data is RETAINED as a hold regardless of the
+        # confluence floor (a degraded confluence is untrustworthy — possibly the 1.0 mirage — so it
+        # can neither justify nor deny the hold). Only a genuine hard exit (real veto) removes it.
+        held_frozen = is_held and degraded and not hard_exit
+        hold_ok = held_frozen or (is_held and not hard_exit and confluence > _EXIT_CONFLUENCE_FLOOR)
 
         if entry_ok or hold_ok:
             # full-size confirmation: a confirmed leader (price + sector leadership) OR a genuine
@@ -168,10 +199,24 @@ def build(budget: float, name_cap: float = 0.08,
             _dirs = {r["lens"]: r.get("direction") for r in rows}
             confirmed = ((_dirs.get("trend") == "bull" and _dirs.get("sector_rs") == "bull")
                          or _dirs.get("narrative") == "bull")
-            passed.append({"ticker": t, "confluence": max(0.0, confluence),
-                           "bull": syn["bull"], "bear": syn["bear"],
-                           "retained": bool(hold_ok and not entry_ok), "confirmed": confirmed,
-                           "divergences": [d["pattern"] for d in syn.get("divergences", [])]})
+            # A frozen (data-degraded) held name is confirmed=False — we have NO price/leadership read
+            # to justify full size, so it can only carry its existing (initial-fraction) weight.
+            if held_frozen:
+                confirmed = False
+            # FREEZE weight floor: a frozen held name's degraded confluence may be 0 (or the untrusted
+            # 1.0 mirage) — either way it must SURVIVE the `weight > 0` filter so the freeze actually
+            # HOLDS the position (a 0 weight would silently liquidate it — the very disaster we guard).
+            # A tiny positive floor keeps it in the book at minimal size; the sector cap / vol sizing
+            # still bound it. Non-frozen entries keep their real confluence unchanged.
+            _conf = max(0.01, confluence) if held_frozen else max(0.0, confluence)
+            _entry = {"ticker": t, "confluence": _conf,
+                      "bull": syn["bull"], "bear": syn["bear"],
+                      "retained": bool(hold_ok and not entry_ok), "confirmed": confirmed,
+                      "divergences": [d["pattern"] for d in syn.get("divergences", [])]}
+            if held_frozen:
+                _entry["retained_reason"] = "data_degraded_freeze"
+                _entry["data_degraded"] = True
+            passed.append(_entry)
         else:
             # Determine a short human-readable rejection reason (most-specific first).
             if vetoes:
@@ -259,6 +304,35 @@ def build(budget: float, name_cap: float = 0.08,
                 "confluence": round(confluence, 3),
             })
 
+    # ── BUILD-LEVEL DATA-HEALTH CIRCUIT BREAKER (fail-closed, book-wide) ─────────────────────────
+    # If the OVERWHELMING majority of evaluated candidates are data-degraded (>80%), the feed is
+    # broken system-wide — not a single-name gap. On the 2026-07-01 incident this was ~100%. In that
+    # state we refuse EVERY new add this build (there is no trustworthy evidence to open on) but KEEP
+    # existing holds (freeze, don't churn — missing data must never liquidate the book). A loud
+    # data_health record rides out in the return so the runlog shows exactly WHY the book froze.
+    _degraded_frac = (n_degraded / n_evaluated) if n_evaluated else 0.0
+    _breaker_tripped = n_evaluated > 0 and _degraded_frac > 0.80
+    data_health = {
+        "degraded": _breaker_tripped,
+        "n_evaluated": n_evaluated,
+        "n_degraded": n_degraded,
+        "degraded_fraction": round(_degraded_frac, 3),
+        "threshold": 0.80,
+        "action": ("NEW_ADDS_FROZEN — data feed degraded across the candidate universe; "
+                   "holding existing book, refusing all new opens this build")
+                  if _breaker_tripped else "ok",
+    }
+    if _breaker_tripped:
+        # keep only names ALREADY in the book (a held name that still cleared the gate on its own real
+        # data is retained too — key off `held`, not the retained flag, so healthy holds aren't
+        # churned out by the breaker); drop every genuinely NEW add. A kept name becomes a HOLD.
+        _kept = [p for p in passed if p["ticker"].upper() in held]
+        for p in _kept:
+            p.setdefault("data_degraded", True)
+            p["retained"] = True                       # a breaker-kept name is a HOLD, not a fresh add
+            p["retained_reason"] = p.get("retained_reason") or "data_health_freeze"
+        passed = _kept
+
     # NOTE: the sector-concentration firebreak is now a PERCENTAGE cap applied AFTER sizing (see
     # _apply_sector_cap, called below). Every entry-gate passer stays in the book; no single sector
     # may exceed SECTOR_MAX_FRACTION of the budget, so an over-weight cohort is risk-trimmed (scaled
@@ -276,7 +350,14 @@ def build(budget: float, name_cap: float = 0.08,
         # fresh add — say so honestly so the book/thesis doesn't claim "all sides confirm".
         p["verdict"] = "hold" if p.get("retained") else "add"
 
-    sized = [p for p in passed if p["weight"] > 0]
+    # `sized` is a list (unchanged for every existing caller) that ALSO carries the build-wide
+    # data_health record as an attribute, so the runlog can surface WHY the book froze without
+    # changing the (sized, rejected) tuple contract every caller already unpacks. Also mirrored onto
+    # the first sized dict as a fallback for consumers that only iterate the positions.
+    sized = _SizedBook(p for p in passed if p["weight"] > 0)
+    sized.data_health = data_health
+    if sized:
+        sized[0].setdefault("data_health", data_health)
     # VOL-MANAGED RISK SIZING (the validated +0.1-0.15 Sharpe lever): re-weight the book
     # by inverse forecasted vol x the dispersion regime — bet less on high-vol names, more
     # on calm ones, de-gross when selection doesn't pay. Risk lever only; never changes

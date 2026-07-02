@@ -2,12 +2,26 @@
 import asyncio
 import json
 
+import pytest
+
 import bot  # noqa: F401
 
 from portfolio import lenses
 from brain import bot_mcp
 
+# The three *_live / *_nvda tests below read the REAL per-name stockdata (site/stockdata/NVDA.json)
+# out of the vendored render. A fresh CI checkout / data-outage worktree has no such file, so NVDA
+# takes the fail-closed degenerate branch (only context lenses fire) and these live-data assertions
+# can't hold. Skip them when the substrate is absent — they still exercise real data on a real render
+# — rather than either failing spuriously OR (worse) locking in the pre-fix buggy 'up' authority that
+# a data-less NVDA used to return. The fail-closed behaviour itself is covered by the dedicated
+# test_absent_stockdata_* tests, which inject their own matrices and do not need vendor data.
+_NVDA_HAS_STOCKDATA = lenses._load("site/stockdata/NVDA.json") is not None
+_needs_nvda = pytest.mark.skipif(not _NVDA_HAS_STOCKDATA,
+                                 reason="no vendored site/stockdata/NVDA.json in this checkout")
 
+
+@_needs_nvda
 def test_matrix_reads_all_sides_live():
     rows = {r["lens"]: r for r in lenses.decision_matrix("NVDA", "name")["rows"]}
     # every side is present
@@ -22,6 +36,7 @@ def test_matrix_reads_all_sides_live():
     assert rows["conviction"]["value"]["band"] is not None
 
 
+@_needs_nvda
 def test_synthesis_and_divergence_on_nvda():
     s = lenses.full("NVDA", "name")["synthesis"]
     assert "confluence" in s and -1 <= s["confluence"] <= 1
@@ -61,6 +76,57 @@ def test_altdata_lens_surfaces_even_without_stockdata(monkeypatch):
     assert r["status"] == "context" and r["direction"] == "bull"    # never validated; buy-side flow
     assert r["value"]["convergence_score"] == 2 and r["value"]["trump_linked"] is True
     assert "convergence" in r["note"]
+
+
+# ---------------- FAIL-CLOSED data-coverage gate (the 2026-07-01 fail-open incident) ----------------
+def test_absent_stockdata_is_data_degraded_and_never_sizes_up(monkeypatch):
+    """The core 07-01 bug: a name with NO stockdata used to yield the alt-data-only degenerate matrix
+    (n_scored=1, confluence=1.0, size_authority='up') — a feed outage minted a full-conviction buy.
+    With the fail-closed gate that name must read size_authority='insufficient_data' (NEW value, not
+    'up') and data_degraded=True. This ENFORCES doctrine ('one dim alone is forbidden') — a lone
+    alt-data context lens can never earn a size-up on its own."""
+    # only the alt-data feed resolves; site/stockdata/{t}.json is absent (returns None) — exactly the
+    # outage shape. by_ticker gives EFX a real buy-side alt-data row so it WOULD have voted bull.
+    bt = {"tickers": {"EFX": {"convergence_score": 2, "channels": ["gov_contract"], "trump_linked": True,
+                              "trump_side": "buy", "gov_contract_usd_30d": 7e7}}}
+    monkeypatch.setattr(lenses, "_load", lambda rel: bt if "altdata/by_ticker" in rel else None)
+    f = lenses.full("EFX", "name")
+    s = f["synthesis"]
+    assert s["size_authority"] == "insufficient_data"     # NOT 'up' — the fix
+    assert s["data_degraded"] is True and s["stockdata_present"] is False
+    # existing authority values are untouched (downstream string checks still work)
+    assert s["size_authority"] not in ("up", "down", "hold", "blocked")
+    # the truth is surfaced in explicit fields so artifacts/logs show WHY (confluence reported as-is)
+    assert "n_scored" in s and "data_degraded" in s
+
+
+def test_thin_evidence_under_two_lenses_is_degraded():
+    """Fewer than 2 real directional votes (n_scored < 2) is degraded even if stockdata was 'present'
+    — a single lens can't authorize a buy. A single bull vote must not read 'up'."""
+    fake = {"rows": [
+        {"lens": "conviction", "direction": "bull", "value": {"band": "high", "stockdata_present": True}},
+    ]}
+    s = lenses.synthesize(fake)
+    assert s["n_scored"] == 1 and s["data_degraded"] is True
+    assert s["size_authority"] == "insufficient_data"
+
+
+def test_full_coverage_is_not_degraded():
+    """Regression: a matrix with full stockdata (the conviction sentinel present, >=2 real votes) is
+    NOT degraded and the gate behaves exactly as before — degraded flag off, authority is one of the
+    original four, confluence math unchanged. (Built from an explicit matrix so the test doesn't
+    depend on live vendor stockdata being present in the checkout.)"""
+    fake = {"rows": [
+        {"lens": "trend", "direction": "bull", "value": {"confirmed_uptrend": True}},
+        {"lens": "sector_rs", "direction": "bull", "value": {}},
+        {"lens": "valuation", "direction": "bull", "value": {}},
+        {"lens": "conviction", "direction": "bull",
+         "value": {"band": "high", "stockdata_present": True}},   # sentinel present => not the outage branch
+    ]}
+    s = lenses.synthesize(fake)
+    assert s["data_degraded"] is False and s["stockdata_present"] is True
+    assert s["size_authority"] in ("up", "down", "hold", "blocked")
+    assert s["n_scored"] >= 2
 
 
 def test_altdata_divergence_patterns():
@@ -109,6 +175,7 @@ def test_flows_13f_min_sample_margin_gate():
     assert lenses._flows_13f_dir(None, None) is None    # no 13F coverage
 
 
+@_needs_nvda
 def test_nvda_growth_leader_passes_gate():
     # regression: NVDA must no longer be a tight-factor false-reject. With PEG-aware valuation and
     # the 13F gate, the 'distribution' divergence does not fire and the gate sizes it.

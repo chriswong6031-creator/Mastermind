@@ -692,22 +692,52 @@ def queue_orders(
     fill_after: str | None = None,
     portfolio_id: str | None = None,
 ) -> list[dict]:
-    """Queue PENDING buy orders to move the book toward `target_weights`, sized at
+    """Queue PENDING orders to move the book toward the FULL `target_weights`, sized at
     `est_prices` (the previous close). Used when the market is CLOSED — no fill, no
-    cash/position change. Only BUYS are queued (the desk does not sell while shut);
-    the whole pending list is REPLACED so the latest decision wins (idempotent per
-    build). Returns the pending list. Paper-only.
+    cash/position change. The whole pending list is REPLACED so the latest decision wins
+    (idempotent per build). Returns the pending list. Paper-only.
 
-    nav_base : the NAV the weights are fractions of (defaults to the current marked
-               NAV at est_prices). fill_after : the next-open date string for display.
+    Both SIDES are queued (this is the fix for the flagship book that structurally never
+    sold): the market-closed cron fired every day at 22:40 UTC when NYSE was shut, so the
+    only sell-capable path — rebalance(), gated on market-open — never ran, and this queue
+    (formerly buy-only) could not represent an exit. The book therefore accreted buys with
+    no offsetting sells until cash hit ~$0 and every subsequent queued buy was dead on
+    arrival. Now, mirroring the FULL target book the Brain books settle via settle_target():
+      * SELL — every held name whose target weight is REDUCED, or that is ABSENT from the
+        target book entirely, is queued as a side='sell'. A full exit (dropped name) always
+        queues; a partial trim of a CONTINUING position must clear the no-trade band (below).
+      * BUY  — every name whose target share count exceeds what is held (new entry or top-up),
+        subject to the same whole-share + min-notional dust filter used at market-open.
+    fill_pending() then executes the SELLS FIRST at the open (freeing cash) so the buys are
+    funded — see that function. Nothing here touches cash/positions; NAV stays honest while
+    orders sit queued.
+
+    No-trade band / dust: an incremental adjustment (trim of a name still in the target, or a
+    top-up of a continuing position) is only queued when its notional clears the ~1%-of-NAV
+    band — the same rule rebalance() uses — so a de-minimis drift is not churned. A full exit
+    and a brand-new entry are deliberate decisions and are never banded. Sells are share-
+    quantified (exact held-minus-target share delta, never fractional-quantized — a held line
+    must stay fully exitable); buys reuse _buyable_shares (whole-share + dust floor), matching
+    how buys were always queued.
+
+    nav_base : the NAV the weights are fractions of. When None (the recommended call), it is
+               the CURRENT marked NAV (cash + positions at est_prices) — NOT the $1M starting
+               NAV. A stale hardcoded $1M base is the historical sizing bug: on a book that has
+               drifted far from $1M it sizes every target against the wrong denominator. $1M
+               survives only as the ultimate fallback when the live NAV can't be computed
+               (empty/zero) so a first-ever build on a fresh account still sizes sanely.
+    fill_after : the next-open date string for display.
     """
-    from datetime import date as _date  # local — avoid shadowing module-level date
     state = _load_account(portfolio_id)
-    if nav_base is None:
+    if nav_base is None or float(nav_base) <= 0.0:
         nav_base = state["cash"] + sum(
             pos["shares"] * est_prices.get(tk, pos["avg_cost"])
             for tk, pos in state["positions"].items()
         )
+    # last-resort only: a genuinely empty/zero-NAV account (no cash, no marks) still needs a
+    # non-zero denominator to size a first build — fall back to the $1M inception NAV.
+    if not nav_base or float(nav_base) <= 0.0:
+        nav_base = _STARTING_NAV
     if fill_after is None:
         try:
             from portfolio import market_calendar
@@ -715,18 +745,78 @@ def queue_orders(
         except Exception:
             fill_after = None
 
+    # No-trade band, in dollars, for this run's NAV — the same band rebalance() applies. It
+    # suppresses de-minimis trims/top-ups of a CONTINUING position (full exits/new entries are
+    # never banded, below), so a queued rebalance can't churn micro-positions any more than a
+    # live one can.
+    band = _no_trade_band_frac() * nav_base
+
+    # normalise the target book to upper-case tickers once (weights collapse on collision)
+    targets: dict[str, float] = {}
+    for tk, w in (target_weights or {}).items():
+        targets[str(tk).upper()] = targets.get(str(tk).upper(), 0.0) + float(w or 0.0)
+    targeted = set(targets)
+
     orders: list[dict] = []
-    for ticker, weight in target_weights.items():
-        ticker = ticker.upper()
+
+    # ---- SELLS first: held names reduced vs target, or dropped from the book entirely ----
+    # (queued first purely for a readable blotter; fill_pending is what enforces sells-before-
+    # buys at the open so freed cash funds the buys.)
+    for ticker, pos in state.get("positions", {}).items():
+        ticker = str(ticker).upper()
+        held = float(pos.get("shares") or 0.0)
+        if held <= 1e-9:
+            continue
+        px = est_prices.get(ticker)
+        if px is None or px <= 0:
+            px = float(pos.get("avg_cost") or 0.0)          # exit sizing can lean on cost when unpriced
+        if px is None or px <= 0:
+            continue                                        # truly no price — can't size a pending sell
+        weight = targets.get(ticker)
+        if weight is None:
+            # DROPPED from the target book → full exit. Always queues (never banded).
+            sell_shares = held
+        else:
+            target_shares = (weight * nav_base) / px
+            reduce_by = held - target_shares
+            if reduce_by <= 1e-9:
+                continue                                    # at/above target — no sell (buy leg handles adds)
+            # trim of a name still in the book: only if it clears the no-trade band
+            if reduce_by * px < band:
+                continue
+            sell_shares = reduce_by
+        value = round(sell_shares * px, 2)
+        if sell_shares <= 1e-9 or value <= 0.0:
+            continue
+        orders.append({
+            "id": f"{asof}-{ticker}-sell",
+            "ticker": ticker,
+            "side": "sell",
+            "shares": round(float(sell_shares), 6),
+            "est_price": round(float(px), 4),
+            "est_value": value,
+            "weight": round(float(weight or 0.0), 4),
+            "placed_asof": asof,
+            "fill_after": fill_after,
+            "status": "pending",
+        })
+
+    # ---- BUYS: new entries + top-ups toward target (unchanged sizing conventions) ----
+    for ticker, weight in targets.items():
         px = est_prices.get(ticker)
         if px is None or px <= 0:
             continue                                   # can't estimate without a prior close
-        held = state["positions"].get(ticker, {}).get("shares", 0.0)
+        held = float(state["positions"].get(ticker, {}).get("shares", 0.0))
         if held <= 1e-9 and weight < _min_position_frac() - 1e-9:
             continue                                   # don't OPEN a sub-floor sliver position (held names exempt)
         target_shares = (weight * nav_base) / px
+        raw_add = target_shares - held
+        # No-trade band: skip a sub-band top-up of a CONTINUING position (a brand-new entry,
+        # held ~ 0, is a deliberate open and is never banded). Mirrors rebalance()'s buy leg.
+        if held > 1e-9 and raw_add * px < band:
+            continue
         # dust filter: whole shares + min-notional floor (don't queue sliver buys)
-        shares = _buyable_shares(target_shares - held, px, nav_base)
+        shares = _buyable_shares(raw_add, px, nav_base)
         value = round(shares * px, 2)
         if shares <= 0.0 or value <= 0.0:
             continue                                   # already at/above target, or below the dust floor
@@ -749,23 +839,69 @@ def queue_orders(
 def fill_pending(prices: dict[str, float], asof: str, portfolio_id: str | None = None) -> list[dict]:
     """Fill every queued order at the live `prices` (the market price at the open).
 
-    Each order buys its queued SHARE COUNT at the real fill price (cash-bounded, no
-    leverage); a real fill is appended to fills.jsonl and the position updated. An
-    order with no available market price stays pending. Returns the executed fills.
-    Call this FIRST on any build that runs while the market is open."""
+    SELLS FILL FIRST, then buys. This ordering is load-bearing: a market-closed build now
+    queues a FULL rebalance (sells + buys — see queue_orders), and the sells must settle
+    before the buys so the freed cash actually funds them. Within each phase every order
+    trades its queued SHARE COUNT at the real fill price:
+      * sell — credits cash, reduces (or closes) the position; a queued sell for a name no
+        longer held, or for more shares than remain, is clamped to what is actually held.
+      * buy  — cash-bounded (no leverage); the whole queued count fills only if cash allows,
+        otherwise it fills as many whole shares as the (post-sell) cash covers and the
+        remainder stays queued (existing graceful-partial behavior, unchanged).
+    A real fill is appended to fills.jsonl and the position updated. An order with no
+    available market price stays pending. Returns the executed fills. Call this FIRST on any
+    build that runs while the market is open.
+
+    Backward-compatible: a legacy pending_orders.json holding only buys (no 'side' field)
+    still fills — a missing/blank side defaults to 'buy', so the buy-only phase runs exactly
+    as before and the sell phase is simply empty."""
     pending = load_pending(portfolio_id)
     if not pending:
         return []
     state = _load_account(portfolio_id)
     fills: list[dict] = []
     still_pending: list[dict] = []
-    for o in pending:
-        ticker = (o.get("ticker") or "").upper()
-        want = float(o.get("shares") or 0.0)
+
+    def _px_for(ticker: str, o: dict) -> float | None:
         px = prices.get(ticker)
         if px is None or px <= 0:
             px = _current_price(ticker)
-        if not px or px <= 0 or want <= 1e-9:
+        return px if (px and px > 0) else None
+
+    # split the queue by side; a missing/blank side is a legacy buy (back-compat read path).
+    sells = [o for o in pending if str(o.get("side") or "buy").lower() == "sell"]
+    buys = [o for o in pending if str(o.get("side") or "buy").lower() != "sell"]
+
+    # ---- PHASE 1: sells (free up cash before the buys are funded) ----
+    for o in sells:
+        ticker = (o.get("ticker") or "").upper()
+        want = float(o.get("shares") or 0.0)
+        px = _px_for(ticker, o)
+        pos = state["positions"].get(ticker)
+        held = float(pos.get("shares") or 0.0) if pos else 0.0
+        if px is None or want <= 1e-9 or held <= 1e-9:
+            # no price → keep queued; nothing (or nothing left) to sell → drop the stale order.
+            if px is None and want > 1e-9 and held > 1e-9:
+                still_pending.append(o)
+            continue
+        sell = min(want, held)                         # clamp to what is actually held
+        value = sell * px
+        state["cash"] += value
+        pos["shares"] = held - sell
+        if pos["shares"] < 1e-9:
+            del state["positions"][ticker]
+        fills.append({
+            "date": asof, "ticker": ticker, "side": "sell",
+            "shares": round(sell, 6), "price": round(px, 4), "value": round(value, 2),
+            "from_pending": True,
+        })
+
+    # ---- PHASE 2: buys (bounded by the cash left after the sells settled) ----
+    for o in buys:
+        ticker = (o.get("ticker") or "").upper()
+        want = float(o.get("shares") or 0.0)
+        px = _px_for(ticker, o)
+        if px is None or want <= 1e-9:
             still_pending.append(o)                    # can't fill without a price — keep queued
             continue
         buy = min(want, state["cash"] / px) if px else 0.0

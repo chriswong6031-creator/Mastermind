@@ -38,6 +38,26 @@ def _isolate_positions_ledger(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_bot_db(tmp_path, monkeypatch):
+    """Isolate the system-of-record SQLite store (data_layer.store._DB) to a tmp file.
+
+    Several tests exercise the real book build and deliberately WIPE the store to reset the
+    gate (test_phase2 unlinks the DB via `if _DB.exists(): _DB.unlink()`). Because
+    ``store._DB`` is an ABSOLUTE path resolved at import, those unlinks hit the LIVE
+    data/bot.db — nuking the production ``runs`` table and, with it, the same-day dedup gate
+    that stops every intraday call from triggering a full rebuild. ``store.connect()`` reads
+    the ``_DB`` module global at call time, so redirecting it here points every test's
+    connect() AND any per-test unlink at the isolated copy instead (mirrors how
+    _isolate_positions_ledger / _isolate_runlog protect their files). Idempotent + safe: a
+    test that never touches the store simply gets an unused tmp path."""
+    try:
+        from data_layer import store
+        monkeypatch.setattr(store, "_DB", tmp_path / "bot.db", raising=False)
+    except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
 def _isolate_research_papers(tmp_path, monkeypatch):
     """Force the deterministic research-paper path (no armed Claude session during pytest) and
     redirect the papers/feed-note writes into a tmp dir, so the book build's research gate never

@@ -503,8 +503,16 @@ def _name_rows(t: str) -> list[dict]:
     rows = []
     if not d:
         # a Trump-linked entity (ABTC/DJT/...) may carry alt-data / options flow but no S&P stockdata
+        # FAIL-CLOSED MARKER (2026-07-01 incident): when the per-name stockdata file is ABSENT the
+        # matrix has NO price / extension / trend / valuation confirmation — only the context feeds
+        # (alt-data / news / flow) that fire independently of stockdata. Historically this degenerate
+        # branch produced n_scored=1, confluence=1.0, size_authority='up' for EVERY name during a feed
+        # outage → the whole book was silently rewritten into an equal-weight buy list on one political
+        # -flow signal, price=None. We now stamp an explicit sentinel row so synthesize() can SEE that
+        # the per-name substrate was missing (not merely that few lenses voted) and refuse to size up.
+        # Doctrine: 'one dim alone is forbidden' — a lone context lens can NEVER earn a full-size buy.
         base = ([ad] if ad else []) + ([nw] if nw else []) + ([fl] if fl else [])
-        return base + [_row("conviction", None, "missing", None, "no stockdata")]
+        return base + [_row("conviction", {"stockdata_present": False}, "missing", None, "no stockdata")]
 
     # valuation — GROWTH-ADJUSTED (the NVDA false-reject fix). The raw value-factor z (built from
     # P/B, P/S, earnings yield) structurally flags EVERY hyper-growth leader as 'expensive': NVDA's
@@ -958,7 +966,13 @@ def synthesize(matrix: dict) -> dict:
     independently — that is genuinely diverse evidence. This makes a cheap laggard-sector name fail
     the gate (its one fundamental bull is outweighed by sector_rs/trend/theme bears) while a leader
     in a top sector with independent flow/price confirmation still passes. Hard vetoes
-    (parabolic / Altman / cycle-blocked) still cap size at 0."""
+    (parabolic / Altman / cycle-blocked) still cap size at 0.
+
+    FAIL-CLOSED (2026-07-01): if the per-name stockdata substrate was ABSENT (only context feeds
+    fired) OR fewer than two lenses voted a real direction (n_scored < 2), the name is DATA-DEGRADED
+    and size_authority is 'insufficient_data' — a new authority value that can never open a position.
+    This closes the fail-OPEN bug where a feed outage silently minted a full-conviction equal-weight
+    buy book (n_scored=1, confluence=1.0, size_authority='up' for 24 names, price=None)."""
     rows = matrix["rows"]
     by_lens = {r["lens"]: r for r in rows}
 
@@ -988,6 +1002,23 @@ def synthesize(matrix: dict) -> dict:
     bear = sum(1 for s, _ in _votes if s < 0)
     n = len(_votes)
     vetoes = _hard_vetoes(rows)
+
+    # ── DATA-COVERAGE / FAIL-CLOSED GATE (2026-07-01 incident: the fail-OPEN bug) ────────────────
+    # A missing per-name feed must NEVER become a full-conviction buy. Two orthogonal degradation
+    # tells, EITHER of which flips the name 'insufficient_data':
+    #   (1) the stockdata file was ABSENT — _name_rows stamped the conviction sentinel
+    #       {"stockdata_present": False}. There is no price / extension / trend / valuation read at
+    #       all; only the context feeds (alt-data / news / flow) that fire without stockdata. This is
+    #       the exact case that manufactured n_scored=1, confluence=1.0, size_authority='up' for 24
+    #       names on a feed outage. (This tell is decisive even if enough CONTEXT lenses voted to push
+    #       n_scored >= 2 — e.g. an alt-data-bull name that also trips the macro bloc.)
+    #   (2) fewer than 2 lenses produced a real bull/bear direction from actual data (n_scored < 2) —
+    #       the general 'thin evidence' floor doctrine already implies ('one dim alone is forbidden').
+    # Degraded confluence is reported AS-IS (we don't fabricate a number); the truth is surfaced via
+    # explicit fields (n_scored, data_degraded, stockdata_present) so artifacts/logs show WHY.
+    _conv_val = (by_lens.get("conviction") or {}).get("value") or {}
+    stockdata_present = _conv_val.get("stockdata_present", True)   # only the fail-closed branch sets False
+    data_degraded = (stockdata_present is False) or (n < 2)
     # reliability-weighted confluence: sum(sign * lens_weight) / sum(lens_weight). With every weight
     # at its 1.0 default this is EXACTLY (bull - bear) / n — the prior behaviour — until lens_edge accrues.
     _num = sum(s * _rel.get(lk, 1.0) for s, lk in _votes)
@@ -1021,6 +1052,13 @@ def synthesize(matrix: dict) -> dict:
     price_downtrend = trend_dir == "bear"
     if vetoes:
         size_authority = "blocked"
+    elif data_degraded:
+        # FAIL CLOSED: missing / one-dimensional evidence can never authorize an OPEN. This is a NEW
+        # authority value (the existing 'up'/'down'/'hold'/'blocked' are untouched so downstream
+        # string checks still work). It is deliberately NOT 'hold': conviction.build treats a degraded
+        # HELD name as a FREEZE (retain, don't churn) — the inverse-disaster guard — but a degraded
+        # NEW name (sa != 'up') simply cannot enter.
+        size_authority = "insufficient_data"
     elif (confluence > 0.3 and leadership_ok and not price_downtrend
           and not price_falling_fast and not weak_asymmetry):
         size_authority = "up"
@@ -1035,6 +1073,7 @@ def synthesize(matrix: dict) -> dict:
             "sector_lagging": sector_lagging, "leadership_ok": leadership_ok,
             "price_downtrend": price_downtrend, "price_falling_fast": price_falling_fast,
             "weak_asymmetry": weak_asymmetry, "asym_ratio": asym_ratio,
+            "data_degraded": data_degraded, "stockdata_present": bool(stockdata_present),
             "size_authority": size_authority}
 
 

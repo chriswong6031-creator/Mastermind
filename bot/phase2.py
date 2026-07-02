@@ -796,16 +796,46 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
         _rl_log(_run_id, "decision", "detectors fired",
                 f"codes={[d['code'] for d in fired]}")
 
+    # ———— build per-ticker close-reason index BEFORE the ledger update ————
+    # Reconstruct WHY each held conviction name left the book so observers can distinguish a
+    # routine rebuild rotation (the S4 scenario) from a deliberate risk exit.  The three rebuild
+    # paths are mutually exclusive (hard_exit → exit-floor → not-in-universe), ordered by
+    # severity.  Non-rebuild paths (D5 time-stop, Risk Officer, Macro Risk Cap) are already
+    # closed by their own sweep above and will NOT be re-processed by update() because
+    # close_position() has already set still_open=False; we include them in the ledger string
+    # for completeness but they are effectively a no-op on the position_log side.
+    _rejected_index: dict[str, dict] = {r["ticker"]: r for r in _rejected}
+
+    def _rebuild_reason(ticker: str) -> str:
+        """Derive the most specific rebuild close-reason for a dropped conviction name."""
+        rej = _rejected_index.get(ticker)
+        if rej is None:
+            # The name was not even in the candidate universe this run (filtered upstream).
+            return "rebuild: not in new candidate universe"
+        # If the rejection reason signals a hard structural failure (veto / downtrend / blocked),
+        # it is a hard exit from the rebuild, not merely falling below the hysteresis floor.
+        _hard_markers = ("vetoed", "blocked", "downtrend", "falling knife")
+        _reason_lower = (rej.get("reason") or "").lower()
+        if rej.get("vetoes") or any(m in _reason_lower for m in _hard_markers):
+            return f"rebuild: hard exit (veto/downtrend/blocked) — {rej.get('reason', '')}"
+        # Otherwise the name was evaluated but fell below the exit confluence floor.
+        conf = rej.get("confluence")
+        _conf_str = f"{conf:+.2f}" if isinstance(conf, (int, float)) else str(conf)
+        return f"rebuild: fell below exit floor (confluence {_conf_str})"
+
+    _final_conv = {p["ticker"] for p in book if p.get("sleeve") == "conviction"}
+    _dropped_conv = _held_conv - _final_conv
+    _close_reasons: dict[str, str] = {t: _rebuild_reason(t) for t in _dropped_conv}
+
     # ———— update positions ledger ————
-    position_log.update(book, asof)
+    position_log.update(book, asof, close_reasons=_close_reasons)
 
     # close ledger theses for conviction names that LEFT the book this run — the append-only ledger
     # otherwise keeps the old thesis 'open' forever (blocking any re-proposal and accreting stale
     # names in the open-thesis candidate pool).
-    _final_conv = {p["ticker"] for p in book if p.get("sleeve") == "conviction"}
-    for _dropped in (_held_conv - _final_conv):
+    for _dropped in _dropped_conv:
         try:
-            ledger.close(_dropped, "exited (left book)")
+            ledger.close(_dropped, _close_reasons.get(_dropped, "exited (left book)"))
         except Exception:
             pass
 
@@ -938,13 +968,20 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
             _rl_log(_run_id, "book_step", "paper account traded (market open)",
                     f"priced={len(_prices)}/{len(_tw) + 1} filled_pending={len(_settled)} positions={len(_tw)}")
         else:
-            # market closed → queue buys at the prev-close estimate, fill at next open. No sells.
+            # market closed → queue the FULL rebalance (sells + buys) at the prev-close estimate,
+            # to settle at the next open. queue_orders reads the currently-held positions itself and
+            # queues a SELL for every held name the target book reduces or drops (the fix for the
+            # flagship book that structurally never sold), plus the buys for entries/top-ups.
+            # nav_base=None → the weights size against the CURRENT marked NAV, not the stale $1M
+            # inception NAV (the historical sizing bug on a book that has drifted from $1M).
             _pending_orders = paper_account.queue_orders(
-                dict(_tw), _prices, asof, nav_base=paper_account._STARTING_NAV,
+                dict(_tw), _prices, asof, nav_base=None,
                 fill_after=_next_open_day)
             paper_account.mark(_prices, asof)                      # NAV unchanged; nothing executed
-            # tag the book so the dashboard renders each holding as PENDING (fills at next open)
-            _pend_by_tk = {o["ticker"]: o for o in _pending_orders}
+            # tag the book so the dashboard renders each holding as PENDING (fills at next open).
+            # Only BUY-side pendings mark a book row as a pending OPEN; a queued sell is an exit of a
+            # name that (by construction) may still appear in the book, and must not be shown as an open.
+            _pend_by_tk = {o["ticker"]: o for o in _pending_orders if o.get("side") != "sell"}
             for p in book:
                 o = _pend_by_tk.get(p["ticker"])
                 if o:
@@ -952,8 +989,10 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
                     p["status"] = "pending_open"
                     p["est_price"] = o["est_price"]
                     p["fill_after"] = _next_open_day
+            _n_sells = sum(1 for o in _pending_orders if o.get("side") == "sell")
             _rl_log(_run_id, "book_step", "orders queued (market closed)",
-                    f"pending={len(_pending_orders)} next_open={_next_open_day} priced={len(_prices)}/{len(_tw) + 1}")
+                    f"pending={len(_pending_orders)} sells={_n_sells} next_open={_next_open_day} "
+                    f"priced={len(_prices)}/{len(_tw) + 1}")
     except Exception as _e:
         _rl_log(_run_id, "decision", "paper account error", f"{_e!r}"[:160])
         _prices = {}

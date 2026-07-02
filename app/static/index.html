@@ -3975,9 +3975,10 @@ function _pendingOrdersHtml() {
     var shares = o.shares != null ? Number(o.shares).toLocaleString(undefined, { maximumFractionDigits: 1 }) : '—';
     var estPx = o.est_price != null ? _ccySym() + Number(o.est_price).toFixed(2) : '—';
     var estVal = o.est_value != null ? _ccySym() + Math.round(o.est_value).toLocaleString() : '—';
+    var _isSell = (o.side === 'sell');
     rows += '<tr>' +
       '<td><span class="pos-ticker">' + esc(o.ticker || '—') + '</span>' + (o.name ? '<span class="pos-name" style="display:block;font-size:11px;color:var(--muted);font-weight:500;line-height:1.2">' + esc(o.name) + '</span>' : '') + '</td>' +
-      '<td><span class="mm-side-chip buy">' + t('trades.buy') + '</span></td>' +
+      '<td><span class="mm-side-chip ' + (_isSell ? 'sell' : 'buy') + '">' + (_isSell ? t('trades.sell') : t('trades.buy')) + '</span></td>' +
       '<td class="mm-hide-sm" style="font-variant-numeric:tabular-nums">' + shares + '</td>' +
       '<td style="font-variant-numeric:tabular-nums">' + estPx + '</td>' +
       '<td class="mm-hide-sm" style="font-variant-numeric:tabular-nums">' + estVal + '</td>' +

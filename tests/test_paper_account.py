@@ -474,6 +474,184 @@ def test_fill_pending_keeps_unpriceable_orders_queued(tmp_account: None) -> None
     assert {o["ticker"] for o in paper_account.load_pending()} == {"ZZZZ"}
 
 
+# ---------------------------------------------------------------------------
+# market-closed FULL rebalance: sells are queued too (the flagship-never-sold fix)
+# ---------------------------------------------------------------------------
+
+def test_queue_orders_queues_sell_for_dropped_name(tmp_account: None) -> None:
+    """A held name absent from the target book must queue a side='sell' full exit —
+    the core fix: the market-closed path can now represent an exit, not just buys."""
+    from portfolio import paper_account
+
+    # seed a two-name book, then rebalance to a target that DROPS MSFT entirely.
+    paper_account.rebalance({"AAPL": 0.4, "MSFT": 0.4}, _PRICES_1, "2026-01-02")
+    held_msft = paper_account._load_account()["positions"]["MSFT"]["shares"]
+
+    pending = paper_account.queue_orders(
+        {"AAPL": 0.4}, _PRICES_1, "2026-06-21", fill_after="2026-06-22",
+    )
+    sells = [o for o in pending if o["side"] == "sell"]
+    assert len(sells) == 1
+    msft_sell = sells[0]
+    assert msft_sell["ticker"] == "MSFT"
+    assert msft_sell["status"] == "pending"
+    assert abs(msft_sell["shares"] - held_msft) < 1e-6      # full exit of the held line
+    assert msft_sell["fill_after"] == "2026-06-22"
+    # queuing changes nothing yet — no fill, cash/positions intact
+    assert "MSFT" in paper_account._load_account()["positions"]
+
+
+def test_queue_orders_queues_sell_for_reduced_weight(tmp_account: None) -> None:
+    """A held name whose target weight is materially REDUCED queues a partial sell."""
+    from portfolio import paper_account
+
+    paper_account.rebalance({"AAPL": 0.5}, _PRICES_1, "2026-01-02")
+    held = paper_account._load_account()["positions"]["AAPL"]["shares"]
+
+    # 0.5 -> 0.3 is a 20%-of-NAV trim, far above the band -> a partial sell is queued.
+    pending = paper_account.queue_orders(
+        {"AAPL": 0.3}, _PRICES_1, "2026-06-21", fill_after="2026-06-22",
+    )
+    sells = [o for o in pending if o["side"] == "sell"]
+    assert len(sells) == 1
+    # sold ~40% of the line (0.5 -> 0.3)
+    assert abs(sells[0]["shares"] - 0.4 * held) < 1e-3
+    assert sells[0]["shares"] < held                        # a trim, not a full exit
+
+
+def test_queue_orders_no_trade_band_suppresses_subband_trim(tmp_account: None) -> None:
+    """A sub-band trim of a name still in the target must NOT queue a sell (no churn)."""
+    from portfolio import paper_account
+
+    paper_account.rebalance({"AAPL": 0.5}, _PRICES_1, "2026-01-02")
+
+    # AAPL restated at 0.5 with the price ticked +0.5% — the implied trim is well under the
+    # 1% band, so nothing should be queued (neither a sell nor a buy).
+    pending = paper_account.queue_orders(
+        {"AAPL": 0.5}, {"AAPL": 201.0}, "2026-06-21", fill_after="2026-06-22",
+    )
+    assert [o for o in pending if o["side"] == "sell"] == []
+    assert pending == []                                    # no buy either — purely banded
+
+
+def test_fill_pending_sells_before_buys_frees_cash(tmp_account: None) -> None:
+    """Sells fill FIRST; the freed cash then funds the buys — assert cash conservation.
+
+    Deploy the whole book so cash is ~0, then queue a rotation (exit MSFT, open GOOG).
+    The GOOG buy is only affordable because the MSFT sell settles first and frees the cash."""
+    from portfolio import paper_account
+
+    # fully deploy: AAPL 50% + MSFT 50% -> cash ~0
+    paper_account.rebalance({"AAPL": 0.5, "MSFT": 0.5}, _PRICES_1, "2026-01-02")
+    cash_after_deploy = paper_account._load_account()["cash"]
+    assert cash_after_deploy < 1000.0                       # essentially no dry powder
+
+    prices = {"AAPL": 200.0, "MSFT": 400.0, "GOOG": 100.0}
+    nav_before = paper_account.nav(prices)
+
+    # queue a rotation: drop MSFT entirely, open GOOG at ~40% — unaffordable without the sell.
+    paper_account.queue_orders(
+        {"AAPL": 0.5, "GOOG": 0.4}, prices, "2026-06-21", fill_after="2026-06-22",
+    )
+    pend = paper_account.load_pending()
+    assert any(o["side"] == "sell" and o["ticker"] == "MSFT" for o in pend)
+    assert any(o["side"] == "buy" and o["ticker"] == "GOOG" for o in pend)
+
+    fills = paper_account.fill_pending(prices, "2026-06-22")
+    # the sell fill must come before the GOOG buy in the returned order (sells-first phase)
+    sides = [(f["ticker"], f["side"]) for f in fills]
+    assert ("MSFT", "sell") in sides
+    assert ("GOOG", "buy") in sides
+    assert sides.index(("MSFT", "sell")) < sides.index(("GOOG", "buy"))
+
+    state = paper_account._load_account()
+    assert "MSFT" not in state["positions"]                 # exited
+    assert "GOOG" in state["positions"]                     # opened with the freed cash
+    assert state["positions"]["GOOG"]["shares"] > 0
+
+    # cash conservation: NAV is unchanged by the rotation (same marks, no leverage, no leak).
+    nav_after = paper_account.nav(prices)
+    assert abs(nav_after - nav_before) < 1.0
+    assert state["cash"] >= -0.01                           # never negative
+    assert paper_account.load_pending() == []               # queue drained
+
+
+def test_fill_pending_legacy_buys_only_still_fills(tmp_account: None) -> None:
+    """Backward compat: a pending file with legacy buy orders that carry NO 'side' key
+    must still fill as buys (missing side defaults to 'buy')."""
+    from portfolio import paper_account
+
+    # write a legacy buy-only pending file by hand (no 'side' field at all)
+    legacy = [{
+        "id": "2026-06-21-AAPL-buy", "ticker": "AAPL", "shares": 100.0,
+        "est_price": 200.0, "est_value": 20000.0, "weight": 0.02,
+        "placed_asof": "2026-06-21", "fill_after": "2026-06-22", "status": "pending",
+    }]
+    paper_account._save_pending(legacy)
+    assert "side" not in paper_account.load_pending()[0]    # genuinely legacy
+
+    fills = paper_account.fill_pending({"AAPL": 200.0}, "2026-06-22")
+    assert len(fills) == 1
+    assert fills[0]["ticker"] == "AAPL" and fills[0]["side"] == "buy"
+    assert abs(fills[0]["shares"] - 100.0) < 1e-6
+    assert paper_account._load_account()["positions"]["AAPL"]["shares"] == 100.0
+    assert paper_account.load_pending() == []
+
+
+def test_queue_orders_nav_base_uses_current_nav_not_1m(tmp_account: None) -> None:
+    """Regression for the hardcoded nav_base=$1M: with nav_base=None the weights must
+    size against the CURRENT marked NAV, not the $1M inception NAV."""
+    from portfolio import paper_account
+
+    # Force the account NAV well below $1M so the two bases differ sharply. Start from a
+    # deployed book, then crater its mark so current NAV ~= $400k while starting NAV is $1M.
+    state = paper_account._load_account()
+    state["cash"] = 0.0
+    state["positions"] = {"AAPL": {"shares": 2000.0, "avg_cost": 200.0}}
+    paper_account._save_account(state)
+
+    low_prices = {"AAPL": 200.0}                            # NAV = 2000 * 200 = $400,000
+    current_nav = paper_account.nav(low_prices)
+    assert abs(current_nav - 400_000.0) < 1.0
+
+    # queue a fresh 10% GOOG open with nav_base=None -> should size against $400k, not $1M.
+    pending = paper_account.queue_orders(
+        {"AAPL": 1.0, "GOOG": 0.1}, {"AAPL": 200.0, "GOOG": 100.0},
+        "2026-06-21", nav_base=None, fill_after="2026-06-22",
+    )
+    goog = next(o for o in pending if o["ticker"] == "GOOG")
+    # 10% of the CURRENT $400k NAV / $100 = 400 shares (NOT 10% of $1M = 1000 shares).
+    assert abs(goog["shares"] - 400.0) < 1.0
+    assert goog["shares"] < 1000.0 - 1.0                    # decisively not the $1M-based size
+
+
+def test_closed_market_build_then_open_fill_converges(tmp_account: None) -> None:
+    """End-to-end mini: a closed-market build queues sells+buys against a NEW target book,
+    and the next-open fill converges the account toward that target (drops the zombie name,
+    opens the new one)."""
+    from portfolio import paper_account
+
+    # existing (stale) book: AAPL + MSFT fully deployed.
+    paper_account.rebalance({"AAPL": 0.5, "MSFT": 0.5}, _PRICES_1, "2026-01-02")
+    assert set(paper_account._load_account()["positions"]) == {"AAPL", "MSFT"}
+
+    # market CLOSED: the desk decides a new book — keep AAPL, drop MSFT, add GOOG.
+    prices = {"AAPL": 200.0, "MSFT": 400.0, "GOOG": 100.0}
+    paper_account.queue_orders(
+        {"AAPL": 0.5, "GOOG": 0.4}, prices, "2026-06-21", nav_base=None,
+        fill_after="2026-06-22",
+    )
+    # nothing filled yet
+    assert set(paper_account._load_account()["positions"]) == {"AAPL", "MSFT"}
+
+    # next OPEN: fill the queue.
+    paper_account.fill_pending(prices, "2026-06-22")
+
+    held = set(paper_account._load_account()["positions"])
+    assert "MSFT" not in held                               # zombie name exited
+    assert held == {"AAPL", "GOOG"}                         # converged toward the target book
+
+
 def test_max_drawdown_computed(tmp_account: None) -> None:
     from portfolio import paper_account
 

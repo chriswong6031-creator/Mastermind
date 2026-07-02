@@ -57,12 +57,17 @@ def _save(ledger: dict[str, Any], portfolio_id: str | None = None) -> None:
     path.write_text(json.dumps(ledger, indent=2, default=str, ensure_ascii=False))
 
 
-def update(positions: list[dict], asof_iso: str, portfolio_id: str | None = None) -> None:
+def update(positions: list[dict], asof_iso: str, portfolio_id: str | None = None,
+           close_reasons: dict[str, str] | None = None) -> None:
     """Call once per book build to reconcile the ledger with the current positions.
 
-    positions: the assembled book list (each dict must have 'ticker' and 'sleeve' at minimum,
-               plus optional 'weight', 'entry_price').
-    asof_iso:  the date string from the regime (used as the 'as_of' watermark).
+    positions:     the assembled book list (each dict must have 'ticker' and 'sleeve' at minimum,
+                   plus optional 'weight', 'entry_price').
+    asof_iso:      the date string from the regime (used as the 'as_of' watermark).
+    close_reasons: optional {ticker: reason_string} mapping. When a position leaves the book this
+                   build the matching reason (if any) is stamped on the close history event, matching
+                   the behaviour of close_position() which always carries a reason. Absent from the
+                   mapping or None → reason field omitted (backwards-compatible with legacy reads).
     """
     now = _now_iso()
     ledger = _load(portfolio_id)
@@ -145,8 +150,14 @@ def update(positions: list[dict], asof_iso: str, portfolio_id: str | None = None
             entry["closed_at"] = now
             entry["close_as_of"] = asof_iso
             if (entry.get("history") or [{}])[-1].get("as_of") != asof_iso:
-                entry["history"].append({"event": "close", "ts": now, "as_of": asof_iso,
-                                         "weight": 0, "price": None})
+                ticker = entry.get("ticker", "")
+                # Stamp the close reason when the caller supplies one (mirrors close_position()).
+                # Absent from the mapping → reason key omitted so legacy reads stay valid.
+                _close_event: dict = {"event": "close", "ts": now, "as_of": asof_iso,
+                                      "weight": 0, "price": None}
+                if close_reasons and ticker and ticker in close_reasons:
+                    _close_event["reason"] = close_reasons[ticker]
+                entry["history"].append(_close_event)
 
     _save(ledger, portfolio_id)
 
@@ -221,19 +232,31 @@ def open_positions(portfolio_id: str | None = None) -> list[dict]:
 
 
 def closed_positions(portfolio_id: str | None = None) -> list[dict]:
-    """Return closed positions shaped for /api/trades 'closed' array."""
+    """Return closed positions shaped for /api/trades 'closed' array.
+
+    exit_reason is derived from the close history event's 'reason' field when present (stamped
+    by either close_position() or update(..., close_reasons=...) — both now write it). Falls back
+    to the generic 'removed from book' string so legacy ledger rows (written before this field
+    was added) continue to deserialise cleanly.
+    """
     ledger = _load(portfolio_id)
     out = []
     for key, e in ledger.items():
         if e.get("still_open"):
             continue
+        # Find the most-recent close event to read its reason (if any).
+        history = e.get("history") or []
+        _close_reason = next(
+            (ev.get("reason") for ev in reversed(history) if ev.get("event") == "close" and ev.get("reason")),
+            None,
+        )
         out.append({
             "ticker": e["ticker"],
             "sleeve": e["sleeve"],
             "opened_at": e.get("opened_at"),
             "closed_at": e.get("closed_at"),
             "held_days": _held_days(e.get("opened_at"), e.get("closed_at")),
-            "exit_reason": "removed from book",
+            "exit_reason": _close_reason or "removed from book",
         })
     out.sort(key=lambda x: x.get("closed_at") or "", reverse=True)
     return out

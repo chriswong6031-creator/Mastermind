@@ -1,21 +1,21 @@
-"""The HK portfolio — a free-form Opus Brain managing its own $1M all-China paper book.
+"""The HK portfolio — a free-form Opus Brain managing its own $1M Hong Kong paper book.
 
-The Greater-China sibling of ``bot/autonomous.py``. Once per Asia trading day (after the
-A-share close), the China Brain:
-  1. sees its current book (cash, holdings, live USD P&L) + the China macro regime,
-  2. researches freely — the macro-dashboard China desks (regime, standouts, intake, brief)
+The HK sibling of ``bot/china.py``. Once per Asia trading day (after the HK session
+closes), the HK Brain:
+  1. sees its current book (cash, holdings, live HKD P&L) + the China macro regime,
+  2. researches freely — the macro-dashboard HK desks (regime, standouts, intake, brief)
      OR web search, its choice,
   3. submits a COMPLETE target book, one rationale per holding (no gate, no research paper),
   4. and the deterministic layer rebalances the paper account to those weights at the latest
-     close, marks NAV in CNY vs FXI (iShares China Large-Cap, marked in CNY), and logs the day.
+     close, marks NAV in HKD vs FXI (iShares China Large-Cap, marked in HKD), and logs the day.
 
-The universe is ALL of Greater China: mainland A-shares (``*.SS`` / ``*.SZ``, quoted CNY), Hong
-Kong (``*.HK``, HKD), and US-listed China ADRs (USD). The book's base currency is **CNY**:
-A-shares are native, while HK (HKD) and ADR (USD) prices are converted to CNY at the prevailing
-rate (``portfolio.fx.usd_to_cny`` over the shared price store) so the single-currency NAV stays
-honest. Everything is scoped to portfolio_id="china" so no other book is touched.
+The universe is HONG KONG listed names only: ``*.HK`` tickers quoted in HKD. The book's
+base currency is **HKD**: prices are sourced via Yahoo Finance (``data_layer.yahoo_feed``),
+and the NAV stays in HKD throughout — there is NO cross-FX conversion to CNY (unlike the
+China book, which converts HKD and USD prices to CNY). Everything is scoped to
+portfolio_id="hk" so no other book is touched.
 
-Run:  python -m bot.china        (or the APScheduler 'china_daily' job, or POST /api/china/run)
+Run:  python -m bot.hk        (or the APScheduler 'hk_daily' job, or POST /api/hk/run)
 """
 from __future__ import annotations
 
@@ -36,11 +36,11 @@ BENCHMARK = "FXI"
 _ROOT = Path(__file__).resolve().parent.parent
 _MAX_TURNS = int(os.environ.get("HK_MAX_TURNS", "30"))
 
-# Base currency + tradeable venue are registry-driven so the HK sibling (bot/hk.py) shares this code
-# unchanged. The China book is mainland A-shares ONLY, marked natively in CNY (no cross-FX).
+# Base currency + tradeable venue are registry-driven (portfolio.registry, id="hk").
+# The HK book is Hong Kong listings ONLY (*.HK), marked natively in HKD — no cross-FX.
 from portfolio import registry as _registry
-CURRENCY = _registry.currency(PORTFOLIO_ID)            # "CNY"
-ALLOWED_VENUES = set(_registry.venues(PORTFOLIO_ID))   # {"A-share"} — empty set = unrestricted
+CURRENCY = _registry.currency(PORTFOLIO_ID)            # "HKD"
+ALLOWED_VENUES = set(_registry.venues(PORTFOLIO_ID))   # {"HK"} — Hong Kong listings only
 
 
 # ---------------------------------------------------------------------------
@@ -49,7 +49,7 @@ ALLOWED_VENUES = set(_registry.venues(PORTFOLIO_ID))   # {"A-share"} — empty s
 
 def run_hk(asof: str | None = None, *, force: bool = False, armed: bool = True,
            directive: str | None = None) -> dict:
-    """Run one China turn end-to-end. Best-effort: every step degrades gracefully so a missing
+    """Run one HK turn end-to-end. Best-effort: every step degrades gracefully so a missing
     credential / price never leaves the book in a half-traded state."""
     from portfolio import china_calendar, paper_account, position_log
 
