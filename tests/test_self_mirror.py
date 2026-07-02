@@ -103,3 +103,47 @@ def test_inject_on_scoring_appends(monkeypatch):
     out = self_mirror.inject(prompt, "gate")
     assert out.startswith("GATE SYS\n\n")                 # original preserved, digest appended
     assert "NVDA" in out
+
+
+# ─────────────── W4 B1.4: PM regime-conditional defensive-vs-winners line ───────────────
+def test_regime_conditional_line_splits_defensive_and_winners(monkeypatch):
+    """The PM line splits rotation calls (verb 'rotation_call' / '-rotcall' id) from press-winners
+    ('champion') and reports each cohort's hit rate past the n>=3 floor."""
+    rows = (
+        [{"date": f"2026-0{m}-01", "ticker": f"D{m}", "outcome": 1 if m % 2 else 0,
+          "rel": 0.03, "verb": "rotation_call"} for m in range(1, 5)]      # 4 defensive
+        + [{"date": f"2026-0{m}-15", "ticker": f"W{m}", "outcome": 0,
+            "rel": -0.02, "verb": "champion"} for m in range(1, 4)]        # 3 winners, all wrong
+    )
+    _stub_rows(monkeypatch, "pm", rows)
+    line = self_mirror.regime_conditional_line("pm")
+    assert "DEFENSIVE/rotation" in line and "press-winners" in line
+    assert "(n=4)" in line and "(n=3)" in line
+    assert "%" in line                                     # both cohorts cleared the n>=3 floor
+
+
+def test_regime_conditional_line_honest_small_n(monkeypatch):
+    """A cohort with n<3 prints the raw n and NO percentage (never a rate off thin evidence)."""
+    _stub_rows(monkeypatch, "pm", [
+        {"date": "2026-01-01", "ticker": "D1", "outcome": 1, "rel": 0.02, "verb": "rotation_call"},
+        {"date": "2026-02-01", "ticker": "D2", "outcome": 0, "rel": -0.01, "verb": "rotation_call"}])
+    line = self_mirror.regime_conditional_line("pm")
+    assert "thin (n=2)" in line                            # honest raw n
+    # the defensive cohort has n=2 → no percentage attached to it
+
+
+def test_regime_conditional_line_empty_when_no_rows(monkeypatch):
+    _stub_rows(monkeypatch, "pm", [])
+    assert self_mirror.regime_conditional_line("pm") == ""
+
+
+def test_inject_pm_appends_regime_line(monkeypatch):
+    """inject('…','pm') appends the regime-conditional line after the standard digest when scoring."""
+    monkeypatch.setenv("MASTERMIND_SELF_MIRROR", "1")
+    _stub_calib(monkeypatch, "pm", {"status": "scoring", "n": 12,
+                                    "reliability": 0.50, "multiplier": 0.8})
+    _stub_rows(monkeypatch, "pm", [
+        {"date": f"2026-0{m}-01", "ticker": f"D{m}", "outcome": 1, "rel": 0.03,
+         "verb": "rotation_call"} for m in range(1, 5)])
+    out = self_mirror.inject("PM SYS", "pm")
+    assert "DEFENSIVE/rotation" in out

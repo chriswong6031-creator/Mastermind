@@ -232,14 +232,26 @@ def _build_d5_lots(open_positions: list[dict], prices: dict, sector_pctile: dict
     return lots
 
 
-def run(asof: str | None = None, force: bool = False, research: bool = False) -> dict:
+def run(asof: str | None = None, force: bool = False, research: bool = False,
+        *, directive: str | None = None) -> dict:
+    """Run one Flagship build.
+
+    ``directive`` is an optional overnight reconsideration instruction (e.g. from the
+    overnight watch loop).  When present it acts as ``force=True`` for the build gate
+    (the overnight tape already passed the materiality check before the caller invoked
+    us) and is threaded into the judgment layer if armed so the PM sees the live tape
+    context.  ``directive=None`` is byte-identical to today — the flag-off invariant
+    is preserved: if ``MASTERMIND_FLAGSHIP_JUDGMENT`` is off the directive has no
+    effect on the book (the deterministic engine path rebuilds with fresh regime /
+    severity inputs, which is itself valuable)."""
     # —— open run log ——
     _run_id: str | None = None
     try:
         from brain import runlog
         _run_id = runlog.start_run("book", title="phase2 book build")
         _rl_log(_run_id, "book_step", "phase2 start",
-                f"asof={asof} force={force} research={research}")
+                f"asof={asof} force={force} research={research} "
+                f"directive={'<set>' if directive else None}")
     except Exception:
         pass
 
@@ -257,9 +269,12 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
 
     con = store.connect()
     sig = gate.state_signature(regime, top_sector)
+    # A directive (overnight reconsideration) acts as force=True: the overnight watch loop already
+    # verified the tape is material before invoking us, so we should always rebuild.
+    _effective_force = force or bool(directive)
     decision = gate.should_run(sig, store.last_run(con),
                                interval_days=int(cfg["scorecard"].get("rebuild_interval_days", 1)),
-                               force=force, asof=asof)
+                               force=_effective_force, asof=asof)
     if not decision["run"]:
         # HARD-EXIT SWEEP — the run gate is keyed on the REGIME signature (quad/risk-band/liquidity/
         # top-sector) and is blind to NAME-level breakdowns. So even on a carried-forward day, sweep
@@ -637,8 +652,49 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
         try:
             from brain import judgment_book as _jb
             _pctx = {"held_conviction": sorted(_open_conv), "n_held": len(_open_conv)}
-            sized = _jb.build(sized, _rejected, regime=regime, asof=asof, gate_info=gate_info,
-                              shadow_inputs=_shadow_inputs, portfolio_ctx=_pctx, name_cap=name_cap)
+            # W4 B1 LEADERSHIP PIPE: the leadership legs live in `book` (built + capped above). Pipe
+            # them into the judgment layer so the PM sees the FULL sleeve-tagged book (killing the
+            # placebo hole where the 40-60% leadership sleeve was structurally untouchable). The PM
+            # may DROP a leadership leg (→ its budget becomes cash/defensive) or KEEP it at engine
+            # weight (the deterministic authority clamp inside build() forbids re-weighting a
+            # survivor). We snapshot the engine leadership legs, run the judgment reshape, then apply
+            # the PM's keep/drop verdict to `book`'s leadership legs — the reshaped CONVICTION rows
+            # flow on as `sized` exactly as before.
+            _lead_legs = [p for p in book if p.get("sleeve") == "leadership"]
+            _reshaped = _jb.build(sized, _rejected, regime=regime, asof=asof, gate_info=gate_info,
+                                  shadow_inputs=_shadow_inputs, portfolio_ctx=_pctx, name_cap=name_cap,
+                                  directive=directive, leadership=_lead_legs)
+            # If the layer degraded to the engine path it returns the SAME `sized` object → no reshape
+            # happened, leave leadership untouched (byte-identical). Otherwise split the reshaped book:
+            # leadership-sleeve rows are the PM's KEPT leaders (weights already engine-clamped); the
+            # rest are conviction rows that continue as `sized`.
+            if _reshaped is not sized:
+                _kept_lead = {}
+                _conv_rows = []
+                for r in _reshaped:
+                    if r.get("sleeve") == "leadership":
+                        _kept_lead[str(r.get("ticker") or "").upper()] = r
+                    else:
+                        _conv_rows.append(r)
+                # apply keep/drop to book's leadership legs: keep only the tickers the PM retained,
+                # at the engine weight the authority clamp restored (never re-weighted upward).
+                _new_book = []
+                for p in book:
+                    if p.get("sleeve") != "leadership":
+                        _new_book.append(p)
+                        continue
+                    _tk = str(p.get("ticker") or "").upper()
+                    _kr = _kept_lead.get(_tk)
+                    if _kr is None:
+                        _rl_log(_run_id, "decision", f"judgment DROP leadership {_tk}",
+                                "PM dropped leadership leg → budget to cash/defensive",
+                                ticker=_tk, sleeve="leadership")
+                        continue                       # dropped → freed to cash/defensive
+                    _new_book.append(p)                # kept at engine weight (clamp already enforced)
+                book = _new_book
+                sized = _conv_rows
+            else:
+                sized = _reshaped
         except Exception:  # noqa: BLE001 — additive; a judgment-layer failure never breaks the build
             pass
     # ──────────────────────────────────────────────────────────────────────────────────────
@@ -740,6 +796,36 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
                 f"bull={c['bull']} bear={c['bear']} price={px} verdict={_verdict}",
                 ticker=t, sleeve="conviction", weight=c["weight"],
                 confluence=c["confluence"], verdict=_verdict)
+
+    # ———— W4 B2: DETERMINISTIC DEF_SLEEVE rotation floor (architecture Stage 4 — the E1-failure branch) ——
+    # AFTER the judgment layer, BEFORE the cross-sleeve firebreaks. When the armed additive PM (task B1)
+    # echoes the engine, this deterministic sleeve ships defensive rotation ANYWAY; it is ALSO the floor
+    # an armed PM may not undercut (rotation.floor_legs). It BUYS from the ONE canonical pool
+    # (portfolio/defensive_candidates.py), equal-weight across frozen weights, tagged
+    # theme_id='DEFENSIVE_<archetype>' so enforce_book_caps below sees a real cluster-mapped position.
+    # BUDGET DISCIPLINE (no double-claim): the sleeve consumes ONLY the cash the W2 flex + W2/W3 caps
+    # already freed FROM leadership (rotation._headroom: total gross with the sleeve <= the un-flexed
+    # engine gross AND cash >= floor). DEF_SLEEVE_MAX=0 (doctrine default) → def_budget 0 → NO legs →
+    # the book is BYTE-IDENTICAL to today (the E1 control arm). Additive; never breaks the build.
+    try:
+        from portfolio import rotation as _rot
+        # best-effort read of the persistent dwell state for the fragility sizing (read-only here — the
+        # macro-risk CAP itself runs later, unchanged). A failure → None → the sleeve degrades safely.
+        _rot_risk_state = None
+        try:
+            from brain import macro_risk as _rot_mr
+            _rot_risk_state = _rot_mr.risk_state(asof, regime)
+        except Exception:  # noqa: BLE001 — the sleeve tolerates a None risk_state (dwell term → 0)
+            _rot_risk_state = None
+        _def = _rot.build_def_sleeve(book, _rot_risk_state, _budget_inputs)
+        if _def.get("legs"):
+            book.extend(_def["legs"])
+            _rl_log(_run_id, "book_step", "DEF_SLEEVE rotation floor",
+                    _def["reason"], def_actual=_def["def_actual"], def_budget=_def["def_budget"],
+                    headroom=_def["headroom"], fragility_signal=_def["fragility_signal"],
+                    tickers=[p["ticker"] for p in _def["legs"]])
+    except Exception as _e:  # noqa: BLE001 — a contingent rotation sleeve must never break the build
+        _rl_log(_run_id, "decision", "def_sleeve error", f"{_e!r}"[:160])
 
     # ———— cross-sleeve firebreaks ————
     capped = enforce_book_caps(book)
@@ -1329,6 +1415,37 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
             "detectors": fired, "track_record": tr, "paths": paths, "llm_used": payload["llm_used"],
             "safety": _safety, "safety_overlay": _safety_overlay,
             "research": research_out, "research_held": research_held, "run_id": _run_id}
+
+
+def run_flagship(asof: str | None = None, *, directive: str | None = None) -> dict:
+    """Overnight watch entrypoint for the Flagship book — mirrors the ``run_autonomous`` /
+    ``run_etf`` signature so ``bot/overnight._RUNNERS`` can invoke it uniformly.
+
+    Thin wrapper over :func:`run` that adapts the return dict to the shape the overnight
+    watch loop expects: ``decided`` (bool), ``queued_for_open`` (bool), ``brain`` (dict).
+    When ``directive`` is set the build gate is forced open (overnight tape already passed
+    materiality) and the directive is threaded into the judgment layer if armed.  When the
+    flag ``MASTERMIND_FLAGSHIP_JUDGMENT`` is OFF the deterministic engine just rebuilds with
+    fresh regime/severity inputs — the directive has no additive effect, but the refresh is
+    still valuable: the dwell/severity state can cut the book overnight.
+
+    Never raises."""
+    from portfolio import paper_account
+    try:
+        res = run(asof=asof, directive=directive)
+        ran = bool(res.get("ran"))
+        # A flagship overnight tick queues (market is closed); check for a pending target.
+        has_pending = bool(paper_account.load_pending_target("flagship"))
+        return {
+            "decided": ran,
+            "queued_for_open": has_pending,
+            # brain is the judgment path's LLM result; surface llm_used as a proxy.
+            "brain": {"ok": ran, "llm_used": res.get("llm_used")},
+            "holdings": len(res.get("book") or []),
+        }
+    except Exception as _e:  # noqa: BLE001 — overnight misses must never kill the scheduler
+        return {"decided": False, "queued_for_open": False,
+                "brain": {"ok": False, "error": repr(_e)[:200]}, "holdings": 0}
 
 
 if __name__ == "__main__":

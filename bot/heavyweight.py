@@ -122,7 +122,8 @@ def _enforce(holdings: list[dict], allowed: set[str]) -> tuple[dict, list[dict],
 # the daily entrypoint
 # ---------------------------------------------------------------------------
 
-def run_heavyweight(asof: str | None = None, *, force: bool = False, armed: bool = True) -> dict:
+def run_heavyweight(asof: str | None = None, *, force: bool = False, armed: bool = True,
+                   directive: str | None = None) -> dict:
     """Run one Heavyweight turn end-to-end. Best-effort: every step degrades gracefully."""
     from portfolio import market_calendar, paper_account, position_log
     from brain import heavyweight_mcp
@@ -154,7 +155,9 @@ def run_heavyweight(asof: str | None = None, *, force: bool = False, armed: bool
     brain: dict = {"ok": False, "skipped": not armed}
     if armed:
         try:
-            brain = _run_brain(asof, inaugural)
+            # directive is an optional ad-hoc override (overnight reviews) — pass through only when set
+            brain = (_run_brain(asof, inaugural, directive=directive)
+                     if directive else _run_brain(asof, inaugural))
         except Exception as e:                       # noqa: BLE001
             brain = {"ok": False, "error": repr(e)[:300]}
         # record this seat's known cost against the nightly per-book ledger (no-op when unknown).
@@ -294,10 +297,10 @@ _PERSONA = (
 )
 
 
-def _run_brain(asof: str, inaugural: bool) -> dict:
+def _run_brain(asof: str, inaugural: bool, directive: str | None = None) -> dict:
     from brain import heavyweight_mcp, cli_bridge
     from brain import self_mirror, risk_lens, student   # lazy; all flag-gated, byte-identical OFF
-    prompt = _build_prompt(asof, inaugural)
+    prompt = _build_prompt(asof, inaugural, directive=directive)
     prompt = student.inject(prompt, _safe_date(asof))   # #3 fast numeric prior (MASTERMIND_STUDENT; OFF→unchanged)
     persona = self_mirror.inject(_PERSONA, "heavyweight", _safe_date(asof))
     persona = risk_lens.govern_persona(persona, "heavyweight")  # RISK GOVERNOR (concentration); OFF → unchanged
@@ -313,7 +316,7 @@ def _run_brain(asof: str, inaugural: bool) -> dict:
     return _run_coro(coro)
 
 
-def _build_prompt(asof: str, inaugural: bool) -> str:
+def _build_prompt(asof: str, inaugural: bool, directive: str | None = None) -> str:
     from portfolio import paper_account
     state = paper_account._load_account(PORTFOLIO_ID)
     cash = float(state.get("cash") or 0.0)
@@ -322,6 +325,8 @@ def _build_prompt(asof: str, inaugural: bool) -> str:
     allowed = sorted(_flagship_universe())
 
     lines = [f"# Heavyweight book — daily decision for {asof}", ""]
+    if directive:
+        lines += ["## ⚠ PRIORITY DIRECTIVE FOR THIS RUN", directive.strip(), ""]
     if regime:
         lines += [f"Macro regime (in-house read): {regime}", ""]
     # RISK GOVERNOR — the live risk-state block that governs CONCENTRATION (flag-gated; OFF → "").

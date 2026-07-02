@@ -96,7 +96,24 @@ async def get_my_book(args):
               "conviction": {"type": "string", "enum": ["high", "medium", "low"]}},
               "required": ["ticker", "weight", "rationale"]}},
           "summary": {"type": "string", "description": "overall thesis / how the book is positioned today"},
-          "sold_note": {"type": "string", "description": "optional: what you exited or trimmed and why"}},
+          "sold_note": {"type": "string", "description": "optional: what you exited or trimmed and why"},
+          # W4 B1 — the three-questions duty. Additive (schema growth only): a submission that omits
+          # these is still accepted; the judgment book logs 'three_questions_incomplete'. Each
+          # not_holding_should row is graded 21 trading days forward as a rotation CALL even absent a trade.
+          "own_more": {"type": "array", "description": "names you would size UP if you could",
+                       "items": {"type": "object", "properties": {
+                           "ticker": {"type": "string"}, "why_now": {"type": "string"},
+                           "probability": {"type": "number"}, "check_by": {"type": "string"}}}},
+          "own_less": {"type": "array", "description": "names you are trimming/exiting and why",
+                       "items": {"type": "object", "properties": {
+                           "ticker": {"type": "string"}, "why_now": {"type": "string"},
+                           "probability": {"type": "number"}, "check_by": {"type": "string"}}}},
+          "not_holding_should": {"type": "array",
+                                 "description": "names you do NOT hold but the regime says you SHOULD "
+                                 "be rotating into — each with ticker, why_now, probability (0-1), check_by",
+                                 "items": {"type": "object", "properties": {
+                                     "ticker": {"type": "string"}, "why_now": {"type": "string"},
+                                     "probability": {"type": "number"}, "check_by": {"type": "string"}}}}},
        "required": ["holdings", "summary"]})
 async def submit_book(args):
     holdings = args.get("holdings") or []
@@ -124,7 +141,11 @@ async def submit_book(args):
         gross, scaled = 1.0, True
     payload = {"holdings": cleaned, "summary": (args.get("summary") or "").strip(),
                "sold_note": (args.get("sold_note") or "").strip(),
-               "gross": round(gross, 4), "scaled_to_no_leverage": scaled}
+               "gross": round(gross, 4), "scaled_to_no_leverage": scaled,
+               # three-questions fields passed through verbatim (pm_conviction normalises them).
+               "own_more": args.get("own_more") or [],
+               "own_less": args.get("own_less") or [],
+               "not_holding_should": args.get("not_holding_should") or []}
     p = submission_path(SUBMIT_PORTFOLIO)          # <- the FIX: write to the flagship_judgment path
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(payload, indent=2, default=str, ensure_ascii=False))

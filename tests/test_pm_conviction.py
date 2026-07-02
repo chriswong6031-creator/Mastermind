@@ -113,3 +113,55 @@ def test_enforce_no_leverage_caps_and_scales():
     big = [{"ticker": str(i), "weight": 0.2} for i in range(10)]   # 10 * 0.2 cap=0.2 -> gross 2.0
     out2 = P.enforce_no_leverage(big, name_cap=0.2)
     assert sum(h["weight"] for h in out2) <= 1.0 + 1e-6
+
+
+# ───────────────────── W4 B1: leadership pipe + defensive + prompt payload ─────────────────────
+def test_pm_input_pipes_leadership_and_defensive_and_deanchors():
+    """The PM payload carries leadership_legs (sleeve-tagged), defensive_candidates, the
+    defensive_benchmark basket, and DE-ANCHORS the engine weights to a trailing ADVISORY block
+    (candidate rows carry NO weight)."""
+    payload = P._pm_input(
+        [{"ticker": "NVDA", "weight": 0.06, "confluence": 0.3, "sleeve": "conviction"}],
+        [], {"confirmed_themes": []}, {"quad": 1}, {}, "2026-07-01",
+        leadership=[{"ticker": "SMH", "weight": 0.12, "rs_pctile": 0.9},
+                    {"ticker": "XLK", "weight": 0.12}],
+        defensive=[{"ticker": "XLV", "archetype": "quality_defensive", "source": "playbook",
+                    "note": "driver-conditional favor"}])
+    lead = {r["ticker"] for r in payload["leadership_legs"]}
+    assert lead == {"SMH", "XLK"}
+    assert all(r["sleeve"] == "leadership" for r in payload["leadership_legs"])
+    # candidate rows are DE-ANCHORED — no weight on them
+    assert all("weight" not in r for r in payload["engine_candidates"])
+    # the engine weights live in the trailing advisory block only
+    adv = payload["engine_proposed_weights_ADVISORY"]
+    assert adv.get("NVDA") == 0.06 and adv.get("SMH") == 0.12
+    assert payload["defensive_benchmark"] == ["XLU", "XLV", "XLF", "XLP"]
+    assert {d["ticker"] for d in payload["defensive_candidates"]} == {"XLV"}
+    # the advisory block is the LAST key in the payload (placed after every other section)
+    assert list(payload.keys())[-1] == "engine_proposed_weights_ADVISORY"
+
+
+def test_build_book_tags_kept_leadership_and_captures_three_questions(monkeypatch):
+    """A kept leadership ticker is tagged sleeve='leadership' on the way out; the three-questions
+    fields (own_more / own_less / not_holding_should) are normalised and returned."""
+    sub = {"holdings": [
+        {"ticker": "SMH", "weight": 0.12, "rationale": "keep the semis leader"},
+        {"ticker": "NVDA", "weight": 0.06, "rationale": "AI infra single name"}],
+        "summary": "positioned", "sold_note": "",
+        "own_more": [{"ticker": "nvda", "why_now": "breadth", "probability": 0.7,
+                      "check_by": "2026-08-01"}],
+        "own_less": [{"ticker": "SMH", "why_now": "extended"}],
+        "not_holding_should": [{"ticker": "xlv", "why_now": "defensive rotate", "probability": 1.4,
+                                "check_by": "2026-08-01"}]}
+    _arm(monkeypatch, sub)
+    out = P.build_book([{"ticker": "NVDA", "weight": 0.06, "confluence": 0.3}], [],
+                       regime={"quad": 1}, asof="2026-07-01", strategist={"confirmed_themes": []},
+                       gate_info={}, leadership=[{"ticker": "SMH", "weight": 0.12}])
+    by = {h["ticker"]: h for h in out["holdings"]}
+    assert by["SMH"]["sleeve"] == "leadership"            # kept leadership leg tagged
+    assert by["NVDA"]["sleeve"] == "conviction"
+    # three-questions normalised: probability clamped into [0,1], ticker upper-cased
+    assert out["not_holding_should"][0]["ticker"] == "XLV"
+    assert out["not_holding_should"][0]["probability"] == 1.0     # 1.4 clamped
+    assert out["own_more"][0]["ticker"] == "NVDA"
+    assert {r["ticker"] for r in out["own_less"]} == {"SMH"}

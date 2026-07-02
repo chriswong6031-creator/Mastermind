@@ -96,13 +96,26 @@ def _shadow_entry(asof: str, ticker: str, weight: float, conviction, thesis: str
 
 def build(sized: list[dict], rejected: list[dict], *, regime: dict | None, asof: str,
           gate_info: dict | None, shadow_inputs: list | None,
-          portfolio_ctx: dict | None = None, name_cap: float | None = None) -> list[dict]:
+          portfolio_ctx: dict | None = None, name_cap: float | None = None,
+          directive: str | None = None,
+          leadership: list[dict] | None = None) -> list[dict]:
     """Reshape the engine's confirmed conviction list (``sized``) into the PM's target book,
     checked by SENTINEL + NEXUS and clamped by ``name_cap``. Returns the SAME schema
     ``conviction.build`` emits, so the downstream loop is unchanged.
 
+    W4 B1 — the LEADERSHIP PIPE (kills the placebo hole). ``leadership`` is the engine's
+    sleeve-tagged leadership legs (the 40-60% NAV sleeve). Before W4 the PM saw ONLY the conviction
+    sleeve, so arming the judgment layer was a placebo — the leadership sleeve was structurally
+    untouchable. Now the PM sees the full sleeve-tagged book. Its authority over a leadership leg is
+    strictly DROP (→ its budget goes to cash or a defensive pick, handled by omission) or KEEP (at
+    the engine's equal weight) — NEVER re-weight a surviving leg. That rule is enforced
+    DETERMINISTICALLY here (``_clamp_leadership_authority``), not just by prompt language: any
+    surviving leadership leg the PM re-weighted is RESTORED to its engine weight and logged
+    ``authority_clamped``.
+
     Degrade-safe: returns the input ``sized`` UNCHANGED whenever the flag is OFF, either seat
-    is unavailable, or the PM did not produce a book → the engine path stays byte-identical.
+    is unavailable, or the PM did not produce a book → the engine path stays byte-identical (the
+    leadership legs, which arrive separately in ``book`` at the call site, pass through untouched).
     Never raises."""
     if not _enabled():
         return sized
@@ -110,7 +123,11 @@ def build(sized: list[dict], rejected: list[dict], *, regime: dict | None, asof:
     gate_info = gate_info or {}
     portfolio_ctx = portfolio_ctx or {}
     rejected = list(rejected or [])
+    leadership = list(leadership or [])
     cap = float(name_cap) if name_cap is not None else _DEFAULT_NAME_CAP
+    # engine weight per leadership ticker (the equal weight the PM may KEEP but never re-weight).
+    _lead_engine_w = {str(c.get("ticker") or "").upper().strip(): c.get("weight")
+                      for c in leadership if c.get("ticker")}
 
     try:
         from brain import strategist, pm_conviction, committee
@@ -194,11 +211,24 @@ def build(sized: list[dict], rejected: list[dict], *, regime: dict | None, asof:
         except Exception:  # noqa: BLE001 — additive; never break the build
             macro_rs = None
 
-    # (B) PM-CONVICTION — the armed Opus PM builds the Flagship target book
+    # (A3) DEFENSIVE CANDIDATES — the ONE canonical generator (portfolio/defensive_candidates.py).
+    # Fed to the PM as its risk-off rotation ammunition (the champion pool). Best-effort; an empty
+    # pool is legal ("no defensive candidates today") — the PM simply holds cash on a drop.
+    defensive = []
+    try:
+        from portfolio import defensive_candidates as _dc
+        _rs_for_dc = (portfolio_ctx.get("macro_risk") if isinstance(portfolio_ctx, dict) else None)
+        defensive = _dc.candidates(_rs_for_dc) or []
+    except Exception:  # noqa: BLE001 — additive; a broken generator contributes nothing
+        defensive = []
+
+    # (B) PM-CONVICTION — the armed Opus PM builds the Flagship target book. Now piped the FULL
+    # sleeve-tagged book: the conviction candidates (sized) + the leadership legs + the defensive pool.
     try:
         book = pm_conviction.build_book(sized, rejected, regime=regime, asof=asof,
                                         strategist=strat, gate_info=gate_info,
-                                        portfolio_ctx=portfolio_ctx)
+                                        portfolio_ctx=portfolio_ctx, directive=directive,
+                                        leadership=leadership, defensive=defensive)
     except Exception:  # noqa: BLE001
         book = None
     if not book or not book.get("ran") or not book.get("holdings"):
@@ -246,6 +276,9 @@ def build(sized: list[dict], rejected: list[dict], *, regime: dict | None, asof:
 
         syn = (full.get("synthesis") or {})
         confluence = syn.get("confluence") or 0.0
+        # sleeve: a leadership ticker the PM KEPT stays 'leadership' (the authority clamp then holds
+        # it at the engine's equal weight); everything else is a conviction leg.
+        _sleeve = "leadership" if t in _lead_engine_w else (h.get("sleeve") or "conviction")
         out.append({
             "ticker": t,
             "weight": w,
@@ -255,6 +288,7 @@ def build(sized: list[dict], rejected: list[dict], *, regime: dict | None, asof:
             "divergences": (syn.get("divergences") or []),
             "retained": False,
             "size_stage": None,
+            "sleeve": _sleeve,
             "research": {"summary": h.get("thesis"), "confirmed": True},
             "committee": {k: cm.get(k) for k in
                           ("action", "scale", "lean", "rationale", "sentinel_stance")},
@@ -306,6 +340,17 @@ def build(sized: list[dict], rejected: list[dict], *, regime: dict | None, asof:
         except Exception:  # noqa: BLE001 — additive; never break the build
             pass
 
+    # (F) LEADERSHIP AUTHORITY CLAMP (deterministic, NOT prompt-only) — the PM's authority over a
+    # leadership leg is DROP or KEEP-at-engine-weight; it may NEVER re-weight a surviving leadership
+    # leg (equal-weight rank-IC≈0 is validated doctrine). Any surviving leadership leg whose weight
+    # drifted from the engine's is RESTORED here and logged 'authority_clamped'. A DROP needs no
+    # action — the PM omitted the leg, and its budget goes to cash or a defensive pick by construction
+    # (the freed weight is never redistributed onto conviction survivors; the downstream book caps +
+    # the no-leverage gross guarantee it can only become cash or an explicit defensive holding). This
+    # runs AFTER every subtract-only pass so it clamps the FINAL surviving set. Never raises.
+    if _lead_engine_w:
+        _clamp_leadership_authority(out, _lead_engine_w)
+
     # re-emit shadow inputs so the judgment policy stays replayable offline / forward-gradable.
     if shadow_inputs is not None:
         for entry in out:
@@ -317,4 +362,129 @@ def build(sized: list[dict], rejected: list[dict], *, regime: dict | None, asof:
             except Exception:  # noqa: BLE001 — shadow emission never blocks the build
                 pass
 
+    # (G) THREE-QUESTIONS DUTY — every not_holding_should rotation CALL emits a shadow entry + a 21
+    # trading-day rel_return falsifier into the EXISTING thesis/shadow machinery, so a rotation the PM
+    # NAMES but does not trade is still Brier-graded (kills "cash generates zero grading rows"). A
+    # submission missing the three fields is still accepted; we log 'three_questions_incomplete' and
+    # emit nothing (never reject a decision for schema growth — add-only). Best-effort; never raises.
+    try:
+        _emit_three_questions(book, asof, shadow_inputs)
+    except Exception:  # noqa: BLE001 — the duty is additive; never break the build
+        pass
+
     return out
+
+
+def _clamp_leadership_authority(out: list[dict], lead_engine_w: dict) -> None:
+    """Restore any surviving leadership leg the PM re-weighted back to the engine's equal weight.
+
+    In place. The PM may DROP a leadership leg (omission → its budget becomes cash/defensive) but may
+    NEVER re-weight a surviving one. We compare each surviving leadership-sleeve row's weight to the
+    engine weight it arrived with; a drift beyond a rounding epsilon is clamped back and the row is
+    tagged ``authority_clamped`` with the from/to for the runlog. Names not in ``lead_engine_w`` are
+    untouched (a conviction leg, or a defensive pick, is freely PM-weighted). Never raises."""
+    for row in out:
+        try:
+            if str(row.get("sleeve") or "") != "leadership":
+                continue
+            tk = str(row.get("ticker") or "").upper().strip()
+            eng = lead_engine_w.get(tk)
+            if eng is None:
+                continue
+            try:
+                eng_w = round(float(eng), 4)
+            except (TypeError, ValueError):
+                continue
+            cur = round(float(row.get("weight") or 0.0), 4)
+            if abs(cur - eng_w) > 1e-4:
+                row["authority_clamped"] = {"from": cur, "to": eng_w,
+                                            "reason": "leadership_reweight_forbidden"}
+                row["weight"] = eng_w
+        except Exception:  # noqa: BLE001 — a single bad row never breaks the clamp
+            continue
+
+
+def _emit_three_questions(book: dict, asof: str, shadow_inputs: list | None) -> None:
+    """Turn the PM's not_holding_should rotation calls into Brier-gradable theses + shadow entries.
+
+    Each not_holding_should entry becomes a directional (lean='add') DecisionDoc whose engine-derived
+    rel_return falsifier resolves 21 trading days out, appended to the thesis ledger (source
+    'pm_judgment' so brain.calibration._is_pm_thesis grades it), plus a shadow entry mirroring the
+    conviction-name shadow schema (weight 0 — a CALL, not a position). own_more/own_less are recorded
+    on the shadow feed as context but are not independent falsifiable positions here.
+
+    Missing three-question fields → log 'three_questions_incomplete' and emit nothing (add-only:
+    schema growth never rejects a decision). Best-effort; never raises."""
+    if not isinstance(book, dict):
+        return
+    nhs = book.get("not_holding_should") or []
+    have_all = all(isinstance(book.get(k), list) and book.get(k) for k in
+                   ("own_more", "own_less", "not_holding_should"))
+    if not have_all:
+        # incomplete is acceptable (add-only) — surface it in a runlog-friendly note, emit nothing new.
+        try:
+            from bot.phase2 import _rl_log  # noqa: F401 — only used if importable
+        except Exception:  # noqa: BLE001
+            _rl_log = None  # type: ignore
+        if _rl_log is not None:
+            try:
+                _rl_log("flagship_judgment", "decision", "three_questions_incomplete",
+                        f"own_more={len(book.get('own_more') or [])} "
+                        f"own_less={len(book.get('own_less') or [])} "
+                        f"not_holding_should={len(nhs)}")
+            except Exception:  # noqa: BLE001
+                pass
+        if not nhs:
+            return
+
+    try:
+        from brain.decision import DecisionDoc
+        from brain import ledger as _ledger
+    except Exception:  # noqa: BLE001
+        DecisionDoc = None  # type: ignore
+        _ledger = None      # type: ignore
+
+    for call in nhs:
+        if not isinstance(call, dict):
+            continue
+        tk = str(call.get("ticker") or "").upper().strip()
+        if not tk:
+            continue
+        why = str(call.get("why_now") or "")[:300]
+        prob = call.get("probability")
+        try:
+            pc = float(prob) if prob is not None else 0.55
+        except (TypeError, ValueError):
+            pc = 0.55
+        pc = max(0.50, min(0.85, pc))
+        # a shadow entry (weight 0 — this is a CALL, not a held position) so the shadow replay + the
+        # forward grader see the rotation call. Reuses the same schema as conviction-name shadows.
+        if shadow_inputs is not None:
+            try:
+                se = _shadow_entry(asof, tk, 0.0, "rotation_call", why, 0.0)
+                se["source"] = "pm_judgment"
+                se["kind"] = "not_holding_should"
+                se["thesis_id"] = f"{asof}-{tk}-rotcall"
+                se["raw_prob_correct"] = round(pc, 2)
+                shadow_inputs.append(se)
+            except Exception:  # noqa: BLE001
+                pass
+        # a gradable thesis with a 21-trading-day rel_return falsifier (lean='add' → the engine
+        # derives the directional check; the PM never writes its own escape hatch).
+        if DecisionDoc is not None and _ledger is not None:
+            try:
+                doc = DecisionDoc(
+                    id=f"{asof}-{tk}-rotcall", subject=tk, lean="add", conviction="medium",
+                    prob_correct=pc, raw_prob_correct=round(pc, 2),
+                    horizon_d=21, state_asof=str(asof)[:10], sleeve="conviction", order_layer=1,
+                    thesis=f"Rotation CALL (not held): {why or 'regime-driven defensive/rotation call'}",
+                    evidence=["source=pm_judgment", "kind=not_holding_should",
+                              f"probability={pc}"],
+                    dissent="Graded 21 trading days forward as a rel_return call even absent a trade.",
+                    entry_levels={"ticker": tk},
+                ).finalize()
+                d = doc.to_json()
+                d["source"] = "pm_judgment"
+                _ledger.append(d)
+            except Exception:  # noqa: BLE001
+                pass

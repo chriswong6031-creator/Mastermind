@@ -90,6 +90,39 @@ def _confirm(t, asof, **k):
             "sentinel_stance": "SUPPORT"}
 
 
+def _patch_seats_book(monkeypatch, *, book, committee_fn):
+    """Like _patch_seats but the PM returns a full book dict (so tests can set the three-questions
+    fields + sleeve tags directly). `book` is the full pm_conviction.build_book return dict."""
+    monkeypatch.setattr(J, "_enabled", lambda: True)
+    import sys
+    import types
+    strat = types.ModuleType("brain.strategist")
+    strat.run = lambda asof, regime: {"agent": "strategist", "confirmed_themes": []}
+    pmc = types.ModuleType("brain.pm_conviction")
+    pmc.build_book = lambda *a, **k: book
+    comm = types.ModuleType("brain.committee")
+    comm.assess = committee_fn
+    lenses = types.ModuleType("portfolio.lenses")
+    lenses.full = lambda t, kind="name": {"synthesis": {"confluence": 0.25, "divergences": []}, "rows": []}
+    lenses._load = lambda rel: {}
+    lenses._g = lambda d, path: None
+    # keep the defensive-candidate generator from touching the real vendor tree
+    dc = types.ModuleType("portfolio.defensive_candidates")
+    dc.candidates = lambda rs=None: []
+    import brain as _brain_pkg
+    import portfolio as _pf_pkg
+    monkeypatch.setattr(_brain_pkg, "strategist", strat, raising=False)
+    monkeypatch.setattr(_brain_pkg, "pm_conviction", pmc, raising=False)
+    monkeypatch.setattr(_brain_pkg, "committee", comm, raising=False)
+    monkeypatch.setattr(_pf_pkg, "lenses", lenses, raising=False)
+    monkeypatch.setattr(_pf_pkg, "defensive_candidates", dc, raising=False)
+    monkeypatch.setitem(sys.modules, "brain.strategist", strat)
+    monkeypatch.setitem(sys.modules, "brain.pm_conviction", pmc)
+    monkeypatch.setitem(sys.modules, "brain.committee", comm)
+    monkeypatch.setitem(sys.modules, "portfolio.lenses", lenses)
+    monkeypatch.setitem(sys.modules, "portfolio.defensive_candidates", dc)
+
+
 def test_flag_off_returns_sized_unchanged(monkeypatch):
     monkeypatch.delenv("MASTERMIND_FLAGSHIP_JUDGMENT", raising=False)
     sized = [{"ticker": "NVDA", "weight": 0.06, "confluence": 0.3, "bull": "", "bear": "",
@@ -343,3 +376,115 @@ def test_macro_risk_riskoff_blocks_adds_degrades_to_sized(monkeypatch):
     sized = [{"ticker": "ENGINE", "weight": 0.05}]
     out = J.build(sized, [], regime={}, asof="2026-06-23", gate_info={}, shadow_inputs=[])
     assert out is sized                                # add-block emptied the book → engine path stands
+
+
+# ═════════════════════════ W4 B1: leadership pipe + three-questions ═════════════════════════
+
+def test_flag_off_leadership_passthrough_byte_identical(monkeypatch):
+    """Flag OFF → build() returns the input `sized` UNCHANGED even when leadership legs are piped in.
+    The leadership legs (which travel separately in `book` at the call site) are never touched by the
+    dark judgment layer — this is the E1 control-arm guarantee extended to the leadership pipe."""
+    monkeypatch.delenv("MASTERMIND_FLAGSHIP_JUDGMENT", raising=False)
+    sized = [{"ticker": "NVDA", "weight": 0.06, "confluence": 0.3}]
+    lead = [{"ticker": "SMH", "weight": 0.12, "sleeve": "leadership"}]
+    out = J.build(sized, [], regime={}, asof="2026-07-01", gate_info={}, shadow_inputs=[],
+                  leadership=lead)
+    assert out is sized                                # same object, byte-identical
+
+
+def test_authority_clamp_restores_reweighted_surviving_leader(monkeypatch):
+    """The PM KEPT a leadership leg (SMH) but re-weighted it up to 0.30 — the deterministic authority
+    clamp RESTORES it to the engine's equal weight (0.12) and tags authority_clamped. A surviving
+    leadership leg may NEVER be conviction-re-weighted (equal-weight rank-IC≈0 doctrine)."""
+    monkeypatch.setenv("MASTERMIND_FLAGSHIP_JUDGMENT", "1")
+    _patch_seats_book(monkeypatch, book={
+        "holdings": [{"ticker": "SMH", "weight": 0.30, "thesis": "keep semis", "conviction": "high",
+                      "sleeve": "leadership"},
+                     {"ticker": "NVDA", "weight": 0.06, "thesis": "AI", "conviction": "high",
+                      "sleeve": "conviction"}],
+        "cash": 0.1, "summary": "s", "sold_note": "", "ran": True,
+        "own_more": [], "own_less": [], "not_holding_should": []},
+        committee_fn=_confirm)
+    lead = [{"ticker": "SMH", "weight": 0.12, "sleeve": "leadership"}]
+    out = J.build([], [], regime={}, asof="2026-07-01", gate_info={}, shadow_inputs=[],
+                  name_cap=0.5, leadership=lead)
+    smh = next(r for r in out if r["ticker"] == "SMH")
+    assert smh["weight"] == pytest.approx(0.12)        # restored to engine equal weight
+    assert smh["authority_clamped"]["from"] == pytest.approx(0.30)
+    assert smh["authority_clamped"]["to"] == pytest.approx(0.12)
+    # a conviction name is freely PM-weighted (NOT clamped)
+    nvda = next(r for r in out if r["ticker"] == "NVDA")
+    assert "authority_clamped" not in nvda
+
+
+def test_dropped_leadership_budget_not_a_conviction_topup(monkeypatch):
+    """The PM DROPPED a leadership leg (SMH omitted). Its budget must NOT reappear as a conviction
+    top-up beyond caps — the surviving conviction name stays bounded by name_cap; SMH is simply gone
+    from the reshaped book (its budget becomes cash/defensive downstream, never a survivor top-up)."""
+    monkeypatch.setenv("MASTERMIND_FLAGSHIP_JUDGMENT", "1")
+    _patch_seats_book(monkeypatch, book={
+        "holdings": [{"ticker": "NVDA", "weight": 0.50, "thesis": "AI", "conviction": "high",
+                      "sleeve": "conviction"}],           # PM omitted SMH; over-sized NVDA
+        "cash": 0.1, "summary": "s", "sold_note": "", "ran": True,
+        "own_more": [], "own_less": [], "not_holding_should": []},
+        committee_fn=_confirm)
+    lead = [{"ticker": "SMH", "weight": 0.12, "sleeve": "leadership"}]
+    out = J.build([], [], regime={}, asof="2026-07-01", gate_info={}, shadow_inputs=[],
+                  name_cap=0.08, leadership=lead)
+    tickers = {r["ticker"] for r in out}
+    assert "SMH" not in tickers                          # dropped leadership leg is gone
+    nvda = next(r for r in out if r["ticker"] == "NVDA")
+    assert nvda["weight"] <= 0.08 + 1e-9                 # bounded by name_cap — no top-up beyond caps
+
+
+def test_three_questions_shadow_entries_land_with_falsifiers(monkeypatch, tmp_path):
+    """Each not_holding_should rotation call emits a shadow entry (weight 0, kind
+    not_holding_should) AND a gradable thesis with a 21-trading-day rel_return falsifier appended to
+    the ledger. We isolate the ledger to a tmp file so the real theses.jsonl is never touched."""
+    monkeypatch.setenv("MASTERMIND_FLAGSHIP_JUDGMENT", "1")
+    from brain import ledger as _ledger
+    monkeypatch.setattr(_ledger, "_LEDGER", tmp_path / "theses.jsonl", raising=False)
+
+    _patch_seats_book(monkeypatch, book={
+        "holdings": [{"ticker": "NVDA", "weight": 0.06, "thesis": "AI", "conviction": "high",
+                      "sleeve": "conviction"}],
+        "cash": 0.1, "summary": "s", "sold_note": "", "ran": True,
+        "own_more": [{"ticker": "NVDA", "why_now": "breadth", "probability": 0.7}],
+        "own_less": [{"ticker": "AMD", "why_now": "extended"}],
+        "not_holding_should": [{"ticker": "XLV", "why_now": "defensive rotate",
+                                "probability": 0.6, "check_by": "2026-08-01"}]},
+        committee_fn=_confirm)
+    shadow = []
+    out = J.build([], [], regime={}, asof="2026-07-01", gate_info={}, shadow_inputs=shadow,
+                  name_cap=0.08, leadership=[])
+    assert {r["ticker"] for r in out} == {"NVDA"}
+    # a shadow entry for the rotation call landed (weight 0, tagged not_holding_should)
+    rot = [s for s in shadow if s.get("kind") == "not_holding_should"]
+    assert rot and rot[0]["ticker"] == "XLV"
+    assert rot[0]["weight_prod"] == 0.0 and rot[0]["source"] == "pm_judgment"
+    # a gradable thesis with a rel_return falsifier landed in the (isolated) ledger
+    theses = _ledger.all_theses()
+    xlv = [t for t in theses if t.get("subject") == "XLV"]
+    assert xlv, "rotation call XLV should be a gradable thesis"
+    chk = (xlv[0].get("falsifier") or {}).get("check") or {}
+    assert chk.get("kind") == "rel_return" and chk.get("subject_ticker") == "XLV"
+    assert xlv[0].get("source") == "pm_judgment"        # graded via _is_pm_thesis
+    assert xlv[0].get("check_by")                        # 21-trading-day horizon bound
+
+
+def test_three_questions_incomplete_still_accepted(monkeypatch, tmp_path):
+    """A submission MISSING the three-questions fields is still accepted (the book is published);
+    schema growth never rejects a decision. No rotation-call theses land."""
+    monkeypatch.setenv("MASTERMIND_FLAGSHIP_JUDGMENT", "1")
+    from brain import ledger as _ledger
+    monkeypatch.setattr(_ledger, "_LEDGER", tmp_path / "theses.jsonl", raising=False)
+    _patch_seats_book(monkeypatch, book={
+        "holdings": [{"ticker": "NVDA", "weight": 0.06, "thesis": "AI", "conviction": "high",
+                      "sleeve": "conviction"}],
+        "cash": 0.1, "summary": "s", "sold_note": "", "ran": True,
+        "own_more": [], "own_less": [], "not_holding_should": []},   # all empty
+        committee_fn=_confirm)
+    out = J.build([], [], regime={}, asof="2026-07-01", gate_info={}, shadow_inputs=[],
+                  name_cap=0.08, leadership=[])
+    assert {r["ticker"] for r in out} == {"NVDA"}        # decision still accepted
+    assert not _ledger.all_theses()                      # no rotation-call theses when incomplete

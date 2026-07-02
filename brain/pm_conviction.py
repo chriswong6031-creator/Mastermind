@@ -41,25 +41,102 @@ def enabled() -> bool:
         return False
 
 
+# The Self-Directed defensive book — the EXPLICIT named benchmark the PM must beat in risk-off
+# regimes (W4 prompt edit 3b). This is the SAME four-ETF book the re-audit found beating every Brain
+# (+2.92%, zero drawdown, over the 07-01 window). Naming it turns "hold cash and do nothing" from an
+# unpriceable non-decision into a concrete, beatable bogey.
+_DEFENSIVE_BENCHMARK_BASKET: tuple[str, ...] = ("XLU", "XLV", "XLF", "XLP")
+
+
+def _full_regime_slice(regime: dict | None) -> dict:
+    """The FULL regime read the seats receive (W4 prompt edit 3a).
+
+    Upgrades from the confidence-blind 3-field lens_row to the enriched regime_frame.frame()
+    (confidence / transition_state / contradicting / flip_margin / flag_confidence_decay) PLUS the
+    dwell risk-state. Best-effort layering: start from whatever `regime` dict the caller passed
+    (keeps today's fields), overlay frame() where it has richer values, then attach the cycles()
+    summary + the dwell risk state. Any failure degrades to the plain 3-field slice — the invariant
+    holds (missing data COARSENS the read, never inflates it)."""
+    reg = {k: (regime or {}).get(k) for k in
+           ("quad", "quad_name", "growth_score", "inflation_score", "liquidity_overlay",
+            "cycle_tag", "sector_rs_top")}
+    try:
+        from brain import regime_frame as _rf
+        fr = _rf.frame("us") or {}
+        for k in ("confidence", "transition_state", "contradicting", "flip_margin",
+                  "flag_confidence_decay"):
+            if fr.get(k) is not None:
+                reg[k] = fr[k]
+    except Exception:  # noqa: BLE001 — degrade to the 3-field slice
+        pass
+    # cycles() summary — a compact per-sector entry/late-cycle read (the sole freshness-gated reader;
+    # stale/absent → {} → this key is simply omitted, never a fabricated cycle read).
+    try:
+        from brain import regime_frame as _rf
+        _cyc = _rf.cycles() or {}
+        entry = sorted(t for t, r in _cyc.items() if isinstance(r, dict) and r.get("entry_favored"))
+        late = sorted(t for t, r in _cyc.items() if isinstance(r, dict) and r.get("late_cycle"))
+        if entry or late:
+            reg["cycles"] = {"entry_favored": entry, "late_cycle": late}
+    except Exception:  # noqa: BLE001
+        pass
+    # dwell risk state — the persistent memory read (state/fragility/gross_cap/allow_adds). Best-effort;
+    # a caller-supplied macro_risk in portfolio_ctx is preferred by _pm_input, this is the fallback.
+    # READ-ONLY: we pass a no-op state_saver so this display-read never DOUBLE-ADVANCES the dwell state
+    # machine (the authoritative risk_state call happens once per build in phase2 / the macro-risk block).
+    try:
+        from brain import macro_risk as _mr
+        rs = _mr.risk_state(str(regime.get("date") if isinstance(regime, dict) else "")[:10]
+                            or None, regime, state_saver=lambda rec: None)
+        reg["risk_state"] = {k: rs.get(k) for k in ("state", "fragility", "gross_cap", "allow_adds")}
+    except Exception:  # noqa: BLE001
+        pass
+    return reg
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # input — everything the PM sees, seeded with the engine candidates, the rejected
 # thematic pool it may champion, the Strategist themes, and the FORGE summaries.
+# W4 B1: leadership legs (sleeve-tagged) + defensive candidates are now piped in too,
+# and the engine's proposed weights are DE-ANCHORED to the end of the payload.
 # ─────────────────────────────────────────────────────────────────────────────
 def _pm_input(sized: list[dict], rejected: list[dict], strategist: dict | None,
-              regime: dict | None, gate_info: dict | None, asof: str) -> dict:
+              regime: dict | None, gate_info: dict | None, asof: str, *,
+              leadership: list[dict] | None = None,
+              defensive: list[dict] | None = None,
+              risk_state: dict | None = None) -> dict:
     sized = sized or []
     rejected = rejected or []
     gate_info = gate_info or {}
+    leadership = leadership or []
+    defensive = defensive or []
 
     engine_candidates = [{
         "ticker": c.get("ticker"),
-        "weight": c.get("weight"),
         "confluence": c.get("confluence"),
         "bull": str(c.get("bull") or "")[:240],
         "bear": str(c.get("bear") or "")[:240],
         "divergences": (c.get("divergences") or [])[:6],
         "retained": bool(c.get("retained")),
+        "sleeve": c.get("sleeve") or "conviction",
     } for c in sized if c.get("ticker")][:40]
+
+    # LEADERSHIP legs (W4 B1 leadership pipe) — the 40-60% NAV sleeve the PM could NOT see before.
+    # sleeve-tagged so the PM (and the deterministic authority clamp) know these are equal-weight
+    # leadership legs it may DROP (→ cash/defensive) but MUST NOT re-weight while surviving.
+    leadership_legs = [{
+        "ticker": c.get("ticker"),
+        "sleeve": "leadership",
+        "rs_pctile": c.get("rs_pctile"),
+    } for c in leadership if c.get("ticker")][:20]
+
+    # DEFENSIVE candidates (the ONE canonical generator) — the champion pool for a risk-off rotate.
+    defensive_candidates = [{
+        "ticker": d.get("ticker"),
+        "archetype": d.get("archetype"),
+        "source": d.get("source"),
+        "note": str(d.get("note") or "")[:120],
+    } for d in defensive if isinstance(d, dict) and d.get("ticker")][:30]
 
     engine_rejected = [{
         "ticker": r.get("ticker"),
@@ -82,17 +159,34 @@ def _pm_input(sized: list[dict], rejected: list[dict], strategist: dict | None,
         })
     forge_summaries = forge_summaries[:40]
 
-    reg = {k: (regime or {}).get(k) for k in
-           ("quad", "quad_name", "growth_score", "inflation_score", "liquidity_overlay",
-            "cycle_tag", "sector_rs_top")}
+    reg = _full_regime_slice(regime)
+    # prefer a caller-supplied (already-computed) dwell risk state over the fallback in _full_regime_slice
+    if isinstance(risk_state, dict) and risk_state:
+        reg["risk_state"] = {k: risk_state.get(k) for k in
+                             ("state", "fragility", "gross_cap", "allow_adds")}
+
+    # DE-ANCHOR (W4 prompt edit 3c): the engine's proposed WEIGHTS are moved OUT of the candidate
+    # rows above (which now carry no weight) into this separate, clearly-labelled block placed LAST
+    # in the payload — the engine's view, not a target. The PM sizes from conviction, not by anchoring
+    # on the engine's number.
+    engine_proposed_weights = {c.get("ticker"): c.get("weight")
+                               for c in sized if c.get("ticker")}
+    for c in leadership:
+        if c.get("ticker"):
+            engine_proposed_weights.setdefault(c["ticker"], c.get("weight"))
 
     return {
         "asof": str(asof)[:10],
-        "engine_candidates": engine_candidates,
-        "engine_rejected": engine_rejected,
-        "strategist": strategist or {},
-        "forge_summaries": forge_summaries,
         "regime": reg,
+        "defensive_benchmark": list(_DEFENSIVE_BENCHMARK_BASKET),
+        "strategist": strategist or {},
+        "engine_candidates": engine_candidates,
+        "leadership_legs": leadership_legs,
+        "defensive_candidates": defensive_candidates,
+        "engine_rejected": engine_rejected,
+        "forge_summaries": forge_summaries,
+        # DE-ANCHORED — LAST in the payload, after every candidate/defensive/regime section.
+        "engine_proposed_weights_ADVISORY": engine_proposed_weights,
     }
 
 
@@ -122,18 +216,53 @@ _PM_PERSONA = (
     "every name you want to hold, its weight (fraction of NAV), and a one-paragraph rationale per "
     "holding (why you own it, now). Anything you omit is SOLD. Your champions are then checked by a "
     "BLIND adversary and HARD risk caps (no-leverage, per-name + concentration limits) — size with "
-    "that in mind; conviction leads, the adversary checks."
+    "that in mind; conviction leads, the adversary checks. \n\n"
+    "THE LEADERSHIP SLEEVE (leadership_legs in the payload) is the engine's equal-weight top-RS "
+    "rotation book — 40-60% of NAV. You have exactly TWO powers over a leadership leg: KEEP it "
+    "(then it stays at the engine's equal weight — you may NOT up-weight or down-weight a leg you "
+    "keep; equal-weight is validated doctrine, rank-IC≈0) or DROP it (omit it — the freed budget "
+    "goes to CASH or to a DEFENSIVE candidate, never to topping-up your conviction names). A leg you "
+    "re-weight but keep will be restored to the engine weight by a deterministic clamp, so do not "
+    "bother — DROP or KEEP. \n\n"
+    "YOU MUST BEAT A STATIC DEFENSIVE BOOK. In risk-off / weakening regimes your book must beat "
+    "max(SPY, the defensive_benchmark basket XLU/XLV/XLF/XLP) — that static defensive book is "
+    "currently beating every Brain, so holding leadership into a weakening tape while it bleeds is "
+    "a LOSS even if you beat SPY. The defensive_candidates pool is your rotation ammunition: DROP a "
+    "leadership leg and rotate its budget into a defensive name when the regime turns. \n\n"
+    "THREE QUESTIONS (required in your submit): beyond the book, answer own_more (names you'd size "
+    "UP if you could), own_less (names you're trimming/exiting and why), and — most important — "
+    "not_holding_should (names you do NOT hold but the regime says you SHOULD be rotating into: for "
+    "each give ticker, why_now, a probability 0-1, and check_by date). These rotation CALLS are "
+    "graded 21 trading days forward even when you place no trade, so a defensive rotation you name "
+    "but don't buy still earns (or costs) you credit. Name them honestly."
 )
 
 
-def _build_prompt(payload: dict) -> str:
+def _build_prompt(payload: dict, directive: str | None = None) -> str:
     strat = payload.get("strategist") or {}
     reg = payload.get("regime") or {}
     lines = [f"# Flagship book — deep-reasoning decision for {payload.get('asof')}", ""]
+    if directive:
+        lines += ["## ⚠ PRIORITY DIRECTIVE FOR THIS RUN", directive.strip(), ""]
     if reg.get("quad_name") or reg.get("quad"):
         lines += [f"Macro regime (in-house read): quad {reg.get('quad')} "
                   f"({reg.get('quad_name')}), liquidity {reg.get('liquidity_overlay')}, "
-                  f"cycle {reg.get('cycle_tag')}.", ""]
+                  f"cycle {reg.get('cycle_tag')}.",
+                  # W4 3a — the confidence-blind funnel is replaced by the full frame:
+                  f"Regime confidence {reg.get('confidence')}, transition {reg.get('transition_state')}, "
+                  f"flip_margin {reg.get('flip_margin')}"
+                  + (f", contradicting: {reg.get('contradicting')}" if reg.get('contradicting') else "")
+                  + ".",
+                  ""]
+    _rs = reg.get("risk_state") or {}
+    if _rs.get("state"):
+        lines += [f"Macro Risk Officer (dwell) state: {str(_rs.get('state')).upper()} "
+                  f"(fragility {_rs.get('fragility')}; gross cap {_rs.get('gross_cap')}; "
+                  f"adds {'BLOCKED' if _rs.get('allow_adds') is False else 'allowed'}).", ""]
+    lines += ["BENCHMARK YOU MUST BEAT (risk-off / weakening regimes): "
+              f"max(SPY, the defensive basket {', '.join(payload.get('defensive_benchmark') or [])}). "
+              "That static defensive book is currently beating every Brain — a book that holds "
+              "leadership into a weakening tape and merely beats SPY still LOSES to it.", ""]
     if strat.get("confirmed_themes"):
         lines += ["Macro Strategist — CONFIRMED leadership themes right now:"]
         for th in strat["confirmed_themes"][:12]:
@@ -144,11 +273,15 @@ def _build_prompt(payload: dict) -> str:
                   f"(supportive={strat.get('supportive')}). "
                   f"Crowding flags: {', '.join(strat.get('crowding_flags', []) or ['none'])}.", ""]
     lines += [
-        "You are seeded below (JSON) with the engine's confirmed candidates, its rejected pool "
-        "(names you may champion), the full Strategist read, and FORGE research summaries. Research "
-        "with the in-house tools and/or the web, then submit your COMPLETE Flagship target book via "
-        "mcp__desk__submit_book — add the thematic names you have conviction in, drop engine names "
-        "without a live thesis, one rationale per holding.",
+        "You are seeded below (JSON) with: the engine's confirmed candidate NAMES (no weights — you "
+        "size from conviction), its LEADERSHIP legs (you may KEEP-at-engine-weight or DROP each, "
+        "never re-weight a survivor), the DEFENSIVE candidate pool (your risk-off rotation ammo), "
+        "the rejected pool (names you may champion), the full Strategist read, and FORGE research "
+        "summaries. The engine's OWN proposed weights are at the very END of the JSON, labelled "
+        "ADVISORY — they are the engine's view, NOT a target; do not anchor on them. Research with "
+        "the in-house tools and/or the web, then submit your COMPLETE Flagship target book via "
+        "mcp__desk__submit_book — plus the three required rotation-call fields (own_more / own_less "
+        "/ not_holding_should).",
         "",
         "```json",
         json.dumps(payload, indent=2, default=str)[:9000],
@@ -159,15 +292,26 @@ def _build_prompt(payload: dict) -> str:
 
 def build_book(sized: list[dict], rejected: list[dict], *, regime: dict | None, asof: str,
                strategist: dict | None, gate_info: dict | None,
-               portfolio_ctx: dict | None = None) -> dict | None:
+               portfolio_ctx: dict | None = None,
+               directive: str | None = None,
+               leadership: list[dict] | None = None,
+               defensive: list[dict] | None = None) -> dict | None:
     """Run the armed Opus PM. Returns the target book
-    ``{holdings:[{ticker,weight,thesis,conviction}], cash, summary, sold_note, ran}`` — or a stub
-    with ``ran=False`` when no LLM is reachable / the PM did not submit. Additive; never raises.
+    ``{holdings:[{ticker,weight,thesis,conviction,sleeve}], cash, summary, sold_note, ran,
+    own_more, own_less, not_holding_should}`` — or a stub with ``ran=False`` when no LLM is
+    reachable / the PM did not submit. Additive; never raises.
+
+    W4 B1: ``leadership`` (the engine's sleeve-tagged leadership legs) and ``defensive`` (the
+    canonical defensive-candidate pool) are piped into the payload so the PM can DROP a leadership
+    leg and rotate its budget into a defensive name — it could see neither before. The three
+    rotation-call fields (own_more / own_less / not_holding_should) are read back from the
+    submission and passed through for the judgment book's Brier-graded shadow entries.
 
     The PM submits via ``mcp__desk__submit_book``; the submission is read back from the
     Flagship-scoped path (``portfolio_id="flagship_judgment"``) so it never collides with the live
     autonomous book."""
-    stub = {"holdings": [], "cash": 1.0, "summary": "", "sold_note": "", "ran": False}
+    stub = {"holdings": [], "cash": 1.0, "summary": "", "sold_note": "", "ran": False,
+            "own_more": [], "own_less": [], "not_holding_should": []}
     if not client.available():
         return stub
     try:
@@ -179,8 +323,10 @@ def build_book(sized: list[dict], rejected: list[dict], *, regime: dict | None, 
     except Exception:  # noqa: BLE001
         return stub
 
-    payload = _pm_input(sized, rejected, strategist, regime, gate_info, asof)
-    prompt = _build_prompt(payload)
+    _rs = (portfolio_ctx or {}).get("macro_risk") if isinstance(portfolio_ctx, dict) else None
+    payload = _pm_input(sized, rejected, strategist, regime, gate_info, asof,
+                        leadership=leadership, defensive=defensive, risk_state=_rs)
+    prompt = _build_prompt(payload, directive=directive)
 
     # self-mirror: append the PM's own champion track record to its persona (flag-gated; OFF →
     # the persona is byte-identical to P1/P2).
@@ -232,6 +378,12 @@ def build_book(sized: list[dict], rejected: list[dict], *, regime: dict | None, 
     if not sub:
         return stub
 
+    # the leadership tickers the engine passed in — a KEPT leg with one of these tickers is tagged
+    # sleeve='leadership' on the way out so the judgment book's authority clamp can enforce the
+    # equal-weight (never re-weight a survivor) rule deterministically.
+    _lead_tickers = {str(c.get("ticker") or "").upper().strip()
+                     for c in (leadership or []) if c.get("ticker")}
+
     holdings = []
     gross = 0.0
     seen: set[str] = set()
@@ -246,7 +398,8 @@ def build_book(sized: list[dict], rejected: list[dict], *, regime: dict | None, 
             continue
         seen.add(t)
         holdings.append({"ticker": t, "weight": w, "thesis": thesis,
-                         "conviction": (h.get("conviction") or "medium")})
+                         "conviction": (h.get("conviction") or "medium"),
+                         "sleeve": ("leadership" if t in _lead_tickers else "conviction")})
         gross += w
 
     # no-leverage scale-down (defence-in-depth; submit_book already enforces this).
@@ -271,7 +424,44 @@ def build_book(sized: list[dict], rejected: list[dict], *, regime: dict | None, 
         "sold_note": str(sub.get("sold_note") or "").strip()[:1000],
         "ran": bool(holdings),
         "calibration_multiplier": pm_mult,
+        # THREE-QUESTIONS rotation calls (W4 B1). Normalised + defensively coerced; missing → [].
+        # The judgment book turns each not_holding_should entry into a shadow entry + 21d falsifier,
+        # so a defensive rotation the PM NAMES but doesn't trade is still Brier-graded.
+        "own_more": _norm_calls(sub.get("own_more")),
+        "own_less": _norm_calls(sub.get("own_less")),
+        "not_holding_should": _norm_calls(sub.get("not_holding_should")),
     }
+
+
+def _norm_calls(rows) -> list[dict]:
+    """Normalise a three-questions field to a list of {ticker, why_now, probability, check_by}.
+    Defensive: accepts a list of dicts (or bare ticker strings); drops rows with no ticker; coerces
+    probability into [0,1] (None if absent/bad). Never raises → [] on any failure."""
+    out: list[dict] = []
+    try:
+        for r in (rows or []):
+            if isinstance(r, str):
+                r = {"ticker": r}
+            if not isinstance(r, dict):
+                continue
+            t = str(r.get("ticker") or "").upper().strip()
+            if not t:
+                continue
+            try:
+                p = float(r.get("probability")) if r.get("probability") is not None else None
+                if p is not None:
+                    p = max(0.0, min(1.0, p))
+            except (TypeError, ValueError):
+                p = None
+            out.append({
+                "ticker": t,
+                "why_now": str(r.get("why_now") or r.get("why") or "")[:300],
+                "probability": p,
+                "check_by": str(r.get("check_by") or "")[:10] or None,
+            })
+    except Exception:  # noqa: BLE001
+        return []
+    return out[:20]
 
 
 def _run_coro(coro):

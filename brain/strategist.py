@@ -65,6 +65,18 @@ def _strategist_input(regime: dict | None, asof: str) -> dict:
     reg = {k: regime.get(k) for k in
            ("quad", "quad_name", "growth_score", "inflation_score", "liquidity_overlay",
             "cycle_tag", "sector_rs_top")}
+    # W4 3a — upgrade the confidence-blind slice to the full regime_frame read (confidence /
+    # transition_state / contradicting / flip_margin). Best-effort overlay: a missing/stale frame
+    # leaves reg untouched (the 3-field slice), never inflating the read (the master invariant).
+    try:
+        from brain import regime_frame as _rf
+        fr = _rf.frame("us") or {}
+        for k in ("confidence", "transition_state", "contradicting", "flip_margin",
+                  "flag_confidence_decay"):
+            if fr.get(k) is not None:
+                reg[k] = fr[k]
+    except Exception:  # noqa: BLE001 — degrade to the 3-field slice
+        pass
 
     # basket_flow[] — the PRIMARY confirmed/emerging stage ranking
     flow_raw = _load("site/basketdata/flow.json") or {}

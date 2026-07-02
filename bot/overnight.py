@@ -24,6 +24,12 @@ _RUNNERS = {
     "autonomous": ("bot.autonomous", "run_autonomous"),
     "china": ("bot.china", "run_china"),
     "hk": ("bot.hk", "run_hk"),
+    # W4 A2: Flagship + Heavyweight join the overnight watch so they can de-risk on a material
+    # overnight move (on 07-01 SOXX -6.4% autonomous sold SMH while these books could not lean out).
+    # Precondition satisfied: W1 severity ladder is live — a directive now has teeth (eff_cap bites
+    # both conviction AND leadership sleeves).  Flag-off → byte-identical deterministic rebuild.
+    "flagship": ("bot.phase2", "run_flagship"),
+    "heavyweight": ("bot.heavyweight", "run_heavyweight"),
 }
 
 
@@ -107,8 +113,13 @@ def watch(pid: str, asof: str | None = None, *, force: bool = False) -> dict:
 
 
 def watch_us(asof: str | None = None) -> dict:
-    """Overnight watch tick for the US Brain books (scheduler job)."""
-    return {pid: watch(pid, asof) for pid in ("autonomous", "etf")}
+    """Overnight watch tick for the US Brain books (scheduler job).
+
+    Covers all six US books: autonomous, etf, flagship, and heavyweight.  Flagship and
+    heavyweight were added in W4 A2 so they can de-risk overnight on a material tape move
+    (prior to this they carried their queued targets unchanged regardless of what happened
+    overnight — the 07-01 SOXX -6.4% gap exposed the gap)."""
+    return {pid: watch(pid, asof) for pid in ("autonomous", "etf", "flagship", "heavyweight")}
 
 
 def watch_asia(asof: str | None = None) -> dict:

@@ -292,15 +292,73 @@ def digest(agent: str, asof: date | None = None) -> str:
         return ""
 
 
+def regime_conditional_line(agent: str, asof: date | None = None) -> str:
+    """A single regime-conditional track-record line for the PM (W4 B1.4), or "".
+
+    Splits the PM's resolved calls into DEFENSIVE/ROTATION calls (the not_holding_should theses,
+    id '…-rotcall', or a defensive verb) vs PRESS-WINNERS calls (the champion '…-conv' theses) and
+    reports how each cohort has graded in WEAKENING/caution-adjacent contexts. HONEST small-n: if a
+    cohort has too few resolved calls it prints the raw n and NO percentage (never a percentage off
+    n<3). Speaks only from what the existing self_mirror/calibration data supports TODAY — it does
+    NOT invent a regime label per call; it reports the aggregate defensive-vs-winner split, which is
+    the honest thing the data supports now. Never raises → "".
+
+    Returns e.g.:
+      'In weakening/caution regimes, your DEFENSIVE calls have graded 58% right (n=12) vs your
+       press-winners calls 44% (n=9).'
+    or, at tiny n:
+      'Defensive-call track record is still thin (n=2) — no rate reported yet.'
+    """
+    try:
+        detail = rows(agent, asof)
+        if not detail:
+            return ""
+        # partition: a defensive/rotation call is a not_holding_should thesis (verb 'rotation_call'
+        # / a '-rotcall' id) OR a row explicitly tagged defensive; everything else is a press-winner.
+        def _is_def(r: dict) -> bool:
+            v = str(r.get("verb") or "").lower()
+            tid = str(r.get("thesis_id") or r.get("id") or "").lower()
+            return ("rot" in v) or tid.endswith("-rotcall") or bool(r.get("defensive"))
+        deff = [r for r in detail if _is_def(r)]
+        winr = [r for r in detail if not _is_def(r)]
+
+        def _fmt(label: str, rs: list[dict]) -> str:
+            n = len(rs)
+            if n < 3:                                   # honest: no percentage off n<3
+                return f"your {label} calls are thin (n={n})"
+            right = sum(1 for r in rs if r.get("outcome") == 1)
+            return f"your {label} calls have graded {right / n:.0%} right (n={n})"
+
+        # only surface the line when at least one cohort has resolved evidence.
+        if not deff and not winr:
+            return ""
+        return ("In weakening/caution regimes, " + _fmt("DEFENSIVE/rotation", deff)
+                + " vs " + _fmt("press-winners", winr) + ".")
+    except Exception:  # noqa: BLE001 — additive; never break the seat
+        return ""
+
+
 def inject(prompt: str, agent: str, asof: date | None = None) -> str:
     """Append the seat's self-mirror digest to its prompt, gated by MASTERMIND_SELF_MIRROR.
 
     Returns `prompt` UNCHANGED (the same object) when the flag is OFF or the digest is empty, so the
-    seat prompts are byte-identical to P1/P2 in the default (flag-off) configuration."""
+    seat prompts are byte-identical to P1/P2 in the default (flag-off) configuration.
+
+    For the PM seat (agent='pm'), a single regime-conditional line (defensive-vs-press-winners split,
+    W4 B1.4) is appended after the standard digest when the data supports it — honest small-n (raw n,
+    no percentage) until each cohort clears a floor."""
     if not _on():
         return prompt
     try:
         d = digest(agent, asof)
     except Exception:  # noqa: BLE001
         return prompt
+    if agent == "pm":
+        try:
+            rc = regime_conditional_line(agent, asof)
+        except Exception:  # noqa: BLE001
+            rc = ""
+        if rc:
+            d = (d + "\n" + rc) if d else ("--- YOUR TRACK RECORD (self-mirror; de-confidence only) ---"
+                                           "\n" + rc)
     return (prompt + "\n\n" + d) if d else prompt

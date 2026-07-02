@@ -248,3 +248,61 @@ cycles:
 # their own merits). Invariant-safe: a MISSING gate_go (legacy artifacts) degrades to today's ingest
 # behaviour — only an explicit False skips. Default true = respect the gate.
 us_standouts_respect_gate_go: true   # (unverified-prior) skip standout buy-board when its own Phase-0 gate says no-go
+
+# ---- defensive candidate generator (portfolio/defensive_candidates.py — W4 A1) ----
+# THE ONE canonical defensive-rotation pool, consumed by THREE seats: the additive PM's champion
+# pool (W4), the contingent DEF_SLEEVE rotation floor (task B2), and the benchmark ledger's
+# regime-conditional basket (W5). One generator so those three never DRIFT (what the PM sees == what
+# the floor buys == what the bogey measures). candidates() = deduped union of:
+#   (a) defensive_playbook.favor  — driver-conditional (reuses defensive_tilt(); NOT forked)
+#   (b) regime_frame.cycles() entry-side — sectors with phaseLabel Bottoming/Prime-entry -> sector ETFs
+#       (freshness-gated by cycles() itself: a stale/absent file -> {} -> this source is empty)
+#   (c) us_standouts bottoming board single names — RESPECTING gate_go (a NO-GO board drops its
+#       single names; the sector-ETF sources a+b are unaffected by the board's gate)
+# WEIGHTS: equal-weight prior, explicitly FROZEN until the predictions ledger resolves >=12 defensive
+# theses (weights() carries the frozen note). No learned weighting in this wave. INVARIANT: every
+# source degrades to [] independently; all sources absent -> [] ('no defensive candidates today', a
+# legal no-op consumers must NOT paper over with a fabricated default basket).
+defensive_candidates:
+  # archetype taxonomy (the DEF_SLEEVE theme_id derives from this); duration is a hedge ONLY in a
+  # growth-scare (see defensive_playbook caveats), ballast_cash is dry powder with a coupon.
+  archetypes: [duration, quality_defensive, ballast_cash, sector_rotation]   # (unverified-prior)
+  # the fresh-entry / bottoming cycle labels that qualify a SECTOR for source (b). Trough->"Bottoming",
+  # Recovery->"Prime entry" are the walk-forward-defensible entry-side labels; late-cycle labels
+  # (Topping/Rolling over/Trending) do NOT qualify.
+  cycle_entry_labels: [Bottoming, "Prime entry"]   # (unverified-prior)
+
+# ---- DETERMINISTIC DEF_SLEEVE rotation floor (portfolio/rotation.py — W4 B2) ----
+# The masterplan's PRE-COMMITTED E1-failure branch: if the armed additive PM (task B1) turns out to
+# ECHO the engine, this deterministic sleeve ships defensive rotation ANYWAY; it is ALSO the rotation
+# FLOOR an armed PM may not undercut (rotation.floor_legs()). It BUYS from portfolio/defensive_
+# candidates.py ONLY (the one canonical pool), equal-weight across its FROZEN weights, tagged
+# theme_id='DEFENSIVE_<archetype>' so W3's cluster pass sees it.
+#
+# SIZING (spec 1):
+#   fragility_signal = clamp( w_dwell·dwell_level + w_conf·(1-confidence)
+#                             + weakening_bump·[transition ∈ weakening_states] , 0, 1 )
+#     dwell_level = {risk_on: 0.0, caution: 0.5, risk_off: 1.0}  (unknown state → 0.0)
+#     confidence  = regime_frame confidence (missing → 1.0 so the (1-conf) term contributes 0)
+#   def_budget = max · fragility_signal      then clamped to the freed leadership de-gross ∩ cash floor
+#
+# BUDGET DISCIPLINE (spec 3 — no double-claim): the sleeve REDEPLOYS the cash the W2 flex + W2/W3 caps
+# already freed FROM leadership; it never levers NEW gross. The binding invariant: total book gross
+# with the sleeve ON <= the UN-FLEXED engine gross (conviction + budget.midpoint) AND cash >= the
+# doctrine cash floor. Encoded in rotation._headroom.
+#
+# THE CONTROL ARM: max 0.0 (DEFAULT) → def_budget 0 → the sleeve is INERT → the book is BYTE-IDENTICAL
+# to today. ARMING (max > 0, hard-capped at armed_ceiling 0.35) is an OPS decision at the coordinated
+# prod restart, NOT a code default. All constants are heuristic priors — re-size with replay data.
+def_sleeve:
+  max:            0.0     # DEF_SLEEVE_MAX — (unverified-prior) 0 = INERT control arm; armed max 0.35
+  armed_ceiling:  0.35    # (unverified-prior) hard clamp on `max` even if over-set (masterplan)
+  w_dwell:        0.5     # (unverified-prior) weight on the dwell-state fragility term
+  w_conf:         0.3     # (unverified-prior) weight on the (1-confidence) term
+  weakening_bump: 0.2     # (unverified-prior) additive bump when transition ∈ weakening_states
+  dwell_levels:           # (unverified-prior) dwell state → fragility level (unknown state → 0.0)
+    risk_on:  0.0
+    caution:  0.5
+    risk_off: 1.0
+  weakening_states: [WEAKENING, ROLLING, DETERIORATING]   # (unverified-prior) mirror budget.transition_mult keys
+  cash_floor:     0.05    # (unverified-prior) mirror of cash.rotation_floor — the sleeve respects it
