@@ -38,13 +38,24 @@ guardrails:
   overextension:
     pct_vs_200d_cap: 40        # >40% above the 200d = extended
     max_weight: 0.08           # extended names capped to 8% of NAV
-  # factor-concentration cap — the COMBINED gross of a correlated leadership cluster is capped, so the
-  # book can't be a single-factor bet wearing many tickers (06-22: SPY/QQQ/SMH/MTUM were all one
-  # growth/semis trade — "7 holdings" that fell together). The excess scales out to cash/defensives.
+  # DEPRECATED-mirror — do NOT edit this block directly.
+  # The authoritative definition lives in config/clusters.yml (cluster id: semis_ai, name:
+  # megacap_growth_semis). This block is kept as a fallback: portfolio/etf_universe._clusters_from_shared_config()
+  # loads clusters.yml first; if that file is absent/unparseable this block is used instead so the
+  # proven G5 brake never weakens during rollout.
+  #
+  # DRIFT-CHECK: the drift-check test (tests/test_etf_guardrails.py test_cluster_drift_check) asserts
+  # that the ETF-universe members (QQQ/XLK/SMH/IGV/MTUM/SIZE) and max_gross here are IDENTICAL to the
+  # semis_ai cluster in clusters.yml.  If they diverge the build fails.
+  # To tune: edit clusters.yml first, then update THIS mirror to match, then re-run the test suite.
+  #
+  # NOTE: clusters.yml semis_ai also lists single-name members (NVDA/AVGO/etc.) that are not in the
+  # ETF universe — those are ignored by G5 (they can't be in the ETF book). The drift-check only
+  # checks that the ETF-universe members from clusters.yml are present here, and max_gross matches.
   factor_clusters:
     - name: megacap_growth_semis
       members: [QQQ, XLK, SMH, IGV, MTUM, SIZE]
-      max_gross: 0.40
+      max_gross: 0.35
 
 # --- accountability ----------------------------------------------------------
 accountability:

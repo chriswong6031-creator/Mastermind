@@ -457,3 +457,292 @@ def summary(asof: str | None = None) -> dict:
         "currency_clean": currency_clean,
         "note": note,
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# W3 B1 — headroom(): the BINDING firm-wide cap (Architecture Stage-6.3)
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# The monitor above is TOOTHLESS by design. `headroom()` is the pure function each US book's finalize
+# calls to learn "how much of this cluster / this name may I STILL hold, given what my PEERS already
+# published?". It reads the OTHER US books' latest.json (flagship's legacy data/portfolio/latest.json +
+# data/portfolios/{autonomous,etf,heavyweight}/latest.json — self_directed excluded until W5 makes it
+# publish; china/hk are non-US, different currency + venue, never firm-aggregated), aggregates PEER
+# exposure by fragility_chain.cluster_id and by name, and returns the remaining weight this book may
+# add for the queried key.
+#
+# THE INVARIANT (v2 Stage-6): headroom only CLAMPS a book's own target DOWN, never raises it.
+#   * peer files ABSENT / unreadable  -> return +inf (no firm-level clamp; per-book caps still bind —
+#     "absent peer data may not un-cap" means WE never raise, and absent data means no firm clamp).
+#   * peer file STALE-BUT-PRESENT     -> used as-is (last-known ≈ fail-closed).
+#   * an UNKNOWN name                 -> its own SINGLETON cluster (cluster_id degrades to 'name:<T>'),
+#     so a firm cluster cap can never spuriously group it; the firm name cap still binds.
+# The firm caps (cluster 0.30 / name 0.10) live in config/clusters.yml (unverified-prior), env-
+# overridable, with in-code fallbacks so a missing file never un-caps.
+
+# US books whose published latest.json is firm-aggregated. self_directed excluded (doesn't publish
+# until W5); china/hk excluded (non-USD, disjoint venue — a CNY A-share never piles into a US name).
+_FIRM_US_BOOKS = ("flagship", "autonomous", "etf", "heavyweight")
+
+
+def caps_enabled() -> bool:
+    """The firm-wide headroom clamp (Stage-6.3) — the ONE definition every US book's finalize reads, so
+    the flag can never drift between books. DEFAULT ON with an env opt-out: MASTERMIND_FIRM_CAPS='0'
+    (or false/no/off) DISABLES it; anything else (unset / '1' / true / …) is ON.
+
+    WHY DEFAULT-ON (against the usual dark-until-armed pattern): the audit VERIFIED four US books
+    independently max-convicting the SAME SMH — the exact firm-concentration failure this clamp exists
+    to stop, live, with nothing trimming the aggregate. A subtract-only firm cap is pure risk reduction
+    (it can only shrink a book toward cash, never lever it up), so shipping it dark would leave the
+    proven breach uncovered for no safety benefit. The clamp is byte-identical no-op on a small book
+    that fits under the firm caps (the calm-tape invariant), so default-on costs nothing when it doesn't
+    bind."""
+    return os.environ.get("MASTERMIND_FIRM_CAPS", "1").strip().lower() not in ("0", "false", "no", "off", "")
+
+
+def _firm_caps() -> dict[str, float]:
+    """The firm-wide cluster / name caps (fraction of a book's NAV). Precedence:
+    env (MASTERMIND_FIRM_CLUSTER_CAP / MASTERMIND_FIRM_NAME_CAP) -> config/clusters.yml
+    (firm_cluster_cap / firm_name_cap) -> in-code fallback (0.30 / 0.10). Never raises; a bad value
+    degrades to the fallback (an over-permissive env can never un-cap below the fallback? — no: env is
+    honoured as-is for tuning, but a non-positive/garbage value falls back). All (unverified-prior)."""
+    cluster_cap, name_cap = 0.30, 0.10
+    try:
+        from portfolio import cluster_config
+        spec = cluster_config.load()
+        v = spec.get("firm_cluster_cap")
+        if isinstance(v, (int, float)) and v > 0:
+            cluster_cap = float(v)
+        v = spec.get("firm_name_cap")
+        if isinstance(v, (int, float)) and v > 0:
+            name_cap = float(v)
+    except Exception:  # noqa: BLE001 — no reader / bad file → in-code fallbacks (never un-cap)
+        pass
+    cluster_cap = _env_float("MASTERMIND_FIRM_CLUSTER_CAP", cluster_cap)
+    name_cap = _env_float("MASTERMIND_FIRM_NAME_CAP", name_cap)
+    return {"cluster_cap": cluster_cap, "name_cap": name_cap}
+
+
+def _cluster_id(ticker: str) -> str:
+    """The single firm-wide cluster identity (fragility_chain.cluster_id — the ONLY identity, never a
+    second definition). Degrades to the ticker's own singleton ('name:<T>') when the resolver is absent
+    so a firm cluster cap can never spuriously group an unknown name. Never raises."""
+    try:
+        from portfolio import fragility_chain
+        return str(fragility_chain.cluster_id(ticker))
+    except Exception:  # noqa: BLE001 — resolver absent → singleton identity (degrade-safe)
+        t = str(ticker or "").upper().strip()
+        return f"name:{t}" if t else "name:?"
+
+
+def _peer_exposure(exclude_book: str) -> dict | None:
+    """Aggregate the OTHER US books' published exposure, by cluster and by name.
+
+    Returns ``{"by_cluster": {cid: weight}, "by_name": {TICKER: weight}, "n_peers": int}`` where each
+    weight is the SUM across peer books of that book's weight in the key — this is intentionally the
+    additive firm contribution (four books each at 0.08 in SMH ⇒ 0.32 firm-cluster weight), so a firm
+    cap of 0.30 binds. Returns None when NO peer file could be read at all (the caller then returns
+    +inf — absent peer data must not clamp). A book that publishes an empty/corrupt file is simply
+    skipped; the firm view is built from whatever peers DID publish (never raises)."""
+    by_cluster: dict[str, float] = {}
+    by_name: dict[str, float] = {}
+    n_peers = 0
+    any_readable = False
+    for pid in _FIRM_US_BOOKS:
+        if pid == exclude_book:
+            continue
+        # _load_book returns None for a missing file, an empty book, OR a corrupt file (it swallows the
+        # JSON error). We distinguish "file present but unreadable/empty" (skip, but the firm view is
+        # still valid from other peers) from "no peer files at all" (return None → +inf) by probing the
+        # path directly: a present-but-unloadable file still counts as "we looked and the firm has data".
+        try:
+            path = _data_dir(pid) / "latest.json"
+            present = path.exists()
+        except Exception:  # noqa: BLE001
+            present = False
+        book = _load_book({"id": pid})
+        if book is None:
+            if present:
+                # a peer published SOMETHING (even if empty/corrupt) — the firm view is real, this peer
+                # just contributes nothing. Does NOT force the +inf no-clamp branch.
+                any_readable = True
+            continue
+        any_readable = True
+        n_peers += 1
+        for tk, w in book["holdings"].items():
+            try:
+                wv = float(w)
+            except (TypeError, ValueError):
+                continue
+            if wv <= 0:
+                continue
+            by_name[tk] = by_name.get(tk, 0.0) + wv
+            by_cluster[_cluster_id(tk)] = by_cluster.get(_cluster_id(tk), 0.0) + wv
+    if not any_readable:
+        return None                       # no peer file exists at all → caller returns +inf (no clamp)
+    return {"by_cluster": by_cluster, "by_name": by_name, "n_peers": n_peers}
+
+
+def headroom(cluster_or_ticker: str, book_id: str, own_weight: float | None = None) -> float:
+    """How much weight ``book_id`` may STILL hold for a cluster id OR a single ticker, given its PEERS'
+    published exposure. Architecture Stage-6.3, the binding firm-wide cap. PURE / NEVER raises.
+
+    ``cluster_or_ticker`` — pass either a cluster id (e.g. ``'semis_ai'`` / ``'sector:...'`` / ``'name:NVDA'``)
+        OR a raw ticker (e.g. ``'NVDA'``). A raw ticker is resolved to BOTH its cluster identity and its
+        name key, and the returned headroom is the TIGHTER of the two firm caps (the name cap and the
+        cluster cap must BOTH be satisfiable). A value that already looks like a cluster id (contains
+        ``':'`` or matches a known explicit cluster) is treated as a cluster key only.
+    ``book_id``     — the requesting book (its own published exposure is NOT counted; only peers).
+    ``own_weight``  — advisory only; unused in the headroom math (headroom is peer-driven), accepted so
+        callers can pass the target weight for symmetry/logging. Kept for API stability.
+
+    Returns the MAX fraction of NAV this book may hold for the key = firm_cap − peer_weight, floored at
+    0.0. Returns ``float('inf')`` (NO clamp) when no peer file is readable at all — the invariant's
+    'absent peer data may not un-cap' means we NEVER raise; absent data simply removes the firm clamp
+    and leaves the per-book caps as the only binding limit."""
+    peers = _peer_exposure(str(book_id or ""))
+    if peers is None:
+        return float("inf")               # no peer data → no firm clamp (never un-caps; per-book caps bind)
+    caps = _firm_caps()
+
+    key = str(cluster_or_ticker or "").strip()
+    if not key:
+        return float("inf")
+
+    # Decide whether the key is a cluster id or a raw ticker. A cluster id either carries the ':' prefix
+    # convention (sector:/name:) or is a known explicit cluster from clusters.yml. Everything else is a
+    # raw ticker → bind on BOTH its name cap and its (resolved) cluster cap, whichever is tighter.
+    is_cluster_key = ":" in key
+    if not is_cluster_key:
+        try:
+            from portfolio import fragility_chain
+            if fragility_chain.cluster_cap(key) is not None:   # an explicit clusters.yml id
+                is_cluster_key = True
+        except Exception:  # noqa: BLE001
+            is_cluster_key = False
+
+    if is_cluster_key:
+        peer_w = float(peers["by_cluster"].get(key, 0.0))
+        return max(0.0, caps["cluster_cap"] - peer_w)
+
+    # raw ticker → tighter of (firm name cap − peer name weight) and (firm cluster cap − peer cluster weight)
+    tk = key.upper()
+    cid = _cluster_id(tk)
+    name_room = caps["name_cap"] - float(peers["by_name"].get(tk, 0.0))
+    cluster_room = caps["cluster_cap"] - float(peers["by_cluster"].get(cid, 0.0))
+    return max(0.0, min(name_room, cluster_room))
+
+
+def clamp_book(positions: Any, book_id: str) -> dict:
+    """Clamp a finalized US book's target weights DOWN to firm headroom (subtract-only). PURE helper the
+    four US books' finalize paths call; NEVER raises, NEVER increases a weight, freed weight → cash.
+
+    ``positions`` — a list of ``{ticker, weight, ...}`` rows OR a ``{ticker: weight}`` mapping (both
+        the sleeve-book shape and the Brain target shape). Returned in the SAME shape.
+    ``book_id``   — the requesting book (excluded from the peer aggregation).
+
+    Algorithm (deterministic, order-independent of book rows):
+      1. NAME pass — each ticker clamped to its firm name headroom (peer name weight only).
+      2. CLUSTER pass — aggregate the (name-clamped) weights by cluster_id; any cluster whose
+         (this-book + peer) firm weight exceeds the firm cluster cap is scaled DOWN pro-rata across its
+         members so this book's contribution fits the remaining cluster headroom.
+    Both passes use PEER exposure (this book's own rows never inflate its own headroom). When no peer
+    file is readable, every headroom is +inf → this is a byte-identical no-op (the calm-tape invariant).
+
+    Returns ``{"positions": <same shape>, "clamped": [{key, kind, from, to, freed}], "freed": float,
+    "bound": bool}``. ``bound`` is True iff any weight was actually reduced (the loud-log trigger)."""
+    # ---- coerce to a {ticker: weight} working map, remembering the input shape ----
+    as_mapping = isinstance(positions, dict)
+    work: dict[str, float] = {}
+    rows: list[dict] = []
+    if as_mapping:
+        for tk, w in positions.items():
+            t = str(tk or "").upper().strip()
+            if not t:
+                continue
+            try:
+                wv = float(w)
+            except (TypeError, ValueError):
+                continue
+            work[t] = work.get(t, 0.0) + wv
+    else:
+        for r in (positions or []):
+            if not isinstance(r, dict):
+                continue
+            t = str(r.get("ticker") or "").upper().strip()
+            if not t:
+                continue
+            try:
+                wv = float(r.get("weight"))
+            except (TypeError, ValueError):
+                continue
+            work[t] = work.get(t, 0.0) + wv
+            rows.append(r)
+
+    if not work:
+        return {"positions": positions, "clamped": [], "freed": 0.0, "bound": False}
+
+    peers = _peer_exposure(str(book_id or ""))
+    if peers is None:                     # no peer data → no clamp (never un-caps; byte-identical no-op)
+        return {"positions": positions, "clamped": [], "freed": 0.0, "bound": False}
+    caps = _firm_caps()
+    clamped: list[dict] = []
+    freed = 0.0
+
+    # ---- pass 1: firm NAME cap ----
+    for tk in list(work.keys()):
+        w = work[tk]
+        room = max(0.0, caps["name_cap"] - float(peers["by_name"].get(tk, 0.0)))
+        if w > room + 1e-12:
+            clamped.append({"key": tk, "kind": "name", "from": round(w, 4),
+                            "to": round(room, 4), "freed": round(w - room, 4)})
+            freed += w - room
+            work[tk] = room
+
+    # ---- pass 2: firm CLUSTER cap (pro-rata scale-down of this book's contribution) ----
+    by_cluster: dict[str, float] = {}
+    members: dict[str, list[str]] = {}
+    for tk, w in work.items():
+        cid = _cluster_id(tk)
+        by_cluster[cid] = by_cluster.get(cid, 0.0) + w
+        members.setdefault(cid, []).append(tk)
+    for cid, own_w in by_cluster.items():
+        peer_w = float(peers["by_cluster"].get(cid, 0.0))
+        room = max(0.0, caps["cluster_cap"] - peer_w)     # weight THIS book may still hold in the cluster
+        if own_w > room + 1e-12 and own_w > 0:
+            scale = room / own_w
+            clamped.append({"key": cid, "kind": "cluster", "from": round(own_w, 4),
+                            "to": round(room, 4), "freed": round(own_w - room, 4)})
+            freed += own_w - room
+            for tk in members[cid]:
+                work[tk] = work[tk] * scale
+
+    if not clamped:
+        return {"positions": positions, "clamped": [], "freed": 0.0, "bound": False}
+
+    # ---- write the clamped weights back in the original shape ----
+    if as_mapping:
+        out_map = {tk: round(w, 4) for tk, w in work.items()}
+        return {"positions": out_map, "clamped": clamped, "freed": round(freed, 4), "bound": True}
+    # A ticker can (rarely) appear in TWO rows (e.g. a name held in both the leadership and conviction
+    # sleeves). `work[t]` is the CLAMPED total for the ticker; distribute it back across that ticker's
+    # rows PRO-RATA by their original weight so the sum matches (never write the full total to each row).
+    orig_by_tk: dict[str, float] = {}
+    for r in rows:
+        t = str(r.get("ticker") or "").upper().strip()
+        try:
+            orig_by_tk[t] = orig_by_tk.get(t, 0.0) + float(r.get("weight"))
+        except (TypeError, ValueError):
+            continue
+    for r in rows:
+        t = str(r.get("ticker") or "").upper().strip()
+        if t not in work:
+            continue
+        orig_total = orig_by_tk.get(t, 0.0)
+        try:
+            row_w = float(r.get("weight"))
+        except (TypeError, ValueError):
+            row_w = 0.0
+        # single-row ticker → the clamped total; duplicated ticker → its pro-rata share of the total.
+        share = (row_w / orig_total) if orig_total > 0 else 0.0
+        r["weight"] = round(work[t] * share if orig_total > 0 else work[t], 4)
+    return {"positions": positions, "clamped": clamped, "freed": round(freed, 4), "bound": True}

@@ -25,12 +25,15 @@ The TEETH (applying the trims, capping gross, blocking adds) live in ``brain/mac
 """
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any
 
 _ROOT = Path(__file__).resolve().parent.parent
 _SPEC_PATH = _ROOT / "config" / "fragility_chains.yml"
+# canonical vendored macro snapshot (same root firm_exposure._sector_of / conviction._load use)
+_STOCKDATA_DIR = _ROOT / "vendor" / "macro" / "site" / "stockdata"
 
 
 # ── in-code DEFAULT — the fallback when the YAML spec is missing/malformed ──────────────────────
@@ -146,6 +149,128 @@ def classify(ticker: str) -> list[dict]:
 def chains_of(ticker: str) -> set[str]:
     """The set of chain ids ``ticker`` belongs to (membership test). Pure; never raises."""
     return {c["chain"] for c in classify(ticker)}
+
+
+# ── W3 A1 — ONE cluster identity (the firebreak that actually binds) ────────────────────────────
+# The 0.25 theme cap keyed on per-instrument theme_id (leadership legs set theme_id=ticker), so a
+# 0.79-0.94-correlated cohort (SMH/XLK/MTUM …) never summed. `cluster_id()` is the single firm-wide
+# resolver the book/firm cluster caps key on instead. Identity is 3-tier and DEGRADES-NEVER-RAISES:
+#   (a) explicit membership in config/clusters.yml            -> the cluster id  (e.g. 'semis_ai')
+#   (b) GICS sector from the vendored stockdata factors.sector -> 'sector:<Name>'
+#   (c) SINGLETON fallback                                     -> 'name:<TICKER>'  (unknown = its own
+#       cluster — caps can never spuriously GROUP it, and it still gets the per-name cap).
+# The clusters.yml read is cached via the shared portfolio.cluster_config reader; the reverse
+# ticker->id index is built once and cached here. A parse error anywhere degrades to {} (everything
+# singleton) — caps still bind per-name, they just stop grouping.
+
+_MEMBER_INDEX: dict[str, str] | None = None   # ticker -> cluster_id (explicit-membership tier)
+_CAP_INDEX: dict[str, float] | None = None    # cluster_id -> per-book max_gross cap
+
+
+def _reset_cluster_cache() -> None:
+    """Drop the cached ticker->cluster index + cap map. Test helper (the stability falsifier resets
+    between the two identical runs); also clears the shared cluster_config cache so a fresh file is
+    re-read. Never raises."""
+    global _MEMBER_INDEX, _CAP_INDEX
+    _MEMBER_INDEX = None
+    _CAP_INDEX = None
+    try:
+        from portfolio import cluster_config
+        cluster_config._clear_cache()
+    except Exception:  # noqa: BLE001 — the reader may be absent in a lean checkout
+        pass
+
+
+def _cluster_indices() -> tuple[dict[str, str], dict[str, float]]:
+    """Build (or return cached) the explicit-membership ticker->cluster_id index and the
+    cluster_id->cap map from config/clusters.yml (via the shared cluster_config reader).
+
+    A ticker listed in two clusters resolves to the FIRST cluster in file order — deterministic and
+    stable absent a config edit (the invariant the stability falsifier asserts). Degrades to empty
+    maps when clusters.yml / PyYAML / the reader is absent (=> every name singleton). Never raises."""
+    global _MEMBER_INDEX, _CAP_INDEX
+    if _MEMBER_INDEX is not None and _CAP_INDEX is not None:
+        return _MEMBER_INDEX, _CAP_INDEX
+    members: dict[str, str] = {}
+    caps: dict[str, float] = {}
+    try:
+        from portfolio import cluster_config
+        for c in cluster_config.clusters():
+            cid = str(c.get("id") or "").strip()
+            if not cid:
+                continue
+            mg = c.get("max_gross")
+            if isinstance(mg, (int, float)) and mg > 0:
+                caps[cid] = float(mg)
+            for m in (c.get("members") or []):
+                t = str(m).upper().strip()
+                if t and t not in members:      # first cluster in file order wins (deterministic)
+                    members[t] = cid
+    except Exception:  # noqa: BLE001 — no reader / bad file → singleton clusters (degrade-safe)
+        members, caps = {}, {}
+    _MEMBER_INDEX, _CAP_INDEX = members, caps
+    return _MEMBER_INDEX, _CAP_INDEX
+
+
+def _sector_from_stockdata(ticker: str) -> str | None:
+    """The GICS sector for a name from the vendored stockdata snapshot (``factors.sector`` first, then
+    the top-level ``sector`` fallback). None when the snapshot is absent / has no sector — the caller
+    then degrades to a singleton. Pure; never raises."""
+    t = (ticker or "").upper().strip()
+    if not t:
+        return None
+    try:
+        p = _STOCKDATA_DIR / f"{t}.json"
+        if not p.exists():
+            return None
+        sd = json.loads(p.read_text())
+        if not isinstance(sd, dict):
+            return None
+        sec = ((sd.get("factors") or {}).get("sector")) or sd.get("sector") or None
+        s = str(sec).strip() if sec else ""
+        return s or None
+    except Exception:  # noqa: BLE001 — corrupt/partial snapshot → no sector (singleton)
+        return None
+
+
+def cluster_id(ticker: str, sector: str | None = None) -> str:
+    """The single firm-wide cluster identity for ``ticker`` (Architecture Stage-6.2 cap key).
+
+    3-tier resolution, degrade-never-raise:
+      (a) explicit config/clusters.yml membership        -> the cluster id (e.g. ``'semis_ai'``)
+      (b) GICS sector — the injected ``sector`` param if given (callers who already loaded stockdata
+          avoid a double read), else ``factors.sector`` from the vendored snapshot -> ``'sector:<Name>'``
+      (c) SINGLETON fallback                             -> ``'name:<TICKER>'``
+
+    An UNKNOWN name (no membership, no sector) degrades to its OWN cluster — caps can never spuriously
+    group it, and the per-name cap still binds. Pure; NEVER raises. The empty/whitespace ticker maps
+    to the stable sentinel ``'name:?'`` so a malformed row still gets a singleton identity."""
+    try:
+        t = str(ticker or "").upper().strip()
+    except Exception:  # noqa: BLE001 — a non-coercible ticker still degrades to a singleton
+        return "name:?"
+    if not t:
+        return "name:?"
+    # (a) explicit membership — the tier that binds the correlated cohort
+    members, _caps = _cluster_indices()
+    cid = members.get(t)
+    if cid:
+        return cid
+    # (b) GICS sector — injected first (no double read), else the vendored snapshot
+    sec = sector if (isinstance(sector, str) and sector.strip()) else _sector_from_stockdata(t)
+    if sec and sec.strip():
+        return f"sector:{sec.strip()}"
+    # (c) singleton — unknown name is its own cluster (never grouped, never un-capped)
+    return f"name:{t}"
+
+
+def cluster_cap(cluster_id_: str, default: float | None = None) -> float | None:
+    """The per-book ``max_gross`` cap for an explicit cluster id from config/clusters.yml, or
+    ``default`` for a sector:/name: singleton (or an unknown id). Lets ``enforce_book_caps`` pass this
+    as its ``cluster_cap_fn`` so the authoritative caps live in ONE file. Pure; never raises."""
+    _members, caps = _cluster_indices()
+    v = caps.get(str(cluster_id_ or "").strip())
+    return float(v) if isinstance(v, (int, float)) and v > 0 else default
 
 
 def _book_weights(book: Any) -> dict[str, float]:

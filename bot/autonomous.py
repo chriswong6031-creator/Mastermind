@@ -129,6 +129,22 @@ def run_autonomous(asof: str | None = None, *, force: bool = False, armed: bool 
                     pass
         except Exception as e:                           # noqa: BLE001 — never block the book
             out["safety_error"] = repr(e)[:200]
+        # W3 B1 — FIRM-WIDE headroom clamp (Stage 6.3). Clamp this book's target DOWN so the firm-wide
+        # cluster/name caps hold across all US books (the audit: four books maxed the SAME SMH). Runs
+        # after the safety de-gross, before settle → the freed weight simply stays cash. Subtract-only;
+        # never raises a weight; byte-identical no-op when no peer file is readable. Flag-gated
+        # (MASTERMIND_FIRM_CAPS, default ON). Sequential: US Brain clamps against Flagship's freshly
+        # published book (Flagship builds first by design). Best-effort; never blocks the book.
+        try:
+            from portfolio import firm_exposure as _firm
+            if _firm.caps_enabled():
+                _fc = _firm.clamp_book(priceable, PORTFOLIO_ID)
+                priceable = _fc["positions"]
+                if _fc.get("bound"):
+                    out["firm_clamp"] = {"book": PORTFOLIO_ID, "freed": _fc["freed"],
+                                         "clamped": _fc["clamped"]}
+        except Exception as e:                           # noqa: BLE001 — a firm cap must never block the book
+            out["firm_clamp_error"] = repr(e)[:200]
         res = _settle.execute_or_queue(PORTFOLIO_ID, priceable, prices, asof)
         executed = res.get("executed") or []
         queued = bool(res.get("queued"))

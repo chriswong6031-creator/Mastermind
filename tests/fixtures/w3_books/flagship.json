@@ -1,0 +1,11 @@
+{
+ "portfolio_id": "flagship",
+ "positions": [
+  {
+   "ticker": "NVDA",
+   "theme_id": "ai_semiconductors",
+   "sleeve": "conviction",
+   "weight": 0.0
+  }
+ ]
+}

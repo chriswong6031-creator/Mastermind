@@ -31,9 +31,37 @@ sleeves:
   leadership_equal_weight: true          # rank-IC ~ 0; never apply Kelly to this sleeve
 
 caps:
-  theme_cap_book: 0.25                   # FIREBREAK A2.1 — cross-sleeve, the NEW glue
+  theme_cap_book: 0.25                   # LEGACY — theme_id cap is DISPLAY-ONLY now (see below), retained for artifact compat
   name_cap: 0.08                         # keep OUR tighter value (vs doctrine 0.10-0.15)
   leadership_pos_cap_of_sleeve: 0.30     # narrative_rotation.POS_CAP, per-theme of the sleeve
+  # ---- W3 A2: name-cap exemption REPLACED by a broad-index allowlist ----
+  # The old sleeves.py exemption ('if sleeve==leadership: continue') let SMH/XLK/MTUM sit UNCAPPED —
+  # SMH held at 12.5% was the single largest risk line. It DIES. Now EVERY position — every sleeve,
+  # single names, sector/thematic ETFs (SMH included: DECIDED, architectural over surgical) — is bound
+  # by name_cap 0.08, EXCEPT the broad, internally-diversified market indices below, which are capped
+  # at the looser broad_index_cap (holding 15% of VTI is not a concentrated bet). No SMH carve-out.
+  broad_index_allowlist: [SPY, QQQ, VTI, RSP, IWM, DIA]   # (unverified-prior) internally-diversified market indices
+  broad_index_cap: 0.15                  # (unverified-prior) name cap for the broad-index allowlist only
+  # ---- W3 A2: CLUSTER book cap (Stage 6.2 layer) — the fix for theme-cap-defeated-by-per-name-theme-id ----
+  # The 0.25 theme_id cap was structurally defeated: leadership legs set theme_id=ticker, so the
+  # 0.79-0.94-correlated tech cohort (SMH/XLK/MTUM + conviction tech) never SUMMED — the live book
+  # carried Information Technology = 42.6% with breaches:[]. The cluster pass aggregates weight by
+  # fragility_chain.cluster_id(ticker) ACROSS BOTH SLEEVES and scales any over-cap cluster DOWN pro-rata
+  # (freed weight -> cash, never redistributed). Per-cluster caps live in config/clusters.yml (A1);
+  # these are the degrade-safe fallbacks used when that file/lookup is absent. A singleton cluster's cap
+  # is the name_cap (a lone name can never 'breach' a cluster cap it already satisfies via the name pass).
+  default_cluster_cap: 0.40              # (unverified-prior) max gross book per correlated cluster
+  cluster_caps:                          # (unverified-prior) per-cluster overrides (clusters.yml is authoritative when present)
+    semis_ai: 0.35                       # the crowded semis/AI cohort — tighter than the default
+  # ---- W3 B1: FIRM-WIDE caps (Stage 6.3 — firm_exposure.headroom / clamp_book) ----
+  # The BINDING firm cap ACROSS all US books (flagship/autonomous/etf/heavyweight): each book's
+  # finalize clamps its own contribution DOWN so the SUMMED firm cluster / name weight fits these caps.
+  # AUTHORITATIVE SOURCE is config/clusters.yml (firm_cluster_cap / firm_name_cap) — firm_exposure reads
+  # THAT file (one definition, no drift), with these values as the documented (unverified-prior) mirror.
+  # Env overrides: MASTERMIND_FIRM_CLUSTER_CAP / MASTERMIND_FIRM_NAME_CAP. The whole clamp is flag-gated
+  # by MASTERMIND_FIRM_CAPS (default ON — the audit proved 4 books independently maxed the same SMH).
+  firm_cluster_cap: 0.30                 # (unverified-prior) combined per-cluster gross across ALL US books (= clusters.yml)
+  firm_name_cap: 0.10                    # (unverified-prior) any single name across ALL US books (= clusters.yml)
 
 # ---- W2.2 GRADED EXTENSION SCHEDULE (portfolio/conviction.py entry brake) ----
 # A NEW conviction add is SIZE-BRAKED (never flipped, never exited) by how far it has run above its

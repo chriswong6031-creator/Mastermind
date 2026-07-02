@@ -745,6 +745,29 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
     capped = enforce_book_caps(book)
     book = capped["positions"]
 
+    # ———— W3 B1: FIRM-WIDE headroom clamp (architecture Stage 6.3 — the BINDING firm cap) ————
+    # After the per-book cluster/name firebreaks, clamp THIS book's contribution DOWN so the FIRM-WIDE
+    # cluster (0.30) / name (0.10) caps hold across all US books. The audit proved four US books
+    # independently max-convicted the SAME SMH with nothing trimming the aggregate — this is the fix.
+    # Subtract-only: freed weight falls to CASH (the cash sizing below reads the reduced gross); never
+    # raises a weight; a byte-identical no-op when no peer file is readable or the book already fits.
+    # SEQUENTIAL FAIRNESS (BY DESIGN): Flagship builds FIRST in the 22:40 order, so it claims firm
+    # headroom first — it sees the OTHER books' prior-published exposure and clamps against it; the
+    # later books then clamp against Flagship's freshly-published book. Flag-gated (MASTERMIND_FIRM_CAPS,
+    # default ON — see firm_exposure.caps_enabled for why default-on). Best-effort; never breaks the build.
+    try:
+        from portfolio import firm_exposure as _firm
+        if _firm.caps_enabled():
+            _fc = _firm.clamp_book(book, "flagship")
+            book = _fc["positions"]
+            if _fc.get("bound"):
+                _rl_log(_run_id, "book_step", "FIRM CAP clamp",
+                        f"freed={_fc['freed']} clamped={_fc['clamped']}",
+                        firm_clamp={"book": "flagship", "freed": _fc["freed"],
+                                    "clamped": _fc["clamped"]})
+    except Exception as _e:  # noqa: BLE001 — a firm cap must never break the build
+        _rl_log(_run_id, "decision", "firm cap clamp error", f"{_e!r}"[:160])
+
     # ———— W2 GUARD-RAIL: offensive-gross floor tripwire (architecture Stage 6.5) ————
     # After ALL brakes (leadership caps + cross-sleeve firebreaks), the offensive (leadership) gross must
     # stay >= floor_frac · lead_budget unless a parabolic hard veto fired — otherwise the compounding-

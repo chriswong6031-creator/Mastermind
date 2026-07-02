@@ -1,0 +1,200 @@
+# Shared cluster config — the FIRM-WIDE single definition of correlation-based position caps.
+#
+# WHY THIS FILE EXISTS (W3 A1). The 0.25 cross-sleeve theme cap keyed on per-instrument `theme_id`,
+# and leadership legs set theme_id=ticker (SMH / XLK / MTUM each became their own "theme"). So a
+# 0.79-0.94-correlated tech cohort never SUMMED: the live book carried Information Technology = 42.6%
+# across 10 names with safety.json breaches:[] — nothing fired. This file is the canonical
+# ticker->cluster identity map that portfolio/fragility_chain.cluster_id() resolves against, so
+# correlated names collapse to ONE identity and the book/firm cluster caps actually bind.
+#
+# Consumed by (in priority order):
+#   1. portfolio/fragility_chain.cluster_id()  — the 3-tier identity resolver (A1)
+#   2. portfolio/sleeves.enforce_book_caps      — Stage-6.2 book cluster pass (A2)
+#   3. bot/etf.py G5 guardrail                  — ETF factor-concentration cap (reads this file first;
+#                                                 falls back to etf_strategy.yml values when this file
+#                                                 is absent/unparseable so the PROVEN brake never
+#                                                 weakens during rollout) (A4)
+#   4. portfolio/firm_exposure.headroom()       — Stage-6.3 firm cluster headroom (A5)
+#
+# INVARIANT (v2, Architecture Stage-6): missing/stale file → consumers fall back to their own in-code
+# defaults (which mirror this file). A bad edit can never un-cap, raise authority, or flip direction.
+# An UNKNOWN name degrades to a SINGLETON cluster (its own ticker) — caps can never spuriously GROUP
+# it, and it still gets the per-name cap.
+#
+# SEEDED FROM BOTH existing sources so nothing is lost:
+#   * config/etf_strategy.yml  factor_clusters.megacap_growth_semis [QQQ,XLK,SMH,IGV,MTUM,SIZE]
+#     (the ETF book's proven G5 max_gross-0.40 block) — every one of those 6 ETFs is a member of
+#     `semis_ai` below, so the A4 drift-check (etf_strategy members ⊆ clusters.yml semis_ai, same
+#     max_gross) passes.
+#   * config/fragility_chains.yml  chain tickers + proxies (ai_buildout / long_duration_tech /
+#     rate_sensitive / commodity_inflation) — folded into the clusters below.
+#
+# ADDING/EDITING A CLUSTER: edit here first, then update the etf_strategy.yml deprecated-mirror to
+# match, then re-run the drift-check test. All thresholds are (unverified-prior) starting points from
+# the masterplan; re-size them with the W7 ablation battery.
+
+# ---------------------------------------------------------------------------
+# defaults (task A1) + book/firm cap knobs (consumed by A2/A5; harmless here)
+# ---------------------------------------------------------------------------
+defaults:
+  cluster_cap_book: 0.40        # (unverified-prior) default per-cluster gross cap within a single book
+  semis_cluster_cap: 0.35       # (unverified-prior) tighter cap for the semis/AI cohort specifically
+
+# firm-level cluster caps (Stage 6.3 — firm_exposure.headroom, A5)
+firm_cluster_cap: 0.30          # (unverified-prior) combined across ALL US books
+firm_name_cap: 0.10             # (unverified-prior) any single name across ALL US books
+
+# ---------------------------------------------------------------------------
+# cluster definitions (list shape — portfolio/cluster_config.clusters() normaliser reads this)
+# ---------------------------------------------------------------------------
+# Each cluster:
+#   id         — stable key (the cluster_id string cluster_id() returns; referenced by code + tests)
+#   name       — human label (also the 'name' field emitted in breach logs)
+#   members    — upper-cased tickers that ARE this correlated factor cluster
+#   max_gross  — combined per-book gross cap (= max_gross_book); also the ETF G5 level for semis_ai
+#   kind       — 'semis_ai' selects the tighter semis cap in enforce_book_caps; else 'default'
+#   note       — why this cluster exists / provenance
+
+clusters:
+
+  # ── semis_ai — the crowded, 0.79-0.94-correlated semis / AI-compute / growth-factor cohort ──────
+  # THE breach cohort. Membership = UNION of the two sources + the correlation evidence, deduped.
+  # Each inclusion annotated inline with its source so a reviewer can audit placement.
+  - id: semis_ai
+    name: megacap_growth_semis
+    max_gross: 0.35             # (unverified-prior) = defaults.semis_cluster_cap (tighter than default)
+    kind: semis_ai
+    note: >
+      Semis + AI-compute + megacap-growth-factor cohort (0.79-0.94 60d corr) — the identity the
+      per-name theme_id defeated (SMH/XLK/MTUM never summed). The 6 ETF members are exactly
+      etf_strategy.yml megacap_growth_semis (A4 drift-check subset); the single names extend the same
+      correlated block firm-wide.
+    members:
+      # --- growth/semis factor ETFs — etf_strategy megacap_growth_semis (A4 drift-check subset) ---
+      - QQQ        # nasdaq-100 — etf_strategy megacap_growth_semis (semis/megacap-tech heavy)
+      - XLK        # tech-sector ETF — etf_strategy megacap_growth_semis + ai_buildout proxy
+      - SMH        # semis ETF — etf_strategy megacap_growth_semis + ai_buildout proxy (THE breach line)
+      - IGV        # software ETF — etf_strategy megacap_growth_semis + ai_buildout proxy
+      - MTUM       # momentum factor — etf_strategy megacap_growth_semis (momentum ≈ tech-led here)
+      - SIZE       # size factor — etf_strategy megacap_growth_semis (co-moves with the growth block)
+      # --- extra semis ETF proxy (ai_buildout.proxies) ---
+      - SOXX       # semis ETF — ai_buildout proxy; ~1.0 corr with SMH
+      # --- AI-compute / semis single names (ai_buildout.tickers, semis subset) ---
+      - NVDA       # ai_buildout downstream — the compute core
+      - AVGO       # ai_buildout downstream — networking/compute
+      - AMD        # ai_buildout downstream — compute
+      - TSM        # ai_buildout downstream — foundry
+      - ANET       # ai_buildout downstream — AI networking
+      # --- memory leading edge (ai_buildout.leading) ---
+      - MU         # ai_buildout LEADING edge — memory/DRAM
+      - STX        # ai_buildout LEADING edge — storage
+      - WDC        # ai_buildout LEADING edge — storage
+      - SMCI       # ai_buildout LEADING edge — AI server / thermal (memory-adjacent blow-off name)
+      # --- semicap equipment (task roster; 0.79-0.94 corr block) ---
+      - AMAT       # semicap equipment — task roster; co-moves with SMH/SOXX
+      - LRCX       # semicap equipment — task roster
+      - KLAC       # semicap equipment — task roster
+      - MRVL       # semis (custom silicon) — task roster
+
+  # ── megacap_platform — hyperscaler / megacap-platform capex funders (ai_buildout hyperscaler node)
+  # DECIDED: split OUT of semis_ai. These fund the capex; their 60d corr to SMH is real but below the
+  # 0.79 semis-block floor. Their own cluster binds them (they ARE mutually correlated platforms)
+  # without inflating the semis breach.
+  - id: megacap_platform
+    name: megacap_platform
+    max_gross: 0.40             # (unverified-prior) = defaults.cluster_cap_book
+    kind: default
+    note: >
+      Hyperscaler / megacap-platform capex funders (ai_buildout hyperscaler node). Correlated with the
+      semis block but a distinct identity — kept separate so semis_ai stays the tight cohort.
+    members:
+      - MSFT       # ai_buildout hyperscaler
+      - GOOGL      # ai_buildout hyperscaler
+      - GOOG       # ai_buildout hyperscaler (share class of GOOGL)
+      - META       # ai_buildout hyperscaler
+      - AMZN       # ai_buildout hyperscaler
+      - ORCL       # ai_buildout — cloud/capex
+      - DELL       # ai_buildout — server/AI hardware channel
+
+  # ── ai_power — industrial-AI power / grid / cooling (ai_buildout tail node) ─────────────────────
+  - id: ai_power
+    name: ai_power
+    max_gross: 0.40             # (unverified-prior)
+    kind: default
+    note: >
+      Industrial-AI power/grid/cooling — the ai_buildout tail node (last to feel it, most extended
+      late). From config/fragility_chains ai_buildout.tickers.
+    members:
+      - VRT        # cooling/power infra
+      - ETN        # electrical
+      - GEV        # grid/power
+      - PWR        # power construction
+      - CEG        # power generation
+      - VST        # power generation
+      - NBIS        # neocloud/power-adjacent
+      - APH        # connectors (AI infra)
+
+  # ── long_duration_tech — high-multiple / long-duration software (fragility_chains chain) ─────────
+  - id: long_duration_tech
+    name: long_duration_tech
+    max_gross: 0.40             # (unverified-prior)
+    kind: default
+    note: >
+      High-multiple / long-duration software (rate- and liquidity-sensitive growth). From
+      config/fragility_chains long_duration_tech.tickers + proxies (ARKK). Distinct from semis_ai —
+      the driver is real yields / multiple, not the semis cycle.
+    members:
+      - CRM
+      - NOW
+      - SNOW
+      - CRWD
+      - PLTR
+      - NET
+      - DDOG
+      - SHOP
+      - PANW
+      - ARKK        # long_duration_tech proxy (leading edge)
+
+  # ── rate_sensitive — banks / REITs / utilities (fragility_chains chain) ─────────────────────────
+  - id: rate_sensitive
+    name: rate_sensitive
+    max_gross: 0.40             # (unverified-prior)
+    kind: default
+    note: >
+      Rate-sensitive financials & real assets. From config/fragility_chains rate_sensitive.tickers +
+      proxies (the sign flips with the driver — an identity cluster, not an avoid).
+    members:
+      - JPM
+      - BAC
+      - WFC
+      - C
+      - GS
+      - MS
+      - PLD
+      - AMT
+      - O
+      - SPG
+      - XLF        # proxy
+      - XLRE        # proxy
+      - KRE        # proxy
+
+  # ── commodity_inflation — energy + materials cyclicals (fragility_chains chain) ─────────────────
+  - id: commodity_inflation
+    name: commodity_inflation
+    max_gross: 0.35             # (unverified-prior)
+    kind: default
+    note: >
+      Commodity / inflation cyclicals (energy + materials). From config/fragility_chains
+      commodity_inflation.tickers + proxies.
+    members:
+      - XOM
+      - CVX
+      - COP
+      - SLB
+      - FCX
+      - NUE
+      - CAT
+      - DE
+      - XLE        # proxy
+      - XLB        # proxy
+      - XOP        # proxy

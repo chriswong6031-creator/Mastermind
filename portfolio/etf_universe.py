@@ -121,15 +121,45 @@ DEFENSIVE: frozenset[str] = _build_defensive(GROUPS)
 OFFENSIVE: frozenset[str] = frozenset(t for t in ALL if t not in DEFENSIVE)
 
 
+def _clusters_from_shared_config() -> list[dict]:
+    """Load factor_clusters from the shared config/clusters.yml (A3 single source of truth).
+
+    Returns the normalised list (same shape as _norm_clusters output) when clusters.yml is present
+    and parseable; returns [] when absent/unparseable so the caller falls back to etf_strategy.yml
+    values.  Lazy-import keeps the dependency optional — a missing portfolio.cluster_config never
+    breaks the ETF book."""
+    try:
+        from portfolio import cluster_config  # noqa: PLC0415 — lazy to stay import-order safe
+        etf_cls = cluster_config.etf_clusters()
+        if etf_cls:
+            return _norm_clusters(etf_cls)   # re-normalise for uniform type guarantees
+    except Exception:  # noqa: BLE001 — any failure degrades to fallback; never weakens the brake
+        pass
+    return []
+
+
 def guardrails() -> dict:
     """The hard risk limits from the spec (with in-code fallbacks). Read fresh so an edit retunes
     the next run. Shape: {max_single_weight, min_trade, offensive_cap: {stressed, elevated},
-    overextension: {pct_vs_200d_cap, max_weight}, factor_clusters: [{name, members, max_gross}]}."""
+    overextension: {pct_vs_200d_cap, max_weight}, factor_clusters: [{name, members, max_gross}]}.
+
+    ``factor_clusters`` source priority:
+      1. ``config/clusters.yml`` — the shared firm-wide definition (A3: single source of truth).
+      2. ``config/etf_strategy.yml`` guardrails.factor_clusters — DEPRECATED mirror; used as
+         fallback when clusters.yml is absent/unparseable so the proven G5 brake never weakens
+         during rollout.
+      3. _DEFAULT_FACTOR_CLUSTERS — the in-code fallback when both files are missing/invalid.
+    """
     g = load_spec().get("guardrails") or {}
     oc = g.get("offensive_cap") or {}
     d = _DEFAULT_GUARDRAILS
     overext = _norm_overextension(g.get("overextension"))      # tolerant of its own bad fields
-    clusters = _norm_clusters(g.get("factor_clusters"))
+
+    # Prefer clusters.yml (shared firm-wide config); fall back to etf_strategy.yml then in-code.
+    clusters = _clusters_from_shared_config()
+    if not clusters:
+        clusters = _norm_clusters(g.get("factor_clusters"))
+
     try:
         return {
             "max_single_weight": float(g.get("max_single_weight", d["max_single_weight"])),

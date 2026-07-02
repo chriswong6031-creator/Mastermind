@@ -137,6 +137,27 @@ def run_etf(asof: str | None = None, *, force: bool = False, armed: bool = True,
         target, guardrail_notes = _apply_guardrails(target, prices, risk)
     out["guardrails"] = guardrail_notes
 
+    # 3c. W3 B1 — FIRM-WIDE headroom clamp (Stage 6.3). After the ETF book's own G-cap guardrails,
+    #     clamp its contribution DOWN so the firm-wide cluster/name caps hold across all US books (the
+    #     audit: four books maxed the SAME SMH — this ETF book's semis ETFs are in the same cluster).
+    #     Subtract-only; never raises a weight; byte-identical no-op when no peer file is readable.
+    #     Flag-gated (MASTERMIND_FIRM_CAPS, default ON). Sequential: the ETF book clamps against
+    #     Flagship's freshly published book (Flagship builds first by design). Never blocks the book.
+    if decided:
+        try:
+            from portfolio import firm_exposure as _firm
+            if _firm.caps_enabled():
+                _fc = _firm.clamp_book(target, PORTFOLIO_ID)
+                target = _fc["positions"]
+                if _fc.get("bound"):
+                    guardrail_notes.append(
+                        f"firm cap clamp: freed {_fc['freed']} to cash "
+                        f"({', '.join(c['key'] for c in _fc['clamped'])})")
+                    out["firm_clamp"] = {"book": PORTFOLIO_ID, "freed": _fc["freed"],
+                                         "clamped": _fc["clamped"]}
+        except Exception as e:                           # noqa: BLE001 — a firm cap must never block the book
+            out["firm_clamp_error"] = repr(e)[:200]
+
     # 4. EXECUTE — market-hours-aware. When the US session is OPEN, rebalance to the (guardrailed)
     #    target at the live mark. When CLOSED (the normal post-close run, or any off-hours manual
     #    run), QUEUE the target to settle at the next open — book NO fills now, so the book never

@@ -1,0 +1,35 @@
+{
+ "portfolio_id": "hk",
+ "positions": [
+  {
+   "ticker": "2628.HK",
+   "theme_id": null,
+   "sleeve": "brain",
+   "weight": 0.1234
+  },
+  {
+   "ticker": "0700.HK",
+   "theme_id": null,
+   "sleeve": "brain",
+   "weight": 0.0992
+  },
+  {
+   "ticker": "1398.HK",
+   "theme_id": null,
+   "sleeve": "brain",
+   "weight": 0.0585
+  },
+  {
+   "ticker": "1093.HK",
+   "theme_id": null,
+   "sleeve": "brain",
+   "weight": 0.0537
+  },
+  {
+   "ticker": "3988.HK",
+   "theme_id": null,
+   "sleeve": "brain",
+   "weight": 0.0478
+  }
+ ]
+}

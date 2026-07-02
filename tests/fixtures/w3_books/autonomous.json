@@ -1,0 +1,47 @@
+{
+ "portfolio_id": "autonomous",
+ "positions": [
+  {
+   "ticker": "SMH",
+   "theme_id": null,
+   "sleeve": "brain",
+   "weight": 0.1621
+  },
+  {
+   "ticker": "EME",
+   "theme_id": null,
+   "sleeve": "brain",
+   "weight": 0.0935
+  },
+  {
+   "ticker": "URI",
+   "theme_id": null,
+   "sleeve": "brain",
+   "weight": 0.0852
+  },
+  {
+   "ticker": "APH",
+   "theme_id": null,
+   "sleeve": "brain",
+   "weight": 0.0846
+  },
+  {
+   "ticker": "HWM",
+   "theme_id": null,
+   "sleeve": "brain",
+   "weight": 0.0793
+  },
+  {
+   "ticker": "ANET",
+   "theme_id": null,
+   "sleeve": "brain",
+   "weight": 0.0512
+  },
+  {
+   "ticker": "MCY",
+   "theme_id": null,
+   "sleeve": "brain",
+   "weight": 0.0493
+  }
+ ]
+}

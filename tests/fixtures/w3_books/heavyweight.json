@@ -1,0 +1,53 @@
+{
+ "portfolio_id": "heavyweight",
+ "positions": [
+  {
+   "ticker": "SMH",
+   "theme_id": null,
+   "sleeve": "heavy",
+   "weight": 0.1499
+  },
+  {
+   "ticker": "XLK",
+   "theme_id": null,
+   "sleeve": "heavy",
+   "weight": 0.13
+  },
+  {
+   "ticker": "MSFT",
+   "theme_id": null,
+   "sleeve": "heavy",
+   "weight": 0.1198
+  },
+  {
+   "ticker": "TSM",
+   "theme_id": null,
+   "sleeve": "heavy",
+   "weight": 0.1196
+  },
+  {
+   "ticker": "GOOGL",
+   "theme_id": null,
+   "sleeve": "heavy",
+   "weight": 0.1097
+  },
+  {
+   "ticker": "META",
+   "theme_id": null,
+   "sleeve": "heavy",
+   "weight": 0.0999
+  },
+  {
+   "ticker": "GEV",
+   "theme_id": null,
+   "sleeve": "heavy",
+   "weight": 0.0895
+  },
+  {
+   "ticker": "IWM",
+   "theme_id": null,
+   "sleeve": "heavy",
+   "weight": 0.08
+  }
+ ]
+}

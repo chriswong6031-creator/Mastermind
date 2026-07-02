@@ -20,8 +20,15 @@ from bot import heavyweight as hw
 @pytest.fixture
 def iso(tmp_path, monkeypatch):
     """Isolate all per-id portfolio state (incl. the legacy flagship dir) to a tmp root, so tests
-    never touch the real books. registry.data_dir() derives every path off registry._ROOT."""
+    never touch the real books. registry.data_dir() derives every path off registry._ROOT.
+
+    These integration tests assert the UNIVERSE + SIZING-RAILS weights in isolation; the flagship
+    latest.json they seed is the universe SOURCE, but it is ALSO a firm peer, so the W3 B1 firm-cap
+    clamp would (correctly) trim a 0.50 name to the 0.10 firm name cap and mask the rails behaviour
+    under test. Disable the flag-gated firm clamp here (default-ON in prod); the firm clamp's own
+    wiring is covered by test_run_firm_cap_clamps_below_rails below and by tests/test_firm_exposure.py."""
     monkeypatch.setattr(registry, "_ROOT", tmp_path, raising=False)
+    monkeypatch.setenv("MASTERMIND_FIRM_CAPS", "0")
     return tmp_path
 
 
@@ -137,6 +144,34 @@ def test_run_enforces_universe_and_sizing(iso, monkeypatch):
     latest = json.loads((registry.data_dir("heavyweight") / "latest.json").read_text())
     nvda = next(p for p in latest["positions"] if p["ticker"] == "NVDA")
     assert nvda["weight"] == pytest.approx(0.50, abs=0.02)     # clamped, not 0.70
+
+
+def test_run_firm_cap_clamps_below_rails(iso, monkeypatch):
+    """W3 B1 wiring: with the firm clamp ARMED (default-on in prod), Heavyweight's contribution to a
+    firm name is clamped BELOW its own 5-50% rails. Flagship (a peer) already holds NVDA at 0.06; the
+    firm NAME cap is 0.10, so Heavyweight's NVDA is trimmed to the 0.04 remaining firm headroom even
+    though the concentration rails alone would allow up to 0.50."""
+    monkeypatch.setenv("MASTERMIND_FIRM_CAPS", "1")               # re-arm (iso disables it)
+    prices = {"NVDA": 210.0, "AVGO": 300.0, "SPY": 740.0}
+    monkeypatch.setattr(paper_account, "_current_price", lambda t: prices.get(t))
+    # NVDA is in Flagship's universe AND Flagship holds NVDA at 0.06 (a firm peer weight on the name).
+    fdir = registry.data_dir("flagship")
+    fdir.mkdir(parents=True, exist_ok=True)
+    (fdir / "latest.json").write_text(json.dumps({
+        "as_of": "2026-06-21", "portfolio_id": "flagship",
+        "positions": [{"ticker": "NVDA", "sleeve": "conviction", "weight": 0.06},
+                      {"ticker": "AVGO", "sleeve": "conviction", "weight": 0.02}]}))
+    monkeypatch.setattr(hw, "_run_brain", _fake_brain([
+        {"ticker": "NVDA", "weight": 0.5, "rationale": "press it"},   # rails allow 0.50; firm caps 0.04
+        {"ticker": "AVGO", "weight": 0.3, "rationale": "diversify"}]))
+    out = hw.run_heavyweight(asof="2026-06-21", armed=True)
+    # the firm clamp bound (surfaced on the run output)
+    assert out.get("firm_clamp") and out["firm_clamp"]["freed"] > 0
+    assert any(c["kind"] == "name" and c["key"] == "NVDA" for c in out["firm_clamp"]["clamped"])
+    latest = json.loads((registry.data_dir("heavyweight") / "latest.json").read_text())
+    nvda = next(p for p in latest["positions"] if p["ticker"] == "NVDA")
+    # NVDA firm name room = 0.10 - 0.06 = 0.04; the 0.50 rails allowance is clamped down to ~0.04.
+    assert nvda["weight"] == pytest.approx(0.04, abs=0.01)
 
 
 def test_fail_closed_when_universe_empty(iso, monkeypatch):

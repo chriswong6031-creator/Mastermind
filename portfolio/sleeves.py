@@ -2,8 +2,11 @@
 
 Leadership = engine.narrative_rotation.allocate() AS-IS (equal-weight, mechanical,
 monthly cadence). Conviction = top_picks + stock_score half-Kelly (capped, falsifiable).
-Cash = sized, never residual. The NEW glue is the cross-sleeve BOOK theme cap (0.25)
-and the rotation-capacity floor — neither engine enforces these.
+Cash = sized, never residual. The NEW glue (W3 A2) is the cross-sleeve BOOK cluster cap
+(keyed on real correlation structure via fragility_chain.cluster_id — NOT per-instrument
+theme_id, which was structurally defeated) + a name cap that binds EVERY sleeve (the
+leadership exemption is dead) with a broad-index allowlist carve-out — neither engine
+enforces these.
 """
 from __future__ import annotations
 
@@ -247,39 +250,156 @@ def offensive_gross_tripwire(legs: list[dict], lead_budget: float,
     }
 
 
-def enforce_book_caps(positions: list[dict]) -> dict:
-    """Apply the firebreaks across BOTH sleeves (subtract-only).
+def _caps_cfg() -> dict:
+    """The ``caps:`` block from doctrine.yml with degrade-safe fallbacks (never raises). Holds the
+    name cap, the broad-index allowlist + its looser cap, and the cluster-cap fallbacks used when
+    config/clusters.yml (A1, authoritative) is absent."""
+    out = {
+        "name_cap": 0.08,
+        "broad_index_allowlist": {"SPY", "QQQ", "VTI", "RSP", "IWM", "DIA"},
+        "broad_index_cap": 0.15,
+        "default_cluster_cap": 0.40,
+        "cluster_caps": {"semis_ai": 0.35},
+    }
+    try:
+        caps = (load_doctrine().get("caps") or {})
+    except Exception:  # noqa: BLE001 — a config failure degrades to the fallback (never breaks a build)
+        caps = {}
+    if isinstance(caps, dict):
+        nc = caps.get("name_cap")
+        if isinstance(nc, (int, float)):
+            out["name_cap"] = float(nc)
+        al = caps.get("broad_index_allowlist")
+        if isinstance(al, (list, tuple)):
+            out["broad_index_allowlist"] = {str(t).upper().strip() for t in al if str(t).strip()}
+        bic = caps.get("broad_index_cap")
+        if isinstance(bic, (int, float)):
+            out["broad_index_cap"] = float(bic)
+        dcc = caps.get("default_cluster_cap")
+        if isinstance(dcc, (int, float)):
+            out["default_cluster_cap"] = float(dcc)
+        cc = caps.get("cluster_caps")
+        if isinstance(cc, dict):
+            out["cluster_caps"] = {str(k): float(v) for k, v in cc.items()
+                                   if isinstance(v, (int, float))}
+    return out
+
+
+def _cluster_cap(cluster_id: str, caps: dict, name_cap: float, cap_fn=None) -> float:
+    """Resolve the max-gross-book cap for a cluster (subtract-only floor at name_cap).
+
+    Precedence: an injected ``cap_fn(cluster_id)`` (DI / A1's clusters.yml lookup) → the doctrine
+    ``cluster_caps`` per-cluster override → the doctrine ``default_cluster_cap``. The result is
+    floored at ``name_cap`` so a SINGLETON cluster (its own ticker, per the invariant for unknown
+    names) can NEVER breach a cluster cap it already satisfies via the name pass — its cluster cap is
+    at least its name cap. Never raises (a bad cap_fn / value degrades to the doctrine default)."""
+    cap = None
+    if cap_fn is not None:
+        try:
+            v = cap_fn(cluster_id)
+            if isinstance(v, (int, float)) and v > 0:
+                cap = float(v)
+        except Exception:  # noqa: BLE001 — a lookup failure degrades to the doctrine default
+            cap = None
+    if cap is None:
+        cc = caps.get("cluster_caps") or {}
+        v = cc.get(cluster_id)
+        cap = float(v) if isinstance(v, (int, float)) and v > 0 else float(caps["default_cluster_cap"])
+    return max(cap, float(name_cap))
+
+
+def enforce_book_caps(positions: list[dict], *, cluster_fn=None, cluster_cap_fn=None) -> dict:
+    """Apply the firebreaks across BOTH sleeves (subtract-only). W3 A2 rebuild.
 
     positions: [{ticker, theme_id, sleeve, weight}]  (weights = fraction of book)
     Returns the capped book + any breaches (which feed detector D6).
+
+    THREE binding layers, in order (each subtract-only; freed weight ALWAYS falls to CASH, never
+    redistributed — doctrine A6):
+
+      1. NAME cap — EVERY position, EVERY sleeve. The old leadership exemption
+         ('if sleeve==leadership: continue') DIES: it let SMH/XLK/MTUM sit uncapped (SMH at 12.5% was
+         the single largest risk line). Now the only carve-out is the BROAD-INDEX ALLOWLIST
+         (SPY/QQQ/VTI/RSP/IWM/DIA) — internally-diversified market indices capped at the looser
+         ``broad_index_cap`` (0.15). SMH is NOT on the allowlist (DECIDED: architectural over surgical —
+         SMH goes to 0.08). breach kind:'name'.
+
+      2. CLUSTER cap (the fix for theme-cap-defeated-by-per-name-theme-id) — aggregate weight by
+         ``cluster_fn(ticker)`` ACROSS BOTH SLEEVES and scale any over-cap cluster DOWN pro-rata across
+         its members. The 0.25 theme_id cap was structurally defeated: leadership legs set
+         theme_id=ticker, so the correlated tech cohort (SMH/XLK/MTUM + conviction tech) NEVER SUMMED —
+         the live book carried IT = 42.6% with breaches:[]. Per-cluster caps come from clusters.yml
+         (A1) when present, else the doctrine fallbacks (default 0.40, semis_ai 0.35). breach
+         kind:'cluster'. An UNKNOWN name degrades to a SINGLETON cluster (its own id) whose cap ≥
+         name_cap → it can never spuriously group with peers and never falsely breach.
+
+      3. theme_id is now DISPLAY-ONLY. WHY the old per-theme_id cap loop was DELETED: it keyed on the
+         per-instrument theme_id, and leadership legs set theme_id=ticker, so three 0.79-0.94-correlated
+         ETFs (SMH/XLK/MTUM) registered as three separate 'themes' that never summed — the cap could
+         not see a correlated cohort and so never fired. Correlation structure lives in the CLUSTER
+         layer now; theme_id is kept (computed/emitted below) only for artifact/UI compatibility.
+
+    cluster_fn : optional ticker->cluster_id callable (DI for tests; also lets this suite pass before
+                 A1's fragility_chain.cluster_id lands). None → lazy fragility_chain.cluster_id, and if
+                 that is absent the name IS ITS OWN cluster (singleton) — degrade-safe, never groups.
+    cluster_cap_fn : optional cluster_id->cap callable (DI / A1's clusters.yml cap lookup). None → the
+                 doctrine cluster_caps override then default_cluster_cap.
     """
-    cfg = load_doctrine()
-    theme_cap = cfg["caps"]["theme_cap_book"]
-    name_cap = cfg["caps"]["name_cap"]
+    caps = _caps_cfg()
+    name_cap = caps["name_cap"]
+    allowlist = caps["broad_index_allowlist"]
+    broad_cap = caps["broad_index_cap"]
 
     breaches = []
-    # single-name cap (ours, tighter) — subtract-only clamp.
-    # Leadership-sleeve holdings are diversified ETFs/baskets, not single-name concentration,
-    # so the name cap applies only to discretionary single names (conviction sleeve).
-    for p in positions:
-        if p.get("sleeve") == "leadership":
-            continue
-        if p["weight"] > name_cap:
-            breaches.append({"code": "D6", "kind": "name", "subject": p["ticker"],
-                             "weight": round(p["weight"], 4), "cap": name_cap})
-            p["weight"] = name_cap
 
-    # cross-sleeve theme cap (the firebreak A2.1)
-    by_theme: dict[str, float] = defaultdict(float)
+    # ── LAYER 1: name cap — EVERY sleeve; broad-index allowlist gets the looser cap ──────────────
     for p in positions:
-        by_theme[p["theme_id"]] += p["weight"]
-    for theme, w in by_theme.items():
-        if w > theme_cap:
-            breaches.append({"code": "D6", "kind": "theme", "subject": theme,
-                             "weight": round(w, 4), "cap": theme_cap})
-            scale = theme_cap / w
+        tkr = str(p.get("ticker") or "").upper().strip()
+        cap = broad_cap if tkr in allowlist else name_cap
+        if p["weight"] > cap:
+            breaches.append({"code": "D6", "kind": "name", "subject": p["ticker"],
+                             "weight": round(p["weight"], 4), "cap": cap})
+            p["weight"] = cap
+
+    # ── LAYER 2: cluster cap — aggregate by cluster_fn ACROSS BOTH SLEEVES, pro-rata scale-down ──
+    # Lazy defaults: fragility_chain.cluster_id / .cluster_cap (task A1 — the authoritative clusters.yml
+    # readers). Import inside the function (house style) so this module never hard-depends on them; if
+    # A1 is absent, a name is its OWN cluster and caps fall back to doctrine.yml. cluster_cap is designed
+    # (by A1) to be passed here as cluster_cap_fn so the caps live in ONE file — clusters.yml wins, and
+    # our doctrine default is only the degrade-safe fallback that A1 returns when a cluster is unmapped.
+    if cluster_fn is None:
+        try:
+            from portfolio import fragility_chain
+            cluster_fn = fragility_chain.cluster_id
+            if cluster_cap_fn is None:
+                cluster_cap_fn = fragility_chain.cluster_cap  # (cluster_id) -> cap | None
+        except Exception:  # noqa: BLE001 — no cluster map yet → singleton clusters (degrade-safe)
+            cluster_fn = None
+
+    def _cid(ticker) -> str:
+        """The cluster id for a ticker; an UNKNOWN name degrades to a SINGLETON (its own id) so caps
+        can never spuriously group it (invariant: missing data coarsens identity, never un-caps)."""
+        t = str(ticker or "").upper().strip()
+        if cluster_fn is None:
+            return t or "?"
+        try:
+            c = cluster_fn(ticker)
+        except Exception:  # noqa: BLE001 — a lookup failure → singleton
+            c = None
+        c = str(c).strip() if c else ""
+        return c or (t or "?")
+
+    by_cluster: dict[str, float] = defaultdict(float)
+    for p in positions:
+        by_cluster[_cid(p.get("ticker"))] += p["weight"]
+    for cid, w in by_cluster.items():
+        cap = _cluster_cap(cid, caps, name_cap, cluster_cap_fn)
+        if w > cap + 1e-12:
+            breaches.append({"code": "D6", "kind": "cluster", "subject": cid,
+                             "weight": round(w, 4), "cap": round(cap, 4)})
+            scale = cap / w
             for p in positions:
-                if p["theme_id"] == theme:
+                if _cid(p.get("ticker")) == cid:
                     p["weight"] *= scale
 
     return {"positions": positions, "breaches": breaches}

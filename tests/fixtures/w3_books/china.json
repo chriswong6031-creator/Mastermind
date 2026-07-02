@@ -1,0 +1,41 @@
+{
+ "portfolio_id": "china",
+ "positions": [
+  {
+   "ticker": "603301.SS",
+   "theme_id": null,
+   "sleeve": "brain",
+   "weight": 0.1265
+  },
+  {
+   "ticker": "300725.SZ",
+   "theme_id": null,
+   "sleeve": "brain",
+   "weight": 0.1014
+  },
+  {
+   "ticker": "603156.SS",
+   "theme_id": null,
+   "sleeve": "brain",
+   "weight": 0.0836
+  },
+  {
+   "ticker": "002020.SZ",
+   "theme_id": null,
+   "sleeve": "brain",
+   "weight": 0.0829
+  },
+  {
+   "ticker": "300308.SZ",
+   "theme_id": null,
+   "sleeve": "brain",
+   "weight": 0.0811
+  },
+  {
+   "ticker": "002415.SZ",
+   "theme_id": null,
+   "sleeve": "brain",
+   "weight": 0.0793
+  }
+ ]
+}

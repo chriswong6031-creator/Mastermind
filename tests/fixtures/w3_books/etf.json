@@ -1,0 +1,53 @@
+{
+ "portfolio_id": "etf",
+ "positions": [
+  {
+   "ticker": "SPY",
+   "theme_id": null,
+   "sleeve": "brain",
+   "weight": 0.2698
+  },
+  {
+   "ticker": "SGOV",
+   "theme_id": null,
+   "sleeve": "brain",
+   "weight": 0.12
+  },
+  {
+   "ticker": "QQQ",
+   "theme_id": null,
+   "sleeve": "brain",
+   "weight": 0.0806
+  },
+  {
+   "ticker": "XLI",
+   "theme_id": null,
+   "sleeve": "brain",
+   "weight": 0.0649
+  },
+  {
+   "ticker": "IWM",
+   "theme_id": null,
+   "sleeve": "brain",
+   "weight": 0.0548
+  },
+  {
+   "ticker": "RSP",
+   "theme_id": null,
+   "sleeve": "brain",
+   "weight": 0.0499
+  },
+  {
+   "ticker": "MTUM",
+   "theme_id": null,
+   "sleeve": "brain",
+   "weight": 0.0487
+  },
+  {
+   "ticker": "SMH",
+   "theme_id": null,
+   "sleeve": "brain",
+   "weight": 0.0196
+  }
+ ]
+}

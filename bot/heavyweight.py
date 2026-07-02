@@ -186,6 +186,27 @@ def run_heavyweight(asof: str | None = None, *, force: bool = False, armed: bool
     out["enforcement"] = notes
     out["held_prior_book"] = held_prior
 
+    # 3d. W3 B1 — FIRM-WIDE headroom clamp (Stage 6.3). After the universe + sizing rails, clamp this
+    #     concentrated book's contribution DOWN so the firm-wide cluster/name caps hold across all US
+    #     books (the audit: four books maxed the SAME SMH — Heavyweight concentrates Flagship's names, so
+    #     it is the MOST likely to double a firm-heavy line). Subtract-only; never raises a weight;
+    #     byte-identical no-op when no peer file is readable. Runs on the ENFORCED weights (the natural
+    #     _enforce rails seam) so the freed weight simply becomes cash at rebalance. Flag-gated
+    #     (MASTERMIND_FIRM_CAPS, default ON). Sequential: Heavyweight clamps against the freshly
+    #     published Flagship/US-Brain/ETF books (Flagship builds first by design). Never blocks the book.
+    if final_weights:
+        try:
+            from portfolio import firm_exposure as _firm
+            if _firm.caps_enabled():
+                _fc = _firm.clamp_book(final_weights, PORTFOLIO_ID)
+                final_weights = _fc["positions"]
+                if _fc.get("bound"):
+                    notes["firm_clamp"] = {"freed": _fc["freed"], "clamped": _fc["clamped"]}
+                    out["firm_clamp"] = {"book": PORTFOLIO_ID, "freed": _fc["freed"],
+                                         "clamped": _fc["clamped"]}
+        except Exception as e:                           # noqa: BLE001 — a firm cap must never block the book
+            out["firm_clamp_error"] = repr(e)[:200]
+
     # 4. price the universe we might trade (targets ∪ held ∪ SPY)
     held = list((paper_account._load_account(PORTFOLIO_ID).get("positions") or {}).keys())
     prices: dict[str, float] = {}
