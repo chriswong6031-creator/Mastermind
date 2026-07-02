@@ -1,0 +1,43 @@
+{
+  "as_of": "2026-07-01",
+  "rank_by": "bottoming-alignment",
+  "gate_go": false,
+  "buy": [
+    {
+      "ticker": "WDAY",
+      "name": "Workday",
+      "sector": "Information Technology",
+      "conviction": 0.7,
+      "label": "BUY ZONE",
+      "state": "buy_now",
+      "price": 127.0,
+      "entry_signal": {
+        "status": "buy_now",
+        "urgency": "now",
+        "stop": 113.0,
+        "buy_zone": {"low": 124.0, "high": 130.3, "pct_from_spot": -2.4},
+        "chase_above": 132.8,
+        "entry_grade": "solid"
+      }
+    },
+    {
+      "ticker": "SNOW",
+      "name": "Snowflake",
+      "sector": "Information Technology",
+      "conviction": 0.6,
+      "label": "BUY ZONE",
+      "state": "buy_now",
+      "price": 210.0,
+      "entry_signal": {
+        "status": "buy_now",
+        "urgency": "soon",
+        "stop": 190.0,
+        "buy_zone": {"low": 205.0, "high": 215.0, "pct_from_spot": -1.0},
+        "chase_above": 222.0,
+        "entry_grade": "watch"
+      }
+    }
+  ],
+  "watch": [],
+  "laggards": []
+}

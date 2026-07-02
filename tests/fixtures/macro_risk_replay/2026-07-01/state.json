@@ -1,0 +1,91 @@
+{
+  "agent": "macro_risk",
+  "state": {
+    "agent": "macro_risk",
+    "asof": "2026-07-01",
+    "state": "risk_on",
+    "fragility": 0.121,
+    "supportive": true,
+    "axes": {
+      "volatility": {
+        "fragility": 0.0,
+        "reason": "vol benign"
+      },
+      "credit_usd": {
+        "fragility": 0.0,
+        "reason": "credit/USD calm"
+      },
+      "liquidity": {
+        "fragility": 0.25,
+        "reason": "gex; complacency warning"
+      },
+      "crowding": {
+        "fragility": 0.18,
+        "reason": "SMH 99th pctile/+47% 60d"
+      },
+      "dealer_gamma": {
+        "fragility": 0.15,
+        "reason": "regime GEX flag"
+      }
+    },
+    "signals": [
+      "gex; complacency warning",
+      "SMH 99th pctile/+47% 60d",
+      "regime GEX flag"
+    ],
+    "drivers": [
+      {
+        "id": "ai_buildout",
+        "name": "AI build-out (memory \u2192 hyperscaler capex \u2192 buildout \u2192 industrial-AI power)",
+        "driver": "memory / DRAM pricing + hyperscaler-capex guidance",
+        "hot_overlap": [
+          "SMH"
+        ],
+        "leading_hit": [],
+        "score": 1
+      }
+    ],
+    "hot_tickers": [
+      "SMH"
+    ],
+    "regime_growth": 0.333,
+    "regime_inflation": -0.52,
+    "defensive_tilt": {
+      "archetype": "broad_derisk",
+      "favor": [
+        "XLP",
+        "XLV",
+        "USMV",
+        "SGOV",
+        "TLT"
+      ],
+      "avoid": [
+        "ARKK",
+        "IWM"
+      ],
+      "cash_floor": 0.25,
+      "rationale": "Default risk-off with no single dominant driver: up-in-quality, low-vol, staples/healthcare, raise cash; stay driver-agnostic until the tell is clear.",
+      "caveats": [
+        "No clear driver yet \u2014 keep the defensive tilt shallow and cash-led until the Macro Risk Officer names the driver."
+      ],
+      "rate_sensitive_note": "Growth-scare driver (growth weak / inflation falling): long duration (TLT) can HELP and banks' loan-loss risk dominates \u2014 duration as a hedge, banks still avoid.",
+      "advisory": true
+    },
+    "gross_cap": 1.0,
+    "allow_adds": true,
+    "falsifier": "escalates to caution if any two of {liquidity contracts, VIX backwardates, credit widens, dealers go short-gamma, leadership narrows} confirm",
+    "check_by": "2026-07-04",
+    "ran": true,
+    "rationale": "Deterministic state is risk_on and I'm not overturning it: Q1 Goldilocks (growth +0.333, inflation -0.52), aggregate fragility 0.121, vol and credit/USD axes at 0, breadth_div false, no credit/equity divergence. Leadership is intact, not distributing \u2014 SMH 99.2 pctile/+46.8% 60d, MTUM 99.2, XLK 97.6, all above 200d. The genuine tell is late-leg BROADENING, not a top: laggards' 20d momentum is accelerating while trailing rank stays low (XLI +9.12% 20d at only 81 pctile/-0.67% 60d, XLV +9.21% 20d at 40 pctile, XLF +5.98% 20d at 11 pctile, IWM +5.59% 20d at 98 pctile). So the tape is fragile only MECHANICALLY, not fundamentally: dealer gamma is a hair-trigger \u2014 GEX long, net +1.07bn, spot 746.77 vs flip 745.61 (0.16%), vol_hole_state IN_HOLE, with flag_gex and flag_confidence_decay both firing. Long-gamma pins until a modest down-gap crosses 745.61, then dealers flip short and sell weakness into an air-pocket. Complacency reads 'watch' not 'sell' (P/C greedy, VIX 16.5/34 pctile, contango 0.866, SPY 98.6% proximity-to-high; realized 17.8 > implied 16.5, so options slightly underprice actual movement). The honest yellow is credit \u2014 HY OAS +8bp/21d, credit_widen true \u2014 small, credit/equi",
+    "lead_driver": "Dealer gamma vol-hole \u2014 SPY 0.16% above the 745.61 gamma flip (spot 746.77) in an IN_HOLE long-gamma regime; a modest down-gap crosses the flip, dealers turn short-gamma and sell into weakness, openin",
+    "llm_driver_chains": [
+      "Gamma flip breach: down-gap crosses 745.61 \u2192 dealers flip long\u2192short gamma \u2192 hed",
+      "Bottleneck migration (unverified): memory \u2192 hyperscaler capex \u2192 buildout \u2192 indus",
+      "Credit-leads chain: HY OAS +8bp/21d (credit_widen true) \u2192 if it accelerates towa",
+      "Broadening head-fake: SPY new high while breadth_div turns true and XLI/IWM 20d "
+    ],
+    "probability_rolldown": 0.4,
+    "what_proves_me_wrong": "Credit, not price, changes my mind: HY OAS accelerates from +8bp toward >+40bp/21d and flips flag_credit_equity true (credit-leads failure mode) \u2192 de-risk. Structurally, a daily close below the 745.61 gamma flip that does NOT recover within 3 sessions confirms a short-gamma regime and trend damage r",
+    "calibration_multiplier": 1.0
+  }
+}

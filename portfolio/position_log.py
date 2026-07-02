@@ -81,9 +81,16 @@ def update(positions: list[dict], asof_iso: str, portfolio_id: str | None = None
     # --- handle currently-in-book positions ---
     for key, p in current_keys.items():
         weight = p.get("weight")
-        price = (p.get("entry_levels") or {}).get("price") or p.get("entry_price")
+        _levels = p.get("entry_levels") or {}
+        price = _levels.get("price") or p.get("entry_price")
         ticker = p["ticker"]
         sleeve = p.get("sleeve", "unknown")
+        # PUBLISHED entry-risk levels (P-NEW-3) — the dashboard's per-name stop / buy_zone /
+        # entry_grade, read from the book row's entry_levels. Persist-only: NONE when the name
+        # carried no published entry_signal (degrades to today's ledger row byte-for-byte).
+        published_stop = _levels.get("stop")
+        buy_zone = _levels.get("buy_zone")
+        entry_grade = _levels.get("entry_grade")
 
         if key not in ledger:
             # new entry
@@ -101,11 +108,23 @@ def update(positions: list[dict], asof_iso: str, portfolio_id: str | None = None
                 "current_weight": weight,
                 "thesis_id": p.get("thesis_id"),
                 "time_stop_by": p.get("time_stop_by"),
+                "published_stop": published_stop,
+                "buy_zone": buy_zone,
+                "entry_grade": entry_grade,
                 "history": [{"event": "open", "ts": now, "as_of": asof_iso,
                              "weight": weight, "price": price}],
             }
         else:
             entry = ledger[key]
+            # backfill the published entry-risk levels onto an already-open entry that predates them
+            # (add-only; never overwrite a persisted non-null stop with a later miss — invariant:
+            # a data gap must never erase the stop we already recorded at entry).
+            if published_stop is not None and entry.get("published_stop") is None:
+                entry["published_stop"] = published_stop
+            if buy_zone and entry.get("buy_zone") is None:
+                entry["buy_zone"] = buy_zone
+            if entry_grade and entry.get("entry_grade") is None:
+                entry["entry_grade"] = entry_grade
             # IDEMPOTENT PER BUILD DATE: a trade event is logged at most once per `as_of`. The book
             # may be rebuilt many times intra-day (dev runs, event interrupts); those rebuilds
             # update the weight silently — they are NOT each a new ADD/TRIM. Without this guard the
@@ -123,6 +142,14 @@ def update(positions: list[dict], asof_iso: str, portfolio_id: str | None = None
                 entry["entry_weight"] = weight
                 entry["entry_price"] = price
                 entry["time_stop_by"] = p.get("time_stop_by")
+                # a re-open is a fresh entry — adopt the freshly-published stop when present, but a
+                # miss must not blank an existing stop (degrade-never-raise: keep the prior level).
+                if published_stop is not None:
+                    entry["published_stop"] = published_stop
+                if buy_zone:
+                    entry["buy_zone"] = buy_zone
+                if entry_grade:
+                    entry["entry_grade"] = entry_grade
                 if not logged_today:
                     entry["history"].append({"event": "open", "ts": now, "as_of": asof_iso,
                                              "weight": weight, "price": price})
@@ -225,6 +252,9 @@ def open_positions(portfolio_id: str | None = None) -> list[dict]:
             "entry_price": e.get("entry_price"),
             "time_stop_by": e.get("time_stop_by"),
             "thesis_id": e.get("thesis_id"),
+            # published entry-risk levels (P-NEW-3) — echoed so the audit/API + the stop-breach
+            "published_stop": e.get("published_stop"),   # surfacing pass can read them. None on legacy.
+            "buy_zone": e.get("buy_zone"),
         })
     # newest first (most recently opened)
     out.sort(key=lambda x: x.get("opened_at") or "", reverse=True)

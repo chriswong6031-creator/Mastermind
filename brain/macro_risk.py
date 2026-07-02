@@ -41,6 +41,23 @@ _ARTIFACTS = Path(__file__).resolve().parent.parent / "data" / "macro_risk"
 _V = Path(__file__).resolve().parent.parent / "vendor" / "macro"
 
 _STATES = ("risk_on", "caution", "risk_off")
+# severity rank of each state (0 = safest). Escalation = a JUMP UP in rank; de-escalation = one step
+# DOWN in rank. Used by the dwell state machine to compare the stateless read against the held state.
+_RANK = {"risk_on": 0, "caution": 1, "risk_off": 2}
+
+# the persistent dwell state — one file firm-wide, versioned, add-only fields (invariant: a corrupt or
+# missing file degrades to today's STATELESS behaviour, never to a looser cap).
+_STATE_MACHINE = _ARTIFACTS / "state_machine.json"
+_STATE_VERSION = 1
+
+# hard fallback dwell thresholds if config/doctrine.yml `risk_state:` is missing/unreadable. These are
+# the SAME values shipped in doctrine.yml (unverified-prior); duplicated only so the machine still binds
+# when the config can't be read (degrade-to-safe, never degrade-to-loose).
+_DWELL_DEFAULTS = {
+    "caution_exit_frag": 0.28, "risk_off_exit_frag": 0.50, "deescalate_sessions": 3,
+    "escalation_cooldown_sessions": 2, "tripwire_clamp_sessions": 2, "tripwire_clamp_severity": 2,
+    "max_dwell_sessions": 15,
+}
 
 # ── axis weights (sum to 1.0) + state thresholds (env-tunable) ──────────────────────────────────
 _AXIS_WEIGHTS = {"liquidity": 0.25, "crowding": 0.20, "volatility": 0.20,
@@ -412,6 +429,189 @@ def apply_risk_state(book: list[dict], risk_state: dict | None, *,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# the fragility DWELL STATE MACHINE — persistent memory over the stateless scorer.
+#
+# WHY THIS EXISTS: the raw scorer is memoryless. On 2026-07-01 SOXX fell -6.4% intraday, and BECAUSE
+# the crowded/complacent read collapses in a crash, that day's raw fragility read 0.121 (RISK_ON) —
+# after two straight CAUTION sessions (0.516, 0.469). The stateless code un-capped the book 0.7 -> 1.0
+# on the crash day and a severity-2 tripwire fired into an empty cap. The dwell machine makes that
+# structurally impossible: state ESCALATES instantly (any run whose raw read is more severe jumps up
+# same-run) but DE-ESCALATES slowly (3 consecutive sub-deadband sessions + a post-escalation cooldown),
+# and de-escalation is HARD-CLAMPED whenever a severity>=2 tripwire fired in the last N sessions. A
+# max-dwell auto-release prevents a stuck-forever CAUTION. INVARIANT: every failure path (corrupt file,
+# unreadable config) degrades to the STATELESS read — coarser/tighter, never looser.
+# ─────────────────────────────────────────────────────────────────────────────
+def _dwell_cfg() -> dict:
+    """The dwell thresholds from config/doctrine.yml `risk_state:`, overlaid on safe hard defaults.
+    Any read failure keeps the defaults — the machine still binds (degrade-to-safe)."""
+    cfg = dict(_DWELL_DEFAULTS)
+    try:
+        from bot.doctrine_config import load_doctrine
+        rs = (load_doctrine() or {}).get("risk_state") or {}
+        for k in cfg:
+            if rs.get(k) is not None:
+                cfg[k] = rs[k]
+    except Exception:  # noqa: BLE001
+        pass
+    return cfg
+
+
+def _load_state_machine() -> dict | None:
+    """Read the persistent dwell state. Returns None on missing/corrupt/version-mismatch (→ the caller
+    degrades to stateless). Never raises."""
+    try:
+        if not _STATE_MACHINE.exists():
+            return None
+        j = json.loads(_STATE_MACHINE.read_text())
+        if not isinstance(j, dict) or j.get("v") != _STATE_VERSION:
+            return None
+        if j.get("state") not in _STATES:
+            return None
+        return j
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _save_state_machine(j: dict) -> None:
+    """Persist the dwell state (add-only fields, versioned). Never raises into the caller."""
+    try:
+        _STATE_MACHINE.parent.mkdir(parents=True, exist_ok=True)
+        _STATE_MACHINE.write_text(json.dumps(j, indent=2, default=str))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _recent_tripwire_severity(asof: str, sessions: int) -> int:
+    """The MAX derisk tripwire severity observed in the last ``sessions`` dated artifact dirs up to and
+    INCLUDING ``asof`` (bot/derisk.py writes data/macro_risk/<date>/derisk_*.json with a `severity`).
+    A crash-day tripwire that fired while the raw state already read RISK_ON is exactly the signal that
+    must block a de-escalation. Returns 0 on any miss. Never raises."""
+    try:
+        d0 = _asof_d(asof)
+        if d0 is None:
+            return 0
+        # collect dated dirs (YYYY-MM-DD) at or before asof, take the most recent `sessions`
+        dated: list[date] = []
+        for p in _ARTIFACTS.iterdir():
+            if not p.is_dir():
+                continue
+            dd = _asof_d(p.name)
+            if dd is not None and dd <= d0:
+                dated.append(dd)
+        dated.sort(reverse=True)
+        worst = 0
+        for dd in dated[:max(1, int(sessions))]:
+            ddir = _ARTIFACTS / dd.isoformat()
+            for f in ddir.glob("derisk_*.json"):
+                try:
+                    j = json.loads(f.read_text())
+                except Exception:  # noqa: BLE001
+                    continue
+                sev = ((j or {}).get("tripwire") or {}).get("severity")
+                try:
+                    sev = int(sev)
+                except (TypeError, ValueError):
+                    sev = 0
+                worst = max(worst, sev)
+        return worst
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _exit_deadband(state: str, cfg: dict) -> float:
+    """The raw-fragility deadband a state must sit BELOW to earn a step down out of it."""
+    if state == "risk_off":
+        return float(cfg["risk_off_exit_frag"])
+    if state == "caution":
+        return float(cfg["caution_exit_frag"])
+    return 0.0  # risk_on has no floor to leave
+
+
+def _advance_dwell(prior: dict | None, raw_state: str, raw_frag: float, asof: str,
+                   *, tripwire_sev: int, cfg: dict) -> dict:
+    """PURE transition function: fold today's stateless read into the persistent dwell state. Returns
+    the NEW dwell record (to persist). Rules, in order:
+
+      * ESCALATE INSTANTLY — if the raw read outranks the held state, jump to it THIS run, reset the
+        sub-deadband streak, and stamp the escalation session (arms the cooldown + starts the clamp).
+      * TRIPWIRE CLAMP — a severity>=`tripwire_clamp_severity` derisk within the last
+        `tripwire_clamp_sessions` sessions BLOCKS every de-escalation, regardless of streak/cooldown.
+      * DE-ESCALATE SLOWLY — step DOWN one rank only when the raw read has been below the current
+        state's exit deadband for `deescalate_sessions` CONSECUTIVE sessions AND at least
+        `escalation_cooldown_sessions` sessions have elapsed since the last escalation.
+      * MAX-DWELL AUTO-RELEASE — a state held longer than `max_dwell_sessions` sessions whose raw read
+        is (this session) below its exit deadband releases one step even if the strict streak/cooldown
+        aren't both met (prevents a stuck-forever CAUTION); still blocked by the tripwire clamp.
+
+    ``prior`` None (cold start / corrupt file) seeds the machine at TODAY'S RAW state — degrade-to-
+    stateless: with no history, the dwell state == the stateless read, so behaviour is unchanged."""
+    if prior is None:
+        return {
+            "v": _STATE_VERSION, "state": raw_state, "asof": str(asof)[:10],
+            "dwell": 1, "below_streak": 0, "sessions_since_escalation": 999,
+            "last_escalation": None, "clamp_reason": None,
+        }
+
+    def _int(v, default):
+        try:
+            return int(v)
+        except (TypeError, ValueError):
+            return default
+
+    pstate = prior.get("state") if prior.get("state") in _STATES else raw_state
+    dwell = _int(prior.get("dwell"), 1)
+    below_streak = _int(prior.get("below_streak"), 0)
+    since_esc = _int(prior.get("sessions_since_escalation"), 999)
+    last_esc = prior.get("last_escalation")
+
+    # is this a NEW session (distinct date) or a re-run of the same date? Only advance counters on a
+    # genuinely new session so intraday re-runs don't inflate the dwell/streak counts.
+    same_session = str(prior.get("asof") or "")[:10] == str(asof)[:10]
+
+    # ── (1) ESCALATE INSTANTLY ────────────────────────────────────────────────────────────────
+    if _RANK.get(raw_state, 0) > _RANK.get(pstate, 0):
+        return {
+            "v": _STATE_VERSION, "state": raw_state, "asof": str(asof)[:10],
+            "dwell": 1 if not same_session else dwell,
+            "below_streak": 0, "sessions_since_escalation": 0,
+            "last_escalation": str(asof)[:10], "clamp_reason": None,
+        }
+
+    # not escalating → advance the session counters (new session only)
+    if not same_session:
+        dwell += 1
+        since_esc = since_esc + 1 if since_esc < 900 else since_esc
+        deadband = _exit_deadband(pstate, cfg)
+        below_streak = below_streak + 1 if raw_frag < deadband else 0
+
+    # ── (2) TRIPWIRE CLAMP — blocks ANY de-escalation ─────────────────────────────────────────
+    clamp_reason = None
+    if pstate != "risk_on" and tripwire_sev >= int(cfg["tripwire_clamp_severity"]):
+        clamp_reason = (f"severity-{tripwire_sev} tripwire within last "
+                        f"{int(cfg['tripwire_clamp_sessions'])} sessions blocks de-escalation")
+
+    new_state = pstate
+    if pstate != "risk_on" and clamp_reason is None:
+        deadband = _exit_deadband(pstate, cfg)
+        below_now = raw_frag < deadband
+        streak_ok = below_streak >= int(cfg["deescalate_sessions"])
+        cooldown_ok = since_esc >= int(cfg["escalation_cooldown_sessions"])
+        max_dwell_hit = dwell > int(cfg["max_dwell_sessions"]) and below_now
+        # ── (3) DE-ESCALATE SLOWLY  or  (4) MAX-DWELL AUTO-RELEASE ──
+        if (streak_ok and cooldown_ok) or max_dwell_hit:
+            rank = max(0, _RANK[pstate] - 1)
+            new_state = _STATES[rank]
+            dwell, below_streak = 1, 0
+
+    return {
+        "v": _STATE_VERSION, "state": new_state, "asof": str(asof)[:10],
+        "dwell": dwell, "below_streak": below_streak,
+        "sessions_since_escalation": since_esc, "last_escalation": last_esc,
+        "clamp_reason": clamp_reason,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # risk_state — the PURE deterministic core. Never raises.
 # ─────────────────────────────────────────────────────────────────────────────
 def _asof_d(asof) -> date | None:
@@ -423,16 +623,33 @@ def _asof_d(asof) -> date | None:
         return None
 
 
-def risk_state(asof: str, regime: dict | None) -> dict:
+def _dwell_enabled() -> bool:
+    """The dwell state machine is ON by default (it is pure risk-reduction and degrades to stateless on
+    any failure). ``MASTERMIND_DWELL=0`` reverts to the pre-W1 stateless behaviour byte-for-byte — the
+    escape hatch the invariant requires (a new state machine must be defeatable without un-capping)."""
+    return os.environ.get("MASTERMIND_DWELL", "1").strip().lower() in ("1", "true", "yes", "on")
+
+
+def risk_state(asof: str, regime: dict | None, *,
+               dwell: bool | None = None, state_loader=None, state_saver=None,
+               tripwire_sev: int | None = None) -> dict:
     """Fuse the dashboard warning signals into a falsifiable RISK STATE. PURE; NEVER raises.
 
     Returns a self-describing, gradable dict::
 
-        {agent:"macro_risk", asof, state, fragility, supportive,
+        {agent:"macro_risk", asof, state, raw_state, fragility, supportive,
          axes:{volatility|credit_usd|liquidity|crowding|dealer_gamma:{fragility, reason}},
          signals:[str], drivers:[{id,name,driver,...}], hot_tickers:[str],
          falsifier:str, check_by:str, regime_growth, regime_inflation,
-         gross_cap, allow_adds, defensive_tilt:{...}}
+         gross_cap, allow_adds, defensive_tilt:{...},
+         dwell:int, deescalation_progress:str, clamp_reason:str|None}
+
+    ``state`` is now the DWELL state (persistent memory over the stateless read); ``raw_state`` is the
+    stateless read the scorer produced this run. ``gross_cap``/``allow_adds`` derive from ``state`` (the
+    dwell state) — that is the whole fix for the SOXX-crash-day un-cap. The dwell machine escalates
+    instantly and de-escalates slowly (see ``_advance_dwell``); it is defeatable via ``MASTERMIND_DWELL=0``
+    and degrades to the stateless read on any failure. Injection params (``dwell``/``state_loader``/
+    ``state_saver``/``tripwire_sev``) exist for deterministic replay tests — production passes none.
 
     Every firing axis is named with its level; the falsifier states the reversal that de-escalates the
     state; check_by bounds it in time — falsifiable + probabilistic per the house rules."""
@@ -457,11 +674,37 @@ def risk_state(asof: str, regime: dict | None) -> dict:
     fragility = round(sum(_AXIS_WEIGHTS[k] * axes[k]["fragility"] for k in _AXIS_WEIGHTS), 4)
 
     if fragility >= _risk_off_score():
-        state = "risk_off"
+        raw_state = "risk_off"
     elif fragility >= _caution_score():
-        state = "caution"
+        raw_state = "caution"
     else:
-        state = "risk_on"
+        raw_state = "risk_on"
+
+    # ── the DWELL STATE MACHINE — persistent memory over the stateless raw read. Escalate instantly,
+    # de-escalate slowly, hard-clamp on a hot tripwire. Everything below wraps the raw read in a
+    # try/except so ANY failure falls back to the stateless read (degrade-to-stateless invariant).
+    state = raw_state
+    dwell_record: dict = {"state": raw_state, "dwell": 1, "below_streak": 0,
+                          "sessions_since_escalation": 999, "clamp_reason": None}
+    use_dwell = _dwell_enabled() if dwell is None else bool(dwell)
+    if use_dwell:
+        try:
+            cfg = _dwell_cfg()
+            loader = state_loader if state_loader is not None else _load_state_machine
+            prior = loader()
+            if tripwire_sev is not None:
+                tsev = int(tripwire_sev)
+            else:
+                tsev = _recent_tripwire_severity(asof, int(cfg["tripwire_clamp_sessions"]))
+            dwell_record = _advance_dwell(prior, raw_state, fragility, asof,
+                                          tripwire_sev=tsev, cfg=cfg)
+            state = dwell_record.get("state") or raw_state
+            saver = state_saver if state_saver is not None else _save_state_machine
+            saver(dwell_record)
+        except Exception:  # noqa: BLE001 — never let the memory layer defeat the stateless teeth
+            state = raw_state
+            dwell_record = {"state": raw_state, "dwell": 1, "below_streak": 0,
+                            "sessions_since_escalation": 999, "clamp_reason": None}
 
     # the leading-edge fragile chains the crowding axis surfaced (drives the chain gate + playbook)
     drivers = []
@@ -475,11 +718,17 @@ def risk_state(asof: str, regime: dict | None) -> dict:
     growth = _f(reg.get("growth_score")) or 0.0
     infl = _f(reg.get("inflation_score")) or 0.0
 
+    # de-escalation progress readout (n/N) — how many of the required consecutive sub-deadband sessions
+    # the current dwell state has accrued. Display + gradability; 0/N whenever fully de-escalated.
+    _cfg = _dwell_cfg()
+    _need = int(_cfg["deescalate_sessions"])
+    _prog = min(int(dwell_record.get("below_streak") or 0), _need) if state != "risk_on" else 0
     out = {
         "agent": "macro_risk",
         "asof": str(asof)[:10],
-        "state": state,
-        "fragility": fragility,
+        "state": state,                                   # the DWELL state (drives the teeth)
+        "raw_state": raw_state,                            # the stateless read this run
+        "fragility": fragility,                            # the raw fragility this run
         "supportive": state == "risk_on",
         "axes": axes,
         "signals": [axes[k]["reason"] for k in
@@ -489,6 +738,10 @@ def risk_state(asof: str, regime: dict | None) -> dict:
         "hot_tickers": hot,
         "regime_growth": round(growth, 3),
         "regime_inflation": round(infl, 3),
+        # dwell telemetry (add-only; consumers that don't read these degrade to today's behaviour)
+        "dwell": int(dwell_record.get("dwell") or 1),
+        "deescalation_progress": f"{_prog}/{_need}",
+        "clamp_reason": dwell_record.get("clamp_reason"),
     }
 
     # the defensive tilt (advisory favor + enforceable avoid/cash_floor) for this driver

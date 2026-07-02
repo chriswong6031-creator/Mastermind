@@ -536,9 +536,11 @@ def _safe_date(asof: str):
 
 
 def _regime_dict() -> dict:
-    raw = _read_china_regime()
-    return {"quad": raw.get("quad"), "quad_name": raw.get("quad_name"),
-            "liquidity_overlay": raw.get("liquidity_overlay")}
+    # Delegated to the single regime reader (architecture Stage 1, W1).
+    # China brain uses lens_row("china") which routes to china_regime/latest.json.
+    # lens_row() is golden-output tested to be byte-identical to the old 3-liner.
+    from brain.regime_frame import lens_row
+    return lens_row("china")
 
 
 def _regime_brief() -> str:

@@ -1,0 +1,25 @@
+{
+  "pid": "china",
+  "asof": "2026-06-29",
+  "tripwire": {
+    "trigger": true,
+    "severity": 2,
+    "reasons": [
+      "macro CAUTION state",
+      "overnight tape STRESSED",
+      "SPY dealers SHORT gamma (amplifies the move)"
+    ],
+    "state": "caution"
+  },
+  "action": "revised_pending_target",
+  "gross_before": 0.3,
+  "gross_cap": 0.7,
+  "scaled": false,
+  "dropped_chains": [],
+  "reasons": [
+    "macro CAUTION state",
+    "overnight tape STRESSED",
+    "SPY dealers SHORT gamma (amplifies the move)"
+  ],
+  "n_names": 2
+}

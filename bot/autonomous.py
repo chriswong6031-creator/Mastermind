@@ -447,9 +447,10 @@ def _safe_date(asof: str):
 
 
 def _regime_dict() -> dict:
-    raw = _read_regime()
-    return {"quad": raw.get("quad"), "quad_name": raw.get("quad_name"),
-            "liquidity_overlay": raw.get("liquidity_overlay")}
+    # Delegated to the single regime reader (architecture Stage 1, W1).
+    # lens_row() is golden-output tested to be byte-identical to the old 3-liner.
+    from brain.regime_frame import lens_row
+    return lens_row("us")
 
 
 def _regime_brief() -> str:

@@ -1,0 +1,96 @@
+{
+  "agent": "macro_risk",
+  "state": {
+    "agent": "macro_risk",
+    "asof": "2026-06-30",
+    "state": "caution",
+    "fragility": 0.4685,
+    "supportive": false,
+    "axes": {
+      "volatility": {
+        "fragility": 0.0,
+        "reason": "vol benign"
+      },
+      "credit_usd": {
+        "fragility": 0.75,
+        "reason": "ETF risk block RISK-OFF; risk tilt -0.20; HYG/TLT credit -1.5% (5d)"
+      },
+      "liquidity": {
+        "fragility": 0.65,
+        "reason": "liquidity contracting; complacency warning"
+      },
+      "crowding": {
+        "fragility": 0.18,
+        "reason": "SMH 98th pctile/+43% 60d"
+      },
+      "dealer_gamma": {
+        "fragility": 0.8,
+        "reason": "SPY dealers SHORT gamma (amplifies moves); SPY -0.3% below gamma-flip; vol-hole EXPANSION"
+      }
+    },
+    "signals": [
+      "SPY dealers SHORT gamma (amplifies moves); SPY -0.3% below gamma-flip; vol-hole EXPANSION",
+      "ETF risk block RISK-OFF; risk tilt -0.20; HYG/TLT credit -1.5% (5d)",
+      "liquidity contracting; complacency warning",
+      "SMH 98th pctile/+43% 60d"
+    ],
+    "drivers": [
+      {
+        "id": "ai_buildout",
+        "name": "AI build-out (memory \u2192 hyperscaler capex \u2192 buildout \u2192 industrial-AI power)",
+        "driver": "memory / DRAM pricing + hyperscaler-capex guidance",
+        "hot_overlap": [
+          "SMH"
+        ],
+        "leading_hit": [],
+        "score": 1
+      }
+    ],
+    "hot_tickers": [
+      "SMH"
+    ],
+    "regime_growth": 0.2,
+    "regime_inflation": -0.52,
+    "defensive_tilt": {
+      "archetype": "ai_capex_unwind",
+      "favor": [
+        "XLP",
+        "XLV",
+        "USMV",
+        "QUAL",
+        "SGOV",
+        "GLD",
+        "TLT"
+      ],
+      "avoid": [
+        "SMH",
+        "SOXX",
+        "ARKK"
+      ],
+      "cash_floor": 0.3,
+      "rationale": "A crowded AI-buildout/semis blow-off into contracting liquidity breaks the most-extended momentum first; rotate to quality/low-vol/staples/healthcare + cash; gold/duration only help if it's a growth-scare (see caveats).",
+      "caveats": [
+        "Duration (TLT) HELPS only if the unwind is a growth-scare (inflation_score < 0); if rates are still rising, duration adds risk, not safety.",
+        "Banks (XLF) are NOT a clean hedge \u2014 a liquidity event stresses credit; favor them only on a steepening-with-stable-credit read.",
+        "REITs (XLRE) are rate-sensitive \u2014 avoid while real yields are rising."
+      ],
+      "rate_sensitive_note": "Growth-scare driver (growth weak / inflation falling): long duration (TLT) can HELP and banks' loan-loss risk dominates \u2014 duration as a hedge, banks still avoid.",
+      "advisory": true
+    },
+    "gross_cap": 0.7,
+    "allow_adds": true,
+    "falsifier": "de-escalates to risk_on when the ETF risk block turns RISK-ON (HYG/TLT credit stabilises, USD eases) AND the liquidity overlay turns from contracting to neutral/expanding AND SPY reclaims the gamma-flip and dealers return to long gamma",
+    "check_by": "2026-07-03",
+    "ran": true,
+    "rationale": "Don't be fooled by the calm tape \u2014 the fragility (0.47, caution) is structural, not price-based. VIX 17.5 (52nd pctile, contango) and benign realized vol are exactly the complacency the engine flags (calm+fragility+credit_widen = watch). The real tell is the divergence: under a placid surface, three things are quietly deteriorating in sync. (1) Credit/USD axis is RISK-OFF (-0.20 tilt): HYG/TLT credit -1.5% on 5d, HY OAS +11bp on 21d \u2014 credit is leaking before equities. (2) Liquidity overlay is contracting in a Q1 Goldilocks quad \u2014 the worst combination, because positioning is maximally long into a thinning tape (SMH 98th pctile, +43% 60d; MTUM 99th). (3) Dealer gamma is the accelerant: SPY dealers SHORT gamma, spot 741.81 sits 0.28% BELOW the 743.86 flip with net GEX -1.6bn and a vol-hole in EXPANSION \u2014 meaning any down-impulse gets amplified, not dampened. So the picture is a narrow, crowded leadership (AI build-out / SMH) levitating on benign vol while credit and liquidity erode underneath and dealers have lost their stabilizing bid. That's a market that is fine until it isn't \u2014 fragile to a gap, not a grind. Crowding fragility reads low (0.18) only because momentum hasn't broken",
+    "lead_driver": "Dealer short-gamma below the flip line (SPY 0.28% under 743.86, net GEX -1.6bn, vol-hole EXPANSION) \u2014 the single mechanism that converts the slow credit/liquidity leak into a fast move.",
+    "llm_driver_chains": [
+      "Short-gamma trigger: SPY breaks decisively below 743.86 flip \u2192 dealers sell into",
+      "Credit-led chain: HYG/TLT keeps bleeding (OAS +11bp/21d \u2192 widening) \u2192 risk tilt ",
+      "Crowding-unwind chain: liquidity keeps contracting \u2192 thin tape can't absorb SMH/"
+    ],
+    "probability_rolldown": 0.4,
+    "what_proves_me_wrong": "SPY reclaims and holds above the 743.86 gamma flip (dealers flip back to long gamma, net GEX positive, vol-hole compresses) AND HYG/TLT stabilizes with HY OAS rolling back under +5bp/21d within ~10 trading sessions. If both hold, the credit leak was noise, dealers re-acquire the stabilizing bid, and",
+    "calibration_multiplier": 1.0
+  }
+}

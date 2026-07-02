@@ -14,6 +14,14 @@ data/brain/*.json
 data/brain/runs/
 data/signal_archive/*.parquet
 data/*.db
+# SQLite write-ahead and journal sidecar files (safe to ignore; the DB itself is tracked above)
+*.db-journal
+*.db-wal
+*.db-shm
+# Dev-REPL artifact: when store._DB path resolves to a literal '{_DB}' string (e.g. the variable
+# was never substituted), Python creates a file with that exact name at the repo root. The code is
+# correct; this gitignore entry is belt-and-braces to keep the stray file out of commits.
+{_DB}
 data/research/
 data/brain/proposals.jsonl
 jobs/

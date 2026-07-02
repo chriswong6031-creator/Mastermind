@@ -1,0 +1,97 @@
+{
+  "agent": "macro_risk",
+  "state": {
+    "agent": "macro_risk",
+    "asof": "2026-06-29",
+    "state": "caution",
+    "fragility": 0.516,
+    "supportive": false,
+    "axes": {
+      "volatility": {
+        "fragility": 0.15,
+        "reason": "VIX 61th pctile"
+      },
+      "credit_usd": {
+        "fragility": 0.6,
+        "reason": "ETF risk block RISK-OFF; risk tilt -0.25"
+      },
+      "liquidity": {
+        "fragility": 0.75,
+        "reason": "liquidity contracting; gex; complacency warning"
+      },
+      "crowding": {
+        "fragility": 0.18,
+        "reason": "SMH 97th pctile/+42% 60d"
+      },
+      "dealer_gamma": {
+        "fragility": 0.95,
+        "reason": "SPY dealers SHORT gamma (amplifies moves); SPY -2.3% below gamma-flip; vol-hole EXPANSION; regime GEX flag"
+      }
+    },
+    "signals": [
+      "SPY dealers SHORT gamma (amplifies moves); SPY -2.3% below gamma-flip; vol-hole EXPANSION; regime GEX flag",
+      "liquidity contracting; gex; complacency warning",
+      "ETF risk block RISK-OFF; risk tilt -0.25",
+      "SMH 97th pctile/+42% 60d",
+      "VIX 61th pctile"
+    ],
+    "drivers": [
+      {
+        "id": "ai_buildout",
+        "name": "AI build-out (memory \u2192 hyperscaler capex \u2192 buildout \u2192 industrial-AI power)",
+        "driver": "memory / DRAM pricing + hyperscaler-capex guidance",
+        "hot_overlap": [
+          "SMH"
+        ],
+        "leading_hit": [],
+        "score": 1
+      }
+    ],
+    "hot_tickers": [
+      "SMH"
+    ],
+    "regime_growth": 0.333,
+    "regime_inflation": -0.36,
+    "defensive_tilt": {
+      "archetype": "ai_capex_unwind",
+      "favor": [
+        "XLP",
+        "XLV",
+        "USMV",
+        "QUAL",
+        "SGOV",
+        "GLD",
+        "TLT"
+      ],
+      "avoid": [
+        "SMH",
+        "SOXX",
+        "ARKK"
+      ],
+      "cash_floor": 0.3,
+      "rationale": "A crowded AI-buildout/semis blow-off into contracting liquidity breaks the most-extended momentum first; rotate to quality/low-vol/staples/healthcare + cash; gold/duration only help if it's a growth-scare (see caveats).",
+      "caveats": [
+        "Duration (TLT) HELPS only if the unwind is a growth-scare (inflation_score < 0); if rates are still rising, duration adds risk, not safety.",
+        "Banks (XLF) are NOT a clean hedge \u2014 a liquidity event stresses credit; favor them only on a steepening-with-stable-credit read.",
+        "REITs (XLRE) are rate-sensitive \u2014 avoid while real yields are rising."
+      ],
+      "rate_sensitive_note": "Growth-scare driver (growth weak / inflation falling): long duration (TLT) can HELP and banks' loan-loss risk dominates \u2014 duration as a hedge, banks still avoid.",
+      "advisory": true
+    },
+    "gross_cap": 0.7,
+    "allow_adds": true,
+    "falsifier": "de-escalates to risk_on when the ETF risk block turns RISK-ON (HYG/TLT credit stabilises, USD eases) AND the liquidity overlay turns from contracting to neutral/expanding AND SPY reclaims the gamma-flip and dealers return to long gamma",
+    "check_by": "2026-07-02",
+    "ran": true,
+    "rationale": "The divergence IS the signal: price says broadening bull (IWM 100th pctile, MTUM 98th, SMH 97th, near-record SPY) while the plumbing is fragile (0.516). This is elevated fragility inside an intact trend, not a top \u2014 breadth divergence reads false and crowding is low (0.18), so leadership is still confirming. Fragility concentrates on the two axes that lead: dealer gamma (0.95, dominant) and credit/USD (0.6). SPY 728.99 sits -2.3% below the 745.79 gamma flip with dealers short gamma, net GEX -10.1bn, vol-hole expanding \u2014 mechanically this amplifies realized moves (two-sided: downside bias below the flip, upside chase above it). Underneath, the cross-asset tilt already turned: ETF risk block RISK-OFF (-0.25), gold bid vs SPY, HYG/TLT softening (HY OAS +6bp/21d), DXY firming, VIX 5/20d rising, flag_confidence_decay firing \u2014 money has quietly de-risked under a near-high index (confirmation, not prediction). The honest offset keeps me from leaning hard directional: equity put/call 1.364 is protective, not complacent \u2014 a hedged crowd plus short dealer gamma plus cold capitulation tools (score 0) is a genuinely two-sided setup. The generals are extended (SMH +42%/60d, 96.8 pctile), so add",
+    "lead_driver": "Dealer gamma (0.95, dominant): SPY 728.99 is -2.3% below the 745.79 gamma flip with dealers short gamma, net GEX -10.1bn and a vol-hole EXPANSION \u2014 the mechanical amplifier that makes any shock bigger",
+    "llm_driver_chains": [
+      "Short dealer gamma below 745.79 flip (GEX -10.1bn, vol-hole expansion) \u2192 dealers",
+      "Cross-asset risk-off already turned under a near-high index (ETF block -0.25, GC",
+      "Bull case / squeeze chain: SPY reclaims and holds >745.79 \u2192 dealer gamma flips p"
+    ],
+    "probability_rolldown": 0.3,
+    "what_proves_me_wrong": "The de-risk lean is wrong if SPY reclaims and HOLDS >745.79 (GEX flips positive) AND the ETF risk tilt turns back positive (GC/SPY rolls over, HYG/TLT stabilizes, VIX 20d trend rolls down) AND flag_confidence_decay clears within the check-by window (~2026-07-13) \u2014 then the under-surface RISK-OFF was",
+    "calibration_multiplier": 1.0
+  }
+}

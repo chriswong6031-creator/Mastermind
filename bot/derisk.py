@@ -24,6 +24,7 @@ import json
 import os
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 import bot  # noqa: F401  -> vendor/macro onto sys.path
 
@@ -33,6 +34,38 @@ _ARTIFACTS = _ROOT / "data" / "macro_risk"
 
 _US_BOOKS = ("flagship", "autonomous", "etf")
 _ASIA_BOOKS = ("china", "hk")
+
+# Sleeves that participate in the held-position sweep — conviction (flagship-style) AND leadership
+# (40-60% NAV in the brain books that hold both sleeves).  The leadership sleeve is the one that
+# was exempt on 2026-07-01, so a severity-2 tripwire with a full-sized leadership sleeve did
+# nothing.  Both sleeves are SUBTRACT-ONLY here: we only trim/exit, never add.
+_DERISKED_SLEEVES: frozenset[str] = frozenset({"conviction", "leadership"})
+
+
+def _severity_cap(severity: int) -> float | None:
+    """Return the doctrine-configured gross cap for *severity*, or None when severity < 2 (caution
+    alone is advisory — no automatic gross-cap override).  Reads config/doctrine.yml lazily so the
+    threshold is one source of truth; falls back to hard-coded defaults on any parse error.
+
+    The ladder (tagged unverified-prior in doctrine.yml):
+      severity 2 → 0.70  (confirmed unwind: risk_off OR gex_flip OR theme_day)
+      severity 3 → 0.55  (maximum severity: all channels lit)
+    """
+    if severity < 2:
+        return None  # caution-only (severity 0/1) never overrides the gross cap
+    _FALLBACK: dict[int, float] = {2: 0.70, 3: 0.55}
+    try:
+        import yaml  # lazy — not on the critical path; gracefully absent in CI without PyYAML
+        _cfg_path = _ROOT / "config" / "doctrine.yml"
+        _cfg: dict[str, Any] = yaml.safe_load(_cfg_path.read_text()) if _cfg_path.exists() else {}
+        ladder: dict = _cfg.get("derisk_severity_caps") or {}
+        # Walk from the exact severity down to 2 so a severity-4 gap is handled gracefully.
+        for s in range(max(severity, 2), 1, -1):
+            if s in ladder:
+                return float(ladder[s])
+    except Exception:  # noqa: BLE001
+        pass
+    return _FALLBACK.get(max(severity, 2), _FALLBACK[2])
 
 
 def enabled() -> bool:
@@ -225,14 +258,28 @@ def derisk_flagship(asof: str | None = None, *, regime: dict | None = None, forc
         return {**out, "skipped": "no_trigger"}
 
     rs = tw["risk_state"]
-    gcap = _f(rs.get("gross_cap")) or 1.0
+    # BUG-A FIX (problem #22, 07-01 no-op): the original code took ONLY the macro-risk-state cap
+    # (rs.gross_cap).  On 07-01 the state was risk_on so gross_cap=1.0, meaning a correctly-fired
+    # severity-2 tripwire on a book at gross 0.75 saw gross ≤ 1.0 and concluded "hold".  The fix:
+    # eff_cap = min(state_cap, severity_cap) so the cut ALWAYS bites once severity ≥ 2, regardless
+    # of the macro-state scorer's instantaneous read.
+    state_gross_cap = _f(rs.get("gross_cap")) or 1.0
+    sev = tw.get("severity", 0)
+    sev_cap = _severity_cap(sev)                             # None when severity < 2
+    eff_cap = min(state_gross_cap, sev_cap) if sev_cap is not None else state_gross_cap
     try:
         from portfolio import position_log, paper_account, fragility_chain
         from brain import risk_officer, ledger
     except Exception as e:  # noqa: BLE001
         return {**out, "error": f"import: {e!r}"[:160]}
 
-    held = [p for p in position_log.open_positions() if (p or {}).get("sleeve") == "conviction"]
+    # BUG-B FIX (problem #22, leadership off-ramp): the original filter checked only
+    # sleeve=='conviction'.  The flagship book also holds a 40-60% NAV leadership sleeve; those
+    # positions had no derisk off-ramp at all, so the tripwire only ever targeted the smaller
+    # conviction piece.  Extend to _DERISKED_SLEEVES = {conviction, leadership}.
+    # Subtract-only invariant preserved: we only trim/exit, never add.
+    held = [p for p in position_log.open_positions()
+            if (p or {}).get("sleeve") in _DERISKED_SLEEVES]
     if not held:
         _write_artifact(asof, "flagship", {**out, "action": "flat"})
         return {**out, "skipped": "flat"}
@@ -251,6 +298,7 @@ def derisk_flagship(asof: str | None = None, *, regime: dict | None = None, forc
         if not t:
             continue
         w = _f(p.get("current_weight")) or 0.0
+        sleeve = str(p.get("sleeve") or "conviction")
         entry, cur = p.get("entry_price"), None
         try:
             cur = paper_account._current_price(t)
@@ -261,35 +309,55 @@ def derisk_flagship(asof: str | None = None, *, regime: dict | None = None, forc
             in_crack = bool(fragility_chain.chains_of(t) & blocked)
         except Exception:  # noqa: BLE001
             in_crack = False
-        rows.append({"ticker": t, "sleeve": "conviction", "current_weight": w,
+        rows.append({"ticker": t, "sleeve": sleeve, "current_weight": w,
                      "rel_return_since_entry": rel, "in_crack": in_crack})
 
     gross = round(sum(r["current_weight"] for r in rows), 4)
-    if gross <= gcap + 1e-9 and not blocked:
-        _write_artifact(asof, "flagship", {**out, "action": "hold", "gross": gross, "gross_cap": gcap})
-        return {**out, "action": "hold", "gross": gross, "gross_cap": gcap,
-                "reasons": tw["reasons"]}
+    if gross <= eff_cap + 1e-9 and not blocked:
+        artifact = {**out, "action": "hold", "gross": gross,
+                    "gross_cap": eff_cap, "state_gross_cap": state_gross_cap,
+                    "severity_cap": sev_cap, "eff_cap": eff_cap,
+                    "cut_scope": sorted(_DERISKED_SLEEVES)}
+        _write_artifact(asof, "flagship", artifact)
+        return {**out, "action": "hold", "gross": gross, "gross_cap": eff_cap,
+                "eff_cap": eff_cap, "severity_cap": sev_cap,
+                "cut_scope": sorted(_DERISKED_SLEEVES), "reasons": tw["reasons"]}
 
-    # order: cracking-chain first, then worst rel-return first; exit until gross ≤ cap.
+    # order: cracking-chain first, then worst rel-return first; exit until gross ≤ eff_cap.
     def _rel_key(r):
         rr = r.get("rel_return_since_entry")
         return rr if isinstance(rr, (int, float)) else 0.0
 
     order = sorted(rows, key=lambda r: (0 if r["in_crack"] else 1, _rel_key(r)))
-    decisions, running = [], gross
+    decisions: list[dict] = []
+    running = gross
     for r in order:
-        if running <= gcap + 1e-9:
+        if running <= eff_cap + 1e-9:
             break
         decisions.append({"ticker": r["ticker"], "action": "exit", "scale": 0.0,
+                          "sleeve": r["sleeve"],
                           "rel_return": r["rel_return_since_entry"]})
         running -= r["current_weight"]
 
-    # never-blow-to-cash guard (worst-loser-first cap + invested floor) — reuse the Risk Officer's pure helper.
-    guarded = risk_officer.apply_exits(rows, decisions, max_exits=len(decisions),
-                                       min_invested=risk_officer._MIN_INVESTED_NAMES)
-    exited, realized = [], []
-    for d in guarded["exits"]:
-        t = d["ticker"]
+    # risk_officer.apply_exits is CONVICTION-ONLY: its internal _held_map() filters to
+    # sleeve=='conviction' and enforces the ½-Kelly minimum-invested-names floor.  Leadership
+    # exits bypass it (the equal-weight sleeve has no such minimum; subtracting pro-rata is
+    # correct).  Both paths are subtract-only — we never add.
+    conv_decisions = [d for d in decisions if d.get("sleeve") != "leadership"]
+    lead_decisions = [d for d in decisions if d.get("sleeve") == "leadership"]
+
+    conv_rows = [r for r in rows if r.get("sleeve") == "conviction"]
+    guarded_conv = risk_officer.apply_exits(
+        conv_rows, conv_decisions,
+        max_exits=len(conv_decisions),
+        min_invested=risk_officer._MIN_INVESTED_NAMES,
+    )
+
+    _reason_str = f"exited (fast de-risk: {'; '.join(tw['reasons'])[:120]})"
+    exited: list[str] = []
+    realized: list[str] = []
+
+    def _execute_exit(t: str, sleeve: str) -> None:
         try:
             res = paper_account.execute_fill(t, "sell", asof=asof)  # REAL paper exit → frees cash
             if res.get("ok"):
@@ -297,17 +365,24 @@ def derisk_flagship(asof: str | None = None, *, regime: dict | None = None, forc
         except Exception:  # noqa: BLE001
             pass
         try:
-            position_log.close_position("conviction", t, asof, reason="fast_derisk")
+            position_log.close_position(sleeve, t, asof, reason="fast_derisk")
         except Exception:  # noqa: BLE001
             pass
         try:
-            ledger.close(t, f"exited (fast de-risk: {'; '.join(tw['reasons'])[:120]})")
+            ledger.close(t, _reason_str)
         except Exception:  # noqa: BLE001
             pass
         exited.append(t)
 
+    for d in guarded_conv["exits"]:         # conviction — guarded by invested floor
+        _execute_exit(d["ticker"], "conviction")
+    for d in lead_decisions:                # leadership — equal-weight, no minimum floor
+        _execute_exit(d["ticker"], "leadership")
+
     result = {**out, "action": "cut", "exited": exited, "realized": realized,
-              "gross_before": gross, "gross_cap": gcap, "reasons": tw["reasons"]}
+              "gross_before": gross, "gross_cap": eff_cap,
+              "state_gross_cap": state_gross_cap, "severity_cap": sev_cap, "eff_cap": eff_cap,
+              "cut_scope": sorted(_DERISKED_SLEEVES), "reasons": tw["reasons"]}
     _write_artifact(asof, "flagship", result)
     return result
 
@@ -341,7 +416,12 @@ def derisk_brain(pid: str, asof: str | None = None, *, regime: dict | None = Non
         return {**out, "skipped": "no_trigger"}
 
     rs = tw["risk_state"]
-    gcap = _f(rs.get("gross_cap")) or 1.0
+    # Apply the same severity-decoupled cap used in derisk_flagship so pending-target revisions
+    # are also bounded by the ladder (sev2→0.70, sev3→0.55) even when state is risk_on/cap=1.0.
+    state_gross_cap = _f(rs.get("gross_cap")) or 1.0
+    sev = tw.get("severity", 0)
+    sev_cap = _severity_cap(sev)
+    eff_cap = min(state_gross_cap, sev_cap) if sev_cap is not None else state_gross_cap
     target = {str(k).upper(): _f(v) or 0.0 for k, v in (pt["target"] or {}).items()}
 
     try:
@@ -361,11 +441,11 @@ def derisk_brain(pid: str, asof: str | None = None, *, regime: dict | None = Non
                 pass
             kept[k] = v
         target = kept
-    # (2) scale gross down to the cap (the cash floor)
+    # (2) scale gross down to the effective cap (severity-decoupled; subtract-only)
     gross = round(sum(target.values()), 4)
     scaled = False
-    if gross > gcap > 0:
-        sc = gcap / gross
+    if gross > eff_cap > 0:
+        sc = eff_cap / gross
         target = {k: round(v * sc, 4) for k, v in target.items()}
         scaled = True
 
@@ -374,9 +454,11 @@ def derisk_brain(pid: str, asof: str | None = None, *, regime: dict | None = Non
     except Exception as e:  # noqa: BLE001
         return {**out, "error": f"save: {e!r}"[:160]}
 
-    result = {**out, "action": "revised_pending_target", "gross_before": gross, "gross_cap": gcap,
+    result = {**out, "action": "revised_pending_target", "gross_before": gross,
+              "gross_cap": eff_cap, "state_gross_cap": state_gross_cap,
+              "severity_cap": sev_cap, "eff_cap": eff_cap,
               "scaled": scaled, "dropped_chains": sorted(blocked), "reasons": tw["reasons"],
-              "n_names": len(target)}
+              "n_names": len(target), "cut_scope": sorted(_DERISKED_SLEEVES)}
     _write_artifact(asof, pid, result)
     return result
 

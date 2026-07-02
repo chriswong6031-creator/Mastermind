@@ -92,18 +92,47 @@ def _from_briefing() -> tuple[dict, dict, dict]:
     return queue, div, macro
 
 
+def _respect_standout_gate() -> bool:
+    """Doctrine toggle (P-NEW-2): honour the standout board's own `gate_go` verdict. Default TRUE;
+    a missing/unreadable doctrine key degrades to respecting the gate. Skipping only ever removes a
+    corroboration source, never adds one, so defaulting to True is invariant-safe."""
+    try:
+        from bot.doctrine_config import load_doctrine
+        v = load_doctrine().get("us_standouts_respect_gate_go")
+        return True if v is None else bool(v)
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def _from_standouts() -> dict:
     d = _read("factordata/us_standouts.json") or {}
+    # RESPECT THE BOARD'S OWN GATE (P-NEW-2): when the dashboard's `gate_go` verdict is explicitly
+    # False the standout board is a confluence read, NOT a validated buy list — so it must contribute
+    # NO positive corroboration to the intake funnel. Skip the whole source. Invariant-safe: gate_go
+    # missing (None) or truthy → today's behaviour (ingest); only an explicit False skips, and only
+    # while the doctrine toggle is on. Skipping removes a source, never adds one.
+    gate_go = d.get("gate_go")
+    if gate_go is False and _respect_standout_gate():
+        rows = d.get("buy") or d.get("standouts") or []
+        log.warning("us_standouts gate_go=False (board not statistically validated) — skipping "
+                    "%d standout buy names from intake funnel", len(rows))
+        return {}
     out = {}
     for s in (d.get("buy") or d.get("standouts") or []):
         t = _u(s.get("ticker"))
         if not t:
             continue
         conv = _f(s.get("conviction"))
+        # carry the PUBLISHED entry-risk levels (P-NEW-3) into the provenance record so the candidate
+        # funnel shows the board's stop / buy_zone / entry_grade. Purely additive — these do NOT size
+        # or gate the name (that stays the conviction sleeve's job); None-on-miss for legacy rows.
+        _es = s.get("entry_signal") if isinstance(s.get("entry_signal"), dict) else {}
         out[t] = {"score": min(max(conv if conv is not None else 0.5, 0.0), 1.0),
                   "reason": f"buy-board: {s.get('label') or s.get('state') or 'standout'}",
                   "lean": -1 if "AVOID" in (s.get("label") or "").upper() else 1,
-                  "confidence": None, "falsifier": None}
+                  "confidence": None, "falsifier": None,
+                  "stop": _es.get("stop"), "buy_zone": _es.get("buy_zone"),
+                  "entry_grade": _es.get("entry_grade")}
     return out
 
 

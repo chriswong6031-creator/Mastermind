@@ -9,6 +9,17 @@ scheduler then calls ``settle_open`` at the next open, which fills the queued ta
 rebalance at the live open marks. This mirrors the flagship's queue_orders/fill_pending discipline
 (bot/phase2.py), generalized to a full target (sells + trims + buys) via ``paper_account.settle_target``.
 
+**Open-price semantics (A4a fix):** the settle job runs at ~15:00 UTC (10 am ET), which means
+``yahoo_feed.warm`` returns the LAST print of the still-open partial-day bar rather than the
+true session open (9:30 ET), while the flagship (phase2.py) fills via ``paper_account.fill_pending``
+which inherits the live mark at queue time — roughly the open.  To unify semantics, the USD-book
+``_price`` helper now tries:
+  1. ``polygon.day_open(ticker)`` — the snapshot ``day.o`` field, the flagship's semantic.
+  2. ``yahoo_feed.open_price_local(ticker)`` — the latest daily bar's Open column.
+  3. ``paper_account._current_price(ticker)`` — today's Close/last (previous behaviour).
+Each fill gets a ``fill_price_source`` stamp (``polygon_open`` / ``yahoo_open`` / ``last_price``)
+so mixed semantics are at least auditable when the fallback fires.
+
 Calendars: the US books (autonomous, etf) use ``portfolio.market_calendar`` (NYSE); the Greater-China
 books (china, hk) use ``portfolio.china_calendar`` (A-share session). Both expose ``is_open()``.
 """
@@ -38,7 +49,13 @@ def is_open(pid: str) -> bool:
         return False
 
 
-def _diff_trades(before: dict, after: dict, prices: dict) -> list[dict]:
+def _diff_trades(before: dict, after: dict, prices: dict,
+                 sources: dict | None = None) -> list[dict]:
+    """Compute the executed trade list from a before/after positions snapshot.
+
+    ``sources`` is an optional ``{ticker: fill_price_source}`` map.  When provided,
+    each trade record gains a ``fill_price_source`` field (``'polygon_open'``,
+    ``'yahoo_open'``, or ``'last_price'``) so mixed-semantics fills are auditable."""
     trades = []
     for t in sorted(set(before) | set(after)):
         b = float((before.get(t) or {}).get("shares") or 0.0)
@@ -47,9 +64,16 @@ def _diff_trades(before: dict, after: dict, prices: dict) -> list[dict]:
         if abs(d) < 1e-6:
             continue
         px = prices.get(t)
-        trades.append({"ticker": t, "side": "buy" if d > 0 else "sell",
-                       "shares": round(abs(d), 4), "price": round(px, 4) if px else None,
-                       "value": round(abs(d) * px, 2) if px else None})
+        row: dict = {
+            "ticker": t,
+            "side": "buy" if d > 0 else "sell",
+            "shares": round(abs(d), 4),
+            "price": round(px, 4) if px else None,
+            "value": round(abs(d) * px, 2) if px else None,
+        }
+        if sources is not None:
+            row["fill_price_source"] = sources.get(t, "last_price")
+        trades.append(row)
     return trades
 
 
@@ -91,38 +115,137 @@ def _held(pid: str) -> set[str]:
     return set((paper_account._load_account(pid).get("positions") or {}).keys())
 
 
-def _price(pid: str, syms) -> dict[str, float]:
-    """Live marks for `syms` in `pid`'s base currency, by book: the ETF book uses the live-Yahoo ETF
-    pricer; other USD books the shared store; HKD/CNY books convert the store mark via FX."""
+def _open_price_usd(ticker: str,
+                    *,
+                    _polygon=None,
+                    _yahoo=None,
+                    _paper=None) -> tuple[float | None, str]:
+    """Best-estimate USD session-OPEN price for a US-listed ticker, with source attribution.
+
+    Priority (A4a): polygon day-open (snapshot ``day.o``) → yahoo daily-bar Open → last price
+    (today's Close / vendored snapshot).  Returns ``(price_or_None, source_label)`` where
+    ``source_label`` is one of ``'polygon_open'``, ``'yahoo_open'``, or ``'last_price'``.
+
+    The ``_polygon`` / ``_yahoo`` / ``_paper`` kwargs are injection points for tests: pass
+    callables with the same signatures as the real functions to avoid network calls.
+    """
+    # Allow tests to inject stubs; default to the real modules (lazy to avoid import cost
+    # on the Asia/non-USD code paths that call _price with ccy!='USD').
+    if _polygon is None:
+        try:
+            from data_layer import polygon as _pg
+            _polygon = _pg.day_open
+        except Exception:
+            _polygon = lambda t: None  # noqa: E731
+
+    if _yahoo is None:
+        try:
+            from data_layer import yahoo_feed as _yf
+            _yahoo = _yf.open_price_local
+        except Exception:
+            _yahoo = lambda t: None  # noqa: E731
+
+    if _paper is None:
+        try:
+            from portfolio import paper_account as _pa
+            _paper = _pa._current_price
+        except Exception:
+            _paper = lambda t: None  # noqa: E731
+
+    t = (ticker or "").upper().strip()
+    if not t:
+        return None, "last_price"
+
+    try:
+        px = _polygon(t)
+        if px and float(px) > 0:
+            return float(px), "polygon_open"
+    except Exception:
+        pass
+
+    try:
+        px = _yahoo(t)
+        if px and float(px) > 0:
+            return float(px), "yahoo_open"
+    except Exception:
+        pass
+
+    try:
+        px = _paper(t)
+        if px and float(px) > 0:
+            return float(px), "last_price"
+    except Exception:
+        pass
+
+    return None, "last_price"
+
+
+def _price_and_sources(pid: str, syms,
+                       *,
+                       _open_price_fn=None) -> tuple[dict[str, float], dict[str, str]]:
+    """Live marks for `syms` in `pid`'s base currency plus per-ticker source labels.
+
+    For USD books (autonomous): prefer session open price (A4a) via ``_open_price_usd``.
+    For the ETF book: the dedicated live-Yahoo Close pricer (its own warm logic).
+    For HKD/CNY books: FX-converted last price (unchanged — no open semantics after Asia close).
+
+    Returns ``(prices, sources)`` where ``sources`` maps ticker → source label
+    (``'polygon_open'`` | ``'yahoo_open'`` | ``'last_price'`` | ``'etf_universe'``).
+    ``_open_price_fn`` is an injection point for tests (same signature as ``_open_price_usd``).
+    """
     from portfolio import paper_account, registry
     prices: dict[str, float] = {}
+    sources: dict[str, str] = {}
+
     if pid == "etf":
+        # ETF book: the dedicated live-Yahoo pricer (unchanged — has its own warm logic).
         from portfolio import etf_universe
         etf_universe.warm(syms)
         for t in syms:
             px = etf_universe.price(t)
             if px and px > 0:
                 prices[t] = px
-        return prices
+                sources[t] = "etf_universe"
+        return prices, sources
+
     ccy = registry.currency(pid)
     if ccy == "USD":
+        # USD Brain books (autonomous): prefer session open so fill semantics match the flagship.
+        # The source label is stamped on each executed trade for auditability.
+        price_fn = _open_price_fn or _open_price_usd
         for t in syms:
-            px = paper_account._current_price(t)
+            px, src = price_fn(t)
             if px and px > 0:
                 prices[t] = px
-        return prices
+                sources[t] = src
+        return prices, sources
+
     from portfolio import fx
     for t in syms:
         base = fx.usd_to(paper_account._current_price(t), ccy)
         if base and base > 0:
             prices[t] = base
+            sources[t] = "last_price"
+    return prices, sources
+
+
+def _price(pid: str, syms, *, _open_price_fn=None) -> dict[str, float]:
+    """Prices only — thin wrapper over ``_price_and_sources`` for callers that don't need sources."""
+    prices, _ = _price_and_sources(pid, syms, _open_price_fn=_open_price_fn)
     return prices
 
 
-def settle_open(pid: str, asof: str | None = None) -> dict:
+def settle_open(pid: str, asof: str | None = None,
+                *,
+                _open_price_fn=None) -> dict:
     """At `pid`'s market OPEN, fill the queued target (decided on a prior closed session) with one
     rebalance at the live open marks, re-mark NAV, and republish the book contract so the dashboard
-    shows the filled positions. No-op (safe) if the market is closed or nothing is queued."""
+    shows the filled positions. No-op (safe) if the market is closed or nothing is queued.
+
+    For USD Brain books the fill prices are the session OPEN (polygon day.o → yahoo Open → last
+    price fallback); each trade in ``executed`` carries a ``fill_price_source`` stamp so mixed
+    semantics are auditable in the blotter.  ``_open_price_fn`` is an injection point for tests.
+    """
     from portfolio import paper_account, position_log, registry
     asof = asof or date.today().isoformat()
     if not is_open(pid):
@@ -130,11 +253,13 @@ def settle_open(pid: str, asof: str | None = None) -> dict:
     if not paper_account.load_pending_target(pid):
         return {"ok": False, "skipped": "nothing_queued"}
     bench = registry.benchmark(pid)
-    prices = _price(pid, set(_held(pid)) | {bench} | set((paper_account.load_pending_target(pid) or {}).get("target") or {}))
+    sym_set = set(_held(pid)) | {bench} | set((paper_account.load_pending_target(pid) or {}).get("target") or {})
+    prices, sources = _price_and_sources(pid, sym_set, _open_price_fn=_open_price_fn)
     before = dict((paper_account._load_account(pid).get("positions") or {}))
     target = paper_account.settle_target(prices, asof, portfolio_id=pid) or {}
     after = dict((paper_account._load_account(pid).get("positions") or {}))
-    executed = _diff_trades(before, after, prices)
+    # Pass sources so each trade row is stamped with fill_price_source for auditability.
+    executed = _diff_trades(before, after, prices, sources=sources)
     try:
         position_log.update([{"ticker": t, "sleeve": "brain", "weight": w, "entry_price": prices.get(t)}
                              for t, w in target.items() if t in prices], asof, portfolio_id=pid)

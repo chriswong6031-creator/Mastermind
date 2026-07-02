@@ -1,0 +1,16 @@
+{
+  "pid": "flagship",
+  "asof": "2026-06-30",
+  "tripwire": {
+    "trigger": true,
+    "severity": 2,
+    "reasons": [
+      "macro CAUTION state",
+      "SPY dealers SHORT gamma (amplifies the move)"
+    ],
+    "state": "caution"
+  },
+  "action": "hold",
+  "gross": 0.1972,
+  "gross_cap": 0.7
+}

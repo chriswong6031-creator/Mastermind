@@ -57,7 +57,7 @@ def run_hk(asof: str | None = None, *, force: bool = False, armed: bool = True,
     out: dict = {"portfolio_id": PORTFOLIO_ID, "asof": asof,
                  "ran_at": datetime.now(timezone.utc).isoformat()}
     today = _safe_date(asof)
-    out["trading_day"] = china_calendar.is_trading_day(today) if today else None
+    out["trading_day"] = china_calendar.is_trading_day(today, venue="HK") if today else None
 
     state0 = paper_account._load_account(PORTFOLIO_ID)
     inaugural = not _has_history() and not (state0.get("positions") or {})
@@ -547,9 +547,11 @@ def _safe_date(asof: str):
 
 
 def _regime_dict() -> dict:
-    raw = _read_china_regime()
-    return {"quad": raw.get("quad"), "quad_name": raw.get("quad_name"),
-            "liquidity_overlay": raw.get("liquidity_overlay")}
+    # Delegated to the single regime reader (architecture Stage 1, W1).
+    # HK uses the China regime frame; lens_row("hk") routes to china_regime/latest.json.
+    # lens_row() is golden-output tested to be byte-identical to the old 3-liner.
+    from brain.regime_frame import lens_row
+    return lens_row("hk")
 
 
 def _regime_brief() -> str:

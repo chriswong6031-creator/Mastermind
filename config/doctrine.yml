@@ -65,6 +65,24 @@ detectors:
   operator_holdings_source: "WATCHLIST.md"
   enabled: [D1, D2, D3, D4, D5, D6]
 
+# ---- macro-risk fragility DWELL STATE MACHINE (brain/macro_risk.risk_state) ----
+# The stateless fragility scorer flipped CAUTION -> RISK_ON on the very day SOXX fell -6.4%
+# (fragility collapsed as the crash cleared the crowded read) — un-capping the book from 0.7 to
+# 1.0 into a live unwind. This block governs the persistent state machine that fixes it: escalate
+# instantly on a bad read, de-escalate only slowly (memory), and NEVER un-cap while a tripwire is
+# hot. All thresholds are heuristic starting points — resize as the replay/ablation battery matures.
+risk_state:
+  # DE-ESCALATION deadbands — raw fragility must sit BELOW these to earn a step DOWN. They are
+  # deliberately LOWER than the escalation thresholds (0.35 caution / 0.60 risk_off) so a read
+  # hovering at the boundary cannot ratchet the state up and down; it must clearly recover.
+  caution_exit_frag: 0.28          # (unverified-prior) raw fragility must be < this to leave CAUTION
+  risk_off_exit_frag: 0.50         # (unverified-prior) raw fragility must be < this to leave RISK_OFF
+  deescalate_sessions: 3           # (unverified-prior) consecutive sub-deadband sessions required to step down
+  escalation_cooldown_sessions: 2  # (unverified-prior) sessions that must elapse since the last escalation
+  tripwire_clamp_sessions: 2       # (unverified-prior) a sev>=2 tripwire within this many sessions BLOCKS de-escalation
+  tripwire_clamp_severity: 2       # (unverified-prior) minimum derisk tripwire severity that clamps
+  max_dwell_sessions: 15           # (unverified-prior) a state older than this, persistently below floor, auto-releases one step
+
 # ---- portfolio safety engine (portfolio/safety.py) ----
 # Read-only risk backtest of the live book: a static-weight historical simulation of the
 # current holdings → max-drawdown / diversification / correlation / beta scorecard.
@@ -98,3 +116,23 @@ safety:
     beta: 0.12
     tail: 0.10
     cash: 0.06
+
+# ---- severity-decoupled gross caps (bot/derisk.py tripwire) ----
+# eff_cap = min(state_gross_cap, severity_cap[severity]) so the cut ALWAYS bites even when the
+# macro-risk-state scorer returns risk_on/cap=1.0 on a crash day (the 2026-07-01 no-op).
+# Severity 0/1 have no cap override (severity<2 never auto-cuts — caution alone is advisory).
+# (unverified-prior) — sized from fragility-chain doctrine; re-calibrate with replay data.
+derisk_severity_caps:
+  2: 0.70   # confirmed unwind signal (risk_off OR gex_flip OR theme_day ≥ 2 confirmations)
+  3: 0.55   # maximum severity (all channels lit; equiv. macro risk_off cap)
+
+# ---- us_standouts board gate (P-NEW-2) ----
+# The dashboard's standout BUY board publishes its OWN Phase-0 gate verdict, `gate_go`. When it is
+# FALSE the board is explicitly "a confluence read, NOT a standalone alpha" (validation_status
+# neutral_ic) — i.e. NOT a statistically-validated buy list. When true it is a ranked, gate-cleared
+# list. Historically the bot ingested the board unconditionally, seeding buys the dashboard itself
+# flagged NO-GO. This toggle makes the bot RESPECT the board's own gate: when gate_go is explicitly
+# False the standout source is SKIPPED (names may still arrive via basket / intake / open theses on
+# their own merits). Invariant-safe: a MISSING gate_go (legacy artifacts) degrades to today's ingest
+# behaviour — only an explicit False skips. Default true = respect the gate.
+us_standouts_respect_gate_go: true   # (unverified-prior) skip standout buy-board when its own Phase-0 gate says no-go

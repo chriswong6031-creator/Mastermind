@@ -9,11 +9,14 @@ else is shown but held at 0 — discipline over enthusiasm.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 import bot  # noqa: F401
 
 from portfolio import lenses
+
+log = logging.getLogger(__name__)
 
 # liquid leadership/AI-complex names that carry a full stockdata lens read
 _SHORTLIST = ["AVGO", "NVDA", "AMD", "MU", "GEV", "PLTR", "DELL", "TSM", "AMAT", "MRVL",
@@ -47,10 +50,36 @@ def _load(rel: str):
         return None
 
 
+def _respect_standout_gate() -> bool:
+    """Doctrine toggle (P-NEW-2): honour the standout board's own `gate_go` verdict. Default TRUE.
+    A missing/unreadable doctrine key degrades to today's behaviour (respect the gate) — the gate
+    only ever SKIPS the source, never adds names, so defaulting to respect is invariant-safe."""
+    try:
+        from bot.doctrine_config import load_doctrine
+        v = load_doctrine().get("us_standouts_respect_gate_go")
+        return True if v is None else bool(v)
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def _us_standouts(n: int = TOP_US) -> list[str]:
-    """Top-N tickers from the us_stocks standout BUY board (already rank-ordered by alpha)."""
+    """Top-N tickers from the us_stocks standout BUY board (already rank-ordered by alpha).
+
+    RESPECTS THE BOARD'S OWN GATE (P-NEW-2): the dashboard publishes `gate_go` — its Phase-0 verdict
+    on whether the board is a statistically-validated buy list. When gate_go is *explicitly* False
+    (present and falsy) the board is a confluence read, NOT standalone alpha, so we DROP its names
+    from the conviction universe — they can still arrive via basket picks / intake / open theses on
+    their own merits, but the un-validated board no longer directly seeds buys. Invariant-safe:
+      * gate_go missing (None) → today's behaviour, ingest (legacy artifacts, degrade-never-raise);
+      * gate_go truthy         → today's behaviour, ingest;
+      * gate_go explicitly False (and the doctrine toggle is on) → SKIP (never adds, only removes)."""
     d = _load("site/factordata/us_standouts.json") or {}
     buy = d.get("buy") or d.get("standouts") or []
+    gate_go = d.get("gate_go")
+    if gate_go is False and _respect_standout_gate():
+        log.warning("us_standouts gate_go=False (board not statistically validated) — skipping "
+                    "%d standout buy names from conviction universe", len(buy))
+        return []
     return [r.get("ticker") for r in buy[:n] if isinstance(r, dict) and r.get("ticker")]
 
 

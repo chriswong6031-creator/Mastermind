@@ -25,7 +25,8 @@ from datetime import date
 
 log = logging.getLogger(__name__)
 
-_CACHE: dict[str, float] = {}      # SYMBOL -> latest quote in its local currency (per process)
+_CACHE: dict[str, float] = {}      # SYMBOL -> latest Close quote in its local currency (per process)
+_OPEN_CACHE: dict[str, float] = {} # SYMBOL -> today's session Open price (cleared daily, same TTL)
 _TS: dict[str, float] = {}         # SYMBOL -> monotonic ts of its last fetch (drives the intraday TTL)
 _FETCHED_DAY: str | None = None    # the calendar day the cache was populated for (cleared when it rolls)
 
@@ -48,10 +49,10 @@ def _today() -> str:
 
 def _reset_if_stale() -> None:
     """Drop the cache when the calendar day rolls so a long-lived server re-fetches each day."""
-    global _FETCHED_DAY, _CACHE, _TS
+    global _FETCHED_DAY, _CACHE, _OPEN_CACHE, _TS
     d = _today()
     if _FETCHED_DAY != d:
-        _CACHE, _TS = {}, {}
+        _CACHE, _OPEN_CACHE, _TS = {}, {}, {}
         _FETCHED_DAY = d
 
 
@@ -86,6 +87,12 @@ def warm(tickers) -> None:
     except Exception as e:  # noqa: BLE001
         log.debug("yahoo_feed: no Close column (%s)", e)
         return
+    # Also grab the Open column for settle._open_price_usd — today's session Open is the
+    # correct fill price for orders that queued overnight (avoids the ~11am partial-day mark).
+    try:
+        open_col = df["Open"]
+    except Exception:
+        open_col = None
     try:
         if hasattr(close, "columns"):             # multi-symbol → column per ticker
             for sym in close.columns:
@@ -93,10 +100,25 @@ def warm(tickers) -> None:
                 if len(s):
                     k = str(sym).upper().strip()
                     _CACHE[k], _TS[k] = float(s.iloc[-1]), now
+            # Populate _OPEN_CACHE from the last row's Open value (the current/today's open).
+            if open_col is not None and hasattr(open_col, "columns"):
+                for sym in open_col.columns:
+                    s = open_col[sym].dropna()
+                    if len(s):
+                        k = str(sym).upper().strip()
+                        v = float(s.iloc[-1])
+                        if v > 0:
+                            _OPEN_CACHE[k] = v
         else:                                     # single ticker → a bare Series
             s = close.dropna()
             if len(s) and len(want) == 1:
                 _CACHE[want[0]], _TS[want[0]] = float(s.iloc[-1]), now
+            if open_col is not None and not hasattr(open_col, "columns"):
+                so = open_col.dropna()
+                if len(so) and len(want) == 1:
+                    v = float(so.iloc[-1])
+                    if v > 0:
+                        _OPEN_CACHE[want[0]] = v
     except Exception as e:  # noqa: BLE001
         log.debug("yahoo_feed parse failed (%s)", e)
 
@@ -110,6 +132,22 @@ def price_local(ticker: str, asof: str | None = None) -> float | None:
         return None
     warm([t])                                     # no-op when the symbol is still fresh
     return _CACHE.get(t)
+
+
+def open_price_local(ticker: str) -> float | None:
+    """Today's session OPEN price for `ticker` in its LOCAL currency, or None.
+
+    Populated as a side-effect of ``warm()`` from the ``Open`` column of the same
+    yfinance 7d daily download — so a prior ``warm([ticker])`` call makes this free.
+    Used by ``bot.settle._open_price_usd`` to fill overnight-queued Brain orders at the
+    true session open rather than the mid-session last print.  Returns None pre-open,
+    when the feed is unavailable, or when yfinance is not installed.
+    """
+    t = (ticker or "").upper().strip()
+    if not t:
+        return None
+    warm([t])                                     # ensure the daily bar has been fetched
+    return _OPEN_CACHE.get(t) or None            # None → caller falls back to Close / snapshot
 
 
 _HEALTH_PROBE = "0700.HK"          # Tencent — about as liquid as Hong Kong gets; if Yahoo can't
@@ -132,6 +170,6 @@ def feed_healthy(probe: str | None = None) -> bool | None:
 
 def clear_cache() -> None:
     """Drop the per-process price memo (tests / a forced refresh)."""
-    global _CACHE, _TS, _FETCHED_DAY
-    _CACHE, _TS = {}, {}
+    global _CACHE, _OPEN_CACHE, _TS, _FETCHED_DAY
+    _CACHE, _OPEN_CACHE, _TS = {}, {}, {}
     _FETCHED_DAY = None

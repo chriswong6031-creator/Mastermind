@@ -58,6 +58,48 @@ def _isolate_bot_db(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_macro_risk_state(tmp_path, monkeypatch):
+    """Isolate the macro-risk fragility DWELL state machine (brain/macro_risk).
+
+    ``risk_state`` now persists a dwell record to ``data/macro_risk/state_machine.json`` and reads the
+    dated derisk_*.json artifacts to detect a recent severity>=2 tripwire. Both are ABSOLUTE paths
+    resolved at import. Without isolation a test that escalates the state (e.g. a risk_off synthetic
+    read) would WRITE the live state file and the NEXT test would load it — the escalation is sticky by
+    design, so ``test_risk_on_state`` would inherit a leaked risk_off state and fail. Redirect the state
+    file to a fresh tmp path per test (cold-start == stateless, today's behaviour) and point the
+    artifacts dir at an empty tmp dir so the tripwire read finds nothing. Injection-based dwell tests
+    (test_macro_risk_dwell) pass their own loader/saver and are unaffected. Idempotent + safe."""
+    try:
+        from brain import macro_risk as mr
+        mr_data = tmp_path / "_macro_risk"
+        mr_data.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(mr, "_STATE_MACHINE", mr_data / "state_machine.json", raising=False)
+        monkeypatch.setattr(mr, "_ARTIFACTS", mr_data, raising=False)
+    except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _isolate_gate_severity_artifacts(tmp_path, monkeypatch):
+    """Isolate the gate's severity-tripwire reader (brain/gate._default_severity_reader).
+
+    The A6 wake-trigger reads ``gate._ROOT/data/macro_risk/<asof>/derisk_*.json`` off the LIVE
+    filesystem to decide whether a severity>=2 tripwire should force a same-day rebuild. That path is
+    resolved from an ABSOLUTE module root at call time. If any prior run (dev or another test) has left
+    a severity>=2 ``derisk_*.json`` in the worktree's live data/macro_risk/<asof>/ dir, EVERY
+    gate.should_run() at that asof would fire 'severity_tripwire' and the same-day dedup carry-forward
+    (test_phase2::test_runs_table_written_and_dedup) breaks — a false rebuild. Redirect the gate's root
+    at a fresh tmp dir per test so the tripwire reader finds no artifacts (severity 0 == today's default,
+    no spurious wake). Tests that want the trigger inject their own severity_reader and are unaffected.
+    Idempotent + safe."""
+    try:
+        from brain import gate
+        monkeypatch.setattr(gate, "_ROOT", tmp_path / "_gate_root", raising=False)
+    except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
 def _isolate_research_papers(tmp_path, monkeypatch):
     """Force the deterministic research-paper path (no armed Claude session during pytest) and
     redirect the papers/feed-note writes into a tmp dir, so the book build's research gate never

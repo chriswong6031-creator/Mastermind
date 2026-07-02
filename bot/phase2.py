@@ -66,6 +66,51 @@ def _conv_theme_id(t: str) -> str:
     return f"name:{t.upper()}"
 
 
+_STANDOUT_ROWS: dict[str, dict] | None = None      # ticker -> buy row, indexed once per build
+_STANDOUT_ROWS_ASOF: str | None = None             # the file as_of the index was built from
+
+
+def _published_entry_signal(ticker: str) -> dict:
+    """The dashboard's PUBLISHED per-name entry_signal (stop / buy_zone / entry_grade / chase_above)
+    for a standout BUY name (P-NEW-3). The source of truth is the us_standouts buy rows, NOT the
+    per-name stockdata JSON — the risk levels live on the standouts row. Every field is None-on-miss
+    (invariant: absent data must never fabricate a stop — a name with no published entry_signal simply
+    carries no stop and is bought at price, exactly like today). Buy rows are indexed once per build.
+
+    Returns {stop, buy_zone, entry_grade, chase_above} — all None when the ticker is absent from the
+    board or the file/field is missing."""
+    global _STANDOUT_ROWS, _STANDOUT_ROWS_ASOF
+    _empty = {"stop": None, "buy_zone": None, "entry_grade": None, "chase_above": None}
+    try:
+        d = _j("site/factordata/us_standouts.json") if (
+            _V / "site/factordata/us_standouts.json").exists() else None
+    except Exception:  # noqa: BLE001
+        d = None
+    if not isinstance(d, dict):
+        return dict(_empty)
+    asof = d.get("as_of")
+    # rebuild the index if we haven't yet, or the artifact rolled to a new as_of mid-process
+    if _STANDOUT_ROWS is None or _STANDOUT_ROWS_ASOF != asof:
+        idx: dict[str, dict] = {}
+        for r in (d.get("buy") or d.get("standouts") or []):
+            if isinstance(r, dict) and r.get("ticker"):
+                idx.setdefault(str(r["ticker"]).upper(), r)
+        _STANDOUT_ROWS, _STANDOUT_ROWS_ASOF = idx, asof
+    row = _STANDOUT_ROWS.get((ticker or "").upper())
+    if not isinstance(row, dict):
+        return dict(_empty)
+    _es = row.get("entry_signal")
+    if not isinstance(_es, dict):
+        return dict(_empty)
+    _g = lenses_mod._g
+    return {
+        "stop": _g(_es, "stop"),
+        "buy_zone": _g(_es, "buy_zone"),          # dict {low, high, pct_from_spot} or None
+        "entry_grade": _g(_es, "entry_grade"),
+        "chase_above": _g(_es, "chase_above"),
+    }
+
+
 def _entry_tech_fields(ticker: str) -> dict:
     """The entry-technical fields the L3 timing lever needs, pulled defensively from the name's
     published stockdata JSON (the same accessors the D1/D2/D4 block uses). Every field is nullable —
@@ -551,6 +596,22 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
             _pc = round(_raw_pc * _calib.multiplier("forge"), 2)
         except Exception:  # noqa: BLE001
             _pc = _raw_pc
+        # PUBLISHED entry_signal risk levels (P-NEW-3) — the dashboard's per-name stop / buy_zone /
+        # entry_grade / chase_above. All None-on-miss; keys are added to entry_levels + the book dict
+        # ONLY when non-null so legacy/absent-signal names stay byte-identical (add-only, degrade-safe).
+        # This is pure PROVENANCE + persistence: it records a level, it does not size, gate, or exit.
+        _es = _published_entry_signal(t)
+        _entry_levels = {"ticker": t}
+        if px:
+            _entry_levels["price"] = px
+        if _es.get("stop") is not None:
+            _entry_levels["stop"] = _es["stop"]
+        if _es.get("buy_zone"):
+            _entry_levels["buy_zone"] = _es["buy_zone"]
+        if _es.get("entry_grade"):
+            _entry_levels["entry_grade"] = _es["entry_grade"]
+        if _es.get("chase_above") is not None:
+            _entry_levels["chase_above"] = _es["chase_above"]
         doc = DecisionDoc(
             id=f"{asof}-{t}-conv", subject=t, lean=_lean, conviction="medium",
             prob_correct=_pc, raw_prob_correct=_raw_pc,
@@ -559,17 +620,27 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
             evidence=_evidence
                      + ([f"divergence:{d}" for d in c["divergences"]] if c["divergences"] else []),
             dissent="Held at 0 if any side vetoes (parabolic/distress/cycle-blocked).",
-            entry_levels={"ticker": t, "price": px} if px else {"ticker": t},
+            entry_levels=_entry_levels,
         ).finalize()
         _synth_map[doc.id] = (_synth, _matrix_rows)
         decisions.append(doc.to_json())
         ledger.append(doc.to_json())
         store.insert_thesis(con, doc.to_json())
-        book.append({"ticker": t, "theme_id": _conv_theme_id(t), "sleeve": "conviction", "stage": 2,
+        _book_row = {"ticker": t, "theme_id": _conv_theme_id(t), "sleeve": "conviction", "stage": 2,
                      "weight": c["weight"], "verdict": _verdict, "thesis_id": doc.id,
                      "time_stop_by": doc.time_stop_by, "confluence": c["confluence"],
                      "entry_price": px, "research": c.get("research"), "retained": is_retained,
-                     "size_stage": c.get("size_stage")})
+                     "size_stage": c.get("size_stage"),
+                     # carry entry_levels so position_log.update() can persist the published stop
+                     "entry_levels": _entry_levels}
+        # mirror the published levels onto the book row too (add-only) so downstream marks/audit see them
+        if _es.get("stop") is not None:
+            _book_row["published_stop"] = _es["stop"]
+        if _es.get("buy_zone"):
+            _book_row["buy_zone"] = _es["buy_zone"]
+        if _es.get("entry_grade"):
+            _book_row["entry_grade"] = _es["entry_grade"]
+        book.append(_book_row)
         _rl_log(_run_id, "trade", f"sized {t} conviction",
                 f"ticker={t} weight={c['weight']} confluence={c['confluence']:+.2f} "
                 f"bull={c['bull']} bear={c['bear']} price={px} verdict={_verdict}",
@@ -838,6 +909,34 @@ def run(asof: str | None = None, force: bool = False, research: bool = False) ->
             ledger.close(_dropped, _close_reasons.get(_dropped, "exited (left book)"))
         except Exception:
             pass
+
+    # ———— STOP-BREACH surfacing (P-NEW-3, NON-EXECUTING) ————
+    # For every open conviction position that persisted a published entry_signal.stop, compare it to
+    # the current price. If price < published_stop, LOG a loud runlog step. This W1 deliverable
+    # OBSERVES and RECORDS — it does NOT sell (stop EXECUTION is W2 work). Invariant-safe: a name
+    # with no persisted stop, or a name with no current price, is silently skipped (degrades to
+    # today's behaviour). Best-effort: wrapped so it can never break the build.
+    try:
+        from portfolio import paper_account as _pa_stop
+        for _op in position_log.open_positions():
+            if _op.get("sleeve") != "conviction":
+                continue
+            _stop = _op.get("published_stop")
+            if _stop is None:
+                continue
+            _t = _op.get("ticker")
+            _cur = _pa_stop._current_price(_t)
+            if _cur is None:
+                continue
+            try:
+                if float(_cur) < float(_stop):
+                    _rl_log(_run_id, "risk", f"STOP BREACH {_t}",
+                            f"price={_cur} < published_stop={_stop} (published entry_signal.stop; "
+                            f"W1 surfaces, does not exit)", ticker=_t, sleeve="conviction")
+            except (TypeError, ValueError):
+                continue
+    except Exception as _e:  # noqa: BLE001
+        _rl_log(_run_id, "decision", "stop-breach surfacing error", f"{_e!r}"[:160])
 
     # ———— enrich positions with opened_at / held_days / thesis_full ————
     decisions_by_id = {d["id"]: d for d in decisions}
