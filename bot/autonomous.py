@@ -470,13 +470,45 @@ def _regime_dict() -> dict:
 
 
 def _regime_brief() -> str:
+    """The persona's regime line — upgraded from the bare label to the full perception read.
+
+    HOT PATCH (charter P1, 2026-07-02 incident): on 07-02 this brief fed the Brain exactly
+    'Goldilocks Q1, liquidity expanding' and it re-risked into semis two days into the breakdown
+    while the cycles/radar/confidence planes all disagreed with the label. The Brain must see the
+    SAME enriched slice the judgment seats get (pm_conviction._full_regime_slice, W4) — the label
+    plus its own uncertainty and the planes that contradict it. Degrades to the old one-liner on
+    any failure (P2: missing data coarsens, never inflates)."""
     raw = _read_regime()
     if not raw:
         return ""
-    parts = [raw.get("quad_name") or raw.get("quad")]
-    if raw.get("liquidity_overlay"):
-        parts.append(f"liquidity {raw['liquidity_overlay']}")
-    return ", ".join(p for p in parts if p)
+    label = ", ".join(p for p in (
+        raw.get("quad_name") or raw.get("quad"),
+        f"liquidity {raw['liquidity_overlay']}" if raw.get("liquidity_overlay") else None) if p)
+    try:
+        from brain.pm_conviction import _full_regime_slice
+        fr = _full_regime_slice(raw)
+        lines = [f"REGIME LABEL: {label}"]
+        conf = fr.get("confidence")
+        if conf is not None:
+            lines.append(f"label confidence: {conf} — LOW confidence means the label itself is suspect")
+        if fr.get("transition_state"):
+            lines.append(f"transition: {fr['transition_state']}")
+        contra = fr.get("contradicting") or []
+        if contra:
+            lines.append(f"legs CONTRADICTING the label: {', '.join(map(str, contra))}")
+        cyc = fr.get("cycles") or {}
+        if cyc.get("late_cycle"):
+            lines.append(f"cycle engine reads LATE-CYCLE (do not add): {', '.join(cyc['late_cycle'])}")
+        if cyc.get("entry_favored"):
+            lines.append(f"cycle engine favors ENTRY: {', '.join(cyc['entry_favored'])}")
+        mrs = fr.get("macro_risk") or {}
+        if mrs.get("state"):
+            lines.append(f"risk state (dwell): {mrs['state']}, fragility {mrs.get('fragility')}")
+        lines.append("Charter P1: never size off the label alone — cite at least one more plane "
+                     "(cycles / risk state / contradicting legs) agreeing with any add.")
+        return "\n".join(lines)
+    except Exception:  # noqa: BLE001 — degrade to the legacy one-liner
+        return label
 
 
 def _read_regime() -> dict:
