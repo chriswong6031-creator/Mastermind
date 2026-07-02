@@ -1,10 +1,13 @@
 """The vendored-macro freshness guard: staleness math + the tripwire (no network).
 
-Tests are grouped into two sections:
+Tests are grouped into three sections:
   A. Original tests — preserved verbatim (is_stale thresholds, check_and_warn smoke).
   B. New anchor-hardening tests — tmp_path fake checkouts covering the W0 rewrite:
        all-anchors-present, one-missing, all-missing, stale-oldest-wins,
        stockdata-gap-reported, and anchors_report().
+  C. R2-leg tests — the _sync_r2_dir mirror of the stores git no longer carries
+       (manifest mode, index fallback, prune, ETag fast-path, failure keeps last-good),
+       with _fetch monkeypatched as the single network seam.
 
 All tests use tmp_path or monkeypatch to stay network-free.
 """
@@ -244,6 +247,7 @@ def test_no_gap_warning_when_stockdata_present(monkeypatch, tmp_path):
         "site/factordata/us_standouts.json": {"as_of": "2026-07-01"},
         "data/regime/latest.json":           {"date": "2026-07-01"},
         "site/sectordata/sector_cycles.json": {"meta": {"asOf": "2026-07-01"}},
+        "site/stockdata/SPY.json":            {"asof": "2026-07-01"},   # 4th (R2-leg) anchor
     }, stockdata=True)
     _patch_src(monkeypatch, src)
     msgs: list[str] = []
@@ -355,3 +359,143 @@ def test_sector_cycles_camelcase_asOf(monkeypatch, tmp_path):
     report = mr.anchors_report()
     assert report["sector_cycles"] == "2026-06-28"
     assert mr.asof() == "2026-06-28"   # oldest → governs
+
+
+# ---------------------------------------------------------------------------
+# Section C — R2-leg tests (the stores git no longer carries)
+# ---------------------------------------------------------------------------
+
+def _patch_fetch(monkeypatch, routes: dict[str, tuple[bytes, str]]) -> list[str]:
+    """Replace mr._fetch with a suffix-routed fake. Returns the list of fetched URLs.
+    routes maps a URL suffix (e.g. 'stockdata/_manifest.json') to (body, etag);
+    anything unrouted returns None (== network/404)."""
+    calls: list[str] = []
+
+    def fake(url: str):
+        calls.append(url)
+        for suffix, resp in routes.items():
+            if url.endswith(suffix):
+                return resp
+        return None
+
+    monkeypatch.setattr(mr, "_fetch", fake)
+    return calls
+
+
+def test_r2_sync_manifest_mode(monkeypatch, tmp_path):
+    """Manifest mode: files listed in _manifest.json are mirrored and the ETag is stamped."""
+    _patch_src(monkeypatch, tmp_path / "macro_src")
+    _patch_fetch(monkeypatch, {
+        "stockdata/_manifest.json": (json.dumps(
+            {"dir": "stockdata", "count": 2, "files": ["SPY.json", "index.json"]}).encode(), "m1"),
+        "stockdata/SPY.json":   (b'{"asof": "2026-07-01"}', "e1"),
+        "stockdata/index.json": (b'[]', "e2"),
+    })
+    assert mr._sync_r2_dir("stockdata") == 2
+    dest = mr._SRC / "site" / "stockdata"
+    assert json.loads((dest / "SPY.json").read_text())["asof"] == "2026-07-01"
+    assert (dest / "index.json").exists()
+    assert json.loads((dest / mr._R2_META).read_text())["etag"] == "m1"
+
+
+def test_r2_sync_fallback_index_mode(monkeypatch, tmp_path):
+    """No manifest yet: names come from index.json tickers + the known extras."""
+    _patch_src(monkeypatch, tmp_path / "macro_src")
+    _patch_fetch(monkeypatch, {
+        # no _manifest.json route -> 404
+        "stockdata/index.json":      (json.dumps([{"t": "SPY"}, {"t": "NVDA"}]).encode(), "i1"),
+        "stockdata/SPY.json":        (b'{"asof": "2026-07-01"}', ""),
+        "stockdata/NVDA.json":       (b'{"asof": "2026-07-01"}', ""),
+        "stockdata/fund_flows.json": (b'{}', ""),
+    })
+    # SPY + NVDA + index.json + fund_flows.json
+    assert mr._sync_r2_dir("stockdata") == 4
+    dest = mr._SRC / "site" / "stockdata"
+    for name in ("SPY.json", "NVDA.json", "index.json", "fund_flows.json"):
+        assert (dest / name).exists(), f"missing {name}"
+
+
+def test_r2_sync_prunes_delisted(monkeypatch, tmp_path):
+    """Local files no longer in the manifest are pruned; the sync meta survives."""
+    src = tmp_path / "macro_src"
+    dest = src / "site" / "stockdata"
+    dest.mkdir(parents=True)
+    (dest / "DEAD.json").write_text("{}")           # delisted stray from a prior sync
+    _patch_src(monkeypatch, src)
+    _patch_fetch(monkeypatch, {
+        "stockdata/_manifest.json": (json.dumps({"files": ["SPY.json"]}).encode(), "m2"),
+        "stockdata/SPY.json":       (b'{"asof": "2026-07-01"}', ""),
+    })
+    assert mr._sync_r2_dir("stockdata") == 1
+    assert not (dest / "DEAD.json").exists()
+    assert (dest / "SPY.json").exists()
+    assert (dest / mr._R2_META).exists()            # meta never pruned
+
+
+def test_r2_sync_etag_fast_path(monkeypatch, tmp_path):
+    """Unchanged manifest ETag + populated dir -> no per-file downloads on the second sync."""
+    _patch_src(monkeypatch, tmp_path / "macro_src")
+    calls = _patch_fetch(monkeypatch, {
+        "stockdata/_manifest.json": (json.dumps({"files": ["SPY.json"]}).encode(), "m3"),
+        "stockdata/SPY.json":       (b'{"asof": "2026-07-01"}', ""),
+    })
+    assert mr._sync_r2_dir("stockdata") == 1
+    n_after_first = len(calls)
+    assert mr._sync_r2_dir("stockdata") == 0        # fast-path skip
+    assert len(calls) == n_after_first + 1          # only the manifest was re-fetched
+
+
+def test_r2_sync_failure_keeps_last_good(monkeypatch, tmp_path):
+    """Total fetch failure returns None and leaves the existing mirror untouched."""
+    src = tmp_path / "macro_src"
+    dest = src / "site" / "stockdata"
+    dest.mkdir(parents=True)
+    (dest / "SPY.json").write_text('{"asof": "2026-06-30"}')
+    _patch_src(monkeypatch, src)
+    _patch_fetch(monkeypatch, {})                   # every fetch fails
+    assert mr._sync_r2_dir("stockdata") is None
+    assert json.loads((dest / "SPY.json").read_text())["asof"] == "2026-06-30"
+
+
+def test_r2_sync_partial_failure_not_stamped(monkeypatch, tmp_path):
+    """A partial sync (some files failed) must NOT stamp the ETag, so the next run retries."""
+    _patch_src(monkeypatch, tmp_path / "macro_src")
+    _patch_fetch(monkeypatch, {
+        "stockdata/_manifest.json": (json.dumps({"files": ["SPY.json", "NVDA.json"]}).encode(), "m4"),
+        "stockdata/SPY.json":       (b'{"asof": "2026-07-01"}', ""),
+        # NVDA.json unrouted -> download fails
+    })
+    assert mr._sync_r2_dir("stockdata") == 1
+    dest = mr._SRC / "site" / "stockdata"
+    assert (dest / "SPY.json").exists()
+    assert not (dest / mr._R2_META).exists()        # incomplete -> no fast-path next time
+
+
+def test_stockdata_anchor_governs_asof(monkeypatch, tmp_path):
+    """The R2-leg SPY anchor joins the minimum: a stale stockdata mirror trips the wire."""
+    src = _make_checkout(tmp_path, {
+        "site/factordata/us_standouts.json": {"as_of": "2026-07-01"},
+        "data/regime/latest.json":           {"date": "2026-07-01"},
+        "site/sectordata/sector_cycles.json": {"meta": {"asOf": "2026-07-01"}},
+        "site/stockdata/SPY.json":            {"asof": "2026-06-27"},   # R2 publish stalled
+    })
+    _patch_src(monkeypatch, src)
+    assert mr.anchors_report()["stockdata_spy"] == "2026-06-27"
+    assert mr.asof() == "2026-06-27"                # oldest governs
+    assert mr.is_stale(max_age_days=2, today=datetime.date(2026, 7, 1)) is True
+
+
+def test_refresh_wires_sparse_set_and_r2(monkeypatch):
+    """refresh() must self-migrate the sparse set (site + data/regime) and run the R2 leg."""
+    import types
+    run_calls: list[list[str]] = []
+    monkeypatch.setattr(mr, "ensure_clone", lambda: True)
+    monkeypatch.setattr(mr, "_run",
+                        lambda args, cwd=None, timeout=240:
+                        (run_calls.append(list(args)), types.SimpleNamespace(returncode=0))[1])
+    synced: list[bool] = []
+    monkeypatch.setattr(mr, "_sync_r2", lambda log=print: synced.append(True))
+    monkeypatch.setattr(mr, "asof", lambda: "2026-07-01")
+    assert mr.refresh() == "2026-07-01"
+    assert synced, "refresh() must invoke the R2 leg"
+    assert ["git", "sparse-checkout", "set", "site", "data/regime"] in run_calls
