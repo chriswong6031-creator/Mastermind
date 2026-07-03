@@ -186,6 +186,7 @@ signal queue today → ~95% priority-weighted after W-E, with NO new data source
 
 ## 5. Status log
 
+- **2026-07-03 (takeover, Fable): W-I SHIPPED + merged + DEPLOYED** (1d195c1, PID 85060, HEAD==master): distribution escalator (replay: sev-3/cap-0.55 on 06-26 vs the real 1.0 no-op; shadow trim ladder w/ pre-registered falsifier), liquidity-quality classifier (incident window = STRESS-EXPANSION; degrades toward stress never benign), **nowcast walk-forward gate FAILED honestly (hit-rate 0.354, wrong:right 1.9:1) → shipped ADVISORY-ONLY, not budget-wired (P3 working as designed)**, rotation_evidence blend (2 agree ×0.90 / 3+ ×0.80 + DEF_SLEEVE lift), incident replay battery 6/6 green as permanent CI, deploy-lag tripwire live, ballast cap-exempt, china_regime sparse restored. W-E.0/1 build launched next.
 - **2026-07-02 (takeover, Fable): CHARTER v2 committed** (10 principles + standing self-interrogation). P1 hot
   patch live (autonomous persona now reads the full perception block — it re-risked into semis on the bare
   label this morning). Judgment SHADOW book ARMED at restart (PID 55944, FLAGSHIP_JUDGMENT=1 persisted).
