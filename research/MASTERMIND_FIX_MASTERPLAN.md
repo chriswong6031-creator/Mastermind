@@ -133,7 +133,18 @@ Model-tier routing per house policy: **Sonnet** for well-specified code, **Opus*
 5. **Incident replay harness + deploy-lag tripwire**: this week's inputs become permanent executable fixtures; alert when prod trails master >24h. *(Sonnet)*
 6. **Sharp fixes**: ballast assets (SGOV/BIL) cap-exempt; data/china_regime restored to sparse; radar consumer verified on master. *(Sonnet)*
 
-### W5 — Measure & learn (Opus; the honesty wave)
+### W-L — The Conscious Learning wave (SUBSUMES W5; design: research/MASTERMIND_LEARNING_DESIGN.md)
+Journal (per-seat memory files: auto-drafted graded entries + conscious lesson duty w/ taxonomy, both mistakes
+AND successes, pinned rules injected into prompts, rules carry their own falsifiers) · Improvement Agenda (weekly
+self-critique fusing calibration/journals/shadow-gaps/benchmark-gaps/validation-verdicts/experiment-maturities →
+ranked AGENDA.md with fix_type + owner — "what to tell the AI to fix", pre-argued) · Bounded self-repair
+(self_tune: ONLY unverified-prior doctrine constants, through the immutable Lab harness w/ PBO+holdout,
+shadow-first, auto-revert, journaled — finally gives loop/ its consumer; prompts/code = proposal-only; gates and
+charter = never self-modifiable) · W5 measurement floor (marks, benchmark ledger w/ defensive-basket bogey,
+regime-conditional grading, allocation attribution, governor) · Experiment registry w/ come-back dates ·
+MAINTENANCE.md (the Opus-only-future runbook). Builds AFTER W-E.0/1 merges.
+
+### W5 — Measure & learn (Opus; the honesty wave — SUBSUMED INTO W-L above, kept for reference)
 1. **`portfolio/marks.py`** — single marking layer: Polygon-EOD → Yahoo-parquet → last-good-carry with `stale_days`, NEVER avg_cost; marks all 7 books incl. Self-Directed; kills SBI-3/nav-dupes.
 2. **`brain/benchmark_ledger.py`** — renorm battery (common inception, one source): SPY + **regime-conditional bogey** (`max(SPY, defensive basket)` only when risk_state≠risk_on OR WEAKENING — plain SPY in risk_on so cash-hoarding still loses) + Self-Directed + carry shadows. **Kill-switch: if the SD lead vanishes under renorm, cancel the governor/conditional-bogey downstream (keep W2/W3 — justified independently).**
 3. **Attribution**: allocation + cash-timing terms beside per-name Brinson (builds on in-flight #17); reconcile-asserted.
