@@ -448,6 +448,73 @@ def set_thesis(ticker: str, note: str) -> Optional[dict]:
 # NAV history mark (W-L / L1) — the mark seam so this book is graded like the others
 # ---------------------------------------------------------------------------
 
+_PUBLISHED_PATH = _ROOT / "data" / "portfolios" / "self_directed" / "latest.json"
+
+
+def publish(*, prices: dict[str, float] | None = None, asof: str | None = None) -> Optional[dict]:
+    """Write data/portfolios/self_directed/latest.json in the firm_exposure latest.json schema.
+
+    This is the PUBLISH SEAM that makes the self-directed book visible to firm_exposure.summary()
+    as a named-yardstick row (cluster/name concentration across the whole firm, including the user's
+    book, is visible to the firm accountant). firm_exposure's headroom()/clamp_book() deliberately
+    EXCLUDE this book from their binding sums — the benchmark book must never mechanically shape the
+    books it measures.
+
+    Schema matches paper_account's published format so _load_book() reads it without modification:
+    {schema, portfolio_id, as_of, nav, positions:[{ticker, weight, shares, market_value}]}.
+    Un-priced names are included at weight derived from avg_cost (an honest approximation tagged in
+    the note). Best-effort; never raises; returns the written doc or None on failure."""
+    asof_str = str(asof or _today())[:10]
+    state = _load_account()
+    prices_map = {(k or "").upper(): float(v) for k, v in (prices or {}).items() if v and v > 0}
+    positions_raw = state.get("positions", {})
+
+    # Mark every position (live price > avg_cost fallback — honest approximation)
+    marks: dict[str, float] = {}
+    for ticker in positions_raw:
+        px = prices_map.get(ticker) or _current_price(ticker)
+        if px and px > 0:
+            marks[ticker] = float(px)
+
+    invested = sum(
+        (pos.get("shares") or 0.0) * marks.get(tk, pos.get("avg_cost") or 0.0)
+        for tk, pos in positions_raw.items()
+    )
+    cash = state.get("cash", 0.0)
+    nav = cash + invested
+
+    rows: list[dict] = []
+    for ticker, pos in positions_raw.items():
+        shares = float(pos.get("shares") or 0.0)
+        if shares <= 0:
+            continue
+        px = marks.get(ticker, pos.get("avg_cost") or 0.0)
+        mv = shares * px if px else None
+        w = round(mv / nav, 6) if (mv is not None and nav > 0) else None
+        rows.append({"ticker": ticker, "shares": round(shares, 6),
+                     "market_value": round(mv, 2) if mv is not None else None,
+                     "weight": w})
+
+    doc = {
+        "schema": "portfolio.v1",
+        "portfolio_id": "self_directed",
+        "as_of": asof_str,
+        "nav": round(nav, 2),
+        "currency": "USD",
+        "positions": rows,
+        "note": ("Self-directed book published for firm-wide concentration visibility. "
+                 "Positions at live mark (avg_cost fallback for unpriced names). "
+                 "EXCLUDED from firm headroom/clamp math — the benchmark book must not "
+                 "mechanically constrain the books it measures."),
+    }
+    try:
+        _PUBLISHED_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _PUBLISHED_PATH.write_text(json.dumps(doc, indent=2, default=str))
+        return doc
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def mark(*, prices: dict[str, float] | None = None, asof: str | None = None,
          benchmark: str = "SPY") -> Optional[dict]:
     """Snapshot this book's NAV to nav_history.jsonl (idempotent per date), so the CIO review and

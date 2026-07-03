@@ -81,14 +81,24 @@ def _thresholds() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def _book_ids() -> list[dict]:
-    """The paper books to scan (registry-driven; self_directed is user-run and excluded — it has
-    no published latest.json book and isn't a Brain pile-up). Degrades to a static list."""
+    """Brain/paper books to scan for pile-up detection (self_directed excluded — it is the user's
+    own book and the firm yardstick; it must never contribute to pile-up detection or headroom math,
+    so it is kept separate: see summary() `yardstick` key). Degrades to a static list."""
     try:
         from portfolio import registry
         return [m for m in registry.all_portfolios() if m.get("id") != "self_directed"]
     except Exception:  # noqa: BLE001
         return [{"id": i, "currency": "USD"} for i in
                 ("flagship", "heavyweight", "autonomous", "etf", "china", "hk")]
+
+
+def _self_directed_meta() -> dict:
+    """The self_directed book's registry metadata (best-effort)."""
+    try:
+        from portfolio import registry
+        return registry.get("self_directed")
+    except Exception:  # noqa: BLE001
+        return {"id": "self_directed", "name": "Self-Directed", "currency": "USD"}
 
 
 def _data_dir(pid: str) -> Path:
@@ -238,6 +248,7 @@ def _empty(as_of: str, note: str) -> dict:
         "by_chain": {},
         "thresholds": _thresholds(),
         "currency_clean": False,
+        "yardstick": None,   # self_directed snapshot — visible for firm-wide view, excluded from clamp math
         "note": note,
     }
 
@@ -258,6 +269,11 @@ def summary(asof: str | None = None) -> dict:
           by_sector:      {sector: {firm_weight, firm_usd, n_books, tickers}},
           thresholds:     {min_books, name_max, sector_max, top_k},
           currency_clean: bool,    # True iff every holding book's NAV converted to USD cleanly
+          yardstick:      {id, name, currency, nav, n_holdings,
+                           holdings:{ticker:weight}} | None,
+                          # self_directed book — displayed for whole-firm concentration visibility;
+                          # EXCLUDED from books[], top_exposures, flags, and all clamp/headroom math.
+                          # The benchmark book must never mechanically shape the books it measures.
           note:           str,     # honest description of the aggregation method actually used
         }
 
@@ -430,6 +446,32 @@ def summary(asof: str | None = None) -> dict:
     except Exception:  # noqa: BLE001 — the chain rollup is additive; never break the monitor
         by_chain = {}
 
+    # ---- self_directed yardstick: the user's book as a whole-firm visibility row ----
+    # DISPLAY-ONLY in this report: self_directed is excluded from books[], top_exposures, and all
+    # flag/clamp/headroom math. The benchmark book must never mechanically shape the books it measures.
+    # It is loaded independently here so the firm accountant can see the whole-firm picture, including
+    # the user's positions, without those positions entering the pile-up or cap calculations.
+    yardstick: dict | None = None
+    try:
+        sd_meta = _self_directed_meta()
+        sd_book = _load_book(sd_meta)
+        if sd_book:
+            sd_book["nav_usd"] = _nav_usd(sd_book)
+            yardstick = {
+                "id": sd_book["id"],
+                "name": sd_book["name"],
+                "currency": sd_book["currency"],
+                "nav": round(sd_book["nav"], 2) if sd_book.get("nav") else None,
+                "nav_usd": round(sd_book["nav_usd"], 2) if sd_book.get("nav_usd") else None,
+                "n_holdings": sd_book["n_holdings"],
+                "holdings": {tk: round(w, 6) for tk, w in sd_book["holdings"].items()},
+                "note": ("Display-only firm-wide yardstick. EXCLUDED from pile-up detection, "
+                         "headroom(), and clamp_book() — the benchmark book must never "
+                         "mechanically shape the books it measures."),
+            }
+    except Exception:  # noqa: BLE001 — the yardstick row is additive; never break the monitor
+        yardstick = None
+
     # ---- honest note about the aggregation actually used ----
     if currency_clean:
         method = ("Firm weight = USD-NAV-weighted mean book weight; firm_usd is the USD-equivalent "
@@ -439,8 +481,10 @@ def summary(asof: str | None = None) -> dict:
                   "EQUAL-book mean weight (each holding book counts the same) and firm_usd is "
                   "populated only for names held entirely by USD-convertible books.")
     sector_note = "" if any_sector else " Sector rollup omitted — no sector data available (stockdata snapshot absent)."
+    ys_note = (" Self-directed yardstick included for whole-firm visibility (excluded from all "
+               "clamp math — it is the benchmark, not a managed book)." if yardstick else "")
     note = (f"Read-only firm-exposure monitor across {len(books)} book(s). {method}"
-            f"{sector_note} This NEVER changes any allocation.")
+            f"{sector_note}{ys_note} This NEVER changes any allocation.")
 
     return {
         "as_of": as_of,
@@ -455,6 +499,7 @@ def summary(asof: str | None = None) -> dict:
         "by_chain": by_chain,
         "thresholds": th,
         "currency_clean": currency_clean,
+        "yardstick": yardstick,
         "note": note,
     }
 

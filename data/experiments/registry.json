@@ -1,162 +1,190 @@
 [
- {
-  "id": "shadow-trim-ladder",
-  "what": "W-I distribution trim ladder (shadow) \u2014 per-name quarter-step trims graded at 21td",
-  "gate": "promotes only if >=40 graded trims beat HOLD on risk-adjusted forward returns",
-  "maturity_condition": ">=40 graded shadow trims",
-  "status": "open",
-  "owner": "fable-review",
-  "artifact_paths": [
-   "data/shadow/distribution_trims/"
-  ],
-  "comeback_date": null,
-  "notes": ""
- },
- {
-  "id": "judgment-book-promotion",
-  "what": "W4 judgment shadow book A/B vs the braked engine",
-  "gate": "replay green + divergence (>2% gross AND >=1 defensive take) + 4wk shadow NAV >= engine in WEAKENING/CAUTION vs max(SPY,defensive)",
-  "comeback_date": "2026-07-17",
-  "status": "open",
-  "owner": "fable-review",
-  "artifact_paths": [
-   "data/shadow/books/flagship_judgment/"
-  ],
-  "maturity_condition": "replay green + divergence (>2% gross AND >=1 defensive take) + 4wk shadow NAV >= engine in WEAKENING/CAUTION vs max(SPY,defensive)",
-  "notes": ""
- },
- {
-  "id": "posture-decider-arming",
-  "what": "W-E.2 posture decider E3.3 arming decision",
-  "gate": "E2.2 wired + grep-gate CI + calm-tape zero-drift + 2wk shadow no-compounding on disagreeing tapes",
-  "comeback_date": "2026-07-17",
-  "status": "open",
-  "owner": "fable-review",
-  "artifact_paths": [
-   "data/posture/"
-  ],
-  "maturity_condition": "E2.2 wired + grep-gate CI + calm-tape zero-drift + 2wk shadow no-compounding on disagreeing tapes",
-  "notes": ""
- },
- {
-  "id": "crash-risk-auc-gate",
-  "what": "CRASH-RISK alarm forward log accrual toward its AUC gate",
-  "gate": "AUC>0.55 vs SPY 5d fwd max-drawdown AND fires <10% of days (uncomputable 2026-07-03 \u2014 no history)",
-  "comeback_date": "2026-10-01",
-  "status": "open",
-  "owner": "opus-session",
-  "artifact_paths": [
-   "data/anticipation/",
-   "research/eyes/validation_runs/crash_risk_2026-07-02.md"
-  ],
-  "maturity_condition": "AUC>0.55 vs SPY 5d fwd max-drawdown AND fires <10% of days (uncomputable 2026-07-03 \u2014 no history)",
-  "notes": ""
- },
- {
-  "id": "label-vs-planes-forward-log",
-  "what": "market_view disagreement conflict-days forward log",
-  "gate": "AUC>0.55 conflict-days vs 5d fwd drawdown (uncomputable 2026-07-03)",
-  "comeback_date": "2026-10-01",
-  "status": "open",
-  "owner": "opus-session",
-  "artifact_paths": [
-   "data/market_view/"
-  ],
-  "maturity_condition": "AUC>0.55 conflict-days vs 5d fwd drawdown (uncomputable 2026-07-03)",
-  "notes": ""
- },
- {
-  "id": "rotation-tensor-regate",
-  "what": "rotation_tensor composite re-gate (failed AUC 0.5426 vs 0.55 on 2026-07-02)",
-  "gate": "AUC>0.55 AND fires <10% of days on the accrued forward log",
-  "comeback_date": "2026-10-01",
-  "status": "open",
-  "owner": "opus-session",
-  "artifact_paths": [
-   "data/market_view/rotation_tensor.json",
-   "research/eyes/validation_runs/rotation_tensor_2026-07-02.md"
-  ],
-  "maturity_condition": "AUC>0.55 AND fires <10% of days on the accrued forward log",
-  "notes": ""
- },
- {
-  "id": "governor-arming",
-  "what": "posture_governor (W-L, default OFF)",
-  "gate": "effective_n>=8 + HAC significance + noise-injection tests green",
-  "maturity_condition": "effective_n>=8 weekly reviews",
-  "status": "open",
-  "owner": "fable-review",
-  "artifact_paths": [
-   "data/benchmark/"
-  ],
-  "comeback_date": null,
-  "notes": ""
- },
- {
-  "id": "self-tune-arming",
-  "what": "self_tune bounded self-repair (default OFF)",
-  "gate": "denylist tests green + first family proposal validated through the Lab harness in shadow",
-  "comeback_date": "2026-07-24",
-  "status": "open",
-  "owner": "fable-review",
-  "artifact_paths": [
-   "data/self_tune/"
-  ],
-  "maturity_condition": "denylist tests green + first family proposal validated through the Lab harness in shadow",
-  "notes": ""
- },
- {
-  "id": "nowcast-advisory-review",
-  "what": "regime_nowcast (advisory-only after failed gate 0.354)",
-  "gate": "re-run walk-forward after 60 more sessions of forward log; retire or re-gate",
-  "comeback_date": "2026-09-26",
-  "status": "open",
-  "owner": "opus-session",
-  "artifact_paths": [
-   "research/incidents/2026-07-02-semis-breakdown/nowcast_validation.md"
-  ],
-  "maturity_condition": "re-run walk-forward after 60 more sessions of forward log; retire or re-gate",
-  "notes": ""
- },
- {
-  "id": "bubble-formation-grading",
-  "what": "BUBBLE-FORMATION alarm needs a forward-graded crowding artifact (H4 handoff)",
-  "gate": "advisory-forever until the dashboard ships a graded crowding log",
-  "maturity_condition": "H4 handoff lands",
-  "status": "open",
-  "owner": "opus-session",
-  "artifact_paths": [
-   "data/anticipation/"
-  ],
-  "comeback_date": null,
-  "notes": "",
-  "note": "[blocked-on-H4-handoff]"
- },
- {
-  "id": "w7-ablation-battery",
-  "what": "per-lever ablation falsifiers (cycle entry-tilt spread, confidence term power, brake-week cost-benefit)",
-  "gate": "pre-committed kill criteria in the masterplan W7",
-  "comeback_date": "2026-07-31",
-  "status": "open",
-  "owner": "fable-review",
-  "artifact_paths": [
-   "research/MASTERMIND_FIX_MASTERPLAN.md"
-  ],
-  "maturity_condition": "pre-committed kill criteria in the masterplan W7",
-  "notes": ""
- },
- {
-  "id": "deploy-lag-sla",
-  "what": "production never trails master >24h",
-  "gate": "continuous; check_deploy_lag on every build",
-  "maturity_condition": "continuous",
-  "status": "open",
-  "owner": "self-tunable",
-  "artifact_paths": [
-   "data/deploy_lag.json",
-   "scripts/check_deploy_lag.py"
-  ],
-  "comeback_date": null,
-  "notes": ""
- }
+  {
+    "id": "shadow-trim-ladder",
+    "what": "W-I distribution trim ladder (shadow) \u2014 per-name quarter-step trims graded at 21td",
+    "gate": "promotes only if >=40 graded trims beat HOLD on risk-adjusted forward returns",
+    "maturity_condition": ">=40 graded shadow trims",
+    "status": "open",
+    "owner": "fable-review",
+    "artifact_paths": [
+      "data/shadow/distribution_trims/"
+    ],
+    "comeback_date": null,
+    "notes": ""
+  },
+  {
+    "id": "judgment-book-promotion",
+    "what": "W4 judgment shadow book A/B vs the braked engine",
+    "gate": "replay green + divergence (>2% gross AND >=1 defensive take) + 4wk shadow NAV >= engine in WEAKENING/CAUTION vs max(SPY,defensive)",
+    "comeback_date": "2026-07-17",
+    "status": "open",
+    "owner": "fable-review",
+    "artifact_paths": [
+      "data/shadow/books/flagship_judgment/"
+    ],
+    "maturity_condition": "replay green + divergence (>2% gross AND >=1 defensive take) + 4wk shadow NAV >= engine in WEAKENING/CAUTION vs max(SPY,defensive)",
+    "notes": ""
+  },
+  {
+    "id": "posture-decider-arming",
+    "what": "W-E.2 posture decider E3.3 arming decision",
+    "gate": "E2.2 wired + grep-gate CI + calm-tape zero-drift + 2wk shadow no-compounding on disagreeing tapes",
+    "comeback_date": "2026-07-17",
+    "status": "open",
+    "owner": "fable-review",
+    "artifact_paths": [
+      "data/posture/"
+    ],
+    "maturity_condition": "E2.2 wired + grep-gate CI + calm-tape zero-drift + 2wk shadow no-compounding on disagreeing tapes",
+    "notes": ""
+  },
+  {
+    "id": "crash-risk-auc-gate",
+    "what": "CRASH-RISK alarm forward log accrual toward its AUC gate",
+    "gate": "AUC>0.55 vs SPY 5d fwd max-drawdown AND fires <10% of days (uncomputable 2026-07-03 \u2014 no history)",
+    "comeback_date": "2026-10-01",
+    "status": "open",
+    "owner": "opus-session",
+    "artifact_paths": [
+      "data/anticipation/",
+      "research/eyes/validation_runs/crash_risk_2026-07-02.md"
+    ],
+    "maturity_condition": "AUC>0.55 vs SPY 5d fwd max-drawdown AND fires <10% of days (uncomputable 2026-07-03 \u2014 no history)",
+    "notes": ""
+  },
+  {
+    "id": "label-vs-planes-forward-log",
+    "what": "market_view disagreement conflict-days forward log",
+    "gate": "AUC>0.55 conflict-days vs 5d fwd drawdown (uncomputable 2026-07-03)",
+    "comeback_date": "2026-10-01",
+    "status": "open",
+    "owner": "opus-session",
+    "artifact_paths": [
+      "data/market_view/"
+    ],
+    "maturity_condition": "AUC>0.55 conflict-days vs 5d fwd drawdown (uncomputable 2026-07-03)",
+    "notes": ""
+  },
+  {
+    "id": "rotation-tensor-regate",
+    "what": "rotation_tensor composite re-gate (failed AUC 0.5426 vs 0.55 on 2026-07-02)",
+    "gate": "AUC>0.55 AND fires <10% of days on the accrued forward log",
+    "comeback_date": "2026-10-01",
+    "status": "open",
+    "owner": "opus-session",
+    "artifact_paths": [
+      "data/market_view/rotation_tensor.json",
+      "research/eyes/validation_runs/rotation_tensor_2026-07-02.md"
+    ],
+    "maturity_condition": "AUC>0.55 AND fires <10% of days on the accrued forward log",
+    "notes": ""
+  },
+  {
+    "id": "governor-arming",
+    "what": "posture_governor (W-L, default OFF)",
+    "gate": "effective_n>=8 + HAC significance + noise-injection tests green",
+    "maturity_condition": "effective_n>=8 weekly reviews",
+    "status": "open",
+    "owner": "fable-review",
+    "artifact_paths": [
+      "data/benchmark/"
+    ],
+    "comeback_date": null,
+    "notes": ""
+  },
+  {
+    "id": "self-tune-arming",
+    "what": "self_tune bounded self-repair (default OFF)",
+    "gate": "denylist tests green + first family proposal validated through the Lab harness in shadow",
+    "comeback_date": "2026-07-24",
+    "status": "open",
+    "owner": "fable-review",
+    "artifact_paths": [
+      "data/self_tune/"
+    ],
+    "maturity_condition": "denylist tests green + first family proposal validated through the Lab harness in shadow",
+    "notes": ""
+  },
+  {
+    "id": "nowcast-advisory-review",
+    "what": "regime_nowcast (advisory-only after failed gate 0.354)",
+    "gate": "re-run walk-forward after 60 more sessions of forward log; retire or re-gate",
+    "comeback_date": "2026-09-26",
+    "status": "open",
+    "owner": "opus-session",
+    "artifact_paths": [
+      "research/incidents/2026-07-02-semis-breakdown/nowcast_validation.md"
+    ],
+    "maturity_condition": "re-run walk-forward after 60 more sessions of forward log; retire or re-gate",
+    "notes": ""
+  },
+  {
+    "id": "bubble-formation-grading",
+    "what": "BUBBLE-FORMATION alarm needs a forward-graded crowding artifact (H4 handoff)",
+    "gate": "advisory-forever until the dashboard ships a graded crowding log",
+    "maturity_condition": "H4 handoff lands",
+    "status": "open",
+    "owner": "opus-session",
+    "artifact_paths": [
+      "data/anticipation/"
+    ],
+    "comeback_date": null,
+    "notes": "",
+    "note": "[blocked-on-H4-handoff]"
+  },
+  {
+    "id": "w7-ablation-battery",
+    "what": "per-lever ablation falsifiers (cycle entry-tilt spread, confidence term power, brake-week cost-benefit)",
+    "gate": "pre-committed kill criteria in the masterplan W7",
+    "comeback_date": "2026-07-31",
+    "status": "open",
+    "owner": "fable-review",
+    "artifact_paths": [
+      "research/MASTERMIND_FIX_MASTERPLAN.md"
+    ],
+    "maturity_condition": "pre-committed kill criteria in the masterplan W7",
+    "notes": ""
+  },
+  {
+    "id": "deploy-lag-sla",
+    "what": "production never trails master >24h",
+    "gate": "continuous; check_deploy_lag on every build",
+    "maturity_condition": "continuous",
+    "status": "open",
+    "owner": "self-tunable",
+    "artifact_paths": [
+      "data/deploy_lag.json",
+      "scripts/check_deploy_lag.py"
+    ],
+    "comeback_date": null,
+    "notes": ""
+  },
+  {
+    "id": "hw-firm-universe-ab",
+    "what": "W6 T1 Heavyweight firm-best-ideas universe (MASTERMIND_HW_FIRM_UNIVERSE, default ON) vs the old flagship-only mirror",
+    "gate": "kill the flag if mean cluster-overlap-with-Flagship does NOT fall for the firm-universe arm vs the mirror shadow over the 2-4wk window (n>=5, mean_delta >= 0)",
+    "maturity_condition": ">=5 daily A/B rows in data/shadow/heavyweight_ab/ledger.jsonl; window_verdict.kill_flag decides",
+    "status": "open",
+    "owner": "fable-review",
+    "artifact_paths": [
+      "data/shadow/heavyweight_ab/",
+      "portfolio/heavyweight_shadow.py"
+    ],
+    "comeback_date": "2026-07-24",
+    "notes": "The falsifiable claim: re-pointing Heavyweight from Flagship-amplifier to firm-concentrator should make it MORE orthogonal to Flagship. compare()/window_verdict() in portfolio.heavyweight_shadow read the A/B."
+  },
+  {
+    "id": "cn-funnel-edge-led",
+    "what": "CN book CHINA_FUNNEL_PROFILE=edge-led vs default funnel — arms the dashboard-validated China reversal/low-vol edge in the live intake funnel",
+    "gate": "CN book vs CSI300-proxy bogey (FXI) over 4wk with CHINA_FUNNEL_PROFILE=edge-led vs the prior 4wk on default; edge-led arm must show better rolling 4wk return vs the FXI bogey (or smaller underperformance) AND not increase turnover by >25% vs default",
+    "maturity_condition": "CN book vs FXI bogey over 4wk with edge-led mode active vs the prior 4wk default; compare rolling_4wk_ret_vs_bogey for both windows",
+    "status": "open",
+    "owner": "fable-review",
+    "artifact_paths": [
+      "brain/china_intake.py",
+      "data/benchmark/china/"
+    ],
+    "comeback_date": "2026-07-31",
+    "notes": "Arm via env: CHINA_FUNNEL_PROFILE=edge-led (add to systemd/process env and restart the China Brain). Default is 'default' (byte-identical to pre-W6). P8: behaviour-changing, no validated basis on THIS codebase yet; ships flag-off. The dashboard-side validation (CN Reversal Sleeve, china_reversal/low-vol IC) is the external prior — it justifies shipping the flag but not hard-flipping the default."
+  }
 ]

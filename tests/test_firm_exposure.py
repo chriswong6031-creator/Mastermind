@@ -356,3 +356,78 @@ def test_firm_caps_env_override(iso, monkeypatch):
     # raise the firm cluster cap to 0.50 → room 0.30
     monkeypatch.setenv("MASTERMIND_FIRM_CLUSTER_CAP", "0.50")
     assert firm_exposure.headroom("semis_ai", "flagship") == pytest.approx(0.30, abs=1e-9)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# T3 — self_directed as the official firm yardstick
+# Two invariants:
+#   (1) self_directed APPEARS in summary() under the 'yardstick' key (whole-firm visibility).
+#   (2) self_directed NEVER enters headroom() or clamp_book() (must not shape its own benchmarks).
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+def _seed_self_directed(tmp_path: "Path", positions: list[dict], *, nav: float = 1_000_000.0) -> None:
+    """Write a self_directed latest.json at data/portfolios/self_directed/latest.json in tmp_path."""
+    sd_dir = tmp_path / "data" / "portfolios" / "self_directed"
+    sd_dir.mkdir(parents=True, exist_ok=True)
+    doc = {"schema": "portfolio.v1", "portfolio_id": "self_directed", "as_of": "2026-07-03",
+           "nav": nav, "currency": "USD", "positions": positions}
+    (sd_dir / "latest.json").write_text(json.dumps(doc))
+
+
+def test_self_directed_appears_in_report(iso):
+    """(1) self_directed published → it appears in summary()['yardstick'], not in books[]."""
+    _seed("flagship", [{"ticker": "NVDA", "weight": 0.10}])
+    _seed_self_directed(iso, [{"ticker": "XLU", "weight": 0.25}, {"ticker": "XLV", "weight": 0.25}])
+
+    s = firm_exposure.summary()
+
+    # It is in the yardstick, not in books[]
+    assert s["yardstick"] is not None
+    assert s["yardstick"]["id"] == "self_directed"
+    assert s["yardstick"]["n_holdings"] == 2
+    assert "XLU" in s["yardstick"]["holdings"]
+    assert s["yardstick"]["holdings"]["XLU"] == pytest.approx(0.25, abs=1e-6)
+    # It is NOT in the pile-up books list
+    assert not any(b["id"] == "self_directed" for b in s["books"])
+    assert s["n_books"] == 1    # only flagship counted
+
+
+def test_self_directed_absent_yardstick_is_none(iso):
+    """(1b) self_directed not published → yardstick is None, monitor still works."""
+    _seed("flagship", [{"ticker": "NVDA", "weight": 0.10}])
+    s = firm_exposure.summary()
+    assert s["yardstick"] is None
+    assert s["n_books"] == 1
+
+
+def test_self_directed_never_clamps_peers(iso):
+    """(2a) self_directed holdings must NOT move the clamp for any managed book.
+
+    Peers at 0.28 of semis_ai; flagship has headroom 0.02.
+    self_directed holds SMH at 0.50 — irrelevant to the clamp (it is excluded from _FIRM_US_BOOKS).
+    Flagship's headroom must still be 0.02, not reduced by self_directed's 0.50."""
+    _seed("autonomous", [{"ticker": "SMH", "weight": 0.28}])
+    _seed_self_directed(iso, [{"ticker": "SMH", "weight": 0.50}])   # user's large position
+
+    # headroom for flagship must reflect ONLY autonomous's 0.28, not self_directed's 0.50
+    room = firm_exposure.headroom("semis_ai", "flagship")
+    assert room == pytest.approx(0.02, abs=1e-9)
+
+    # and clamp_book must be byte-identical (no self_directed effect)
+    book_positions = [{"ticker": "NVDA", "weight": 0.10}]
+    res = firm_exposure.clamp_book(book_positions, "flagship")
+    # 0.10 <= 0.02 room? No, 0.10 > 0.02 → clamped to 0.02 by autonomous's 0.28 alone
+    assert res["bound"] is True
+    assert res["positions"][0]["weight"] == pytest.approx(0.02, abs=1e-4)
+
+
+def test_self_directed_not_counted_in_headroom_as_peer(iso):
+    """(2b) headroom excludes self_directed by design: it is never a peer in _FIRM_US_BOOKS."""
+    _seed_self_directed(iso, [{"ticker": "SMH", "weight": 0.30}])   # only peer is self_directed
+    import math
+    # No US Brain peer published → headroom is +inf (self_directed doesn't count as a firm US book)
+    assert math.isinf(firm_exposure.headroom("semis_ai", "flagship"))
+    # and clamp_book is a no-op
+    res = firm_exposure.clamp_book([{"ticker": "SMH", "weight": 0.40}], "flagship")
+    assert res["bound"] is False
+    assert res["positions"][0]["weight"] == 0.40

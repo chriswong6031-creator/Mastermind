@@ -12,11 +12,31 @@ vendored China artifact is absent the queue degrades (ultimately to a small all-
 the Brain is never empty. Nothing here sizes or executes — it decides WHAT to look at. Tickers
 keep their venue suffix (``*.SS`` / ``*.SZ`` mainland, ``*.HK`` Hong Kong, bare = US ADR) so the
 pricing layer can route + FX-convert them.
+
+FUNNEL PROFILE — ``CHINA_FUNNEL_PROFILE`` env var (default ``"default"``):
+  ``default``  — equal weighting of all four source desks (current behaviour; byte-identical).
+  ``edge-led`` — elevates the validated reversal/low-vol edge signals relative to the
+                 momentum/quality/standout desks.  The dashboard validated China reversal +
+                 low-vol outperformance (CN Reversal Sleeve); this mode arms that edge in the
+                 live funnel.  Concretely: reversal-desk scores are boosted by a multiplier
+                 (REVERSAL_BOOST) and the reversal cap raised from 0.5 to 0.75; alpha-desk
+                 names whose ``entry`` is ``"intact"`` (high recent momentum) receive a
+                 small penalty (MOMENTUM_PENALTY) to bring momentum-heavy names below the
+                 reversal/low-vol tier.
+
+To arm: set ``CHINA_FUNNEL_PROFILE=edge-led`` in the process env (e.g. in .env or systemd
+unit) and restart the Brain.  The experiment 'cn-funnel-edge-led' tracks the forward outcomes
+(comeback 2026-07-31, owner fable-review).
+
+P8: this flag is behaviour-changing and lacks an independent validated basis on THIS codebase;
+it ships with the registry experiment above and a comparison shadow (default mode) until the
+4-week gate clears.
 """
 from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -25,6 +45,22 @@ _ROOT = Path(__file__).resolve().parent.parent
 _V = _ROOT / "vendor" / "macro"
 
 _CORROBORATION = 0.08          # each INDEPENDENT desk beyond the first adds this
+
+# ── FUNNEL PROFILE ──────────────────────────────────────────────────────────────────────────
+# Read once at import time; callers may pass profile= to build() / queue() to override.
+# Allowed values: "default" | "edge-led"
+PROFILE_DEFAULT = "default"
+PROFILE_EDGE_LED = "edge-led"
+
+_REVERSAL_BOOST = 1.60         # multiply reversal scores in edge-led mode
+_REVERSAL_CAP_EDGE = 0.75      # raise the cap from 0.50 when edge-led (validated edge; softer cap)
+_MOMENTUM_PENALTY = 0.85       # alpha names flagged 'intact' (momentum) get a haircut in edge-led
+
+
+def _env_profile() -> str:
+    """Read CHINA_FUNNEL_PROFILE from the environment; default to 'default'."""
+    v = os.environ.get("CHINA_FUNNEL_PROFILE", "").strip().lower()
+    return PROFILE_EDGE_LED if v == PROFILE_EDGE_LED else PROFILE_DEFAULT
 
 # A small, liquid all-China seed across venues so the queue is never empty pre-build.
 _SEED = ["600519.SS", "300750.SZ", "601318.SS", "000858.SZ",   # mainland A-shares
@@ -111,13 +147,18 @@ def _from_standouts() -> dict:
     return out
 
 
-def _from_alpha() -> dict:
-    """Residual-alpha leaders (china_alpha.top): momentum/quality screen, lean up."""
+def _from_alpha(profile: str = PROFILE_DEFAULT) -> dict:
+    """Residual-alpha leaders (china_alpha.top): momentum/quality screen, lean up.
+
+    In ``edge-led`` mode, names flagged ``entry='intact'`` (recent momentum leaders) receive a
+    small score penalty (``_MOMENTUM_PENALTY``) to let reversal/low-vol names surface above them
+    — consistent with the dashboard finding that China reversal > momentum edge."""
     d = _read("factordata/china_alpha.json") or {}
     out = {}
     rows = d.get("top") or []
     if not rows and isinstance(d.get("per_ticker"), dict):
         rows = [{"ticker": k, **(v or {})} for k, v in d["per_ticker"].items() if isinstance(v, dict)][:30]
+    edge = (profile == PROFILE_EDGE_LED)
     for r in rows:
         if not isinstance(r, dict):
             continue
@@ -126,16 +167,25 @@ def _from_alpha() -> dict:
         if not t or a is None:
             continue
         intact = (r.get("entry") == "intact")
-        out[t] = {"score": min(max(a / 3.0, 0.0), 1.0),   # alpha ~0–3 → 0–1
-                  "reason": f"alpha leader (resid α {a:.2f}, entry {r.get('entry') or '?'})",
+        score = min(max(a / 3.0, 0.0), 1.0)      # alpha ~0–3 → 0–1
+        if edge and intact:
+            score = score * _MOMENTUM_PENALTY     # momentum haircut in edge-led mode
+        out[t] = {"score": score,
+                  "reason": f"alpha leader (resid α {a:.2f}, entry {r.get('entry') or '?'})"
+                            + (" [edge-led: mom-penalty]" if edge and intact else ""),
                   "lean": 1 if intact else 0, "confidence": None, "falsifier": None}
     return out
 
 
-def _from_reversal() -> dict:
-    """Oversold reversal watch (china_reversal.watch): bottoming candidates, capped weak lean."""
+def _from_reversal(profile: str = PROFILE_DEFAULT) -> dict:
+    """Oversold reversal watch (china_reversal.watch): bottoming candidates, capped weak lean.
+
+    In ``edge-led`` mode the score is multiplied by ``_REVERSAL_BOOST`` and the cap is raised
+    to ``_REVERSAL_CAP_EDGE`` — arming the dashboard-validated China reversal edge."""
     d = _read("factordata/china_reversal.json") or {}
     out = {}
+    edge = (profile == PROFILE_EDGE_LED)
+    cap = _REVERSAL_CAP_EDGE if edge else 0.5
     for r in (d.get("watch") or []):
         if not isinstance(r, dict):
             continue
@@ -143,8 +193,12 @@ def _from_reversal() -> dict:
         z = _f(r.get("rev_z"))
         if not t or z is None:
             continue
-        out[t] = {"score": min(max(z / 4.0, 0.0), 0.5),   # reversal alone is weak — capped
-                  "reason": f"reversal watch (rev_z {z:.1f}, 3m {r.get('ret_3m')}%)",
+        raw_score = z / 4.0
+        if edge:
+            raw_score = raw_score * _REVERSAL_BOOST
+        out[t] = {"score": min(max(raw_score, 0.0), cap),
+                  "reason": f"reversal watch (rev_z {z:.1f}, 3m {r.get('ret_3m')}%)"
+                            + (" [edge-led]" if edge else ""),
                   "lean": 1, "confidence": None, "falsifier": None}
     return out
 
@@ -178,9 +232,12 @@ def _from_hk() -> dict:
 
 # source name -> loader attribute (resolved through globals at call time so a monkeypatch on a
 # loader takes effect and a single failing source never sinks the funnel).
+# Profile-aware loaders receive a `profile` kwarg; profile-neutral ones do not.
 _SOURCES = ("standout", "alpha", "reversal", "hk")
 _LOADERS = {"standout": "_from_standouts", "alpha": "_from_alpha",
             "reversal": "_from_reversal", "hk": "_from_hk"}
+# Which loaders accept a profile= keyword (others are called without it).
+_PROFILE_AWARE = {"alpha", "reversal"}
 
 
 def _china_frame() -> dict:
@@ -193,15 +250,26 @@ def _china_frame() -> dict:
             "cycle_tag": raw.get("cycle_tag")}
 
 
-def build(limit: int = 40) -> dict:
+def build(limit: int = 40, *, profile: str | None = None) -> dict:
     """The unified China intake queue + macro frame. Reads vendored artifacts; never raises.
 
     Returns {as_of?, macro_context, n_universe, candidates:[{ticker, score, sources, reasons,
-    lean, confidence, falsifier, n_sources, venue}], note}."""
+    lean, confidence, falsifier, n_sources, venue}], note, funnel_profile}.
+
+    ``profile`` — override the funnel profile for this call; ``None`` reads
+    ``CHINA_FUNNEL_PROFILE`` from the environment (default ``"default"``).  Pass
+    ``profile='edge-led'`` to arm the validated reversal/low-vol edge without setting the env.
+    """
+    active_profile = profile if profile in (PROFILE_DEFAULT, PROFILE_EDGE_LED) else _env_profile()
+
     per_source: dict[str, dict] = {}
     for name in _SOURCES:
         try:
-            per_source[name] = globals()[_LOADERS[name]]() or {}
+            fn = globals()[_LOADERS[name]]
+            if name in _PROFILE_AWARE:
+                per_source[name] = fn(profile=active_profile) or {}
+            else:
+                per_source[name] = fn() or {}
         except Exception as e:  # noqa: BLE001
             log.debug("china_intake: source %s failed (%s)", name, e)
             per_source[name] = {}
@@ -247,6 +315,7 @@ def build(limit: int = 40) -> dict:
     out.sort(key=lambda x: (x["score"], x["n_sources"]), reverse=True)
     return {"as_of": macro.get("as_of"), "macro_context": macro,
             "n_universe": len(out), "candidates": out[:max(0, limit)],
+            "funnel_profile": active_profile,
             "note": "Unified China intake across the A-share buy board, alpha leaders, reversal "
                     "watch, and the HK board — corroboration across independent desks lifts a "
                     "name. Context-only; decides what to look at, never sizes."}
@@ -331,11 +400,11 @@ def display_name(ticker: str) -> str:
     return raw or t
 
 
-def queue(limit: int = 40) -> list[dict]:
+def queue(limit: int = 40, *, profile: str | None = None) -> list[dict]:
     """Just the ranked candidate list (provenance kept)."""
-    return build(limit)["candidates"]
+    return build(limit, profile=profile)["candidates"]
 
 
-def tickers(limit: int = 40, min_score: float = 0.0) -> list[str]:
+def tickers(limit: int = 40, min_score: float = 0.0, *, profile: str | None = None) -> list[str]:
     """Ranked tickers only — for callers that just want the expanded universe."""
-    return [c["ticker"] for c in queue(limit) if c["score"] >= min_score]
+    return [c["ticker"] for c in queue(limit, profile=profile) if c["score"] >= min_score]

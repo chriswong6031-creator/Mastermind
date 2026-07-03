@@ -1,11 +1,11 @@
 """THE benchmark ledger (charter P7 — one benchmark ledger; P6 — the book that beats us is a named
-input) — W-L / L1.
+input) — W-L / L1 / W6 T4.
 
 The program started from one fact the system could not compute: *the user's simple defensive basket
 beat the Brain during the semis unwind.* This module makes that fact a first-class, daily artifact.
 
-Four bogeys, every one renormalized to **$1.00 at a common inception** on ONE price source (the
-marking layer, `portfolio.marks`), so they are directly comparable to each book's normalized NAV:
+Four bogeys for the US books, renormalized to **$1.00 at a common inception** on ONE price source
+(the marking layer, `portfolio.marks`), so they are directly comparable to each book's normalized NAV:
 
   1. ``spy``        — SPY buy-and-hold. The market.
   2. ``defensive``  — the user's defensive basket: XLU / XLV / XLF / XLP, equal-weight, rebalanced
@@ -17,10 +17,23 @@ marking layer, `portfolio.marks`), so they are directly comparable to each book'
                       So a cash-hoarding book in a calm up-tape still *loses* to the market (it can't
                       hide behind "but defense would have won" when defense was the wrong call).
 
-Renorm math (all bogeys share it): pick the first date on which EVERY constituent has a mark
-(``common_inception``); each constituent starts at its inception price; the basket value on date d
-is ``mean_i( price_i(d) / price_i(inception) )`` for an equal-weight basket, ``price(d)/price(0)``
-for a single name. Every series is a growth-of-$1 curve.
+**Per-book regional bogey overrides (W6 T4)** — the CN and HK books compare against a China-market
+index proxy, NOT the US defensive basket (imposing XLV on a CNY-denominated A-share book is wrong):
+
+  ``china`` book → ``CN_BOGEY`` constituents (FXI, iShares China Large-Cap).
+  ``hk``    book → ``HK_BOGEY`` constituents (FXI — the only China-region ETF in the parquet store;
+                   2800.HK Tracker is not currently priced in the store).
+
+Proxy choice rationale: as of 2026-07-03 only FXI has a populated yahoo parquet history.  Both the
+china and hk registry entries already carry ``benchmark: "FXI"``.  When 2800.HK becomes priceable
+(or MCHI/ASHR are added), update ``HK_BOGEY`` here; tests guard the degrade path.
+
+``build_regional(price_series, book_id, asof, ...)`` assembles the two bogeys relevant to a
+regional book (``regional`` + ``do_nothing``).  ``BOOK_BOGEY_OVERRIDES`` maps book_id →
+constituent list so callers can inspect or override the choice.
+
+Renorm math (all bogeys share it): pick the first date on which EVERY constituent has a positive
+mark (``common_inception``); the basket value on date d is mean(price(d)/price(inception)).
 
 Output: ``data/benchmark/<asof>.json`` (the full curves + a leaderboard) and ``leaderboard()`` —
 consumed by cio and the improvement agenda. Best-effort; missing marks degrade a bogey to no-op
@@ -40,6 +53,24 @@ _BENCH_DIR = _ROOT / "data" / "benchmark"
 # live in code with the ledger, not in doctrine.yml.)
 DEFENSIVE_BASKET = ["XLU", "XLV", "XLF", "XLP"]
 SPY = "SPY"
+
+# ── Regional bogey constituents (W6 T4) ─────────────────────────────────────────────────────
+# CN bogey: FXI (iShares China Large-Cap, USD-listed).  The registry.benchmark("china") is also
+#   FXI.  000300.SS (CSI300 index) and MCHI/ASHR are NOT in the yahoo parquet store as of
+#   2026-07-03 — update if/when they are added.
+CN_BOGEY = ["FXI"]
+
+# HK bogey: 2800.HK (Tracker Fund of Hong Kong) is the canonical Hang Seng proxy, but it is NOT
+#   in the parquet store.  FXI is the only priceable China-region ETF today, so we fall back.
+#   When 2800.HK is added to the store update HK_BOGEY = ["2800.HK"] here.
+HK_BOGEY = ["FXI"]   # NOTE: ideally 2800.HK; update when the store carries it
+
+# Mapping of book_id → regional bogey constituents.  US books have no entry (they use the
+# standard spy/defensive/regime_max suite).  Callers can inspect or override.
+BOOK_BOGEY_OVERRIDES: dict[str, list[str]] = {
+    "china": CN_BOGEY,
+    "hk":    HK_BOGEY,
+}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -207,6 +238,67 @@ def leaderboard(bogeys: dict, book_curves: dict) -> list:
                      "return_pct": _ret_pct(curve), "n_points": len(curve),
                      "inception": (sorted(curve)[0] if curve else None)})
     return sorted(rows, key=lambda r: (r["return_pct"] is None, -(r["return_pct"] or 0)))
+
+
+def build_regional(price_series: dict, book_id: str, *, asof: str,
+                   book_curves: dict | None = None, persist: bool = True) -> dict:
+    """Assemble the TWO-bogey ledger for a regional book (china / hk).
+
+    Regional books compare against their own market index proxy (``BOOK_BOGEY_OVERRIDES``), not
+    the US defensive basket.  The ledger has two bogeys:
+
+      ``regional``   — the book's market-index proxy (e.g. FXI), growth-of-$1.
+      ``do_nothing`` — the carry shadow (same semantics as in ``build``); only present when
+                       ``book_curves`` supplies a ``"do_nothing"`` curve.
+
+    Returns the same shape as ``build`` so the leaderboard and cio callers are compatible.
+    Degrades to empty curves on missing marks (P2). Persisted under
+    ``data/benchmark/<book_id>/<asof>.json`` to avoid collision with the main ledger file.
+
+    If ``book_id`` is not in ``BOOK_BOGEY_OVERRIDES`` this falls back to ``build()``
+    (so callers do not need to branch)."""
+    if book_id not in BOOK_BOGEY_OVERRIDES:
+        return build(price_series, asof=asof, book_curves=book_curves, persist=persist)
+
+    asof = str(asof)[:10]
+    constituents = BOOK_BOGEY_OVERRIDES[book_id]
+    label_map = {
+        "china": f"China regional bogey ({', '.join(constituents)}) — FXI proxy for CSI300",
+        "hk":    f"HK regional bogey ({', '.join(constituents)}) — FXI proxy pending 2800.HK",
+    }
+    label = label_map.get(book_id, f"Regional bogey ({', '.join(constituents)})")
+
+    series = {}
+    for k, sv in (price_series or {}).items():
+        if not isinstance(sv, dict):
+            continue
+        series[(k or "").upper()] = {str(d)[:10]: float(v)
+                                     for d, v in sv.items() if isinstance(v, (int, float)) and v > 0}
+
+    regional_curve = renorm_basket(series, constituents)
+    do_nothing_curve = (book_curves or {}).get("do_nothing") or {}
+
+    bogeys = {
+        "regional":   {"label": label, "constituents": constituents, "curve": regional_curve},
+        "do_nothing": {"label": "Do-nothing (carry from inception)",
+                       "constituents": [], "curve": do_nothing_curve},
+    }
+    for b in bogeys.values():
+        c = b["curve"]
+        b["return_pct"] = _ret_pct(c)
+        b["inception"] = (sorted(c)[0] if c else None)
+        b["n_points"] = len(c)
+
+    result = {"as_of": asof, "book_id": book_id, "bogeys": bogeys,
+              "leaderboard": leaderboard(bogeys, book_curves or {})}
+    if persist:
+        try:
+            dest = _BENCH_DIR / book_id
+            dest.mkdir(parents=True, exist_ok=True)
+            (dest / f"{asof}.json").write_text(json.dumps(result, indent=2, default=str))
+        except Exception:  # noqa: BLE001
+            pass
+    return result
 
 
 def load(asof: str) -> dict:

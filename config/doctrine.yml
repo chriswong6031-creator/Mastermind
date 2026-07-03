@@ -74,6 +74,23 @@ caps:
   firm_cluster_cap: 0.30                 # (unverified-prior) combined per-cluster gross across ALL US books (= clusters.yml)
   firm_name_cap: 0.10                    # (unverified-prior) any single name across ALL US books (= clusters.yml)
 
+# ---- W6 T1: HEAVYWEIGHT MANDATE v2 — firm best-ideas, not a Flagship mirror ----
+# The audit: the US books are one bet wearing four hats — Heavyweight was HARD-GATED to Flagship's
+# universe, so it could only AMPLIFY Flagship (it force-rotated into Flagship's tech book at the top
+# and discarded the defensives). v2 re-points it from amplifier to cross-book concentrator: its
+# universe is the UNION of every published book's latest.json (flagship + autonomous + etf, plus
+# self_directed once it publishes), with AT MOST ONE name per fragility_chain.cluster_id (the Brain
+# picks which expression; the enforcer drops the rest, keep-first-by-conviction). The 5-50% / 8-name
+# rails + the W3 firm-headroom clamp are UNCHANGED. Flag-gated MASTERMIND_HW_FIRM_UNIVERSE (default
+# ON); the old flagship-only gate survives as the MIRROR FALLBACK (used when the union yields < the
+# min fundable count — never an empty book from a data gap, P2) AND as the mirror-shadow A/B arm.
+heavyweight:
+  min_fundable_names: 4          # (unverified-prior) union must yield >= this many fundable names, else MIRROR fallback
+  # rails (mirror config/doctrine — the env vars HEAVYWEIGHT_MIN_WEIGHT/MAX_WEIGHT/MAX_NAMES override in code)
+  min_weight: 0.05               # (unverified-prior) per-name floor (sub-floor nibbles dropped)
+  max_weight: 0.50               # (unverified-prior) per-name ceiling (concentration cap)
+  max_names: 8                   # (unverified-prior) top-N by weight kept
+
 # ---- W2.2 GRADED EXTENSION SCHEDULE (portfolio/conviction.py entry brake) ----
 # A NEW conviction add is SIZE-BRAKED (never flipped, never exited) by how far it has run above its
 # 200dma — the proven G4/G5 overextension lever, ported as a graded multiplier on ENTRY size only.
@@ -677,6 +694,30 @@ posture_governor:
   hac_lag:           3      # (unverified-prior) Newey-West lag for the HAC standard error
   hysteresis_reviews: 3     # (unverified-prior) consecutive same-sign reviews required before a step
   ema_alpha:         0.34   # (unverified-prior) restore-slow EMA weight toward 1.0 on a sign flip
+
+# ---- W6 T2: THE BOOK LIFECYCLE — probation/retire as CIO recommendations (brain/book_lifecycle.py) ----
+# The kill/promote hooks from architecture §2, made honest at paper-n. The problem this kills: the US
+# books are one bet wearing four hats and NOTHING measures or polices book orthogonality (Autonomous's
+# active returns correlate ~0.87 with Flagship). The module grades each US book on its rolling active
+# return vs three bogeys (SPY / the defensive basket / the regime-conditional max) plus max-drawdown,
+# computes the ORTHOGONALITY MATRIX (pairwise correlation of ACTIVE returns — book minus its bogey —
+# across the US books), and moves books active -> probation -> retired-recommendation. The probation
+# triggers: 2 consecutive HAC-significant losing weekly reviews, OR the 'noisy mirror' flag (active-
+# return corr to Flagship persistently >= noisy_mirror_corr). KILL IS NEVER AUTOMATED: the module
+# writes data/lifecycle/<date>.json, feeds the cio weekly note, and emits a {owner: fable-review}
+# agenda item — a human/Fable executes any retirement. Self-Directed is CONSTITUTIONALLY EXEMPT (the
+# yardstick, never killed — hard-coded). HONEST STATISTICS: HAC significance with an effective_n gate
+# EXACTLY like the posture governor — n below threshold => 'insufficient-n', NEVER a recommendation
+# (said so in the artifact). All (unverified-prior).
+book_lifecycle:
+  min_effective_n:      8      # (unverified-prior) independent weekly reviews before a loss is HAC-testable (mirrors governor/cio)
+  hac_t_min:            2.0    # (unverified-prior) Newey-West |t| the losing active-return mean must exceed to be 'significant'
+  hac_lag:              3      # (unverified-prior) Newey-West lag for the HAC standard error
+  losing_reviews_to_probation: 2   # (unverified-prior) consecutive HAC-significant losing weekly reviews -> probation
+  corr_window_reviews:  8      # (unverified-prior) rolling window (reviews) for the active-return correlation matrix
+  noisy_mirror_corr:    0.8    # (unverified-prior) active-return corr to Flagship at/above this (persistent) = 'noisy mirror' probation trigger
+  noisy_mirror_min_pairs: 6    # (unverified-prior) overlapping active-return observations required before a correlation is trusted
+  max_drawdown_watch:   0.20   # (unverified-prior) rolling max-drawdown at/beyond this is surfaced on the grade card (display-only, never an auto-trigger)
 
 # ---- THE JOURNAL — per-seat memory files (brain/journal.py — W-L / L2) ----
 # The conscious-learning conscience (charter P3/P6). Two layers: DETERMINISTIC auto-drafts on every

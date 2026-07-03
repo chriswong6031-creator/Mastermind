@@ -126,20 +126,22 @@ def test_run_offline_inaugural(iso, monkeypatch):
 
 
 def test_run_enforces_universe_and_sizing(iso, monkeypatch):
-    prices = {"NVDA": 210.0, "AVGO": 300.0, "SPY": 740.0}
+    # NVDA (semis_ai) + XLE (commodity_inflation) are DIFFERENT clusters, so both survive one-per-cluster
+    # and this test isolates the universe-drop + clamp rails (the cluster collapse is covered separately).
+    prices = {"NVDA": 210.0, "XLE": 90.0, "SPY": 740.0}
     monkeypatch.setattr(paper_account, "_current_price", lambda t: prices.get(t))
-    _seed_flagship(["NVDA", "AVGO"])
+    _seed_flagship(["NVDA", "XLE"])
     monkeypatch.setattr(hw, "_run_brain", _fake_brain([
         {"ticker": "NVDA", "weight": 0.7, "rationale": "press the winner"},   # clamp → 0.50
-        {"ticker": "AVGO", "weight": 0.3, "rationale": "high conviction"},
-        {"ticker": "TSLA", "weight": 0.2, "rationale": "not held by flagship"},  # dropped
+        {"ticker": "XLE", "weight": 0.3, "rationale": "high conviction"},
+        {"ticker": "TSLA", "weight": 0.2, "rationale": "not held by any book"},  # dropped
     ]))
     out = hw.run_heavyweight(asof="2026-06-21", armed=True)
     assert out["decided"] is True and out["held_prior_book"] is False
     assert "TSLA" in out["enforcement"]["out_of_universe"]
     assert any(c["ticker"] == "NVDA" for c in out["enforcement"]["clamped"])
     sides = {(t["ticker"], t["side"]) for t in out["executed"]}
-    assert ("NVDA", "buy") in sides and ("AVGO", "buy") in sides
+    assert ("NVDA", "buy") in sides and ("XLE", "buy") in sides
     assert "TSLA" not in {t["ticker"] for t in out["executed"]}
     latest = json.loads((registry.data_dir("heavyweight") / "latest.json").read_text())
     nvda = next(p for p in latest["positions"] if p["ticker"] == "NVDA")
@@ -269,3 +271,223 @@ def test_web_decisions_dispatch(iso, monkeypatch):
     assert "heavyweight" in ids
     assert isinstance(c.get("/api/decisions?portfolio=heavyweight").json()["decisions"], list)
     assert c.get("/api/decisions?portfolio=flagship").json()["decisions"] == []
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+# W6 T1 — Heavyweight mandate v2: firm best-ideas union, not a Flagship mirror
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+
+def _seed_book(pid: str, positions: list[str], pending: list[str] | None = None) -> None:
+    """Write a fake published latest.json for ANY book (autonomous/etf/self_directed) — a firm-union
+    universe source."""
+    bdir = registry.data_dir(pid)
+    bdir.mkdir(parents=True, exist_ok=True)
+    (bdir / "latest.json").write_text(json.dumps({
+        "as_of": "2026-06-21", "portfolio_id": pid,
+        "positions": [{"ticker": t, "weight": 0.05} for t in positions],
+        "pending_orders": [{"ticker": t, "weight": 0.05, "side": "buy", "status": "pending"}
+                           for t in (pending or [])],
+    }))
+
+
+# ── union assembly ───────────────────────────────────────────────────────────────────────────
+
+def test_firm_universe_is_union_of_published_books(iso):
+    _seed_flagship(["NVDA", "AVGO"])
+    _seed_book("autonomous", ["XLE", "TSLA"])
+    _seed_book("etf", ["SPY"], pending=["GLD"])
+    allowed, meta = hw._firm_universe()
+    assert allowed == {"NVDA", "AVGO", "XLE", "TSLA", "SPY", "GLD"}
+    assert meta["source"] == "firm_union" and meta["mirror_fallback"] is False
+    assert meta["per_book"] == {"flagship": 2, "autonomous": 2, "etf": 2, "self_directed": 0}
+
+
+def test_firm_universe_includes_self_directed_when_published(iso):
+    _seed_flagship(["NVDA", "AVGO", "MSFT"])
+    _seed_book("self_directed", ["XLU", "XLP"])
+    allowed, meta = hw._firm_universe()
+    assert {"XLU", "XLP"} <= allowed                    # self_directed joins once it publishes
+    assert meta["per_book"]["self_directed"] == 2
+
+
+def test_firm_universe_ignores_china_hk(iso):
+    _seed_flagship(["NVDA", "AVGO", "MSFT"])
+    _seed_book("china", ["600519.SS"])                  # non-USD disjoint venue
+    _seed_book("hk", ["0700.HK"])
+    allowed, _meta = hw._firm_universe()
+    assert "600519.SS" not in allowed and "0700.HK" not in allowed
+
+
+# ── one-name-per-cluster ─────────────────────────────────────────────────────────────────────
+
+def test_one_per_cluster_keeps_highest_conviction(iso):
+    # NVDA/AVGO/MU all resolve to the semis_ai cluster; only the top-conviction one survives.
+    kept, notes = hw._one_per_cluster([
+        {"ticker": "NVDA", "weight": 0.2, "conviction": 7},
+        {"ticker": "AVGO", "weight": 0.4, "conviction": 9},   # highest conviction → kept
+        {"ticker": "MU", "weight": 0.3, "conviction": 4},
+        {"ticker": "XLE", "weight": 0.2, "conviction": 5},    # different cluster → survives
+    ])
+    kept_tk = {h["ticker"] for h in kept}
+    assert kept_tk == {"AVGO", "XLE"}
+    dropped = {d["ticker"] for d in notes["dropped_same_cluster"]}
+    assert dropped == {"NVDA", "MU"}
+    assert all(d["kept"] == "AVGO" for d in notes["dropped_same_cluster"])
+
+
+def test_one_per_cluster_ties_break_on_weight_then_order(iso):
+    # equal conviction → higher weight wins; equal weight → earlier submission order wins.
+    kept, _notes = hw._one_per_cluster([
+        {"ticker": "NVDA", "weight": 0.3, "conviction": 5},
+        {"ticker": "AVGO", "weight": 0.4, "conviction": 5},   # same conv, more weight → kept
+    ])
+    assert [h["ticker"] for h in kept] == ["AVGO"]
+
+
+def test_one_per_cluster_distinct_singletons_not_collapsed(iso):
+    # two un-clustered names (name:<T> singletons) must NEVER be collapsed together.
+    kept, notes = hw._one_per_cluster([
+        {"ticker": "ZZZ", "weight": 0.3, "conviction": 5},
+        {"ticker": "YYY", "weight": 0.2, "conviction": 5},
+    ])
+    assert {h["ticker"] for h in kept} == {"ZZZ", "YYY"}
+    assert notes["dropped_same_cluster"] == []
+
+
+# ── <4-fundable mirror fallback ──────────────────────────────────────────────────────────────
+
+def test_thin_union_falls_back_to_flagship_mirror(iso, monkeypatch):
+    monkeypatch.setenv("MASTERMIND_HW_MIN_FUNDABLE", "4")
+    # only flagship publishes, and it holds <4 names → union too thin → mirror fallback
+    _seed_flagship(["NVDA", "AVGO"])
+    allowed, meta = hw._firm_universe()
+    assert allowed == {"NVDA", "AVGO"}                  # exactly the flagship mirror
+    assert meta["source"] == "mirror" and meta["mirror_fallback"] is True
+
+
+def test_union_at_min_fundable_uses_firm_union(iso, monkeypatch):
+    monkeypatch.setenv("MASTERMIND_HW_MIN_FUNDABLE", "4")
+    _seed_flagship(["NVDA", "AVGO"])
+    _seed_book("autonomous", ["XLE", "TSLA"])           # union now 4 == min → firm_union
+    _allowed, meta = hw._firm_universe()
+    assert meta["source"] == "firm_union" and meta["mirror_fallback"] is False
+
+
+# ── rails intact under the union ─────────────────────────────────────────────────────────────
+
+def test_run_union_universe_enforces_cluster_and_rails(iso, monkeypatch):
+    prices = {"NVDA": 210.0, "AVGO": 300.0, "XLE": 90.0, "TSLA": 250.0, "SPY": 740.0}
+    monkeypatch.setattr(paper_account, "_current_price", lambda t: prices.get(t))
+    _seed_flagship(["NVDA", "AVGO"])
+    _seed_book("autonomous", ["XLE", "TSLA"])
+    # Brain submits two semis_ai names (NVDA+AVGO) — one-per-cluster keeps the top-conviction; XLE is a
+    # separate cluster; TSLA is in-universe (autonomous). NVDA over the 0.50 rail is clamped.
+    monkeypatch.setattr(hw, "_run_brain", _fake_brain([
+        {"ticker": "NVDA", "weight": 0.7, "conviction": 9, "rationale": "press semis"},
+        {"ticker": "AVGO", "weight": 0.3, "conviction": 4, "rationale": "also semis"},  # dropped (cluster)
+        {"ticker": "XLE", "weight": 0.3, "conviction": 8, "rationale": "energy"},
+        {"ticker": "TSLA", "weight": 0.2, "conviction": 6, "rationale": "autonomous name"}]))
+    out = hw.run_heavyweight(asof="2026-06-21", armed=True)
+    assert out["universe"]["source"] == "firm_union"
+    tickers = {t["ticker"] for t in out["executed"]}
+    assert "AVGO" not in tickers                        # collapsed into NVDA (higher conviction)
+    assert {"NVDA", "XLE", "TSLA"} <= tickers
+    latest = json.loads((registry.data_dir("heavyweight") / "latest.json").read_text())
+    nvda = next(p for p in latest["positions"] if p["ticker"] == "NVDA")
+    assert nvda["weight"] == pytest.approx(0.50, abs=0.02)   # rail clamp still binds
+    assert any(d["ticker"] == "AVGO" for d in out["enforcement"]["dropped_same_cluster"])
+
+
+# ── flag OFF → byte-identical to the old flagship-only gate ───────────────────────────────────
+
+def test_flag_off_is_flagship_mirror(iso, monkeypatch):
+    monkeypatch.setenv("MASTERMIND_HW_FIRM_UNIVERSE", "0")
+    _seed_flagship(["NVDA", "AVGO"])
+    _seed_book("autonomous", ["XLE", "TSLA"])           # would enter the union if the flag were ON
+    allowed, meta = hw._firm_universe()
+    assert allowed == {"NVDA", "AVGO"}                  # ONLY flagship — the union is ignored
+    assert meta["source"] == "mirror" and meta["mirror_fallback"] is False
+    assert "XLE" not in allowed and "TSLA" not in allowed
+
+
+def test_flag_off_run_matches_old_universe_gate(iso, monkeypatch):
+    monkeypatch.setenv("MASTERMIND_HW_FIRM_UNIVERSE", "0")
+    prices = {"NVDA": 210.0, "XLE": 90.0, "SPY": 740.0}
+    monkeypatch.setattr(paper_account, "_current_price", lambda t: prices.get(t))
+    _seed_flagship(["NVDA"])
+    _seed_book("autonomous", ["XLE"])
+    # XLE is NOT in Flagship's book → with the flag OFF it is out-of-universe (old behaviour)
+    monkeypatch.setattr(hw, "_run_brain", _fake_brain([
+        {"ticker": "NVDA", "weight": 0.3, "conviction": 8, "rationale": "x"},
+        {"ticker": "XLE", "weight": 0.3, "conviction": 8, "rationale": "not flagship"}]))
+    out = hw.run_heavyweight(asof="2026-06-21", armed=True)
+    assert "XLE" in out["enforcement"]["out_of_universe"]
+    assert "XLE" not in {t["ticker"] for t in out["executed"]}
+
+
+# ── the mirror-shadow A/B arm ─────────────────────────────────────────────────────────────────
+
+def test_mirror_shadow_ab_measures_cluster_overlap(iso):
+    _seed_flagship(["NVDA", "AVGO"])                    # Flagship = the semis_ai cluster
+    _seed_book("autonomous", ["XLE", "TSLA"])          # firm universe adds commodity_inflation + TSLA
+    from portfolio import heavyweight_shadow
+    submission = {"holdings": [
+        {"ticker": "XLE", "weight": 0.4, "conviction": 9},   # commodity_inflation — NOT a Flagship cluster
+        {"ticker": "TSLA", "weight": 0.3, "conviction": 8},  # singleton — NOT a Flagship cluster
+    ], "summary": "orthogonal"}
+    row = heavyweight_shadow.compare(submission, asof="2026-06-21")
+    # the firm-universe (live) arm can hold XLE/TSLA (0% cluster-overlap with Flagship's semis_ai);
+    # the mirror arm drops both (not in Flagship's book) → empty → 0 overlap too, but the live arm is
+    # the one that actually EXPRESSES the orthogonal names.
+    assert "XLE" in row["live"]["tickers"] and "TSLA" in row["live"]["tickers"]
+    assert row["live"]["overlap_frac"] == 0.0           # neither name shares Flagship's clusters
+    assert row["mirror"]["tickers"] == []               # mirror can't hold them (out of flagship universe)
+
+
+def test_mirror_shadow_ab_flag_favored_when_more_orthogonal(iso):
+    _seed_flagship(["NVDA", "AVGO", "MU"])              # semis_ai
+    _seed_book("autonomous", ["XLE", "XOM"])            # commodity_inflation (orthogonal)
+    from portfolio import heavyweight_shadow
+    # Brain proposes a semis name (overlaps Flagship) AND an energy name (orthogonal).
+    submission = {"holdings": [
+        {"ticker": "NVDA", "weight": 0.4, "conviction": 9},  # semis — mirror keeps it (Flagship holds it)
+        {"ticker": "XLE", "weight": 0.3, "conviction": 8},   # energy — only the firm arm can hold it
+    ], "summary": "x"}
+    row = heavyweight_shadow.compare(submission, asof="2026-06-21")
+    # live arm holds NVDA(semis, overlaps) + XLE(energy, orthogonal) → overlap_frac = 1/2 = 0.5
+    # mirror arm holds NVDA only → overlap_frac = 1/1 = 1.0. The firm universe is MORE orthogonal.
+    assert row["live"]["overlap_frac"] == pytest.approx(0.5, abs=1e-6)
+    assert row["mirror"]["overlap_frac"] == pytest.approx(1.0, abs=1e-6)
+    assert row["overlap_delta"] < 0 and row["flag_favored"] is True
+
+
+def test_mirror_shadow_record_and_window_verdict(iso):
+    _seed_flagship(["NVDA", "AVGO", "MU"])
+    _seed_book("autonomous", ["XLE", "XOM"])
+    from portfolio import heavyweight_shadow
+    sub = {"holdings": [{"ticker": "NVDA", "weight": 0.4, "conviction": 9},
+                        {"ticker": "XLE", "weight": 0.3, "conviction": 8}], "summary": "x"}
+    for d in range(6):                                   # 6 rows > the n>=5 evidence floor
+        heavyweight_shadow.record(sub, asof=f"2026-06-{21 + d:02d}")
+    v = heavyweight_shadow.window_verdict()
+    assert v["n"] == 6
+    assert v["mean_live_overlap"] < v["mean_mirror_overlap"]   # firm universe more orthogonal
+    assert v["flag_favored"] is True and v["kill_flag"] is False   # flag EARNS its keep → do not kill
+
+
+def test_registry_has_hw_firm_universe_ab():
+    from brain import experiment_registry as er
+    exp = er.get("hw-firm-universe-ab")
+    assert exp is not None
+    assert exp["owner"] == "fable-review" and exp["comeback_date"] == "2026-07-24"
+    assert "overlap" in exp["gate"].lower()
+
+
+# ── persona golden ───────────────────────────────────────────────────────────────────────────
+
+def test_persona_states_firm_universe_and_one_per_cluster():
+    assert "FIRM'S BEST-IDEAS CONCENTRATOR" in hw._PERSONA
+    assert "EVERY PUBLISHED BOOK" in hw._PERSONA
+    assert "ONE EXPRESSION PER CLUSTER" in hw._PERSONA
+    assert "vs Flagship" in hw._PERSONA or "vs Flagship itself" in hw._PERSONA
+    assert "5%" in hw._PERSONA and "50%" in hw._PERSONA         # rails preserved

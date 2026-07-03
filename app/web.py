@@ -584,6 +584,22 @@ def _portfolio_status(meta: dict) -> dict:
             })
         except Exception:
             pass
+        # vs_spy and vs_defensive: benchmark_ledger already computes these bogey returns; wire the
+        # read here so the leaderboard row for self_directed carries the same performance columns
+        # as the other books. Best-effort: skip cleanly if the ledger hasn't been built yet.
+        try:
+            from brain import benchmark_ledger
+            ledger = benchmark_ledger.latest()
+            bogeys = ledger.get("bogeys") or {}
+            spy_ret = (bogeys.get("spy") or {}).get("return_pct")
+            def_ret = (bogeys.get("defensive") or {}).get("return_pct")
+            own_ret = status.get("total_return_pct")
+            if own_ret is not None and spy_ret is not None:
+                status["vs_spy_pct"] = round(own_ret - spy_ret, 4)
+            if own_ret is not None and def_ret is not None:
+                status["vs_defensive_pct"] = round(own_ret - def_ret, 4)
+        except Exception:  # noqa: BLE001
+            pass
         return {**{k: meta.get(k) for k in ("id", "name", "tagline", "kind", "manager", "benchmark", "currency")},
                 "status": status}
     try:

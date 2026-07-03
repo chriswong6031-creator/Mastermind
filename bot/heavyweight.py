@@ -72,6 +72,179 @@ def _flagship_universe() -> set[str]:
     return allowed
 
 
+# ── W6 T1 — the firm best-ideas UNION (universe = every published book, not a Flagship mirror) ──
+# The published US books whose latest.json positions[] ∪ pending_orders[] form Heavyweight's universe.
+# self_directed joins ONLY once it publishes a latest.json (T3 makes it a first-class published book;
+# read it if present, ignore it silently otherwise). china/hk are non-USD disjoint venues — excluded
+# (a CNY A-share is never a Heavyweight US concentration). heavyweight excludes ITSELF (it may not
+# bootstrap its own universe). Mirror of firm_exposure._FIRM_US_BOOKS minus heavyweight + self_directed.
+_FIRM_UNION_BOOKS = ("flagship", "autonomous", "etf", "self_directed")
+
+
+def _firm_universe_enabled() -> bool:
+    """W6 T1 flag MASTERMIND_HW_FIRM_UNIVERSE — the firm best-ideas union universe. DEFAULT ON (the
+    flagship-only mirror IS the fallback, so default-on is safe: it degrades to today's behaviour on a
+    thin union). '0'/false/no/off DISABLES → byte-identical to the old flagship-only gate."""
+    return os.environ.get("MASTERMIND_HW_FIRM_UNIVERSE", "1").strip().lower() \
+        not in ("0", "false", "no", "off", "")
+
+
+def _min_fundable() -> int:
+    """Minimum fundable names the union must yield before it is used; below this the MIRROR fallback
+    (flagship-only) runs so a data gap never produces an empty concentrated book (P2). doctrine.yml
+    heavyweight.min_fundable_names, env override MASTERMIND_HW_MIN_FUNDABLE, in-code fallback 4."""
+    fallback = 4
+    try:
+        from bot.doctrine_config import load_doctrine
+        v = (load_doctrine().get("heavyweight") or {}).get("min_fundable_names")
+        if isinstance(v, (int, float)) and v > 0:
+            fallback = int(v)
+    except Exception:  # noqa: BLE001 — a config failure degrades to the in-code fallback (never raises)
+        pass
+    try:
+        v = int(float(os.environ.get("MASTERMIND_HW_MIN_FUNDABLE", fallback)))
+        return v if v > 0 else fallback
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _tickers_from_book(pid: str) -> set[str]:
+    """The tickers a published book currently expresses = its latest.json positions[] ∪ pending_orders[]
+    (the pending union covers the market-closed state where buys are still queued, mirroring
+    _flagship_universe). Empty set for a missing/corrupt/unpublished book. Never raises."""
+    from portfolio import registry
+    out: set[str] = set()
+    try:
+        p = registry.data_dir(pid) / "latest.json"
+        if not p.exists():
+            return out
+        d = json.loads(p.read_text())
+        if not isinstance(d, dict):
+            return out
+        for row in (d.get("positions") or []):
+            if isinstance(row, dict):
+                t = (row.get("ticker") or "").upper().strip()
+                if t:
+                    out.add(t)
+        for o in (d.get("pending_orders") or []):
+            if isinstance(o, dict):
+                t = (o.get("ticker") or "").upper().strip()
+                if t:
+                    out.add(t)
+    except Exception:  # noqa: BLE001 — a corrupt peer file contributes nothing, never raises
+        pass
+    return out
+
+
+def _firm_universe() -> tuple[set[str], dict]:
+    """The firm best-ideas UNION universe (W6 T1) = the union of every published book's expressed names.
+    Returns (allowed, meta) where meta = {source, per_book:{pid:n}, mirror_fallback:bool, union_size}.
+
+    When the flag is OFF → returns exactly _flagship_universe() with source='mirror' (byte-identical to
+    the old behaviour). When ON but the union yields fewer than _min_fundable() names → MIRROR FALLBACK
+    (flagship-only) so a data gap never produces an empty concentrated book (P2). Otherwise the union.
+    Never raises; an unreadable peer simply contributes nothing to the union."""
+    if not _firm_universe_enabled():
+        allowed = _flagship_universe()
+        return allowed, {"source": "mirror", "per_book": {"flagship": len(allowed)},
+                         "mirror_fallback": False, "union_size": len(allowed)}
+    per_book: dict[str, int] = {}
+    union: set[str] = set()
+    for pid in _FIRM_UNION_BOOKS:
+        names = _tickers_from_book(pid)
+        per_book[pid] = len(names)
+        union |= names
+    # MIRROR FALLBACK: too thin a union (data gap) → fall back to today's flagship-mirror behaviour.
+    if len(union) < _min_fundable():
+        mirror = _flagship_universe()
+        return mirror, {"source": "mirror", "per_book": per_book, "mirror_fallback": True,
+                        "union_size": len(union)}
+    return union, {"source": "firm_union", "per_book": per_book, "mirror_fallback": False,
+                   "union_size": len(union)}
+
+
+def _firm_universe_arms() -> tuple[tuple[set[str], set[str], dict], None]:
+    """Both A/B arms in one read (for portfolio.heavyweight_shadow): the firm-union universe AND the
+    flagship-only mirror universe, plus the firm-union meta. Returned as ``((firm_union, mirror, meta),
+    None)`` — the trailing None keeps the shadow caller's unpack shape stable. NEVER raises.
+
+    The firm-union arm here is the RAW union (before the min-fundable mirror fallback) so the A/B always
+    contrasts the two selection policies even on a thin day; the live run's fallback is a separate
+    concern (P2 empty-book protection), not an orthogonality question."""
+    mirror = _flagship_universe()
+    if not _firm_universe_enabled():
+        return (set(mirror), mirror, {"source": "mirror", "mirror_fallback": False}), None
+    per_book: dict[str, int] = {}
+    union: set[str] = set()
+    for pid in _FIRM_UNION_BOOKS:
+        names = _tickers_from_book(pid)
+        per_book[pid] = len(names)
+        union |= names
+    meta = {"source": "firm_union", "per_book": per_book,
+            "mirror_fallback": len(union) < _min_fundable(), "union_size": len(union)}
+    return (union, mirror, meta), None
+
+
+def _one_per_cluster(holdings: list[dict]) -> tuple[list[dict], dict]:
+    """W6 T1 — collapse the Brain's submission to AT MOST ONE name per fragility_chain.cluster_id.
+    The Brain proposes which expression it wants; the enforcer is deterministic: KEEP-FIRST-BY-
+    CONVICTION — within each cluster the highest-conviction row survives (tie → highest weight →
+    submission order), the rest are dropped. Names with no resolvable cluster fall to their own
+    singleton ('name:<T>') so distinct un-clustered names are NEVER collapsed together.
+
+    Returns (kept_rows, notes) where notes = {'dropped_same_cluster': [{ticker, cluster, kept}]}.
+    Pure; NEVER raises (a resolver failure degrades to per-name singletons → no collapse)."""
+    from portfolio import fragility_chain
+
+    def _conv(h: dict) -> float:
+        # keep-first-by-conviction: numeric conviction if the Brain supplied one, else the weight.
+        try:
+            c = h.get("conviction")
+            return float(c) if c is not None else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _w(h: dict) -> float:
+        try:
+            return float(h.get("weight") or 0.0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    # remember submission order so the tie-break is deterministic
+    indexed = list(enumerate(holdings or []))
+    best_by_cluster: dict[str, tuple] = {}   # cid -> (conv, weight, -order, row)
+    for order, h in indexed:
+        t = (h.get("ticker") or "").upper().strip()
+        if not t:
+            continue
+        try:
+            cid = str(fragility_chain.cluster_id(t))
+        except Exception:  # noqa: BLE001 — resolver absent → singleton (never groups distinct names)
+            cid = f"name:{t}"
+        rank = (_conv(h), _w(h), -order)
+        cur = best_by_cluster.get(cid)
+        if cur is None or rank > cur[0]:
+            best_by_cluster[cid] = (rank, h, t)
+
+    winners = {id(v[1]) for v in best_by_cluster.values()}
+    keep_ticker_by_cluster = {cid: v[2] for cid, v in best_by_cluster.items()}
+    kept: list[dict] = []
+    dropped: list[dict] = []
+    for order, h in indexed:
+        t = (h.get("ticker") or "").upper().strip()
+        if not t:
+            continue
+        if id(h) in winners:
+            kept.append(h)
+        else:
+            try:
+                cid = str(fragility_chain.cluster_id(t))
+            except Exception:  # noqa: BLE001
+                cid = f"name:{t}"
+            dropped.append({"ticker": t, "cluster": cid, "kept": keep_ticker_by_cluster.get(cid)})
+    return kept, {"dropped_same_cluster": dropped}
+
+
 def _enforce(holdings: list[dict], allowed: set[str]) -> tuple[dict, list[dict], dict]:
     """Apply the universe + concentration rails to the Brain's raw submission. Returns
     (final_weights {ticker: weight}, kept [full holding dicts], notes). Order:
@@ -170,24 +343,45 @@ def run_heavyweight(asof: str | None = None, *, force: bool = False, armed: bool
     out["decided"] = submitted
 
     # 3. DETERMINISTIC universe + sizing rails (the hard gate — Python owns it, not the prompt)
-    allowed = _flagship_universe()
-    out["flagship_universe_size"] = len(allowed)
+    # W6 T1: universe = the UNION of every published book's latest.json (firm best-ideas), NOT a
+    # Flagship-only mirror. Flag-gated (MASTERMIND_HW_FIRM_UNIVERSE, default ON); the flagship-only
+    # gate survives as the MIRROR FALLBACK when the union is too thin (a data gap → never an empty book).
+    allowed, uni_meta = _firm_universe()
+    out["universe"] = uni_meta                       # {source, per_book, mirror_fallback, union_size}
+    out["universe_size"] = len(allowed)
+    out["flagship_universe_size"] = len(allowed)     # back-compat key (== universe_size)
     final_weights: dict[str, float] = {}
     kept: list[dict] = []
     notes: dict = {}
     held_prior = False
     if submitted:
         if not allowed:
-            out["universe_empty"] = True             # no Flagship book → fail closed, do not trade
+            out["universe_empty"] = True             # no published book → fail closed, do not trade
             held_prior = True
         else:
-            final_weights, kept, notes = _enforce(submission["holdings"], allowed)
+            # W6 T1: ONE-NAME-PER-CLUSTER before the rails — the Brain proposes which expression per
+            # fragility_chain.cluster_id; the enforcer keeps the highest-conviction and drops the rest.
+            deduped, cluster_notes = _one_per_cluster(submission["holdings"])
+            final_weights, kept, notes = _enforce(deduped, allowed)
+            if cluster_notes.get("dropped_same_cluster"):
+                notes["dropped_same_cluster"] = cluster_notes["dropped_same_cluster"]
             if not final_weights:
                 # the rails stripped the WHOLE submission — never blow the book to cash; hold prior.
                 held_prior = True
                 notes["held_prior_reason"] = "all submitted names dropped by universe/sizing rails"
     out["enforcement"] = notes
     out["held_prior_book"] = held_prior
+
+    # 3c. W6 T1 — MIRROR-SHADOW A/B (registry 'hw-firm-universe-ab'). Re-derive the SAME raw submission
+    #     under both the firm-universe arm (live) and the flagship-only mirror arm, and record each
+    #     arm's cluster-overlap-with-Flagship. The gate: overlap(live) < overlap(mirror) over 2–4wk, else
+    #     kill MASTERMIND_HW_FIRM_UNIVERSE. Write-isolated (data/shadow/heavyweight_ab/); never blocks.
+    if submitted and (submission or {}).get("holdings"):
+        try:
+            from portfolio import heavyweight_shadow
+            out["mirror_shadow_ab"] = heavyweight_shadow.record(submission, asof=asof)
+        except Exception as e:  # noqa: BLE001 — a shadow A/B must never block the live book
+            out["mirror_shadow_error"] = repr(e)[:200]
 
     # 3d. W3 B1 — FIRM-WIDE headroom clamp (Stage 6.3). After the universe + sizing rails, clamp this
     #     concentrated book's contribution DOWN so the firm-wide cluster/name caps hold across all US
@@ -248,7 +442,8 @@ def run_heavyweight(asof: str | None = None, *, force: bool = False, armed: bool
         out["mark_error"] = repr(e)[:200]
 
     # 7. publish the book contract + 8. append the daily decision log
-    payload = _build_payload(asof, submission, kept, notes, prices, executed, skipped, brain, held_prior)
+    payload = _build_payload(asof, submission, kept, notes, prices, executed, skipped, brain, held_prior,
+                             uni_meta)
     try:
         from bridge import build_portfolio
         out["paths"] = build_portfolio.write(payload, portfolio_id=PORTFOLIO_ID)
@@ -272,16 +467,22 @@ def run_heavyweight(asof: str | None = None, *, force: bool = False, armed: bool
 # ---------------------------------------------------------------------------
 
 _PERSONA = (
-    "You are the HEAVYWEIGHT PORTFOLIO MANAGER of a $1,000,000 PAPER book. You run once per trading "
-    "day, after the US close. Your EDGE is concentration and conviction: the Flagship book already "
-    "holds a broad, engine-disciplined set of names — your job is to find the BEST SUBSET of what "
-    "Flagship holds and bet on it with SIZE.\n\n"
-    "Your tradable universe is FLAGSHIP'S CURRENT HOLDINGS — period. You may ONLY hold names Flagship "
-    "currently holds; anything you submit that Flagship does not hold is dropped automatically. Use the "
-    "mcp__heavydesk__get_flagship_book / get_flagship_trades / get_flagship_research / "
-    "get_flagship_thinking tools to see EXACTLY what Flagship is doing — its holdings and weights, its "
-    "trade history, its per-name research papers, and its full reasoning trace — and one-up it by "
-    "concentrating into the highest-conviction, most ASYMMETRIC winners.\n\n"
+    "You are the HEAVYWEIGHT PORTFOLIO MANAGER of a $1,000,000 PAPER book — the FIRM'S BEST-IDEAS "
+    "CONCENTRATOR. You run once per trading day, after the US close. Your EDGE is concentration and "
+    "conviction: across the firm's published books (Flagship, the US Brain, and the ETF Brain) there is "
+    "a broad set of engine- and Brain-vetted names — your job is to find the BEST expressions in that "
+    "WHOLE firm universe and bet on them with SIZE.\n\n"
+    "Your tradable universe is EVERY PUBLISHED BOOK — not just Flagship. You may hold any name any of "
+    "the firm's books currently expresses; anything you submit that NO book holds is dropped "
+    "automatically. Use the mcp__heavydesk__get_flagship_book / get_flagship_trades / "
+    "get_flagship_research / get_flagship_thinking tools to see EXACTLY what Flagship is doing — its "
+    "holdings and weights, trade history, per-name research, and full reasoning — and concentrate the "
+    "firm's best ideas into the highest-conviction, most ASYMMETRIC winners.\n\n"
+    "ONE EXPRESSION PER CLUSTER. The firm's books overlap on correlated cohorts (e.g. the semis/AI "
+    "cluster: SMH, NVDA, AVGO, MU…). You may hold AT MOST ONE name per correlated cluster — pick the "
+    "single best expression of each theme; if you submit two names from the same cluster, only your "
+    "HIGHEST-CONVICTION one is kept and the rest are dropped. Give each holding an explicit numeric "
+    "conviction so the enforcer keeps the one you mean.\n\n"
     "Mandate: ASYMMETRIC RETURNS. Bet on your winners; add to your winners. When a name is working and "
     "the thesis is intact, SIZE UP into it rather than trimming. Run a CONCENTRATED book — roughly 5 to "
     "8 names, each 5% to 50% of NAV. Sub-5% nibbles are DROPPED and only your top ~8 by size are kept, "
@@ -289,11 +490,11 @@ _PERSONA = (
     "marginal names.\n\n"
     "Idle cash earns ~4% annualized (a money-market sweep) — holding it when you lack a "
     "high-conviction asymmetric bet is a REWARDED choice, not dead money. \n\n"
-    "You also have the macro dashboard (mcp__bot__*) and the open web for context, but your universe is "
-    "Flagship's holdings. When done, call mcp__heavydesk__submit_book ONCE with your complete "
-    "concentrated target book, a one-paragraph conviction rationale per holding, and a summary of how "
-    "you are pressing Flagship's best ideas. You are graded on realized NAV vs the S&P 500 — and vs "
-    "Flagship itself."
+    "You also have the macro dashboard (mcp__bot__*) and the open web for context. When done, call "
+    "mcp__heavydesk__submit_book ONCE with your complete concentrated target book, a one-paragraph "
+    "conviction rationale per holding, and a summary of how you are concentrating the firm's best "
+    "ideas. You are graded on realized NAV vs the S&P 500 AND vs Flagship itself — your concentration "
+    "must BEAT the thing it concentrates, or it is not earning its keep."
 )
 
 
@@ -322,7 +523,8 @@ def _build_prompt(asof: str, inaugural: bool, directive: str | None = None) -> s
     cash = float(state.get("cash") or 0.0)
     positions = state.get("positions") or {}
     regime = _regime_brief()
-    allowed = sorted(_flagship_universe())
+    allowed_set, uni_meta = _firm_universe()
+    allowed = sorted(allowed_set)
 
     lines = [f"# Heavyweight book — daily decision for {asof}", ""]
     if directive:
@@ -344,10 +546,21 @@ def _build_prompt(asof: str, inaugural: bool, directive: str | None = None) -> s
     brief = risk_lens.briefing("heavyweight", regime=_regime_dict(), asof=asof, held=sorted(positions))
     if brief:
         lines += [brief, ""]
+    if uni_meta.get("source") == "firm_union" and not uni_meta.get("mirror_fallback"):
+        pb = uni_meta.get("per_book") or {}
+        breakdown = ", ".join(f"{k}:{v}" for k, v in pb.items() if v)
+        uni_head = (f"The FIRM'S PUBLISHED BOOKS together express {len(allowed)} names "
+                    f"({breakdown}) — this is your ENTIRE tradable universe. You may ONLY hold names "
+                    "from this list (anything else you submit is dropped), and AT MOST ONE per "
+                    "correlated cluster:")
+    else:
+        uni_head = (f"FLAGSHIP currently holds {len(allowed)} names — this is your ENTIRE tradable "
+                    "universe (the firm-union was too thin, so this run mirrors Flagship). You may ONLY "
+                    "hold names from this list (anything else you submit is dropped), and AT MOST ONE "
+                    "per correlated cluster:")
     lines += [
-        f"FLAGSHIP currently holds {len(allowed)} names — this is your ENTIRE tradable universe. You "
-        "may ONLY hold names from this list (anything else you submit is dropped):",
-        (", ".join(allowed) if allowed else "(none — Flagship has not published a book yet)"),
+        uni_head,
+        (", ".join(allowed) if allowed else "(none — no book has published yet)"),
         "",
     ]
     if inaugural:
@@ -376,7 +589,8 @@ def _build_prompt(asof: str, inaugural: bool, directive: str | None = None) -> s
 # ---------------------------------------------------------------------------
 
 def _build_payload(asof: str, submission: dict | None, kept: list[dict], notes: dict, prices: dict,
-                   executed: list, skipped: list, brain: dict, held_prior: bool) -> dict:
+                   executed: list, skipped: list, brain: dict, held_prior: bool,
+                   uni_meta: dict | None = None) -> dict:
     from portfolio import market_calendar, paper_account, position_log
     state = paper_account._load_account(PORTFOLIO_ID)
     pnl = paper_account.positions_pnl(prices, PORTFOLIO_ID)
@@ -439,6 +653,7 @@ def _build_payload(asof: str, submission: dict | None, kept: list[dict], notes: 
         "executed_today": executed,
         "skipped_unpriceable": skipped,
         "enforcement": notes,                 # what the rails dropped/clamped (honesty)
+        "universe": uni_meta or {},           # W6 T1: firm-union vs mirror provenance (dashboard honesty)
         "held_prior_book": held_prior,
         "vs_flagship_pct": _vs_flagship(total_return_pct),
         "market_status": market_calendar.status(),

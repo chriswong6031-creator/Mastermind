@@ -411,6 +411,12 @@ def _daily_mark_job():
             self_directed.set_price_resolver(lambda t: marks.mark_one(t, asof))
             try:
                 self_directed.mark(prices=union_usd, asof=asof)
+                # W6/T3 — PUBLISH the self-directed book to data/portfolios/self_directed/latest.json
+                # so it becomes a first-class published book: visible to firm_exposure.summary() as the
+                # named-yardstick row and joinable to Heavyweight's firm-union universe. Best-effort;
+                # publish() never raises and firm_exposure EXCLUDES it from all clamp/headroom math, so
+                # this only ADDS the display-only yardstick — it can never shape the books it measures.
+                self_directed.publish(prices=union_usd, asof=asof)
             finally:
                 self_directed.set_price_resolver(None)      # never leave the seam installed
     except Exception:  # noqa: BLE001

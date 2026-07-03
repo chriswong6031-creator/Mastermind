@@ -360,6 +360,16 @@ def review(asof: date | None = None) -> dict:
         firm = None
     firm_flags = [f for f in ((firm or {}).get("flags") or []) if f.get("kind") == "name"]
 
+    # W6/T2 — the BOOK LIFECYCLE (probation/retire recommendations + the orthogonality matrix). Pure
+    # READ-ONLY: it never trades or kills; it surfaces which books are noisy mirrors of Flagship or are
+    # persistently losing to their regime-conditional bogey, so the weekly note answers "which books
+    # earn their capital?". Degrades to an empty summary on any failure (charter P2).
+    try:
+        from brain import book_lifecycle
+        lifecycle = book_lifecycle.lifecycle_summary()
+    except Exception:  # noqa: BLE001
+        lifecycle = {}
+
     whats_working = [s["label"] for s in per_seat
                      if s["reputation"] == "well_calibrated" and (s["kpis"] or {}).get("significant")]
     whats_broken = [s["label"] for s in per_seat if s["reputation"] == "overconfident"]
@@ -372,11 +382,12 @@ def review(asof: date | None = None) -> dict:
         "book_summary": book_summary,
         "leaderboard": leaderboard,
         "firm_exposure": firm,
+        "book_lifecycle": lifecycle,
         "whats_working": whats_working,
         "whats_broken": whats_broken,
         "tuning_recommendations": tuning,
         "note_md": _fallback_note(asof, per_seat, book_summary, whats_working, whats_broken,
-                                  tuning, firm_flags),
+                                  tuning, firm_flags, lifecycle),
     }
     return rep
 
@@ -386,7 +397,8 @@ def _isoweek(d: date) -> str:
     return f"{y}-W{w:02d}"
 
 
-def _fallback_note(asof, per_seat, book_summary, working, broken, tuning, firm_flags=None) -> str:
+def _fallback_note(asof, per_seat, book_summary, working, broken, tuning, firm_flags=None,
+                   lifecycle=None) -> str:
     """A deterministic human note used when no LLM is available (write() upgrades it to Opus prose)."""
     L = [f"# CIO / Meta-PM weekly review — {_isoweek(asof)} (as of {asof.isoformat()})", "",
          "_Accountability review of the Flagship desk seats. This note recommends only — it does not "
@@ -414,6 +426,30 @@ def _fallback_note(asof, per_seat, book_summary, working, broken, tuning, firm_f
                      f"({books}) · firm wt {f.get('firm_weight_pct')}% · {f.get('reason')}")
     else:
         L.append("- (no cross-book pile-ups flagged)")
+    # W6/T2 — book lifecycle: orthogonality + probation/retire recommendations (recommend only).
+    L += ["", "## Book lifecycle — orthogonality + probation/retire (recommend only)"]
+    lc = lifecycle or {}
+    states = lc.get("states") or {}
+    if states:
+        L.append(f"- states: " + ", ".join(f"{b}={s}" for b, s in sorted(states.items())
+                                            if b not in ("self_directed",))
+                 + " · self_directed=EXEMPT (yardstick)")
+    nm = lc.get("noisy_mirror_flags") or []
+    if nm:
+        for f in nm[:4]:
+            L.append(f"- **noisy mirror**: {f.get('book')} active-return corr to {f.get('vs')} = "
+                     f"{f.get('corr')} (n={f.get('n_pairs')})")
+    else:
+        L.append("- (no noisy-mirror flags — or insufficient reviews to test)")
+    recs = lc.get("recommendations") or []
+    if recs:
+        for r in recs:
+            L.append(f"- **{r.get('book')}** → recommend **{r.get('recommend')}** "
+                     f"({'; '.join(r.get('reasons') or [])}) — human executes")
+    else:
+        L.append(f"- (no lifecycle recommendations — {lc.get('scored_books', 0)} book(s) scored, "
+                 f"{lc.get('insufficient_n_books', 0)} insufficient-n; kill is never automated)")
+
     L += ["", "## What is working"]
     L += [f"- {w}" for w in working] or ["- (nothing has cleared the significance bar yet)"]
     L += ["", "## Who is miscalibrated"]

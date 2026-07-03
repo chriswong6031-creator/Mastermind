@@ -68,6 +68,7 @@ CLASS_BENCHMARK = "benchmark-gap"
 CLASS_VALIDATION = "validation-verdict"
 CLASS_EXPERIMENT = "experiment-maturity"
 CLASS_UNARMED = "unarmed-posture-gate"
+CLASS_LIFECYCLE = "book-lifecycle"          # W6/T2 — probation/retire book recommendations (fable-review)
 CLASS_COST = "cost-guard"
 CLASS_DEPLOY = "deploy-lag"
 CLASS_MODEL = "student-drift"
@@ -78,6 +79,7 @@ CLASS_MODEL = "student-drift"
 _CLASS_WEIGHT = {
     CLASS_VALIDATION: 90,
     CLASS_UNARMED: 88,
+    CLASS_LIFECYCLE: 87,           # a book that should be retired is a firm-portfolio decision (P9)
     CLASS_EXPERIMENT: 86,
     CLASS_JOURNAL: 80,
     CLASS_CALIBRATION: 74,
@@ -360,6 +362,42 @@ def _from_benchmark(asof: date) -> list[dict]:
             expected_impact="the book at least matches its regime-conditional bogey",
             severity=min(1.0, gap / 8.0),
             extra={"book": r.get("id"), "gap_pct": round(gap, 3)}))
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# SOURCE 4b — the BOOK LIFECYCLE (W6/T2): probation/retire recommendations + the orthogonality matrix
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+def _from_book_lifecycle(asof: date) -> list[dict]:
+    """The book lifecycle's probation/retire recommendations become {owner: fable-review} agenda items
+    (a lifecycle change is a boundary call — never self-applied, charter P8). A noisy-mirror or
+    persistently-losing US book that should be retired is a firm-portfolio decision (charter P9 — the
+    firm is a portfolio of orthogonal experiments; a noisy mirror is dead weight). Reuses
+    book_lifecycle.agenda_items (one source of truth, charter P7). Lazy-imported; degrades absent (P2).
+    Self-Directed can never appear here — it is the constitutionally-exempt yardstick."""
+    out: list[dict] = []
+    try:
+        from brain import book_lifecycle
+        raw = book_lifecycle.agenda_items() or []
+    except Exception:  # noqa: BLE001
+        return out
+    for r in raw:
+        try:
+            rec = r.get("recommend")
+            # severity: retirement recs outrank probation recs outrank restores
+            sev = {"retired-recommendation": 0.95, "probation": 0.7}.get(rec, 0.3)
+            out.append(_item(
+                r.get("id") or f"lifecycle:{r.get('book')}", CLASS_LIFECYCLE,
+                r.get("title") or "Book lifecycle recommendation",
+                evidence=r.get("evidence") or [],
+                suggested_fix=r.get("suggested_fix") or "Review the lifecycle card and execute or decline.",
+                fix_type=FIX_EXPERIMENT, owner=OWNER_FABLE,   # book kill/promote = human decision (P8)
+                expected_impact=r.get("expected_impact") or "the firm's books stay orthogonal (P9)",
+                severity=sev,
+                extra={"book": r.get("book"), "recommend": rec}))
+        except Exception:  # noqa: BLE001
+            continue
     return out
 
 
@@ -727,6 +765,7 @@ def build(asof: date | None = None, *, cio_rep: dict | None = None) -> dict:
         lambda: _from_journal(asof),
         lambda: _from_shadow(asof, leaderboard),
         lambda: _from_benchmark(asof),
+        lambda: _from_book_lifecycle(asof),
         lambda: _from_validation(asof),
         lambda: _from_cost_guard(asof),
         lambda: _from_deploy_lag(asof),

@@ -688,6 +688,130 @@ def test_intake_entry_gate_demotes_avoid(monkeypatch):
     assert r["candidates"][0]["ticker"] == "AAA.SS"
 
 
+# --------------------------------------------------------------------------- #
+# W6 T4 — CHINA_FUNNEL_PROFILE: edge-led mode
+# --------------------------------------------------------------------------- #
+class TestChinaFunnelProfile:
+    """Guards for the CHINA_FUNNEL_PROFILE flag (W6 T4).
+
+    Key invariants:
+    1. default profile → byte-identical to pre-W6 behaviour (no score change).
+    2. edge-led → reversal scores are higher (REVERSAL_BOOST) and the cap is raised.
+    3. edge-led → alpha 'intact' names receive a score penalty.
+    4. Both profiles surface a 'funnel_profile' field in the build() output.
+    5. Profile can be set via env OR via the profile= kwarg.
+    6. Unknown env value falls back to 'default'.
+    """
+
+    def _reversal_data(self, rev_z=3.0) -> dict:
+        return {"watch": [{"ticker": "REV.SS", "rev_z": rev_z, "ret_3m": -12.0}]}
+
+    def _alpha_data(self, intact=True) -> dict:
+        return {"top": [{"ticker": "MOM.SS", "alpha": 2.4,
+                         "entry": "intact" if intact else "waning"}]}
+
+    def test_default_profile_is_byte_identical(self, monkeypatch):
+        """build() with profile='default' must produce the same scores as pre-W6."""
+        from brain import china_intake
+        monkeypatch.setattr(china_intake, "_read", lambda rel: (
+            self._reversal_data() if "china_reversal" in rel else None))
+        r_default = china_intake.build(20, profile="default")
+        by = {c["ticker"]: c for c in r_default["candidates"]}
+        # score = min(3.0/4.0, 0.5) = 0.5  (old cap of 0.5)
+        assert by["REV.SS"]["score"] == pytest.approx(0.5, abs=1e-4)
+        assert r_default["funnel_profile"] == "default"
+
+    def test_edge_led_boosts_reversal_score(self, monkeypatch):
+        """edge-led mode multiplies reversal scores by _REVERSAL_BOOST and raises the cap."""
+        from brain import china_intake
+        monkeypatch.setattr(china_intake, "_read", lambda rel: (
+            self._reversal_data(rev_z=2.0) if "china_reversal" in rel else None))
+        # default: score = min(2.0/4.0, 0.5) = 0.5
+        r_default = china_intake.build(20, profile="default")
+        by_def = {c["ticker"]: c for c in r_default["candidates"]}
+        # edge-led: raw = 2.0/4.0 * BOOST; with BOOST=1.6 and cap=0.75 → min(0.8, 0.75)=0.75
+        r_edge = china_intake.build(20, profile="edge-led")
+        by_edge = {c["ticker"]: c for c in r_edge["candidates"]}
+        assert by_edge["REV.SS"]["score"] > by_def["REV.SS"]["score"]
+        assert r_edge["funnel_profile"] == "edge-led"
+
+    def test_edge_led_raises_reversal_cap(self, monkeypatch):
+        """Reversal cap must be > 0.5 in edge-led mode (0.75 configured)."""
+        from brain import china_intake
+        # rev_z=4.0: default score = min(1.0, 0.5) = 0.5; edge-led = min(1.0*1.6, 0.75) = 0.75
+        monkeypatch.setattr(china_intake, "_read", lambda rel: (
+            self._reversal_data(rev_z=4.0) if "china_reversal" in rel else None))
+        r = china_intake.build(20, profile="edge-led")
+        by = {c["ticker"]: c for c in r["candidates"]}
+        assert by["REV.SS"]["score"] == pytest.approx(china_intake._REVERSAL_CAP_EDGE, abs=1e-4)
+        assert by["REV.SS"]["score"] > 0.5   # strictly above the default cap
+
+    def test_edge_led_penalises_alpha_intact_names(self, monkeypatch):
+        """Alpha 'intact' names must receive a score haircut in edge-led mode."""
+        from brain import china_intake
+        monkeypatch.setattr(china_intake, "_read", lambda rel: (
+            self._alpha_data(intact=True) if "china_alpha" in rel else None))
+        # default: score = min(2.4/3.0, 1.0) = 0.8
+        r_default = china_intake.build(20, profile="default")
+        by_def = {c["ticker"]: c for c in r_default["candidates"]}
+        # edge-led: score *= _MOMENTUM_PENALTY
+        r_edge = china_intake.build(20, profile="edge-led")
+        by_edge = {c["ticker"]: c for c in r_edge["candidates"]}
+        assert by_edge["MOM.SS"]["score"] < by_def["MOM.SS"]["score"]
+        assert by_edge["MOM.SS"]["score"] == pytest.approx(
+            by_def["MOM.SS"]["score"] * china_intake._MOMENTUM_PENALTY, abs=1e-4)
+
+    def test_edge_led_does_not_penalise_non_intact_alpha(self, monkeypatch):
+        """Alpha names with entry != 'intact' must NOT be penalised in edge-led mode."""
+        from brain import china_intake
+        monkeypatch.setattr(china_intake, "_read", lambda rel: (
+            self._alpha_data(intact=False) if "china_alpha" in rel else None))
+        r_default = china_intake.build(20, profile="default")
+        r_edge = china_intake.build(20, profile="edge-led")
+        by_def = {c["ticker"]: c for c in r_default["candidates"]}
+        by_edge = {c["ticker"]: c for c in r_edge["candidates"]}
+        # waning entry → no penalty in either mode
+        assert by_edge["MOM.SS"]["score"] == pytest.approx(by_def["MOM.SS"]["score"], abs=1e-4)
+
+    def test_env_var_controls_profile(self, monkeypatch):
+        """CHINA_FUNNEL_PROFILE env var selects the profile when no kwarg is passed."""
+        import os
+        from brain import china_intake
+        monkeypatch.setattr(china_intake, "_read", lambda rel: (
+            self._reversal_data() if "china_reversal" in rel else None))
+        monkeypatch.setenv("CHINA_FUNNEL_PROFILE", "edge-led")
+        r = china_intake.build(20)
+        assert r["funnel_profile"] == "edge-led"
+        monkeypatch.setenv("CHINA_FUNNEL_PROFILE", "default")
+        r2 = china_intake.build(20)
+        assert r2["funnel_profile"] == "default"
+
+    def test_unknown_env_value_falls_back_to_default(self, monkeypatch):
+        """An unknown CHINA_FUNNEL_PROFILE value must degrade to 'default', never raise."""
+        from brain import china_intake
+        monkeypatch.setenv("CHINA_FUNNEL_PROFILE", "experimental-2.0")
+        monkeypatch.setattr(china_intake, "_read", lambda rel: None)
+        r = china_intake.build(10)
+        assert r["funnel_profile"] == "default"
+
+    def test_kwarg_overrides_env(self, monkeypatch):
+        """profile= kwarg overrides the env var (for one-off calls without restarting)."""
+        from brain import china_intake
+        monkeypatch.setenv("CHINA_FUNNEL_PROFILE", "default")
+        monkeypatch.setattr(china_intake, "_read", lambda rel: (
+            self._reversal_data() if "china_reversal" in rel else None))
+        r = china_intake.build(20, profile="edge-led")
+        assert r["funnel_profile"] == "edge-led"
+
+    def test_edge_led_does_not_break_degrade_path(self, monkeypatch):
+        """edge-led mode must degrade as gracefully as default when no boards are built."""
+        from brain import china_intake
+        monkeypatch.setattr(china_intake, "_read", lambda rel: None)
+        r = china_intake.build(10, profile="edge-led")
+        assert r["candidates"], "seed fallback must fire even in edge-led mode"
+        assert r["funnel_profile"] == "edge-led"
+
+
 def test_tushare_feed_healthy_tristate(monkeypatch):
     """The A-share feed-health probe is TRI-STATE: up (bulk market non-empty), down (token present
     but every walked-back day empty → an outage), None (no token → live feed not deployed; the
