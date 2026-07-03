@@ -1,0 +1,23 @@
+{
+  "pid": "autonomous",
+  "asof": "2026-07-01",
+  "tripwire": {
+    "trigger": true,
+    "severity": 2,
+    "reasons": [
+      "overnight tape elevated",
+      "theme day: SOXX -6.4% (\u2264 -4%)"
+    ],
+    "state": "risk_on"
+  },
+  "action": "revised_pending_target",
+  "gross_before": 0.644,
+  "gross_cap": 1.0,
+  "scaled": false,
+  "dropped_chains": [],
+  "reasons": [
+    "overnight tape elevated",
+    "theme day: SOXX -6.4% (\u2264 -4%)"
+  ],
+  "n_names": 7
+}

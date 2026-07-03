@@ -1,27 +1,46 @@
 """The daily loop — one entrypoint for cron / the scheduler.
 
 Runs, in order, each step degrading gracefully (a missing credential never breaks the loop):
-  1. Gated multi-name paper book (phase2, material-change gated).
-  2. Armed Claude regime/theme research -> proposals gated into the falsifiable ledger.
-  3. Competitor desk — pull Quiver's AI strategies + an armed "where's our edge" note.
+  0a. Deploy-lag tripwire: alert (LOUD) when production trails master >24h. Never raises.
+  0b. Freshen the vendored macro analyzer data before the engine reads it.
+  1.  Gated multi-name paper book (phase2, material-change gated).
+  2.  Armed Claude regime/theme research -> proposals gated into the falsifiable ledger.
+  3.  Competitor desk — pull Quiver's AI strategies + an armed "where's our edge" note.
 
 Run:  python -m bot.daily        (or POST /daily, or the APScheduler job in app/scheduler.py)
 """
 from __future__ import annotations
 
+import logging
 from datetime import date, datetime, timezone
 
 import bot  # noqa: F401
+
+_log = logging.getLogger(__name__)
 
 
 def run_daily(asof: str | None = None, *, force: bool = False, armed: bool = True) -> dict:
     asof = asof or date.today().isoformat()
     out = {"asof": asof, "ran_at": datetime.now(timezone.utc).isoformat()}
 
-    # 0. FRESHEN the vendored macro analyzer data BEFORE the engine reads it. A stale vendored tree
-    #    is how the book once bought NVDA off a days-old "Constructive" read after the live analyzer
-    #    had already flipped it to "avoid / wait for a base". Pulls origin/main (== the live site);
-    #    the staleness tripwire warns (or refuses via MACRO_STALE_BLOCK=1). Never raises.
+    # 0a. DEPLOY-LAG TRIPWIRE — alert when production trails master >24h (W-I Task 4b).
+    #     The 2026-07-02 incident was worsened because 4 merged fix-waves sat on master while
+    #     production ran a pre-W0 branch through the entire episode. This check runs first so
+    #     the alert appears at the TOP of the daily runlog, not buried. Never raises; degrades
+    #     silently when git is unavailable (e.g. a fully detached CI checkout).
+    try:
+        from scripts.check_deploy_lag import check as _deploy_lag_check
+        lag = _deploy_lag_check()
+        out["deploy_lag"] = lag
+        if lag.get("warn"):
+            _log.warning(lag["message"])
+    except Exception as e:  # noqa: BLE001 — deploy-lag check must NEVER kill the build
+        out["deploy_lag"] = {"error": str(e)[:200]}
+
+    # 0b. FRESHEN the vendored macro analyzer data BEFORE the engine reads it. A stale vendored
+    #     tree is how the book once bought NVDA off a days-old "Constructive" read after the live
+    #     analyzer had already flipped it to "avoid / wait for a base". Pulls origin/main (== the
+    #     live site); the staleness tripwire warns (or refuses via MACRO_STALE_BLOCK=1). Never raises.
     try:
         from data_layer import macro_refresh
         out["macro_data"] = macro_refresh.refresh_and_check()

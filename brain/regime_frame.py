@@ -26,8 +26,11 @@ PUBLIC API
 * ``cycles()``             -> {ticker: {phase, phaseLabel, pos, osc_slope, late_cycle,
                               entry_favored}} — the SOLE reader of sector_cycles.json, gated
                               stale (>5 trading days by meta.asOf) -> {} (W2).
-* ``budget(region='us')``  -> {lead_budget, inputs} — the ONE leadership budget equation;
-                              missing frame fields -> 0.50 midpoint (W2).
+* ``budget(region='us', evidence=None)`` -> {lead_budget, inputs} — the ONE leadership budget
+                              equation; missing frame fields -> 0.50 midpoint (W2).  The optional
+                              ``evidence`` dict adds the shrink-only rotation-evidence damp (W-I t6).
+* ``rotation_evidence(...)`` -> {n_agree, sources} — the shrink-only disagreement-agreement count
+                              consumed by budget()'s damp AND rotation.fragility_signal (W-I t6).
 
 REGION ROUTING
 --------------
@@ -48,7 +51,7 @@ from __future__ import annotations
 import json
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 # The module lives at brain/regime_frame.py; the repo root is two levels up.
 _ROOT: Path = Path(__file__).resolve().parent.parent
@@ -85,6 +88,23 @@ _BUDGET_FALLBACK: dict[str, Any] = {
 }
 # Fallback staleness horizon for cycles(), mirroring config/doctrine.yml's cycles: block.
 _CYCLES_STALE_TD_FALLBACK: int = 5
+
+# Rotation-evidence fallback constants — MUST mirror config/doctrine.yml's rotation_evidence: block.
+# Used only when PyYAML is absent or the block is malformed; the yml is the source of truth.
+# See budget()'s evidence damp + rotation.fragility_signal's unthrottle (W-I task 6).
+_ROTATION_EVIDENCE_FALLBACK: dict[str, Any] = {
+    "damp_2_agree": 0.90,
+    "damp_3plus_agree": 0.80,
+    "lift_per_source": 0.15,
+    "liquidity_stress_labels": ("stress-expansion", "neutral-hollow"),
+    "radar_caution_states": ("caution", "risk_off", "risk-off"),
+}
+# The path to the VALIDATED risk_radar forward-log — the fallback radar-caution read when
+# brain/risk_prior (which lands via the in-flight merge) is not importable.  Read-only; a missing
+# file degrades the radar source to None (non-agreeing) — never fabricates a caution.
+_RADAR_FORWARD_LOG: Path = (
+    _ROOT / "vendor" / "macro" / "data" / "risk_radar" / "forward_log.jsonl"
+)
 
 # Fields carried through to frame() unchanged from the raw JSON.
 # Any field NOT in the raw dict becomes None — never a KeyError.
@@ -407,27 +427,278 @@ def _cycles_stale_after_td() -> int:
 
 
 # ---------------------------------------------------------------------------
+# rotation_evidence() — the shrink-only disagreement-agreement count (W-I task 6)
+# ---------------------------------------------------------------------------
+# THE ONE definition of "how many disagreement sources agree", consumed by BOTH budget()'s damp and
+# rotation.fragility_signal()'s DEF_SLEEVE unthrottle so the two levers never count evidence two
+# different ways.  Four tri-state sources ({nowcast doubt, liquidity stress/hollow, radar caution,
+# defensive-RS crossover}); True counts, False/None do NOT (a MISSING source is never evidence).
+# SHRINK-ONLY: the count can only DAMP the budget (down toward the floor) and LIFT the defensive
+# floor — it can never un-cap, raise authority, or flip direction.
+
+def _rotation_evidence_cfg() -> dict[str, Any]:
+    """Merge doctrine's ``rotation_evidence:`` block over the mirrored fallback (fallback wins gaps)."""
+    cfg = dict(_ROTATION_EVIDENCE_FALLBACK)
+    try:
+        block = _doctrine().get("rotation_evidence") or {}
+        if isinstance(block, dict):
+            for k, v in block.items():
+                if v is not None:
+                    cfg[k] = v
+    except Exception:  # noqa: BLE001
+        pass
+    return cfg
+
+
+def _nowcast_doubt_source(
+    nowcast_out: Any = None,
+    *,
+    series_fn: Any = None,
+    quad: Any = None,
+    quad_name: Any = None,
+    risk_state: Any = None,
+    asof: Any = None,
+) -> Optional[bool]:
+    """True when the price-action nowcast DOUBTS the offensive label, None when undeterminable.
+
+    Advisory-only per nowcast_validation.md (the gate FAILED, ``BUDGET_INPUT_QUALIFIED=False``) — but
+    this is a shrink SIZE input (a lens surface the validation explicitly permits), NOT a wired
+    budget-return predictor, so using it here is within the honest frame.  ``nowcast_out`` (a
+    pre-computed ``nowcast()`` dict) may be injected for tests; otherwise it is computed with the
+    supplied label (never a live regime read here — the label is passed in).  Any error → None."""
+    out = nowcast_out
+    if out is None:
+        try:
+            from brain import regime_nowcast as _nc
+            out = _nc.nowcast(series_fn, quad=quad, quad_name=quad_name,
+                              risk_state=risk_state, asof=asof)
+        except Exception:  # noqa: BLE001 — a missing/broken nowcast leaves the source absent
+            return None
+    if not isinstance(out, dict):
+        return None
+    # applies==False (defensive label) means the nowcast no-ops — NOT a doubt (it is a no-op, absent).
+    if out.get("applies") is False:
+        return False
+    stance = out.get("stance")
+    if stance in ("doubt", "strong-doubt"):
+        return True
+    if stance == "confirm":
+        return False
+    return None  # unknown stance → undeterminable
+
+
+def _liquidity_stress_source(
+    liquidity_out: Any = None,
+    *,
+    series_fn: Any = None,
+    cfg: Optional[dict] = None,
+) -> Optional[bool]:
+    """True when liquidity QUALITY reads stress-expansion / neutral-hollow, None when unknown.
+
+    A 'benign-expansion' or 'contracting' read is a definite NON-agreement (False); an 'unknown' read
+    (a missing quantity series) is UNDETERMINABLE (None) and never counts.  ``liquidity_out`` (a
+    pre-computed ``classify()`` dict) may be injected for tests; otherwise it is computed from the
+    production frames reader.  Any error → None."""
+    ev_cfg = cfg or _rotation_evidence_cfg()
+    stress_labels = {str(x).strip().lower() for x in (ev_cfg.get("liquidity_stress_labels") or ())}
+    out = liquidity_out
+    if out is None:
+        try:
+            from brain import liquidity_quality as _lq
+            fn = series_fn if series_fn is not None else _lq.series_from_frames
+            out = _lq.classify(fn)
+        except Exception:  # noqa: BLE001
+            return None
+    if not isinstance(out, dict):
+        return None
+    label = out.get("label")
+    if label is None or label == "unknown":
+        return None  # cannot even measure liquidity → undeterminable, never counts
+    return bool(str(label).strip().lower() in stress_labels)
+
+
+def _radar_caution_source(
+    radar_state: Any = None,
+    *,
+    cfg: Optional[dict] = None,
+) -> Optional[bool]:
+    """True when the dashboard's own risk_radar reads caution / risk_off, None when unavailable.
+
+    Prefers ``radar_state`` if injected (a plain state string — the DI path tests use).  Otherwise it
+    tries ``brain.risk_prior`` (which lands via the in-flight fix/bot-orphans-arming merge — its
+    ``prior()`` exposes ``radar_state``), then falls back to the VALIDATED radar forward-log's last
+    row.  A missing radar everywhere → None (non-agreeing; the incident's blinded-feed failure must
+    degrade to 'no evidence', never to a fabricated caution OR a fabricated all-clear).  Any error → None."""
+    ev_cfg = cfg or _rotation_evidence_cfg()
+    caution_states = {
+        str(x).strip().lower().replace("-", "_")
+        for x in (ev_cfg.get("radar_caution_states") or ())
+    }
+    st = radar_state
+    if st is None:
+        # (a) risk_prior (present only after the in-flight merge) — never a hard dependency.
+        try:
+            from brain import risk_prior as _rp  # type: ignore
+            p = _rp.prior()
+            if isinstance(p, dict):
+                st = p.get("radar_state") or (p.get("reconciliation") or {}).get("radar_state")
+        except Exception:  # noqa: BLE001 — risk_prior not on this base / any error → try the log
+            st = None
+    if st is None:
+        # (b) the validated forward-log tail (the read risk_prior's test binds against).
+        st = _read_radar_forward_log_state()
+    if st is None:
+        return None
+    return bool(str(st).strip().lower().replace("-", "_") in caution_states)
+
+
+def _read_radar_forward_log_state() -> Optional[str]:
+    """Return the ``state`` of the last risk_radar forward-log row, or None on any miss.  Read-only.
+
+    The validated (non-shadow) radar plane the bot was BLIND to during the incident.  A missing file /
+    empty log / parse error → None (the source is simply absent — never a fabricated read)."""
+    try:
+        if not _RADAR_FORWARD_LOG.exists():
+            return None
+        lines = [ln for ln in _RADAR_FORWARD_LOG.read_text().splitlines() if ln.strip()]
+        if not lines:
+            return None
+        row = json.loads(lines[-1])
+        st = row.get("state") if isinstance(row, dict) else None
+        return str(st) if st is not None else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _defensive_rs_source(
+    rs_crossed: Any = None,
+    *,
+    series_fn: Any = None,
+) -> Optional[bool]:
+    """True when the defensive-vs-offensive 20d RS differential has crossed (defensives leading).
+
+    ``rs_crossed`` (a bool) may be injected directly for tests; otherwise the shared
+    ``distribution_tells.defensive_offensive_rs_diff`` is called (the ONE RS-diff construction, shared
+    with the nowcast + the distribution escalator).  Absent baskets → crossed None → None (never
+    counts).  Any error → None."""
+    if rs_crossed is not None:
+        return bool(rs_crossed)
+    try:
+        from portfolio import distribution_tells as _dt
+        rs = _dt.defensive_offensive_rs_diff(series_fn=series_fn) if series_fn is not None \
+            else _dt.defensive_offensive_rs_diff()
+        if isinstance(rs, dict):
+            crossed = rs.get("crossed")
+            return None if crossed is None else bool(crossed)
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def rotation_evidence(
+    *,
+    nowcast_doubt: Any = None,
+    liquidity_stress: Any = None,
+    radar_caution: Any = None,
+    defensive_rs_cross: Any = None,
+    cfg: Optional[dict] = None,
+) -> dict[str, Any]:
+    """The shrink-only agreement count over the four disagreement sources (W-I task 6).
+
+    Each of the four keyword args may be supplied DIRECTLY as a tri-state (True / False / None) — the
+    DI path the tests and phase2 use so the shared mutating store is NEVER live-read inside this
+    computation.  When an arg is left ``None`` the corresponding source is treated as ABSENT (None) —
+    it does NOT trigger a live read here (callers that want the production reads pass the pre-computed
+    source verdicts in; ``budget()``/``fragility_signal()`` accept a whole ``evidence`` dict).
+
+    Returns
+    -------
+    {
+      "n_agree": int,                # count of sources that are TRUE (0-4); the ONLY thing levers read
+      "sources": {                   # the tri-state verdict per source (True / False / None)
+         "nowcast_doubt": bool|None,
+         "liquidity_stress": bool|None,
+         "radar_caution": bool|None,
+         "defensive_rs_cross": bool|None,
+      },
+    }
+
+    INVARIANT: a None (missing) source is never counted (absent data can never manufacture a shrink);
+    only an affirmative True agrees.  ``n_agree`` is therefore monotonic in real evidence and 0 on a
+    total outage → the damp is 1.0 and the lift is 0.0 (byte-identical no-op)."""
+    sources = {
+        "nowcast_doubt": _tri(nowcast_doubt),
+        "liquidity_stress": _tri(liquidity_stress),
+        "radar_caution": _tri(radar_caution),
+        "defensive_rs_cross": _tri(defensive_rs_cross),
+    }
+    n_agree = sum(1 for v in sources.values() if v is True)
+    return {"n_agree": n_agree, "sources": sources}
+
+
+def _tri(v: Any) -> Optional[bool]:
+    """Coerce to True / False / None — anything non-bool-ish (including 0/1 ints) stays as-is if bool.
+
+    None (or a non-bool) is 'absent' and never counts; only a real bool True agrees."""
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return v
+    # a non-None non-bool (e.g. a stray dict) is treated as absent — never a fabricated True.
+    return None
+
+
+def _evidence_damp(n_agree: int, cfg: dict[str, Any]) -> float:
+    """The budget FLEX multiplier from the agreement count: 0-1 → 1.0; 2 → 0.9; 3+ → 0.8.  Shrink-only.
+
+    Reads ``rotation_evidence.damp_2_agree`` / ``damp_3plus_agree`` (both in (0,1]); anything out of
+    band degrades to 1.0 (no damp) so a bad config can never damp harder than the doctrine intends."""
+    def _mult(key: str) -> float:
+        try:
+            m = float(cfg[key])
+        except (TypeError, ValueError, KeyError):
+            return 1.0
+        return m if 0.0 < m <= 1.0 else 1.0
+    if n_agree >= 3:
+        return _mult("damp_3plus_agree")
+    if n_agree == 2:
+        return _mult("damp_2_agree")
+    return 1.0
+
+
+# ---------------------------------------------------------------------------
 # budget() — the ONE leadership budget equation (architecture Stage 2, W2)
 # ---------------------------------------------------------------------------
 
-def budget(region: str = "us") -> dict[str, Any]:
+def budget(region: str = "us", *, evidence: Optional[dict] = None) -> dict[str, Any]:
     """Return the single leadership-sleeve budget for *region* + the inputs that produced it.
 
     THE ONE EQUATION (no double-counting — confidence × transition × flip-fragility is
     consumed exactly ONCE, here):
 
-        lead_budget = clamp( base + slope · clamp(confidence,0,1) · T · F ,  floor, ceil )
+        lead_budget = clamp( base + slope · clamp(confidence,0,1) · T · F · D ,  floor, ceil )
           T = {WEAKENING: 0.6, ROLLING/DETERIORATING: 0.4, else 1.0}
           F = 0.75 if flip_margin < flip_margin_min else 1.0
+          D = the ROTATION-EVIDENCE damp (W-I task 6): 0-1 agree → 1.0; 2 → 0.9; 3+ → 0.8
+
+    THE EVIDENCE DAMP (D) — the incident's DETECTION fix.  ``evidence`` is the shrink-only agreement
+    count over the four disagreement sources ({nowcast doubt, liquidity stress/hollow, radar caution,
+    defensive-RS crossover}); it is PASSED IN (a ``rotation_evidence()`` dict, or ``{"n_agree": int}``)
+    so this function stays standalone and never live-reads the mutating store.  ``None`` (the default,
+    and every caller pre-W-I) means "no evidence supplied" → n_agree 0 → D 1.0 → the budget is
+    BYTE-IDENTICAL to pre-W-I.  D multiplies the FLEX above the floor and the result is re-clamped, so
+    D can only ever push the budget DOWN toward the 0.40 floor — never up (the master invariant: this
+    lever is shrink-only; missing/insufficient evidence is a no-op, never an un-cap).
 
     DEGRADE-TO-MIDPOINT: if confidence OR transition_state OR flip_margin is missing from
     the frame, the equation is SKIPPED and lead_budget = midpoint (0.50 = today's behavior).
     A partial/absent frame can therefore never inflate the budget to the ceiling — it lands
     on the neutral midpoint.  This is the invariant in action: missing data shrinks toward
-    neutral, never un-caps.
+    neutral, never un-caps.  (The evidence damp does NOT further move the degraded midpoint — a
+    missing regime has no flex to damp; the midpoint is already the conservative no-flex read.)
 
-    All constants come from config/doctrine.yml's ``budget:`` block (tagged unverified-prior);
-    a missing config falls back to the mirrored priors above.
+    All constants come from config/doctrine.yml's ``budget:`` / ``rotation_evidence:`` blocks (tagged
+    unverified-prior); a missing config falls back to the mirrored priors above.
 
     Returns
     -------
@@ -439,11 +710,15 @@ def budget(region: str = "us") -> dict[str, Any]:
          "flip_margin": float|None,
          "T": float,                 # applied transition multiplier
          "F": float,                 # applied flip-fragility multiplier
+         "D": float,                 # applied rotation-evidence damp (1.0 when no evidence)
+         "evidence_n_agree": int,    # the agreement count that produced D (0 when no evidence)
+         "evidence_sources": dict|None,  # per-source tri-state verdicts (None when no evidence dict)
       },
     }
     The inputs block exists so runlogs can show WHY a budget landed where it did.
     """
     cfg = _budget_cfg()
+    ev_cfg = _rotation_evidence_cfg()
     f = frame(region)
     confidence = f.get("confidence")
     transition_state = f.get("transition_state")
@@ -452,10 +727,23 @@ def budget(region: str = "us") -> dict[str, Any]:
     conf_f = _as_float(confidence)
     fm_f = _as_float(flip_margin)
 
+    # Resolve the evidence agreement count (0 when no evidence supplied → D 1.0 → byte-identical).
+    n_agree = 0
+    ev_sources = None
+    if isinstance(evidence, dict):
+        ev_sources = evidence.get("sources")
+        try:
+            n_agree = int(evidence.get("n_agree") or 0)
+        except (TypeError, ValueError):
+            n_agree = 0
+    D = _evidence_damp(n_agree, ev_cfg)
+
     # DEGRADE-TO-MIDPOINT: any of the three load-bearing fields missing → neutral budget.
     # transition_state missing means we cannot know T; confidence missing means no flex basis;
     # flip_margin missing means we cannot know the fragility damp. In all cases we refuse to
-    # guess a *larger* budget and return the midpoint (today's hardwired 0.50 behaviour).
+    # guess a *larger* budget and return the midpoint (today's hardwired 0.50 behaviour).  The
+    # evidence damp does NOT apply here: there is no flex to damp and the midpoint is already the
+    # conservative no-flex read (D is still reported so runlogs see the evidence that WOULD apply).
     if conf_f is None or transition_state is None or fm_f is None:
         return {
             "lead_budget": float(cfg["midpoint"]),
@@ -465,6 +753,9 @@ def budget(region: str = "us") -> dict[str, Any]:
                 "flip_margin": fm_f,
                 "T": 1.0,
                 "F": 1.0,
+                "D": D,
+                "evidence_n_agree": n_agree,
+                "evidence_sources": ev_sources,
             },
         }
 
@@ -472,7 +763,7 @@ def budget(region: str = "us") -> dict[str, Any]:
     T = _transition_mult(transition_state, cfg)
     F = 0.75 if fm_f < float(cfg["flip_margin_min"]) else 1.0
 
-    raw_budget = float(cfg["base"]) + float(cfg["slope"]) * conf_clamped * T * F
+    raw_budget = float(cfg["base"]) + float(cfg["slope"]) * conf_clamped * T * F * D
     lead_budget = min(max(raw_budget, float(cfg["floor"])), float(cfg["ceil"]))
 
     return {
@@ -483,6 +774,9 @@ def budget(region: str = "us") -> dict[str, Any]:
             "flip_margin": fm_f,
             "T": T,
             "F": F,
+            "D": D,
+            "evidence_n_agree": n_agree,
+            "evidence_sources": ev_sources,
         },
     }
 

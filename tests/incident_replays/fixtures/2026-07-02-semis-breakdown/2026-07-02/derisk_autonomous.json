@@ -1,0 +1,21 @@
+{
+  "pid": "autonomous",
+  "asof": "2026-07-02",
+  "tripwire": {
+    "trigger": true,
+    "severity": 2,
+    "reasons": [
+      "SPY dealers SHORT gamma (amplifies the move)"
+    ],
+    "state": "risk_on"
+  },
+  "action": "revised_pending_target",
+  "gross_before": 0.644,
+  "gross_cap": 1.0,
+  "scaled": false,
+  "dropped_chains": [],
+  "reasons": [
+    "SPY dealers SHORT gamma (amplifies the move)"
+  ],
+  "n_names": 7
+}

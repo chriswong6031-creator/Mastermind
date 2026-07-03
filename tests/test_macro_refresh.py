@@ -499,3 +499,37 @@ def test_refresh_wires_sparse_set_and_r2(monkeypatch):
     assert mr.refresh() == "2026-07-01"
     assert synced, "refresh() must invoke the R2 leg"
     assert ["git", "sparse-checkout", "set", *mr._SPARSE_PATHS] in run_calls  # pin to the constant, not a copy
+
+
+# ---------------------------------------------------------------------------
+# W-I Task 5(b) — data/china_regime in _SPARSE_PATHS
+# ---------------------------------------------------------------------------
+
+def test_china_regime_in_sparse_paths():
+    """data/china_regime MUST be in _SPARSE_PATHS so the CN/HK books' regime read is materialised
+    in the sparse checkout. W-I Task 5(b) — was missing, causing bot/china.py:_read_china_regime()
+    to always return {} (empty fallback) on every build."""
+    assert "data/china_regime" in mr._SPARSE_PATHS, (
+        "data/china_regime is not in _SPARSE_PATHS — CN/HK books read an empty regime dict; "
+        "add it to _SPARSE_PATHS in data_layer/macro_refresh.py"
+    )
+
+
+def test_sparse_paths_contains_required_set():
+    """Regression guard: the FULL required sparse set must be present. Any path removed from
+    _SPARSE_PATHS causes a silent data outage that the W0 fail-closed gate may not catch in time.
+    This test lists the KNOWN-REQUIRED paths; new paths may be added freely."""
+    required = {
+        "site",            # standouts board, sector_cycles, GEX, etf_pulse, stockdata (R2 leg)
+        "data/regime",     # regime/latest.json (anchor 2)
+        "engine",          # engine/ imports (loop/harness + in-engine calcs)
+        "lib",             # lib/store.py parquet reader
+        "data/yahoo",      # per-name OHLC parquet (engine price store, loop backtests)
+        "data/risk_radar", # risk_radar/forward_log.jsonl (P-NEW-1 / W-I radar consumer)
+        "data/china_regime",  # CN/HK regime read (bot/china.py + bot/hk.py)
+    }
+    missing = required - set(mr._SPARSE_PATHS)
+    assert not missing, (
+        f"Required paths missing from _SPARSE_PATHS: {sorted(missing)}. "
+        "Each missing path causes a silent data outage."
+    )

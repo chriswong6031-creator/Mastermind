@@ -1,0 +1,22 @@
+{
+  "_note": "Vendored regime/latest.json as of 2026-07-01 (the crash-eve read the bot consumed). Source: vendor/macro/data/regime/latest.json. This is what caused the label plane to read Goldilocks/STABLE/expanding while the radar already read CAUTION/growth-scare/91.",
+  "quad": "Q1",
+  "quad_name": "Goldilocks",
+  "liquidity_overlay": "expanding",
+  "confidence": 0.327,
+  "transition_state": "STABLE",
+  "contradicting": [
+    "growth_cyclical_defensive",
+    "growth_wei_trend",
+    "inflation_sticky_cpi_direction"
+  ],
+  "flip_condition": {
+    "axis": "growth",
+    "component": "copper_gold",
+    "z": 0.5,
+    "threshold": 0.45,
+    "margin": 0.05,
+    "note": "growth axis flips risk: copper_gold slope z=0.5 is the closest supporter to its +/-0.45 cutoff"
+  },
+  "date": "2026-07-01"
+}

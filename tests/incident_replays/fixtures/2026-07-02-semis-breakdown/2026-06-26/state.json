@@ -1,0 +1,98 @@
+{
+  "agent": "macro_risk",
+  "state": {
+    "agent": "macro_risk",
+    "asof": "2026-06-26",
+    "state": "caution",
+    "fragility": 0.552,
+    "supportive": false,
+    "axes": {
+      "volatility": {
+        "fragility": 0.15,
+        "reason": "VIX 65th pctile"
+      },
+      "credit_usd": {
+        "fragility": 0.6,
+        "reason": "ETF risk block RISK-OFF; risk tilt -0.23"
+      },
+      "liquidity": {
+        "fragility": 0.75,
+        "reason": "liquidity contracting; gex; complacency warning"
+      },
+      "crowding": {
+        "fragility": 0.36,
+        "reason": "SMH 99th pctile/+51% 60d; MTUM 100th pctile/+27% 60d"
+      },
+      "dealer_gamma": {
+        "fragility": 0.95,
+        "reason": "SPY dealers SHORT gamma (amplifies moves); SPY -1.5% below gamma-flip; vol-hole EXPANSION; regime GEX flag"
+      }
+    },
+    "signals": [
+      "SPY dealers SHORT gamma (amplifies moves); SPY -1.5% below gamma-flip; vol-hole EXPANSION; regime GEX flag",
+      "liquidity contracting; gex; complacency warning",
+      "ETF risk block RISK-OFF; risk tilt -0.23",
+      "SMH 99th pctile/+51% 60d; MTUM 100th pctile/+27% 60d",
+      "VIX 65th pctile"
+    ],
+    "drivers": [
+      {
+        "id": "ai_buildout",
+        "name": "AI build-out (memory \u2192 hyperscaler capex \u2192 buildout \u2192 industrial-AI power)",
+        "driver": "memory / DRAM pricing + hyperscaler-capex guidance",
+        "hot_overlap": [
+          "SMH"
+        ],
+        "leading_hit": [],
+        "score": 1
+      }
+    ],
+    "hot_tickers": [
+      "SMH",
+      "MTUM"
+    ],
+    "regime_growth": 0.2,
+    "regime_inflation": -0.36,
+    "defensive_tilt": {
+      "archetype": "ai_capex_unwind",
+      "favor": [
+        "XLP",
+        "XLV",
+        "USMV",
+        "QUAL",
+        "SGOV",
+        "GLD",
+        "TLT"
+      ],
+      "avoid": [
+        "SMH",
+        "SOXX",
+        "ARKK"
+      ],
+      "cash_floor": 0.3,
+      "rationale": "A crowded AI-buildout/semis blow-off into contracting liquidity breaks the most-extended momentum first; rotate to quality/low-vol/staples/healthcare + cash; gold/duration only help if it's a growth-scare (see caveats).",
+      "caveats": [
+        "Duration (TLT) HELPS only if the unwind is a growth-scare (inflation_score < 0); if rates are still rising, duration adds risk, not safety.",
+        "Banks (XLF) are NOT a clean hedge \u2014 a liquidity event stresses credit; favor them only on a steepening-with-stable-credit read.",
+        "REITs (XLRE) are rate-sensitive \u2014 avoid while real yields are rising."
+      ],
+      "rate_sensitive_note": "Growth-scare driver (growth weak / inflation falling): long duration (TLT) can HELP and banks' loan-loss risk dominates \u2014 duration as a hedge, banks still avoid.",
+      "advisory": true
+    },
+    "gross_cap": 0.7,
+    "allow_adds": true,
+    "falsifier": "de-escalates to risk_on when the ETF risk block turns RISK-ON (HYG/TLT credit stabilises, USD eases) AND the liquidity overlay turns from contracting to neutral/expanding AND SPY reclaims the gamma-flip and dealers return to long gamma",
+    "check_by": "2026-06-29",
+    "ran": true,
+    "rationale": "Price is pinned near the highs (SPY 734.3 at 0.969 of its high) while the plumbing has quietly gone risk-off \u2014 a fragility setup, not a thesis-break a...[trimmed for test fixture]",
+    "lead_driver": "Dealer short-gamma below the flip: SPY 734.3 sitting \u22121.54% under the 745.6 gamma flip with the vol-hole in expansion, the highest fragility axis (dea...[trimmed for test fixture]",
+    "llm_driver_chains": [
+      "Short-gamma break below the flip \u2192 dealer hedging sells into weakness, amplifyin",
+      "Cross-asset risk-off (ETF tilt \u22120.235: gold bid, VIX rising, DXY firm) diverging",
+      "(unverified) Crowding axis 0.36 vs raw RS at 99th\u2013100th pctile understates true "
+    ],
+    "probability_rolldown": 0.5,
+    "what_proves_me_wrong": "SPY reclaims and HOLDS above the 745.6 gamma flip within ~5 sessions AND the ETF risk tilt flips back toward neutral (VIX leg stops dominating, HYG/TL...[trimmed for test fixture]",
+    "calibration_multiplier": 1.0
+  }
+}

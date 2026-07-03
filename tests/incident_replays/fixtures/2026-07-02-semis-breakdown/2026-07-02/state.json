@@ -1,0 +1,80 @@
+{
+  "agent": "macro_risk",
+  "state": {
+    "agent": "macro_risk",
+    "asof": "2026-07-02",
+    "state": "risk_on",
+    "raw_state": "risk_on",
+    "fragility": 0.1575,
+    "supportive": true,
+    "axes": {
+      "volatility": {
+        "fragility": 0.0,
+        "reason": "vol benign"
+      },
+      "credit_usd": {
+        "fragility": 0.0,
+        "reason": "credit/USD calm"
+      },
+      "liquidity": {
+        "fragility": 0.15,
+        "reason": "complacency warning"
+      },
+      "crowding": {
+        "fragility": 0.0,
+        "reason": "breadth healthy"
+      },
+      "dealer_gamma": {
+        "fragility": 0.8,
+        "reason": "SPY dealers SHORT gamma (amplifies moves); SPY -0.2% below gamma-flip; vol-hole EXPANSION"
+      }
+    },
+    "signals": [
+      "SPY dealers SHORT gamma (amplifies moves); SPY -0.2% below gamma-flip; vol-hole EXPANSION",
+      "complacency warning"
+    ],
+    "drivers": [],
+    "hot_tickers": [],
+    "regime_growth": 0.333,
+    "regime_inflation": -0.52,
+    "dwell": 1,
+    "deescalation_progress": "0/3",
+    "clamp_reason": null,
+    "defensive_tilt": {
+      "archetype": "broad_derisk",
+      "favor": [
+        "XLP",
+        "XLV",
+        "USMV",
+        "SGOV",
+        "TLT"
+      ],
+      "avoid": [
+        "ARKK",
+        "IWM"
+      ],
+      "cash_floor": 0.25,
+      "rationale": "Default risk-off with no single dominant driver: up-in-quality, low-vol, staples/healthcare, raise cash; stay driver-agnostic until the tell is clear.",
+      "caveats": [
+        "No clear driver yet \u2014 keep the defensive tilt shallow and cash-led until the Macro Risk Officer names the driver."
+      ],
+      "rate_sensitive_note": "Growth-scare driver (growth weak / inflation falling): long duration (TLT) can HELP and banks' loan-loss risk dominates \u2014 duration as a hedge, banks still avoid.",
+      "advisory": true
+    },
+    "gross_cap": 1.0,
+    "allow_adds": true,
+    "falsifier": "escalates to caution if any two of {liquidity contracts, VIX backwardates, credit widens, dealers go short-gamma, leadership narrows} confirm",
+    "check_by": "2026-07-05",
+    "ran": true,
+    "rationale": "Don't confuse a lit positioning tile with a lit regime. The deterministic composite is honestly risk-on \u2014 fragility 0.16, Goldilocks Q1, liquidity exp...[trimmed for test fixture]",
+    "lead_driver": "SPY dealers short gamma with spot pinned ~0.23% under the gamma-flip (744.78 vs 746.49), net GEX -$1.48bn and the vol-hole expanding \u2014 the one axis th...[trimmed for test fixture]",
+    "llm_driver_chains": [
+      "Spot breaks below the low-740s vol-hole \u2192 dealers (short gamma) sell into weakne",
+      "Amplified flush + already-crowded rotation (Regional Banks breadth 1.0, Managed ",
+      "ESCALATION path (would upgrade tactical\u2192real): VIX term structure inverts (term "
+    ],
+    "probability_rolldown": 0.58,
+    "what_proves_me_wrong": "SPY reclaims and HOLDS >746.49 \u2192 dealers flip long-gamma, the amplification signal is dead, and the read collapses back to plain constructive risk-on....[trimmed for test fixture]",
+    "calibration_multiplier": 1.0
+  }
+}

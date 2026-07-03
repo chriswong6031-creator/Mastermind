@@ -1,0 +1,40 @@
+{
+  "_note": "Synthetic peer-book weights mirroring the 2026-07-02 incident state (from counterfactual.md F2). Firm SMH pile-up: autonomous 0.1621 + etf 0.0196 + heavyweight 0.1499 = 0.3316 vs firm name cap 0.10. Used to test that clamp_book() zeroes a new autonomous SMH add when peers already saturate the firm name cap.",
+  "_source": "research/incidents/2026-07-02-semis-breakdown/counterfactual.md §4b",
+  "etf": {
+    "positions": [
+      {"ticker": "SMH", "weight": 0.0196},
+      {"ticker": "SPY", "weight": 0.2700},
+      {"ticker": "QQQ", "weight": 0.0806},
+      {"ticker": "RSP", "weight": 0.0500},
+      {"ticker": "XLI", "weight": 0.0400},
+      {"ticker": "SGOV", "weight": 0.1200}
+    ],
+    "nav": 980029,
+    "currency": "USD"
+  },
+  "heavyweight": {
+    "positions": [
+      {"ticker": "SMH",  "weight": 0.1499},
+      {"ticker": "XLK",  "weight": 0.1300},
+      {"ticker": "NVDA", "weight": 0.0800},
+      {"ticker": "MSFT", "weight": 0.0800},
+      {"ticker": "AAPL", "weight": 0.0800},
+      {"ticker": "AMZN", "weight": 0.0800},
+      {"ticker": "GOOGL","weight": 0.0800},
+      {"ticker": "META", "weight": 0.0800}
+    ],
+    "nav": 988099,
+    "currency": "USD"
+  },
+  "flagship": {
+    "positions": [
+      {"ticker": "NVDA", "weight": 0.0800},
+      {"ticker": "MSFT", "weight": 0.0600},
+      {"ticker": "AAPL", "weight": 0.0600},
+      {"ticker": "AMZN", "weight": 0.0600}
+    ],
+    "nav": 1000000,
+    "currency": "USD"
+  }
+}

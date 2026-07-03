@@ -252,12 +252,15 @@ def offensive_gross_tripwire(legs: list[dict], lead_budget: float,
 
 def _caps_cfg() -> dict:
     """The ``caps:`` block from doctrine.yml with degrade-safe fallbacks (never raises). Holds the
-    name cap, the broad-index allowlist + its looser cap, and the cluster-cap fallbacks used when
-    config/clusters.yml (A1, authoritative) is absent."""
+    name cap, the broad-index allowlist + its looser cap, the ballast allowlist + its looser cap,
+    and the cluster-cap fallbacks used when config/clusters.yml (A1, authoritative) is absent."""
     out = {
         "name_cap": 0.08,
         "broad_index_allowlist": {"SPY", "QQQ", "VTI", "RSP", "IWM", "DIA"},
         "broad_index_cap": 0.15,
+        # W-I Task 5(a): ballast cash-equivalents — cap-exempt up to ballast_cap, excluded from clusters.
+        "ballast_allowlist": {"SGOV", "BIL", "SHY", "USFR"},
+        "ballast_cap": 0.40,
         "default_cluster_cap": 0.40,
         "cluster_caps": {"semis_ai": 0.35},
     }
@@ -275,6 +278,13 @@ def _caps_cfg() -> dict:
         bic = caps.get("broad_index_cap")
         if isinstance(bic, (int, float)):
             out["broad_index_cap"] = float(bic)
+        # ballast allowlist + cap (W-I Task 5a)
+        bal = caps.get("ballast_allowlist")
+        if isinstance(bal, (list, tuple)):
+            out["ballast_allowlist"] = {str(t).upper().strip() for t in bal if str(t).strip()}
+        bapc = caps.get("ballast_cap")
+        if isinstance(bapc, (int, float)):
+            out["ballast_cap"] = float(bapc)
         dcc = caps.get("default_cluster_cap")
         if isinstance(dcc, (int, float)):
             out["default_cluster_cap"] = float(dcc)
@@ -319,19 +329,25 @@ def enforce_book_caps(positions: list[dict], *, cluster_fn=None, cluster_cap_fn=
 
       1. NAME cap — EVERY position, EVERY sleeve. The old leadership exemption
          ('if sleeve==leadership: continue') DIES: it let SMH/XLK/MTUM sit uncapped (SMH at 12.5% was
-         the single largest risk line). Now the only carve-out is the BROAD-INDEX ALLOWLIST
-         (SPY/QQQ/VTI/RSP/IWM/DIA) — internally-diversified market indices capped at the looser
-         ``broad_index_cap`` (0.15). SMH is NOT on the allowlist (DECIDED: architectural over surgical —
-         SMH goes to 0.08). breach kind:'name'.
+         the single largest risk line). Now two carve-outs:
+           * BROAD-INDEX ALLOWLIST (SPY/QQQ/VTI/RSP/IWM/DIA) — internally-diversified market indices
+             capped at the looser ``broad_index_cap`` (0.15). SMH is NOT on this list.
+           * BALLAST ALLOWLIST (SGOV/BIL/SHY/USFR) — T-bill/cash-equivalent ETFs capped at the
+             much looser ``ballast_cap`` (0.40). These are NOT concentrated bets; they are dry powder
+             with a coupon. Trimming $39.2k of SGOV ballast to enforce the name cap is a false positive
+             that cuts defence while the engine thinks it is de-risking (W-I Task 5a). Ballast still
+             counts in GROSS (it is not leverage-neutral). breach kind:'name'.
 
       2. CLUSTER cap (the fix for theme-cap-defeated-by-per-name-theme-id) — aggregate weight by
          ``cluster_fn(ticker)`` ACROSS BOTH SLEEVES and scale any over-cap cluster DOWN pro-rata across
-         its members. The 0.25 theme_id cap was structurally defeated: leadership legs set
-         theme_id=ticker, so the correlated tech cohort (SMH/XLK/MTUM + conviction tech) NEVER SUMMED —
-         the live book carried IT = 42.6% with breaches:[]. Per-cluster caps come from clusters.yml
-         (A1) when present, else the doctrine fallbacks (default 0.40, semis_ai 0.35). breach
-         kind:'cluster'. An UNKNOWN name degrades to a SINGLETON cluster (its own id) whose cap ≥
-         name_cap → it can never spuriously group with peers and never falsely breach.
+         its members. BALLAST NAMES ARE EXCLUDED FROM CLUSTER AGGREGATION — a T-bill is a cash-like
+         instrument, not a correlated equity factor; grouping it into any cluster would be wrong. The
+         0.25 theme_id cap was structurally defeated: leadership legs set theme_id=ticker, so the
+         correlated tech cohort (SMH/XLK/MTUM + conviction tech) NEVER SUMMED — the live book carried
+         IT = 42.6% with breaches:[]. Per-cluster caps come from clusters.yml (A1) when present, else
+         the doctrine fallbacks (default 0.40, semis_ai 0.35). breach kind:'cluster'. An UNKNOWN name
+         degrades to a SINGLETON cluster (its own id) whose cap ≥ name_cap → it can never spuriously
+         group with peers and never falsely breach.
 
       3. theme_id is now DISPLAY-ONLY. WHY the old per-theme_id cap loop was DELETED: it keyed on the
          per-instrument theme_id, and leadership legs set theme_id=ticker, so three 0.79-0.94-correlated
@@ -349,19 +365,30 @@ def enforce_book_caps(positions: list[dict], *, cluster_fn=None, cluster_cap_fn=
     name_cap = caps["name_cap"]
     allowlist = caps["broad_index_allowlist"]
     broad_cap = caps["broad_index_cap"]
+    ballast_set = caps["ballast_allowlist"]
+    ballast_cap = caps["ballast_cap"]
 
     breaches = []
 
-    # ── LAYER 1: name cap — EVERY sleeve; broad-index allowlist gets the looser cap ──────────────
+    # ── LAYER 1: name cap — EVERY sleeve; carve-outs for broad-index + ballast ─────────────────
+    # Precedence: ballast_allowlist → ballast_cap | broad_index_allowlist → broad_cap | name_cap.
+    # A ticker on BOTH lists (impossible by design, but guard it) takes the HIGHER cap — degrade-safe.
     for p in positions:
         tkr = str(p.get("ticker") or "").upper().strip()
-        cap = broad_cap if tkr in allowlist else name_cap
+        if tkr in ballast_set:
+            cap = ballast_cap           # cash-equivalent: ballast_cap (0.40), not name_cap
+        elif tkr in allowlist:
+            cap = broad_cap             # broad market index: 0.15
+        else:
+            cap = name_cap              # everything else: 0.08
         if p["weight"] > cap:
             breaches.append({"code": "D6", "kind": "name", "subject": p["ticker"],
                              "weight": round(p["weight"], 4), "cap": cap})
             p["weight"] = cap
 
     # ── LAYER 2: cluster cap — aggregate by cluster_fn ACROSS BOTH SLEEVES, pro-rata scale-down ──
+    # BALLAST NAMES EXCLUDED FROM CLUSTER AGGREGATION — cash-equivalents are not correlated equity
+    # factor clusters; including them would cause spurious cluster-cap breaches.
     # Lazy defaults: fragility_chain.cluster_id / .cluster_cap (task A1 — the authoritative clusters.yml
     # readers). Import inside the function (house style) so this module never hard-depends on them; if
     # A1 is absent, a name is its OWN cluster and caps fall back to doctrine.yml. cluster_cap is designed
@@ -391,6 +418,9 @@ def enforce_book_caps(positions: list[dict], *, cluster_fn=None, cluster_cap_fn=
 
     by_cluster: dict[str, float] = defaultdict(float)
     for p in positions:
+        tkr = str(p.get("ticker") or "").upper().strip()
+        if tkr in ballast_set:
+            continue           # ballast is EXCLUDED from cluster aggregation — cash-like, not equity factor
         by_cluster[_cid(p.get("ticker"))] += p["weight"]
     for cid, w in by_cluster.items():
         cap = _cluster_cap(cid, caps, name_cap, cluster_cap_fn)
@@ -399,7 +429,8 @@ def enforce_book_caps(positions: list[dict], *, cluster_fn=None, cluster_cap_fn=
                              "weight": round(w, 4), "cap": round(cap, 4)})
             scale = cap / w
             for p in positions:
-                if _cid(p.get("ticker")) == cid:
+                tkr = str(p.get("ticker") or "").upper().strip()
+                if tkr not in ballast_set and _cid(p.get("ticker")) == cid:
                     p["weight"] *= scale
 
     return {"positions": positions, "breaches": breaches}

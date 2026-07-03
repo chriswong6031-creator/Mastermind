@@ -168,12 +168,39 @@ def _theme_drop(drivers: list | None) -> tuple[bool, str]:
     return False, ""
 
 
+def _distribution_escalation(pid: str) -> tuple[int, str]:
+    """W-I task 1 — DISTRIBUTION ESCALATOR. Read the pid's held book for distribution tells (crowding
+    + 3D/weekly-MACD bear + defensive-RS crossover) and return ``(severity_bump, reason)``. When
+    >= book_weight_escalate_frac of book weight sits in >=min_tells distributing names, bump +1.
+
+    SHRINK-ONLY + degrade-safe: any failure (no holdings module, no price series, empty book) returns
+    ``(0, "")`` so the tripwire is byte-identical to today. The bump is composed via max() by the
+    caller — it can only ADD severity into the already-validated ladder, never un-cap. The reason
+    string names the tells (spec 1b: 'distribution: SMH crowd99+3D-MACD-bear ...')."""
+    try:
+        from portfolio import position_log, distribution_tells
+        held = position_log.open_positions(pid if pid != "flagship" else None)
+    except Exception:  # noqa: BLE001
+        return 0, ""
+    if not held:
+        return 0, ""
+    try:
+        sc = distribution_tells.score(held)
+    except Exception:  # noqa: BLE001
+        return 0, ""
+    bump = int(sc.get("escalate_severity") or 0)
+    return (bump, sc.get("reason") or "") if bump > 0 else (0, "")
+
+
 def tripwire(pid: str, asof: str, *, regime: dict | None = None) -> dict:
     """DETERMINISTIC, free (no-LLM) tripwire — is an unwind CONFIRMED right now? Fuses the Macro Risk
-    Officer state, the live overnight tape, a SPY GEX flip, a credit gap, and a −X% theme day on the
-    book's fragile chains. ``trigger`` is True on a HARD confirmation (severity ≥ 2): macro risk_off, a
-    stressed overnight tape, a gamma flip, or a theme-day drop — caution alone (severity 1) does not
-    auto-cut. Returns ``{trigger, severity, reasons, state, gross_cap, risk_state}``. Never raises."""
+    Officer state, the live overnight tape, a SPY GEX flip, a credit gap, a −X% theme day on the
+    book's fragile chains, and (W-I) a DISTRIBUTION ESCALATION on the book's own held names.
+    ``trigger`` is True on a HARD confirmation (severity ≥ 2): macro risk_off, a stressed overnight
+    tape, a gamma flip, or a theme-day drop — caution alone (severity 1) does not auto-cut. The
+    distribution escalator is SHRINK-ONLY: it composes +1 via max() (so a book already printing sev-2
+    on short gamma + a distributing pile becomes sev-3 → eff_cap 0.55), NEVER additive beyond sev-3.
+    Returns ``{trigger, severity, reasons, state, gross_cap, risk_state}``. Never raises."""
     regime = regime if regime is not None else _regime()
     reasons: list[str] = []
     severity = 0
@@ -217,6 +244,21 @@ def tripwire(pid: str, asof: str, *, regime: dict | None = None) -> dict:
         if hit:
             reasons.append(why)
             severity = max(severity, 2)
+    except Exception:  # noqa: BLE001
+        pass
+
+    # W-I DISTRIBUTION ESCALATOR — compose +1 via max() (SHRINK-ONLY; never un-caps). A book already
+    # printing sev-2 on a hard confirmation whose held names are ALSO distributing becomes sev-3
+    # (eff_cap 0.55). Clamped to the ladder ceiling (3): the escalation is a bump, never additive
+    # stacking beyond the ladder's floor. A distribution read WITHOUT a hard confirmation lifts
+    # severity to 1 (advisory) but does not on its own auto-cut — the hard-confirmation gate
+    # (severity>=2) is unchanged, exactly as caution-alone never auto-cuts.
+    try:
+        dist_bump, dist_reason = _distribution_escalation(pid)
+        if dist_bump > 0:
+            severity = min(3, severity + dist_bump)
+            if dist_reason:
+                reasons.append(dist_reason)
     except Exception:  # noqa: BLE001
         pass
 

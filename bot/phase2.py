@@ -357,6 +357,41 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
             transition_state=_budget_inputs.get("transition_state"),
             flip_margin=_budget_inputs.get("flip_margin"),
             T=_budget_inputs.get("T"), F=_budget_inputs.get("F"))
+
+    # ———— W-I task 6: ROTATION-EVIDENCE damp (the incident's DETECTION fix) ————
+    # Count the disagreement sources that AGREE — {nowcast doubt, liquidity stress/hollow, radar
+    # caution, defensive-RS crossover} — and RE-derive the leadership budget with a shrink-only damp
+    # (2 agree ×0.9, 3+ ×0.8). SHRINK-ONLY: it can only push lead_budget DOWN toward the 0.40 floor.
+    # Every source degrades to ABSENT (non-agreeing) on missing data — on a calm tape n_agree=0, the
+    # damp is 1.0, and the budget is byte-identical. The same evidence lifts the DEF_SLEEVE below.
+    # (The nowcast is ADVISORY-only per nowcast_validation.md — here it sizes a shrink, not a wired
+    # budget-return predictor, which the failed gate explicitly permits.)
+    _rotation_evidence = None
+    try:
+        from brain import regime_frame as _rf_ev
+        _regime_label = _rf_ev.frame("us")
+        _ev_nowcast = _rf_ev._nowcast_doubt_source(
+            quad=_regime_label.get("quad"), quad_name=_regime_label.get("quad_name"))
+        _ev_liq = _rf_ev._liquidity_stress_source()
+        _ev_radar = _rf_ev._radar_caution_source()
+        _ev_rs = _rf_ev._defensive_rs_source()
+        _rotation_evidence = _rf_ev.rotation_evidence(
+            nowcast_doubt=_ev_nowcast, liquidity_stress=_ev_liq,
+            radar_caution=_ev_radar, defensive_rs_cross=_ev_rs)
+        _budget_out2 = _rf_ev.budget("us", evidence=_rotation_evidence)
+        lead_budget = float(_budget_out2["lead_budget"])
+        _budget_inputs = _budget_out2.get("inputs") or _budget_inputs
+        _rl_log(_run_id, "book_step", "rotation-evidence damp",
+                f"n_agree={_rotation_evidence['n_agree']} D={_budget_inputs.get('D')} "
+                f"lead_budget={lead_budget:.4f} sources={_rotation_evidence['sources']}",
+                lead_budget=round(lead_budget, 4),
+                evidence_n_agree=_rotation_evidence["n_agree"],
+                evidence_sources=_rotation_evidence["sources"],
+                D=_budget_inputs.get("D"))
+    except Exception as _e:  # noqa: BLE001 — evidence is additive; a failure degrades to the un-damped budget
+        _rotation_evidence = None
+        _rl_log(_run_id, "decision", "rotation-evidence error", f"{_e!r}"[:160])
+
     leaders = [s for s in secrs[:6] if s.get("above_200d_trend")][:4]
     lw = round(lead_budget / max(1, len(leaders)), 4)
     book = []
@@ -817,7 +852,8 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
             _rot_risk_state = _rot_mr.risk_state(asof, regime)
         except Exception:  # noqa: BLE001 — the sleeve tolerates a None risk_state (dwell term → 0)
             _rot_risk_state = None
-        _def = _rot.build_def_sleeve(book, _rot_risk_state, _budget_inputs)
+        _def = _rot.build_def_sleeve(book, _rot_risk_state, _budget_inputs,
+                                     evidence=_rotation_evidence)
         if _def.get("legs"):
             book.extend(_def["legs"])
             _rl_log(_run_id, "book_step", "DEF_SLEEVE rotation floor",

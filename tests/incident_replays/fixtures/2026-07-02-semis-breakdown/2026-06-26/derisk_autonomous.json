@@ -1,0 +1,27 @@
+{
+  "pid": "autonomous",
+  "asof": "2026-06-26",
+  "tripwire": {
+    "trigger": true,
+    "severity": 2,
+    "reasons": [
+      "macro CAUTION state",
+      "overnight tape elevated",
+      "SPY dealers SHORT gamma (amplifies the move)",
+      "theme day: SOXX -4.6% (\u2264 -4%)"
+    ],
+    "state": "caution"
+  },
+  "action": "revised_pending_target",
+  "gross_before": 0.54,
+  "gross_cap": 0.7,
+  "scaled": false,
+  "dropped_chains": [],
+  "reasons": [
+    "macro CAUTION state",
+    "overnight tape elevated",
+    "SPY dealers SHORT gamma (amplifies the move)",
+    "theme day: SOXX -4.6% (\u2264 -4%)"
+  ],
+  "n_names": 8
+}

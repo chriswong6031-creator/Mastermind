@@ -630,3 +630,66 @@ class TestBudget:
                 monkeypatch.setitem(RF._REGION_PATHS, "us", p)
                 lb = RF.budget("us")["lead_budget"]
                 assert 0.40 <= lb <= 0.60, f"conf={conf} ts={ts} -> {lb} out of band"
+
+
+# ---------------------------------------------------------------------------
+# budget() rotation-evidence DAMP + rotation_evidence() (W-I task 6)
+# ---------------------------------------------------------------------------
+
+class TestBudgetEvidenceDamp:
+    """The optional ``evidence`` damp is shrink-only, floored, and byte-identical with no evidence.
+
+    Full source-degrade coverage + the two levers' coupling live in tests/test_rotation_evidence.py;
+    this class binds the budget()-side contract next to the rest of the budget tests."""
+
+    _PAYLOAD = {"confidence": 0.327, "transition_state": "STABLE",
+                "flip_condition": {"margin": 0.05}}  # flip 0.05 < 0.15 → F=0.75
+
+    def _ev(self, n_true):
+        keys = ("nowcast_doubt", "liquidity_stress", "radar_caution", "defensive_rs_cross")
+        return RF.rotation_evidence(**{k: (True if i < n_true else None)
+                                       for i, k in enumerate(keys)})
+
+    def test_no_evidence_is_byte_identical(self, monkeypatch, tmp_path):
+        p = _make_regime_file(tmp_path, self._PAYLOAD)
+        monkeypatch.setitem(RF._REGION_PATHS, "us", p)
+        base = RF.budget("us")["lead_budget"]
+        assert RF.budget("us", evidence=None)["lead_budget"] == base
+        assert RF.budget("us", evidence=self._ev(0))["lead_budget"] == base
+        assert RF.budget("us", evidence=self._ev(1))["lead_budget"] == base
+        # a no-evidence call reports D=1.0 / n_agree=0 (runlog visibility)
+        assert RF.budget("us")["inputs"]["D"] == pytest.approx(1.0)
+        assert RF.budget("us")["inputs"]["evidence_n_agree"] == 0
+
+    def test_two_and_three_agree_damp_multipliers(self, monkeypatch, tmp_path):
+        p = _make_regime_file(tmp_path, self._PAYLOAD)
+        monkeypatch.setitem(RF._REGION_PATHS, "us", p)
+        flex = 0.20 * 0.327 * 1.0 * 0.75
+        assert RF.budget("us", evidence=self._ev(2))["lead_budget"] == pytest.approx(0.40 + flex * 0.9)
+        assert RF.budget("us", evidence=self._ev(3))["lead_budget"] == pytest.approx(0.40 + flex * 0.8)
+        assert RF.budget("us", evidence=self._ev(4))["lead_budget"] == pytest.approx(0.40 + flex * 0.8)
+
+    def test_damp_is_shrink_only_and_floored(self, monkeypatch, tmp_path):
+        payload = {"confidence": 1.0, "transition_state": "DETERIORATING",
+                   "flip_condition": {"margin": 0.01}}
+        p = _make_regime_file(tmp_path, payload)
+        monkeypatch.setitem(RF._REGION_PATHS, "us", p)
+        prev = None
+        for n in range(5):
+            lb = RF.budget("us", evidence=self._ev(n))["lead_budget"]
+            assert lb >= 0.40 - 1e-12, f"n_agree={n} → {lb} below floor"
+            if prev is not None:
+                assert lb <= prev + 1e-12, "the damp must be monotone shrinking"
+            prev = lb
+
+    def test_missing_frame_midpoint_not_damped(self, monkeypatch, tmp_path):
+        p = _make_regime_file(tmp_path, {"transition_state": "STABLE"})  # no confidence → midpoint
+        monkeypatch.setitem(RF._REGION_PATHS, "us", p)
+        out = RF.budget("us", evidence=self._ev(4))
+        assert out["lead_budget"] == pytest.approx(0.50)  # midpoint untouched
+        assert out["inputs"]["D"] == pytest.approx(0.8)     # but D surfaced for the runlog
+
+    def test_rotation_evidence_counts_only_true(self):
+        assert RF.rotation_evidence()["n_agree"] == 0
+        assert RF.rotation_evidence(nowcast_doubt=False, radar_caution=None)["n_agree"] == 0
+        assert RF.rotation_evidence(nowcast_doubt=True, radar_caution=True)["n_agree"] == 2

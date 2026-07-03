@@ -1,0 +1,90 @@
+{
+  "agent": "macro_risk",
+  "state": {
+    "agent": "macro_risk",
+    "asof": "2026-07-01",
+    "state": "risk_on",
+    "fragility": 0.121,
+    "supportive": true,
+    "axes": {
+      "volatility": {
+        "fragility": 0.0,
+        "reason": "vol benign"
+      },
+      "credit_usd": {
+        "fragility": 0.0,
+        "reason": "credit/USD calm"
+      },
+      "liquidity": {
+        "fragility": 0.25,
+        "reason": "gex; complacency warning"
+      },
+      "crowding": {
+        "fragility": 0.18,
+        "reason": "SMH 99th pctile/+47% 60d"
+      },
+      "dealer_gamma": {
+        "fragility": 0.15,
+        "reason": "regime GEX flag"
+      }
+    },
+    "signals": [
+      "gex; complacency warning",
+      "SMH 99th pctile/+47% 60d",
+      "regime GEX flag"
+    ],
+    "drivers": [
+      {
+        "id": "ai_buildout",
+        "name": "AI build-out (memory \u2192 hyperscaler capex \u2192 buildout \u2192 industrial-AI power)",
+        "driver": "memory / DRAM pricing + hyperscaler-capex guidance",
+        "hot_overlap": [
+          "SMH"
+        ],
+        "leading_hit": [],
+        "score": 1
+      }
+    ],
+    "hot_tickers": [
+      "SMH"
+    ],
+    "regime_growth": 0.333,
+    "regime_inflation": -0.52,
+    "defensive_tilt": {
+      "archetype": "broad_derisk",
+      "favor": [
+        "XLP",
+        "XLV",
+        "USMV",
+        "SGOV",
+        "TLT"
+      ],
+      "avoid": [
+        "ARKK",
+        "IWM"
+      ],
+      "cash_floor": 0.25,
+      "rationale": "Default risk-off with no single dominant driver: up-in-quality, low-vol, staples/healthcare, raise cash; stay driver-agnostic until the tell is clear.",
+      "caveats": [
+        "No clear driver yet \u2014 keep the defensive tilt shallow and cash-led until the Macro Risk Officer names the driver."
+      ],
+      "rate_sensitive_note": "Growth-scare driver (growth weak / inflation falling): long duration (TLT) can HELP and banks' loan-loss risk dominates \u2014 duration as a hedge, banks still avoid.",
+      "advisory": true
+    },
+    "gross_cap": 1.0,
+    "allow_adds": true,
+    "falsifier": "escalates to caution if any two of {liquidity contracts, VIX backwardates, credit widens, dealers go short-gamma, leadership narrows} confirm",
+    "check_by": "2026-07-04",
+    "ran": true,
+    "rationale": "Deterministic state is risk_on and I'm not overturning it: Q1 Goldilocks (growth +0.333, inflation -0.52), aggregate fragility 0.121, vol and credit/U...[trimmed for test fixture]",
+    "lead_driver": "Dealer gamma vol-hole \u2014 SPY 0.16% above the 745.61 gamma flip (spot 746.77) in an IN_HOLE long-gamma regime; a modest down-gap crosses the flip, deale...[trimmed for test fixture]",
+    "llm_driver_chains": [
+      "Gamma flip breach: down-gap crosses 745.61 \u2192 dealers flip long\u2192short gamma \u2192 hed",
+      "Bottleneck migration (unverified): memory \u2192 hyperscaler capex \u2192 buildout \u2192 indus",
+      "Credit-leads chain: HY OAS +8bp/21d (credit_widen true) \u2192 if it accelerates towa"
+    ],
+    "probability_rolldown": 0.4,
+    "what_proves_me_wrong": "Credit, not price, changes my mind: HY OAS accelerates from +8bp toward >+40bp/21d and flips flag_credit_equity true (credit-leads failure mode) \u2192 de-...[trimmed for test fixture]",
+    "calibration_multiplier": 1.0
+  }
+}

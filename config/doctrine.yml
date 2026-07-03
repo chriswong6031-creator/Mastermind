@@ -42,6 +42,17 @@ caps:
   # at the looser broad_index_cap (holding 15% of VTI is not a concentrated bet). No SMH carve-out.
   broad_index_allowlist: [SPY, QQQ, VTI, RSP, IWM, DIA]   # (unverified-prior) internally-diversified market indices
   broad_index_cap: 0.15                  # (unverified-prior) name cap for the broad-index allowlist only
+  # ---- W-I Task 5(a): BALLAST asset class — cap-exempt cash equivalents ----
+  # The W3 name-cap false-positive: SGOV (T-bill ETF) at 12% was trimmed to 0.08 (-$39.2k of ballast)
+  # because it looked like a concentrated bet. T-bill/cash-equivalent ETFs are NOT a concentrated
+  # bet — they ARE the cash ballast that funded the rotation dry powder. The fix:
+  #   * ballast names are excluded from cluster aggregation (asset_class='ballast', cash-like identity)
+  #   * the name-cap for ballast names is ballast_cap (0.40) — not 0.08
+  #   * ballast weight still counts toward GROSS (it is NOT leverage-neutral)
+  # The allowlist is deliberate and short: T-bill ETFs only (not GLD, not TLT). Any name NOT on
+  # this list is treated as a normal position. (unverified-prior)
+  ballast_allowlist: [SGOV, BIL, SHY, USFR]    # T-bill / cash-equivalent ETFs — name-cap-exempt ballast
+  ballast_cap: 0.40                              # (unverified-prior) max single-name weight for ballast
   # ---- W3 A2: CLUSTER book cap (Stage 6.2 layer) — the fix for theme-cap-defeated-by-per-name-theme-id ----
   # The 0.25 theme_id cap was structurally defeated: leadership legs set theme_id=ticker, so the
   # 0.79-0.94-correlated tech cohort (SMH/XLK/MTUM + conviction tech) never SUMMED — the live book
@@ -207,6 +218,24 @@ derisk_severity_caps:
   2: 0.70   # confirmed unwind signal (risk_off OR gex_flip OR theme_day ≥ 2 confirmations)
   3: 0.55   # maximum severity (all channels lit; equiv. macro risk_off cap)
 
+# ---- DISTRIBUTION ESCALATOR (portfolio/distribution_tells.py + bot/derisk.py — W-I task 1) ----
+# Holdings-level distribution EVIDENCE routed through the ALREADY-VALIDATED severity ladder above.
+# NOT a new per-name exit predictor (the cycle-phase veto on held leaders was walk-forward REFUTED
+# and the macro repo's exit rule was a NO-GO). Instead: when >= book_weight_escalate_frac of book
+# WEIGHT sits in names carrying >= min_tells_for_hot distribution tells (crowding + 3D/weekly-MACD
+# bear + defensive-RS crossover), the tripwire severity is bumped +1 — composed via max() into the
+# ladder (NEVER additive beyond sev-3, which caps at 0.55). SHRINK-ONLY: it can only add severity,
+# never un-cap. Every tell degrades to ABSENT on missing data (never fabricated True). All thresholds
+# (unverified-prior) — the per-name TRIM ladder that reads these same tells ships in SHADOW with a
+# pre-registered 40-call / 21td risk-adjusted falsifier (portfolio/distribution_tells.shadow_trim_ladder).
+distribution_tells:
+  crowd_pctile_min:          0.95   # (unverified-prior) 60d-return own-history pctile (or board pctile_252d) at/above → crowded
+  crowd_lookback_d:          60     # (unverified-prior) the return horizon whose percentile defines crowding
+  crowd_pctile_window:       252    # (unverified-prior) trailing window the own-history percentile ranks within
+  rs_diff_window:            20     # (unverified-prior) defensive-vs-offensive RS differential lookback (task 3 coordinates on this)
+  min_tells_for_hot:         2      # (unverified-prior) a holding is "distributing" at >= this many DETERMINED-TRUE tells
+  book_weight_escalate_frac: 0.25   # (unverified-prior) >= this fraction of book weight in distributing names → +1 severity
+
 # ---- ONE leadership budget equation (architecture Stage 2 — W2) ----
 # The single, non-double-counting budget for the leadership sleeve. Confidence × transition ×
 # flip-fragility is consumed EXACTLY ONCE here (both the offense-brakes cluster's lead_budget flex
@@ -229,6 +258,29 @@ budget:
     WEAKENING:     0.6
     ROLLING:       0.4
     DETERIORATING: 0.4
+
+# ---- LIQUIDITY-QUALITY classifier (brain/liquidity_quality.classify — W-I task 2) ----
+# The `liquidity_overlay = "expanding"` label the bot bought on (2026-07-01) is a PURE quantity
+# read: net_liquidity (WALCL − RRP − TGA) 20d RoC crossed +25bn and printed "expanding" with NO
+# regard for HOW it expanded. That +68.9bn was one-day base-effect noise on a flat/ffilled WALCL,
+# composed of Treasury-cash drawdown (−TGA) against an RRP facility drained to $6.4bn — MECHANICAL,
+# stress-flavoured plumbing, not durable Fed easing. This block adds the QUALITY dimension:
+#   quantity RoC  +  composition (dWALCL benign vs −dTGA/−dRRP mechanical)
+#   +  RRP-buffer flag (<$100bn ⇒ cushion exhausted)  +  credit/NFCI stress overlay
+#     → an `expanding` read reclassifies as STRESS-expansion iff composition is mechanical OR the
+#       buffer is exhausted OR credit is confirming; benign-expansion requires POSITIVE benign +
+#       calm reads. Missing any series → that component reads 'unknown' and the label degrades
+#       toward 'unknown'/'stress' — NEVER toward benign (the incident's exact false positive).
+# STANDALONE this wave: classify() only classifies; task 6 wires it (SHRINK-ONLY) into budget().
+# All thresholds heuristic priors — re-calibrate with replay data, do not treat as validated.
+liquidity_quality:
+  roc_window_d:        20      # (unverified-prior) net-liquidity RoC window (trading days; mirrors the engine overlay)
+  expand_bn:           25.0    # (unverified-prior) |RoC| >= this = expanding/contracting; below = flat (= engine ±25bn)
+  rrp_buffer_bn:       100.0   # (unverified-prior) RRPONTSYD level below this = reserves cushion exhausted (today $6.4bn)
+  benign_walcl_share:  0.50    # (unverified-prior) dWALCL share of the gross 20d move >= this = BENIGN composition
+  oas_widen_pp:        0.10    # (unverified-prior) HY-OAS 20d change (pp) >= this = credit confirming stress
+  oas_z_hot:           1.0     # (unverified-prior) OR HY-OAS trailing z >= this = credit confirming stress
+  nfci_window_d:       20      # (unverified-prior) NFCI direction lookback (~4 weeks of weekly prints)
 
 # ---- sector-cycle read freshness (regime_frame.cycles() — W2) ----
 # cycles() is the ONLY consumer of vendor/macro/site/sectordata/sector_cycles.json. When meta.asOf
@@ -306,3 +358,66 @@ def_sleeve:
     risk_off: 1.0
   weakening_states: [WEAKENING, ROLLING, DETERIORATING]   # (unverified-prior) mirror budget.transition_mult keys
   cash_floor:     0.05    # (unverified-prior) mirror of cash.rotation_floor — the sleeve respects it
+
+# ---- price-action regime NOWCAST (brain/regime_nowcast.nowcast — W-I task 3) ----
+# The SECOND OPINION. On 2026-07-01 the macro label read Q1 Goldilocks / STABLE / expanding while
+# semis broke down; the PRICE TAPE said "reduce offense" days early. This module re-derives a coarse
+# regime read from price action alone — three legs, no dependence on the regressed label — and emits
+# a `doubt`/`strong-doubt` verdict a consumer may use ONLY to SHRINK offense (or raise the DEFENSIVE
+# floor). SHRINK-ONLY BY CONSTRUCTION: no add-risk verdict exists, and it acts ONLY on a risk-on /
+# Goldilocks-class label (a defensive label no-ops it — it can doubt offense, never doubt defense).
+# LEGS (signals.md §3): (1) defensive-vs-offensive 20d RS diff > 0 [imported from distribution_tells];
+# (2) SMH 3D-MACD bearish STATE [imported from distribution_tells, canon MACD]; (3) %sectors>50d
+# FALLING over 5 sessions [owned here]. TALLY: 2-of-3 = doubt, 3-of-3 = strong-doubt. Back-tested:
+# soft doubt by 2026-06-24, strong-doubt on 2026-07-01 (day before the SMH rebuy); calm 2025-05
+# offense-led uptrend never reaches 2-of-3. WIRING is GATED by the pre-registered walk-forward in
+# incidents/2026-07-02-semis-breakdown/nowcast_validation.md (BUDGET_INPUT_QUALIFIED in the module):
+# gate PASS => task 6 may wire it into budget() (shrink-only); gate FAIL => advisory-only (lens +
+# DEF_SLEEVE unthrottle). STANDALONE this wave — nowcast() only classifies. Heuristic priors.
+regime_nowcast:
+  rs_diff_window:            20   # (unverified-prior) defensive-vs-offensive RS lookback (trading days; = distribution_tells)
+  breadth_ma:                50   # (unverified-prior) sector trend MA for %sectors-above (trading days)
+  breadth_falling_lookback:  5    # (unverified-prior) %>50d must FALL over this many sessions
+  doubt_legs:                2    # (unverified-prior) legs TRUE for `doubt`
+  strong_doubt_legs:         3    # (unverified-prior) legs TRUE for `strong-doubt`
+
+# ---- ROTATION-EVIDENCE damp / unthrottle (regime_frame.budget + rotation.fragility_signal — W-I task 6) ----
+# The incident's DETECTION gap: the deployed W0-W4 RESPONSE stack cut correctly once fed a truthful
+# read, but every book sat on a wrong-but-fresh Goldilocks/expanding label the bot TRUSTED. The
+# dashboard's own planes (defensive-RS crossover, sector cycles, risk_radar CAUTION) already disagreed;
+# the bot had no machinery to COUNT that disagreement. This block is that machinery: a shrink-only
+# AGREEMENT count over four disagreement sources, routed into two already-validated levers.
+#
+# THE FOUR EVIDENCE SOURCES (each tri-state True / False / None; None = MISSING = never counts):
+#   (1) nowcast_doubt      — brain/regime_nowcast: stance in {doubt, strong-doubt} AND applies==True.
+#                            ADVISORY-only per nowcast_validation.md (gate FAILED) — but it is a lens
+#                            surface here, sizing a shrink, NOT a budget-return predictor, which the
+#                            gate explicitly permits.
+#   (2) liquidity_stress   — brain/liquidity_quality: label in {stress-expansion, neutral-hollow}
+#                            (the honest 'hollow' read; benign-expansion / contracting / unknown do NOT
+#                            agree — unknown NEVER counts).
+#   (3) radar_caution      — the dashboard's own risk_radar (brain/risk_prior when present, else the
+#                            validated forward_log): state in {caution, risk_off} (never risk_on).
+#   (4) defensive_rs_cross — distribution_tells.defensive_offensive_rs_diff: crossed is True.
+#
+# AGREEMENT = count of sources that are TRUE. Missing sources count as NON-agreeing (never as
+# evidence — the invariant: absent data can never manufacture a shrink, only a real disagreement can).
+#
+# budget() DAMP (shrink-only): 0-1 agree -> ×1.0; 2 agree -> ×0.9; 3+ agree -> ×0.8. The damp
+# multiplies the FLEX above the floor and the result is re-clamped to [floor, ceil], so the damp can
+# only ever push the budget DOWN toward the 0.40 floor — never up. On a calm tape (0 agreement) the
+# damp is 1.0 and budget() is BYTE-IDENTICAL to pre-W-I.
+#
+# fragility_signal LIFT (unthrottle the '7% when it should be 23%' DEF_SLEEVE): +0.15 per agreeing
+# source BEYOND the first, clamped [0,1]. With DEF_SLEEVE_MAX=0 (default) this changes NOTHING live
+# (def_budget = 0 · anything = 0) — byte-identical; it only bites once the sleeve is armed.
+#
+# All constants heuristic priors — re-calibrate with the W5 benchmark ledger, do not treat as validated.
+rotation_evidence:
+  damp_2_agree:      0.90   # (unverified-prior) budget flex ×this at exactly 2 agreeing sources
+  damp_3plus_agree:  0.80   # (unverified-prior) budget flex ×this at 3+ agreeing sources
+  lift_per_source:   0.15   # (unverified-prior) fragility_signal += this per agreeing source beyond the first
+  # which liquidity_quality labels count as a stress agreement (unknown/benign/contracting do NOT):
+  liquidity_stress_labels: [stress-expansion, neutral-hollow]   # (unverified-prior)
+  # which risk_radar states count as a caution agreement (risk_on / neutral do NOT):
+  radar_caution_states: [caution, risk_off, risk-off]           # (unverified-prior)

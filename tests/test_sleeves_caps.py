@@ -244,6 +244,105 @@ class TestAuditEraReplayFalsifier:
 
 
 # ---------------------------------------------------------------------------
+# W-I Task 5(a) — BALLAST asset class: SGOV/BIL/SHY/USFR cap-exempt + cluster-excluded
+# ---------------------------------------------------------------------------
+
+class TestBallastCapExempt:
+    """The W3 name-cap false-positive: SGOV at 12% of the ETF book was trimmed to 0.08 (−$39.2k
+    of T-bill ballast) because the name cap couldn't distinguish a concentrated equity bet from
+    a cash-equivalent position. T-bill ETFs are NOT concentrated bets: they ARE the rotation dry
+    powder. W-I Task 5(a) exempts them: ballast_cap 0.40, excluded from cluster aggregation."""
+
+    def test_sgov_not_trimmed_by_name_cap(self):
+        """SGOV at 12% of book (the ETF-book incident weight) must NOT be trimmed to 0.08 —
+        it is ballast, not a concentrated equity bet."""
+        pos = [_p("SGOV", 0.12, sleeve="conviction")]
+        out = sleeves.enforce_book_caps(pos, cluster_fn=_cluster_fn)
+        assert pos[0]["weight"] == 0.12    # untouched — under ballast_cap 0.40
+        assert not any(b["subject"] == "SGOV" for b in out["breaches"])
+
+    def test_bil_usfr_shy_also_exempt(self):
+        """All four T-bill ETFs are exempt from the 0.08 name cap."""
+        for tkr in ("BIL", "USFR", "SHY"):
+            pos = [_p(tkr, 0.20, sleeve="conviction")]
+            out = sleeves.enforce_book_caps(pos, cluster_fn=_cluster_fn)
+            assert pos[0]["weight"] == 0.20, f"{tkr} should not be trimmed by the name cap"
+            assert not any(b["subject"] == tkr for b in out["breaches"])
+
+    def test_ballast_cap_bites_when_truly_over(self):
+        """The ballast cap (0.40) still bites when a ballast position is genuinely over it
+        (degenerate edge case — a book should never hold >40% T-bills). Keeps the invariant."""
+        pos = [_p("SGOV", 0.50, sleeve="conviction")]
+        out = sleeves.enforce_book_caps(pos, cluster_fn=_cluster_fn)
+        assert pos[0]["weight"] == 0.40    # clamped to ballast_cap, not 0.08
+        assert any(b["subject"] == "SGOV" and b["cap"] == 0.40 for b in out["breaches"])
+
+    def test_ballast_excluded_from_cluster_aggregation(self):
+        """SGOV MUST NOT be counted in the cluster pass: adding a T-bill to a semis_ai cluster
+        run-total would cause a spurious cluster breach against equity factor caps."""
+        # A semis book right at the semis_ai cap (0.35) + a large SGOV position —
+        # the cluster pass must NOT treat SGOV as semis_ai weight.
+        pos = [
+            _p("SMH",  0.08, sleeve="leadership"),
+            _p("XLK",  0.08, sleeve="leadership"),
+            _p("MTUM", 0.08, sleeve="leadership"),
+            _p("NVDA", 0.07, sleeve="conviction"),    # semis_ai total = 0.31 (under 0.35)
+            _p("SGOV", 0.12, sleeve="conviction"),    # ballast — must be invisible to the cluster
+        ]
+        out = sleeves.enforce_book_caps(pos, cluster_fn=_cluster_fn)
+        # no cluster breach on semis_ai (SGOV not counted)
+        assert not any(b["kind"] == "cluster" and b["subject"] == "semis_ai"
+                       for b in out["breaches"])
+        # SGOV weight untouched
+        sgov = next(p for p in out["positions"] if p["ticker"] == "SGOV")
+        assert sgov["weight"] == 0.12
+
+    def test_ballast_does_not_shield_equity_from_cluster_cap(self):
+        """Adding ballast must NEVER shield the equity cluster from the cluster cap: the equity
+        legs must still be trimmed if THEY are over the cluster cap (ballast just doesn't add to it)."""
+        pos = [
+            _p("SMH",  0.08, sleeve="leadership"),
+            _p("XLK",  0.08, sleeve="leadership"),
+            _p("MTUM", 0.08, sleeve="leadership"),
+            _p("NVDA", 0.08, sleeve="conviction"),
+            _p("AVGO", 0.08, sleeve="conviction"),    # semis_ai = 0.40 > cap 0.35 → cluster breach
+            _p("SGOV", 0.15, sleeve="conviction"),    # ballast alongside them
+        ]
+        out = sleeves.enforce_book_caps(pos, cluster_fn=_cluster_fn)
+        # cluster breach on semis_ai fires
+        assert any(b["kind"] == "cluster" and b["subject"] == "semis_ai"
+                   for b in out["breaches"])
+        # semis_ai trimmed to <= 0.35
+        semis_wt = sum(p["weight"] for p in out["positions"]
+                       if _cluster_fn(p["ticker"]) == "semis_ai")
+        assert semis_wt <= 0.35 + 1e-9
+        # SGOV untouched by the equity cluster trim
+        sgov = next(p for p in out["positions"] if p["ticker"] == "SGOV")
+        assert sgov["weight"] == 0.15
+
+    def test_w3_replay_with_ballast_sgov_preserved(self):
+        """W3 replay update (counterfactual §4b): the audit-era book with SGOV at 0.12.
+        Old: name cap trimmed SGOV 0.12→0.08 (−$39.2k false positive). New: SGOV preserved at 0.12."""
+        book = [_p(t, 0.125, sleeve="leadership") for t in ("SMH", "XLK", "MTUM", "IWM")]
+        book += [_p("NVDA", 0.05, sleeve="conviction"), _p("AVGO", 0.05, sleeve="conviction"),
+                 _p("AMD",  0.04, sleeve="conviction"), _p("SMCI", 0.036, sleeve="conviction"),
+                 _p("SGOV", 0.12, sleeve="conviction")]   # ETF book ballast (the incident false positive)
+        out = sleeves.enforce_book_caps(book, cluster_fn=_cluster_fn)
+        by = {p["ticker"]: p for p in out["positions"]}
+
+        # SMH still clamped to 0.08 by name cap (unchanged)
+        assert by["SMH"]["weight"] <= 0.08 + 1e-9
+        # semis_ai cluster still trimmed
+        semis_wt = sum(p["weight"] for p in out["positions"]
+                       if _cluster_fn(p["ticker"]) == "semis_ai")
+        assert semis_wt <= 0.35 + 1e-9
+        # SGOV NOT trimmed — the false positive is fixed
+        assert by["SGOV"]["weight"] == 0.12
+        # no name breach on SGOV
+        assert not any(b["kind"] == "name" and b["subject"] == "SGOV" for b in out["breaches"])
+
+
+# ---------------------------------------------------------------------------
 # INTEGRATION — the real default lookup (degrades to singletons before A1 lands)
 # ---------------------------------------------------------------------------
 

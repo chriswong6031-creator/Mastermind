@@ -138,17 +138,30 @@ def _clamp01(x: float) -> float:
 
 def fragility_signal(risk_state: dict | None,
                      budget_inputs: dict | None,
-                     cfg: dict | None = None) -> float:
-    """The [0,1] fragility magnitude that sizes the def sleeve (spec 1). Pure; never raises.
+                     cfg: dict | None = None,
+                     *,
+                     evidence: dict | None = None) -> float:
+    """The [0,1] fragility magnitude that sizes the def sleeve (spec 1 + W-I task 6). Pure; never raises.
 
     fragility_signal = clamp( w_dwell·dwell_level + w_conf·(1-confidence)
-                              + weakening_bump·[transition ∈ WEAKENING_STATES] , 0, 1 )
+                              + weakening_bump·[transition ∈ WEAKENING_STATES]
+                              + rotation-evidence LIFT , 0, 1 )
 
     dwell_level reads ``risk_state['state']`` (risk_on/caution/risk_off) — the W1 dwell machine's
     persistent state. An unknown/missing state → 0.0 (invariant-safe: missing data cannot inflate
     the defensive budget). confidence/transition come from ``budget_inputs`` (the same
     regime_frame.budget() ``inputs`` dict phase2 already threads) — missing confidence → treated as
     1.0 so (1-conf) contributes 0 (again, missing shrinks not inflates).
+
+    THE ROTATION-EVIDENCE LIFT (W-I task 6) — unthrottles the incident's documented '7% when it
+    should be 23%' problem: when the disagreement sources agree, the defensive floor should RISE.
+    ``evidence`` is the SAME shrink-only agreement count budget()'s damp reads (a
+    ``regime_frame.rotation_evidence()`` dict, or ``{"n_agree": int}``); PASSED IN so this stays pure
+    and never live-reads the mutating store.  The lift is ``lift_per_source · max(0, n_agree − 1)`` —
+    +0.15 per agreeing source BEYOND the first — clamped into [0,1] with the rest of the signal.
+    ``None`` (the default, and every pre-W-I caller) → n_agree 0 → lift 0 → BYTE-IDENTICAL.  Because
+    the lift is >= 0 it can only ever RAISE the defensive floor (never lower it) — and with
+    DEF_SLEEVE_MAX=0 (default) def_budget = 0·anything = 0, so it changes NOTHING live until armed.
     """
     c = cfg or _cfg()
     # ── dwell term ──
@@ -176,19 +189,50 @@ def fragility_signal(risk_state: dict | None,
     is_weakening = isinstance(trans, str) and trans.upper() in set(c["weakening_states"])
     bump = float(c["weakening_bump"]) if is_weakening else 0.0
 
-    sig = float(c["w_dwell"]) * dwell_level + float(c["w_conf"]) * conf_term + bump
+    # ── rotation-evidence lift: +lift_per_source per agreeing source BEYOND the first (>= 0 only) ──
+    lift = _evidence_lift(evidence)
+
+    sig = float(c["w_dwell"]) * dwell_level + float(c["w_conf"]) * conf_term + bump + lift
     return _clamp01(sig)
+
+
+def _evidence_lift(evidence: dict | None) -> float:
+    """``lift_per_source · max(0, n_agree − 1)`` — the DEF_SLEEVE unthrottle (W-I task 6). Never raises.
+
+    Reads the SAME ``rotation_evidence`` config regime_frame.budget()'s damp reads (one definition of
+    ``lift_per_source``), so the two levers stay coupled.  A missing/malformed evidence dict → 0.0
+    (byte-identical no-op — absent evidence never lifts the floor).  The lift is always >= 0 (it can
+    only raise the defensive floor, never lower it — the invariant for a shrink-on-offense signal)."""
+    if not isinstance(evidence, dict):
+        return 0.0
+    try:
+        n_agree = int(evidence.get("n_agree") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if n_agree <= 1:
+        return 0.0
+    per = 0.15  # fallback prior; overridden by doctrine's rotation_evidence.lift_per_source below
+    try:
+        from brain import regime_frame as _rf
+        per = float(_rf._rotation_evidence_cfg().get("lift_per_source", per))
+    except Exception:  # noqa: BLE001 — degrade to the mirrored prior; never break the sleeve
+        pass
+    return max(0.0, per) * (n_agree - 1)
 
 
 def def_budget(risk_state: dict | None,
                budget_inputs: dict | None,
-               cfg: dict | None = None) -> float:
+               cfg: dict | None = None,
+               *,
+               evidence: dict | None = None) -> float:
     """``DEF_SLEEVE_MAX · fragility_signal`` — the target defensive budget BEFORE headroom clamping.
 
     When DEF_SLEEVE_MAX is 0 (default / control arm) this is always 0.0 → the sleeve is inert.
+    ``evidence`` (the shrink-only rotation-evidence dict) unthrottles the fragility signal (W-I t6);
+    None → no lift → byte-identical.
     """
     c = cfg or _cfg()
-    return float(c["max"]) * fragility_signal(risk_state, budget_inputs, c)
+    return float(c["max"]) * fragility_signal(risk_state, budget_inputs, c, evidence=evidence)
 
 
 # ---------------------------------------------------------------------------
@@ -314,7 +358,8 @@ def build_def_sleeve(book: list[dict],
                      risk_state: dict | None,
                      budget_inputs: dict | None,
                      *,
-                     candidates: list[dict] | None = None) -> dict[str, Any]:
+                     candidates: list[dict] | None = None,
+                     evidence: dict | None = None) -> dict[str, Any]:
     """Build the deterministic DEF_SLEEVE legs (the E1-failure branch + the armed-PM floor).
 
     Parameters
@@ -326,6 +371,8 @@ def build_def_sleeve(book: list[dict],
     budget_inputs : the ``inputs`` dict from regime_frame.budget() (confidence / transition_state) —
            the same dict phase2 already threads; sizes the fragility signal.
     candidates : optional pre-read candidate list (DI for tests). None → defensive_candidates.candidates.
+    evidence : the shrink-only rotation-evidence dict (regime_frame.rotation_evidence()); lifts the
+           fragility signal (W-I task 6). None → no lift → byte-identical to pre-W-I.
 
     Returns
     -------
@@ -347,7 +394,7 @@ def build_def_sleeve(book: list[dict],
     empty = {"legs": [], "def_budget": 0.0, "def_actual": 0.0, "headroom": 0.0,
              "fragility_signal": 0.0, "reason": "inert"}
 
-    sig = fragility_signal(risk_state, budget_inputs, c)
+    sig = fragility_signal(risk_state, budget_inputs, c, evidence=evidence)
     tgt = float(c["max"]) * sig
 
     # Control arm: max 0 (or a zero fragility read) → the sleeve is inert and the book is unchanged.
@@ -408,7 +455,8 @@ def floor_legs(book: list[dict],
                risk_state: dict | None,
                budget_inputs: dict | None,
                *,
-               candidates: list[dict] | None = None) -> list[dict]:
+               candidates: list[dict] | None = None,
+               evidence: dict | None = None) -> list[dict]:
     """The rotation FLOOR the armed PM (task B1) may not undercut when DEF_SLEEVE_MAX > 0.
 
     THE CONTRACT (this module owns it; B1 imports it lazily):
@@ -424,7 +472,8 @@ def floor_legs(book: list[dict],
     exactly as when the sleeve is off).
     """
     try:
-        out = build_def_sleeve(book, risk_state, budget_inputs, candidates=candidates)
+        out = build_def_sleeve(book, risk_state, budget_inputs,
+                               candidates=candidates, evidence=evidence)
         return out.get("legs") or []
     except Exception:  # noqa: BLE001 — a floor read must never break the judgment layer
         return []
