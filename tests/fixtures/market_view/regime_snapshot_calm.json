@@ -1,0 +1,401 @@
+{
+  "_note": "CONSTRUCTED calm-tape control fixture — synthesized to represent a high-confidence agreeing window where all validated planes agree risk_on. No real date; values chosen so all plane directions align and market_view conflict=False. Used to assert calm-tape invariance: conflict=False, class=OFFENSE on agreeing tape, budgets byte-identical to pre-view stack (zero drift on agreeing tape).",
+  "quad": "Q1",
+  "quad_name": "Goldilocks",
+  "liquidity_overlay": "expanding",
+  "confidence": 0.78,
+  "transition_state": "STABLE",
+  "contradicting": [],
+  "flip_condition": {
+    "axis": "growth",
+    "component": "copper_gold",
+    "z": 0.2,
+    "threshold": 0.45,
+    "margin": 0.25,
+    "note": "Well inside the threshold — no flip risk"
+  },
+  "date": "2026-05-15",
+  "risk_radar": {
+    "schema": "risk_radar.v2",
+    "asof": "2026-05-15",
+    "state": "risk_on",
+    "alert": false,
+    "dominant_scare": null,
+    "dominant_label_en": "No dominant scare — broad-based expansion",
+    "dominant_label_zh": "无主导恐慌——广泛扩张",
+    "top_score": 12.0,
+    "conjunction": false,
+    "scares": [],
+    "headline_en": "Risk-on: no scare active, vol benign, credit tight.",
+    "headline_zh": "风险偏好：无恐慌，波动率温和，信用利差收紧。",
+    "drawdown_prob": {
+      "h5": 0.015,
+      "h10": 0.04,
+      "h21": 0.07,
+      "base_h21": 0.1,
+      "lift_h21": 0.7,
+      "conjunction_n": 0,
+      "measure": ">=5% SPY pullback (empirical 2006-2026)"
+    },
+    "gross_factor": 1.0,
+    "favor_entries": true,
+    "cap_leadership": false,
+    "is_context_only": false,
+    "forward_log": {
+      "calibration_status": "calibrated"
+    }
+  },
+  "froth_fragility": {
+    "asof": "2026-05-15",
+    "headline": 18.5,
+    "band": "ok",
+    "band_zh": "正常",
+    "quadrant": "healthy",
+    "quadrant_en": "Healthy breadth — leadership in expansion phase",
+    "alert": false,
+    "face_a": {
+      "score": 18.0,
+      "n_available": 2,
+      "thin": false,
+      "legs": []
+    },
+    "face_b": {
+      "score": 19.0,
+      "n_available": 2,
+      "thin": false,
+      "legs": []
+    }
+  },
+  "mtf_signals": {
+    "asof": "2026-06-24",
+    "tf": "3D",
+    "universe": "us_deep",
+    "source": "daily_adjusted",
+    "note": "entry-quality RISK signal (display-only, NOT alpha); see research/signal_engine/CHARTER.md. Exits are the simple validated baseline (sell=SELL*, cut=fast-reversal). trail_breach/trail_stop = close-below-EMA8(3D) tail-risk flag (display-only, NOT a sell). early_now / res.early_markers = 2D-MACD pre-cross ADVANCE-WARNING (display-only context, NOT a buy and NOT scored; acting early is empirically worse entry quality — see CONFLUENCE_TUNING.md).",
+    "signals": [
+      {
+        "ticker": "AAPL",
+        "asof": "2026-06-26",
+        "state": "mixed",
+        "above200": true,
+        "weekly_bull": true,
+        "trail_breach": true,
+        "trail_stop": 290.1133,
+        "early_now": false,
+        "last": {
+          "date": "2026-06-10",
+          "type": "sell"
+        }
+      },
+      {
+        "ticker": "MSFT",
+        "asof": "2026-06-24",
+        "state": "short-bias",
+        "above200": false,
+        "weekly_bull": true,
+        "trail_breach": true,
+        "trail_stop": 392.6454,
+        "early_now": false,
+        "last": {
+          "date": "2026-06-11",
+          "type": "sell"
+        }
+      },
+      {
+        "ticker": "NVDA",
+        "asof": "2026-06-26",
+        "state": "mixed",
+        "above200": true,
+        "weekly_bull": true,
+        "trail_breach": true,
+        "trail_stop": 203.769,
+        "early_now": false,
+        "last": {
+          "date": "2026-06-05",
+          "type": "sell"
+        }
+      }
+    ]
+  },
+  "risk_state": {
+    "schema": "risk_state.v1",
+    "asof": "2026-05-15",
+    "score": 12.0,
+    "state": "risk_on",
+    "label_en": "Risk-On",
+    "label_zh": "风险偏好",
+    "headline_en": "Risk-on: broad participation, vol benign, credit tight.",
+    "drivers": [],
+    "gross_factor": 1.0,
+    "favor_entries": true,
+    "cap_leadership": false,
+    "is_context_only": true
+  },
+  "turning_point": {
+    "asof": "2026-05-15",
+    "present": false,
+    "state": "normal",
+    "raw_fire": false,
+    "active": false,
+    "put_state": "no-put",
+    "drivers": {}
+  },
+  "vol_shock": {
+    "score": 15.0,
+    "score_int": 15,
+    "band": "low",
+    "asof": "2026-05-15",
+    "n_available": 9,
+    "factors": []
+  },
+  "cross_asset": {
+    "asof": "2026-06-26",
+    "verdict": "concentrated",
+    "summary": "CONCENTRATED · 0.96 5y-pctile",
+    "headline": "CONCENTRATED — 3 of 6 markets are one bet (US, Commodities, Dollar). Cross-asset correlation is in the top 4% of its 5y range: stacking these views is doubling one liquidity/risk exposure, not diversifying.",
+    "window_d": 63,
+    "markets": [
+      "US",
+      "Crypto",
+      "China",
+      "HK",
+      "Commodities",
+      "Dollar"
+    ],
+    "absorption_ratio": 0.442,
+    "absorption_pctile_5y": 0.96,
+    "absorption_floor": 0.167,
+    "mean_abs_corr": 0.337,
+    "pc1_loadings": {
+      "US": 0.53,
+      "Crypto": 0.32,
+      "China": 0.3,
+      "HK": 0.26,
+      "Commodities": 0.5,
+      "Dollar": 0.46
+    },
+    "dominant_cluster": [
+      "US",
+      "Commodities",
+      "Dollar"
+    ],
+    "top_pairs": [
+      {
+        "a": "China",
+        "b": "HK",
+        "corr": 0.65
+      },
+      {
+        "a": "US",
+        "b": "Dollar",
+        "corr": 0.61
+      },
+      {
+        "a": "US",
+        "b": "Commodities",
+        "corr": 0.58
+      },
+      {
+        "a": "Commodities",
+        "b": "Dollar",
+        "corr": 0.56
+      }
+    ],
+    "corr_matrix": {
+      "US": {
+        "US": 1.0,
+        "Crypto": 0.47,
+        "China": 0.29,
+        "HK": 0.25,
+        "Commodities": 0.58,
+        "Dollar": 0.61
+      },
+      "Crypto": {
+        "US": 0.47,
+        "Crypto": 1.0,
+        "China": -0.1,
+        "HK": -0.13,
+        "Commodities": 0.29,
+        "Dollar": 0.41
+      },
+      "China": {
+        "US": 0.29,
+        "Crypto": -0.1,
+        "China": 1.0,
+        "HK": 0.65,
+        "Commodities": 0.34,
+        "Dollar": 0.06
+      },
+      "HK": {
+        "US": 0.25,
+        "Crypto": -0.13,
+        "China": 0.65,
+        "HK": 1.0,
+        "Commodities": 0.29,
+        "Dollar": 0.0
+      },
+      "Commodities": {
+        "US": 0.58,
+        "Crypto": 0.29,
+        "China": 0.34,
+        "HK": 0.29,
+        "Commodities": 1.0,
+        "Dollar": 0.56
+      },
+      "Dollar": {
+        "US": 0.61,
+        "Crypto": 0.41,
+        "China": 0.06,
+        "HK": 0.0,
+        "Commodities": 0.56,
+        "Dollar": 1.0
+      }
+    },
+    "evidence": "Absorption ratio = PC1 variance share (Kritzman-Page 2010): high/rising absorption marks a fragile one-factor regime that has historically led drawdowns. Daily closes across US/Asia/24-7 crypto carry a timezone lead/lag — a coarse regime gauge, not a hedge ratio."
+  },
+  "market_drivers": {
+    "asof": "2026-06-26",
+    "window_d": 5,
+    "verdict": "clear",
+    "verdict_zh": "明确",
+    "primary": "ai_semis",
+    "primary_label": "AI / semis",
+    "primary_label_zh": "AI/半导体",
+    "direction": "AI/semis unwind — tech-led de-rating",
+    "direction_zh": "AI/半导体回吐 — 科技主导的回调",
+    "dir_sign": -1,
+    "confidence": "high",
+    "confidence_zh": "高",
+    "strength": 2.18,
+    "dominance_ratio": 1.83,
+    "agreement": 1.0,
+    "runner_up": "china_stimulus",
+    "runner_up_label": "China stimulus",
+    "runner_up_label_zh": "中国刺激",
+    "headline": "AI / semis — AI/semis unwind — tech-led de-rating. semis RS -2.1σ, tech vs utilities -2.3σ, cap-weight vs equal-weight -2.7σ.",
+    "evidence": [
+      "semis RS -2.1σ",
+      "tech vs utilities -2.3σ",
+      "cap-weight vs equal-weight -2.7σ"
+    ],
+    "evidence_legs": [
+      {
+        "en": "semis RS",
+        "zh": "半导体相对强度",
+        "z": -2.1
+      },
+      {
+        "en": "tech vs utilities",
+        "zh": "科技对公用事业",
+        "z": -2.3
+      },
+      {
+        "en": "cap-weight vs equal-weight",
+        "zh": "市值加权对等权重",
+        "z": -2.7
+      }
+    ],
+    "invalidation": "Fades if semis RS reverses and the rest of the equity-leadership fingerprint stops confirming.",
+    "invalidation_zh": "若半导体相对强度反转、且股票领涨指纹其余腿停止确认，此判读将消退。",
+    "absorption_pctile": 0.95,
+    "scores": [
+      {
+        "driver": "ai_semis",
+        "label": "AI / semis",
+        "label_zh": "AI/半导体",
+        "family": "equity-leadership",
+        "projection": -2.18,
+        "strength": 2.18,
+        "direction": "AI/semis unwind — tech-led de-rating"
+      },
+      {
+        "driver": "china_stimulus",
+        "label": "China stimulus",
+        "label_zh": "中国刺激",
+        "family": "china",
+        "projection": -1.19,
+        "strength": 1.19,
+        "direction": "China risk-off — A-shares/HK & copper lead down"
+      },
+      {
+        "driver": "crypto_liquidity",
+        "label": "Crypto liquidity",
+        "label_zh": "加密流动性",
+        "family": "crypto",
+        "projection": -0.96,
+        "strength": 0.96,
+        "direction": "crypto liquidity draining — BTC/ETH lead down"
+      },
+      {
+        "driver": "credit_stress",
+        "label": "Credit stress",
+        "label_zh": "信用压力",
+        "family": "credit",
+        "projection": 0.86,
+        "strength": 0.86,
+        "direction": "credit spreads widening — stress"
+      },
+      {
+        "driver": "oil_shock",
+        "label": "Oil shock",
+        "label_zh": "油价冲击",
+        "family": "inflation",
+        "projection": -0.75,
+        "strength": 0.75,
+        "direction": "oil collapsing — energy lags, breakevens down"
+      },
+      {
+        "driver": "usd_shock",
+        "label": "USD shock",
+        "label_zh": "美元冲击",
+        "family": "fx",
+        "projection": 0.73,
+        "strength": 0.73,
+        "direction": "dollar surging — squeeze, commodities & EM pressured"
+      },
+      {
+        "driver": "real_rate_shock",
+        "label": "Real-rate shock",
+        "label_zh": "实际利率冲击",
+        "family": "rates",
+        "projection": 0.6,
+        "strength": 0.6,
+        "direction": "real yields rising — restrictive, gold & duration hit"
+      },
+      {
+        "driver": "fed_repricing",
+        "label": "Fed repricing",
+        "label_zh": "美联储重定价",
+        "family": "rates",
+        "projection": -0.44,
+        "strength": 0.44,
+        "direction": "dovish repricing — cuts priced in, front-end down"
+      },
+      {
+        "driver": "liquidity_impulse",
+        "label": "Liquidity impulse",
+        "label_zh": "流动性脉冲",
+        "family": "liquidity",
+        "projection": -0.01,
+        "strength": 0.01,
+        "direction": "net liquidity draining — risk headwind"
+      }
+    ],
+    "note": "Deterministic cross-asset attribution — a regime READ, not a signal; never gates a score."
+  },
+  "dislocation": {
+    "state": "calm",
+    "asof": "2026-05-15"
+  },
+  "macro_risk": {
+    "score": 0.2504,
+    "label": "moderate",
+    "components": {
+      "recession": 0.039,
+      "drawdown": 0.15,
+      "nfci": 0.0,
+      "liquidity": 1.0,
+      "transition": 0.5
+    }
+  }
+}

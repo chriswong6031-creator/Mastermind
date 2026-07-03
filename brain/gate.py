@@ -14,6 +14,20 @@ state_signature() now appends three new tokens after the original four-field bas
   7. stable hash of contradicting  — sorted-join of the contradicting-leg list; a new
      contradicting leg (evidence accumulating toward a flip) wakes the rebuild.
 
+E1.3 — MARKET-VIEW DISSENT TOKEN (W-E.1)
+-----------------------------------------
+state_signature() gains one further token (field 8):
+  8. quantized count of VALIDATED dissenting planes from data/market_view/latest.json —
+     the number of validated, fresh planes in label_vs_planes.dissenting_planes, bucketed
+     into 0 / 1 / 2 / 3+ so a new or flipped validated disagreement (e.g. a plane whose
+     direction just crossed to risk_off while the label is risk_on) wakes a same-day
+     rebuild.  A missing or unreadable view → token 'na' (stable, no thrash).
+
+     NOTE ON DEPLOY-DAY BEHAVIOUR: the token is appended after the existing 7 fields.
+     The first build after this code ships will see the NEW 8-field signature vs the
+     OLD 7-field signature in the run record → exactly one extra rebuild fires on deploy
+     day.  This is expected and harmless; subsequent runs will match.
+
 Missing fields → the literal token 'na' so old 3-field regime dicts produce a
 stable signature that degrades to today's behaviour.
 
@@ -86,16 +100,68 @@ def _contradicting_token(regime: dict) -> str:
     return "+".join(sorted(str(x) for x in val)) or "none"
 
 
-def state_signature(regime: dict, top_sector: str) -> str:
+def _dissent_token(view_reader: Callable[[], dict | None] | None = None) -> str:
+    """Return a quantized token for the count of VALIDATED dissenting planes in the market_view.
+
+    Reads ``data/market_view/latest.json`` (via an injected reader for tests; the default reads
+    the live artifact).  The count is bucketed: 0 → '0', 1 → '1', 2 → '2', 3+ → '3p'.  A missing
+    or unreadable view returns 'na' — stable, no spurious wakes.
+
+    A new validated disagreement (or a flip from 0→1+ dissenting planes) changes this token and
+    wakes a same-day rebuild; a view with 2 dissenting planes that gains a third produces '3p'
+    (same token as 2+, intentionally coarse — individual-plane granularity is not needed here).
+
+    Injected reader signature: () -> dict | None.  None return or any exception → 'na'.
+    """
+    try:
+        d = view_reader() if view_reader is not None else _default_view_reader()
+        if not isinstance(d, dict):
+            return "na"
+        lvp = d.get("label_vs_planes")
+        if not isinstance(lvp, dict):
+            return "na"
+        n = len(lvp.get("dissenting_planes") or [])
+        if n == 0:
+            return "0"
+        if n == 1:
+            return "1"
+        if n == 2:
+            return "2"
+        return "3p"
+    except Exception:  # noqa: BLE001 — never thrash the gate on a reader error
+        return "na"
+
+
+def _default_view_reader() -> dict | None:
+    """Read data/market_view/latest.json, returning None on any miss/error."""
+    p = _ROOT / "data" / "market_view" / "latest.json"
+    try:
+        if p.exists():
+            return json.loads(p.read_text())
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def state_signature(regime: dict, top_sector: str,
+                    view_reader: Callable[[], dict | None] | None = None) -> str:
     """Return a stable string that changes when any gate-relevant dimension moves.
 
-    Format (7 pipe-delimited fields):
-      <quad>|<risk_band>|<liquidity_overlay>|<top_sector>|<conf_bucket>|<transition>|<contradicting>
+    Format (8 pipe-delimited fields):
+      <quad>|<risk_band>|<liquidity_overlay>|<top_sector>|<conf_bucket>|<transition>|<contradicting>|<dissent>
 
     The first four fields are unchanged from the pre-A6 format (backward compatible
-    for the INTERVAL/first_run trigger paths).  The three new fields are appended so
-    the only behaviour change on old callers is: the signature is longer, which causes
-    exactly one extra rebuild on deploy day when the stored old signature mismatches.
+    for the INTERVAL/first_run trigger paths).  The three A6 fields are next.  The
+    eighth field (E1.3) is the quantized count of VALIDATED dissenting planes from
+    data/market_view/latest.json — a new or flipped validated disagreement wakes a
+    same-day rebuild; a missing view → 'na' (stable, no thrash).
+
+    ``view_reader``: injected for tests (() → dict | None); defaults to reading the
+    live data/market_view/latest.json artifact.
+
+    NOTE ON DEPLOY-DAY BEHAVIOUR: the first build after this code ships sees the NEW
+    8-field signature vs the OLD 7-field signature → exactly one extra rebuild fires
+    on deploy day.  This is expected and harmless.
     """
     band = "lo" if _risk(regime) < 0.34 else "hi" if _risk(regime) > 0.66 else "mid"
     base = f"{regime.get('quad')}|{band}|{regime.get('liquidity_overlay')}|{top_sector}"
@@ -104,7 +170,9 @@ def state_signature(regime: dict, top_sector: str) -> str:
     conf_bucket = _confidence_bucket(regime)
     transition  = _transition_token(regime)
     contradicting = _contradicting_token(regime)
-    return f"{base}|{conf_bucket}|{transition}|{contradicting}"
+    # E1.3 — market-view dissent token: a new validated disagreement wakes a rebuild.
+    dissent = _dissent_token(view_reader)
+    return f"{base}|{conf_bucket}|{transition}|{contradicting}|{dissent}"
 
 
 def _risk(regime: dict) -> float:

@@ -267,6 +267,28 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
             quad=regime.get("quad"), quad_name=regime.get("quad_name"),
             top_sector=top_sector)
 
+    # —— E0.5: perception runlog step — P5: perception logged BEFORE any position decision ——
+    # Assemble + PUBLISH THE one market view (P7: data/market_view/latest.json, all books read the
+    # one artifact) before the book is touched.  Read-only enrichment — the wave contract is ZERO
+    # behaviour change: nothing downstream sizes off this in W-E.0.  Lazy import so this degrades
+    # gracefully if brain/market_view.py (E0.3) is absent; any failure logs "unavailable" and the
+    # build proceeds unchanged (a perception organ never blocks the book — masterplan §4).
+    try:
+        from brain import market_view as _mv_mod
+        _pv = _mv_mod.build("us", write=True)
+        _pv_brief = (_pv.get("brief") or {}).get("wheres_the_risk", "")
+        _pv_conflict = (_pv.get("label_vs_planes") or {}).get("conflict", False)
+        _pv_coverage = (_pv.get("assembly") or {}).get("fresh", "?")
+        _rl_log(_run_id, "perception", "market_view",
+                f"conflict={_pv_conflict} coverage_fresh={_pv_coverage} | {_pv_brief}",
+                conflict=_pv_conflict,
+                coverage_fresh=_pv_coverage,
+                label_vs_planes=_pv.get("label_vs_planes"),
+                posture_floor_defense=_pv.get("posture_floor_defense"),
+                net_posture_tilt=_pv.get("net_posture_tilt"))
+    except Exception:
+        _rl_log(_run_id, "perception", "market_view", "perception unavailable")
+
     con = store.connect()
     sig = gate.state_signature(regime, top_sector)
     # A directive (overnight reconsideration) acts as force=True: the overnight watch loop already

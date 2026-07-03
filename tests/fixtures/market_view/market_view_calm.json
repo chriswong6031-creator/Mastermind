@@ -1,0 +1,133 @@
+{
+  "_note": "EXPECTED market_view output for calm-tape control (constructed, no real date). All planes agree risk_on. conflict=False. Asserts: calm tape produces zero conflict, class=OFFENSE if posture decider were armed, budgets identical to pre-view stack.",
+  "schema_version": 1,
+  "region": "us",
+  "asof": "2026-05-15",
+  "built_at": "2026-05-15T22:55:00Z",
+  "seq": 1,
+  "planes": {
+    "risk_radar": {
+      "reading": "risk_on",
+      "direction": "risk_on",
+      "magnitude": 0.12,
+      "freshness": {
+        "asof": "2026-05-15",
+        "age_sessions": 0,
+        "stale": false
+      },
+      "confidence": 0.85,
+      "status": "validated",
+      "source_contract": "regime.risk_radar",
+      "raw": {
+        "state": "risk_on",
+        "dominant_scare": null,
+        "drawdown_prob_h21": 0.07
+      }
+    },
+    "froth_fragility": {
+      "reading": "healthy",
+      "direction": "risk_on",
+      "magnitude": 0.185,
+      "freshness": {
+        "asof": "2026-05-15",
+        "age_sessions": 0,
+        "stale": false
+      },
+      "confidence": 0.6,
+      "status": "advisory",
+      "source_contract": "regime.froth_fragility",
+      "raw": {
+        "quadrant": "healthy",
+        "alert": false,
+        "band": "ok"
+      }
+    },
+    "gross_factor": {
+      "reading": "risk_on",
+      "direction": "risk_on",
+      "magnitude": 0.0,
+      "freshness": {
+        "asof": "2026-05-15",
+        "age_sessions": 0,
+        "stale": false
+      },
+      "confidence": 0.6,
+      "status": "advisory",
+      "source_contract": "regime.risk_state.gross_factor",
+      "raw": {
+        "gross_factor": 1.0,
+        "cap_leadership": false
+      }
+    },
+    "cycles_entry": {
+      "reading": "expansion",
+      "direction": "risk_on",
+      "magnitude": 0.45,
+      "freshness": {
+        "asof": "2026-05-15",
+        "age_sessions": 0,
+        "stale": false
+      },
+      "confidence": 0.75,
+      "status": "validated",
+      "source_contract": "sector_cycles",
+      "raw": {
+        "no_late_cycle": true
+      }
+    },
+    "regime_label": {
+      "reading": "Goldilocks",
+      "direction": "risk_on",
+      "magnitude": 0.78,
+      "freshness": {
+        "asof": "2026-05-15",
+        "age_sessions": 0,
+        "stale": false
+      },
+      "confidence": 0.78,
+      "status": "validated",
+      "source_contract": "regime/latest.json.quad",
+      "raw": {
+        "quad": "Q1",
+        "quad_name": "Goldilocks",
+        "transition_state": "STABLE"
+      }
+    }
+  },
+  "net_posture_tilt": "risk_on",
+  "coherence": 0.92,
+  "disagreements": [],
+  "label_vs_planes": {
+    "label_direction": "risk_on",
+    "plane_consensus_direction": "risk_on",
+    "conflict": false,
+    "magnitude": 0.0,
+    "n_validated_dissent": 0,
+    "n_validated_agree": 3
+  },
+  "posture_floor_defense": false,
+  "posture_confidence": 0.78,
+  "assembly": {
+    "total": 5,
+    "fresh": 5,
+    "stale": 0,
+    "missing": 6,
+    "degraded": 0
+  },
+  "budget_ref": {
+    "lead_budget": 0.5312,
+    "inputs": {
+      "confidence": 0.78,
+      "T": 1.0,
+      "F": 1.0,
+      "transition_state": "STABLE"
+    },
+    "_read_only": true
+  },
+  "brief": {
+    "what_changed": "No change \u2014 all planes agreeing risk_on",
+    "whats_rotating": "No defensive rotation detected",
+    "wheres_the_risk": "No validated disagreement",
+    "posture_implication": "No posture intervention needed; OFFENSE class if armed"
+  }
+}

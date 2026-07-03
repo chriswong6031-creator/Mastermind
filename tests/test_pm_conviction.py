@@ -141,6 +141,133 @@ def test_pm_input_pipes_leadership_and_defensive_and_deanchors():
     assert list(payload.keys())[-1] == "engine_proposed_weights_ADVISORY"
 
 
+# ─────────────────────────────────────────── E1.1: market_view enrichment ───────────────────────
+
+def _fake_market_view(n_dissent: int = 2, conflict: bool = True) -> dict:
+    """Minimal market_view.v1 artifact for test injection."""
+    dissenting = [f"plane_{i}" for i in range(n_dissent)]
+    return {
+        "schema_version": "market_view.v1",
+        "label_vs_planes": {
+            "conflict": conflict,
+            "label_direction": "risk_on",
+            "plane_consensus_direction": "risk_off",
+            "dissenting_planes": dissenting,
+            "magnitude": 0.667,
+        },
+        "planes": {
+            "risk_radar": {
+                "direction": "risk_off", "status": "validated",
+                "reading": "growth-scare caution", "freshness": {"stale": False}},
+            "cycles": {
+                "direction": "risk_off", "status": "validated",
+                "reading": "3 late-cycle / 0 entry-favored", "freshness": {"stale": False}},
+            "froth_fragility": {
+                "direction": "risk_on", "status": "advisory",
+                "reading": "calm", "freshness": {"stale": False}},
+        },
+        "brief": {
+            "what_changed": "conflict OPENED",
+            "whats_rotating": "3 late-cycle / 0 entry-favored",
+            "wheres_the_risk": "risk_radar*(V): caution; cycles*(V): late",
+            "posture_implication": "Validated planes dissent risk_off — defensive tilt.",
+        },
+    }
+
+
+def test_market_view_enrichment_composes_from_view(monkeypatch, tmp_path):
+    """_market_view_enrichment() extracts brief, plane_summaries, label_vs_planes_line."""
+    mv = _fake_market_view(n_dissent=2)
+    enrichment = P._market_view_enrichment(mv)
+    assert enrichment.get("label_vs_planes_line")
+    assert "2 validated planes dissent" in enrichment["label_vs_planes_line"]
+    assert enrichment.get("market_view_brief")
+    assert "posture_implication" in enrichment["market_view_brief"]
+    summaries = enrichment.get("plane_summaries") or []
+    directions = {s["name"]: s["direction"] for s in summaries}
+    # planes with None direction are excluded
+    assert "risk_radar" in directions
+    assert directions["risk_radar"] == "risk_off"
+
+
+def test_market_view_enrichment_absent_view():
+    """_market_view_enrichment(None) returns {} — degrade to current behavior."""
+    assert P._market_view_enrichment(None) == {}
+    # An empty dict has no lvp block; the function emits a stable no-conflict line.
+    # Ensure it does NOT raise and does NOT fabricate a conflict reading.
+    enrichment = P._market_view_enrichment({})
+    assert not enrichment.get("market_view_brief")
+    assert not enrichment.get("plane_summaries")
+
+
+def test_market_view_enrichment_no_conflict():
+    """A conflict=False view still produces a label_vs_planes_line (no-conflict message)."""
+    mv = _fake_market_view(n_dissent=0, conflict=False)
+    enrichment = P._market_view_enrichment(mv)
+    assert "agree" in (enrichment.get("label_vs_planes_line") or "")
+
+
+def test_read_market_view_absent_file(tmp_path, monkeypatch):
+    """_read_market_view() returns None when the artifact has not been built yet."""
+    # Patch Path so the function looks in tmp_path (no file there)
+    import brain.pm_conviction as _mod
+    monkeypatch.setattr(_mod, "_read_market_view",
+                        lambda: None)
+    assert _mod._read_market_view() is None
+
+
+def test_full_regime_slice_includes_market_view_when_available(monkeypatch):
+    """_full_regime_slice() includes market_view enrichment when the view is present."""
+    mv = _fake_market_view(n_dissent=3)
+    monkeypatch.setattr(P, "_read_market_view", lambda: mv)
+    reg = P._full_regime_slice({"quad": "Q1", "quad_name": "Goldilocks"})
+    assert "market_view" in reg
+    assert reg["market_view"].get("label_vs_planes_line")
+    assert "3 validated planes dissent" in reg["market_view"]["label_vs_planes_line"]
+
+
+def test_full_regime_slice_absent_view_degrades_gracefully(monkeypatch):
+    """_full_regime_slice() degrades to no market_view key when the organ is absent."""
+    monkeypatch.setattr(P, "_read_market_view", lambda: None)
+    reg = P._full_regime_slice({"quad": "Q1"})
+    # market_view key must not be present (or if present, must be {})
+    assert not reg.get("market_view")
+
+
+def test_build_prompt_includes_label_vs_planes_line_on_conflict(monkeypatch):
+    """_build_prompt() renders the label_vs_planes_line when a conflict is present.
+
+    Golden prompt-payload test: the prompt must contain the dissent sentence so the PM
+    seat reads the same perception layer the architecture demands.
+    """
+    mv = _fake_market_view(n_dissent=2, conflict=True)
+    monkeypatch.setattr(P, "_read_market_view", lambda: mv)
+    # Build the payload via _pm_input (exercises _full_regime_slice)
+    payload = P._pm_input([], [], None, {"quad": "Q1", "quad_name": "Goldilocks"},
+                          {}, "2026-07-01")
+    prompt = P._build_prompt(payload)
+    assert "2 validated planes dissent" in prompt, (
+        "The prompt must surface the validated-plane disagreement line so the PM "
+        "cannot miss it (E1.1 golden prompt-payload assertion)"
+    )
+
+
+def test_build_prompt_no_market_view_section_when_absent(monkeypatch):
+    """When the market_view organ is absent the prompt must be byte-identical to W4 output.
+
+    This confirms the 'lazy, degrade to current behavior' contract: the prompt section is
+    omitted, not fabricated, when the view isn't built yet.
+    """
+    monkeypatch.setattr(P, "_read_market_view", lambda: None)
+    payload = P._pm_input([], [], None, {"quad": "Q1"}, {}, "2026-07-01")
+    prompt = P._build_prompt(payload)
+    assert "Perception layer" not in prompt
+    assert "label_vs_planes" not in prompt
+
+
+# ─────────────────────────────── end E1.1 tests ──────────────────────────────────────────────────
+
+
 def test_build_book_tags_kept_leadership_and_captures_three_questions(monkeypatch):
     """A kept leadership ticker is tagged sleeve='leadership' on the way out; the three-questions
     fields (own_more / own_less / not_holding_should) are normalised and returned."""

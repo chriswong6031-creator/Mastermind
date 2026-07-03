@@ -84,7 +84,19 @@ def _stock_price(t: str):
 async def get_regime(args):
     d = _read_json(_V / "data" / "regime" / "latest.json") or {}
     keys = ["date", "quad", "quad_name", "growth_score", "inflation_score", "liquidity_overlay", "cycle_tag"]
-    return _json({k: d.get(k) for k in keys} | {"sector_rs_top": (d.get("sector_rs") or [])[:6]})
+    out = {k: d.get(k) for k in keys} | {"sector_rs_top": (d.get("sector_rs") or [])[:6]}
+    # E1.1 — append the market_view brief + label_vs_planes line (ADDITIVE; absent view → keys absent).
+    # This replaces the ad-hoc 7-key slice so the autonomous Brain reads the same perception layer as
+    # the judgment seats — the incident's root cause was the Brain seeing ONLY the label.
+    try:
+        from brain.pm_conviction import _read_market_view, _market_view_enrichment
+        mv = _read_market_view()
+        enrichment = _market_view_enrichment(mv)
+        if enrichment:
+            out["market_view"] = enrichment
+    except Exception:  # noqa: BLE001 — additive; never break the tool
+        pass
+    return _json(out)
 
 
 @tool("get_overnight_tape",

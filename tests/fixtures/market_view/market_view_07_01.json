@@ -1,0 +1,199 @@
+{
+  "_note": "Frozen EXPECTED market_view output for 2026-07-01 (crash-eve). This is what brain/market_view.py SHOULD have produced if it had existed. Values from judged_market-view.md synthesis: label risk_on at conf 0.327 vs cycles/rotation/radar risk_off \u2014 conflict=True, coherence~0.38. Per build_plan.md \u00a74.3: label_vs_planes.conflict=True, posture_floor_defense=True for every session 06-26..07-01.",
+  "schema_version": 1,
+  "region": "us",
+  "asof": "2026-07-01",
+  "built_at": "2026-07-01T22:55:00Z",
+  "seq": 1,
+  "planes": {
+    "risk_radar": {
+      "reading": "caution",
+      "direction": "risk_off",
+      "magnitude": 0.908,
+      "freshness": {
+        "asof": "2026-06-26",
+        "age_sessions": 3,
+        "stale": false
+      },
+      "confidence": 0.85,
+      "status": "validated",
+      "source_contract": "regime.risk_radar",
+      "raw": {
+        "state": "caution",
+        "dominant_scare": "growth",
+        "drawdown_prob_h21": 0.19
+      }
+    },
+    "mtf_signals": {
+      "reading": "bearish_cross",
+      "direction": "risk_off",
+      "magnitude": 0.72,
+      "freshness": {
+        "asof": "2026-06-24",
+        "age_sessions": 5,
+        "stale": false
+      },
+      "confidence": 0.7,
+      "status": "validated",
+      "source_contract": "regime.mtf_signals",
+      "raw": {
+        "note": "XLK trail_breach=True, weekly_bull falling"
+      }
+    },
+    "froth_fragility": {
+      "reading": "narrowing_top",
+      "direction": "risk_off",
+      "magnitude": 0.406,
+      "freshness": {
+        "asof": "2026-06-26",
+        "age_sessions": 3,
+        "stale": false
+      },
+      "confidence": 0.65,
+      "status": "advisory",
+      "source_contract": "regime.froth_fragility",
+      "raw": {
+        "quadrant": "narrowing_top",
+        "alert": true,
+        "band": "watch"
+      }
+    },
+    "gross_factor": {
+      "reading": "caution",
+      "direction": "risk_off",
+      "magnitude": 0.1,
+      "freshness": {
+        "asof": "2026-06-26",
+        "age_sessions": 3,
+        "stale": false
+      },
+      "confidence": 0.6,
+      "status": "advisory",
+      "source_contract": "regime.risk_state.gross_factor",
+      "raw": {
+        "gross_factor": 0.9,
+        "cap_leadership": false
+      }
+    },
+    "cycles_entry": {
+      "reading": "late_cycle_xlk",
+      "direction": "risk_off",
+      "magnitude": 0.65,
+      "freshness": {
+        "asof": "2026-07-02",
+        "age_sessions": 0,
+        "stale": false
+      },
+      "confidence": 0.8,
+      "status": "validated",
+      "source_contract": "sector_cycles.sectors[XLK].now.phase",
+      "raw": {
+        "XLK": {
+          "phase": "Peak",
+          "late_cycle": true
+        },
+        "XLV": {
+          "phase": "Expansion",
+          "entry_favored": true
+        }
+      }
+    },
+    "rotation_tensor": {
+      "reading": "defensive_episode",
+      "direction": "risk_off",
+      "magnitude": 0.78,
+      "freshness": {
+        "asof": "2026-07-01",
+        "age_sessions": 0,
+        "stale": false
+      },
+      "confidence": 0.62,
+      "status": "advisory",
+      "source_contract": "data/market_view/rotation_tensor.json",
+      "raw": {
+        "headline_episode": {
+          "axis": "DEF_over_OFF",
+          "n_sessions": 6,
+          "percentile": 0.83
+        }
+      }
+    },
+    "regime_label": {
+      "reading": "Goldilocks",
+      "direction": "risk_on",
+      "magnitude": 0.327,
+      "freshness": {
+        "asof": "2026-07-01",
+        "age_sessions": 0,
+        "stale": false
+      },
+      "confidence": 0.327,
+      "status": "validated",
+      "source_contract": "regime/latest.json.quad",
+      "raw": {
+        "quad": "Q1",
+        "quad_name": "Goldilocks",
+        "transition_state": "STABLE"
+      }
+    }
+  },
+  "net_posture_tilt": "risk_off",
+  "coherence": 0.38,
+  "disagreements": [
+    {
+      "plane_a": "regime_label",
+      "plane_b": "risk_radar",
+      "direction_a": "risk_on",
+      "direction_b": "risk_off",
+      "note": "Goldilocks label vs caution radar \u2014 the core disagreement"
+    },
+    {
+      "plane_a": "regime_label",
+      "plane_b": "cycles_entry",
+      "direction_a": "risk_on",
+      "direction_b": "risk_off",
+      "note": "STABLE label vs XLK late_cycle / XLV entry_favored"
+    },
+    {
+      "plane_a": "regime_label",
+      "plane_b": "rotation_tensor",
+      "direction_a": "risk_on",
+      "direction_b": "risk_off",
+      "note": "STABLE vs 6-session defensive rotation episode (0.83-pct)"
+    }
+  ],
+  "label_vs_planes": {
+    "label_direction": "risk_on",
+    "plane_consensus_direction": "risk_off",
+    "conflict": true,
+    "magnitude": 0.73,
+    "n_validated_dissent": 3,
+    "n_validated_agree": 1,
+    "note": "3 validated planes (radar/mtf/cycles) say risk_off vs label risk_on at conf 0.327"
+  },
+  "posture_floor_defense": true,
+  "posture_confidence": 0.327,
+  "assembly": {
+    "total": 7,
+    "fresh": 7,
+    "stale": 0,
+    "missing": 4,
+    "degraded": 1
+  },
+  "budget_ref": {
+    "lead_budget": 0.44905,
+    "inputs": {
+      "confidence": 0.327,
+      "T": 1.0,
+      "F": 0.75,
+      "transition_state": "STABLE"
+    },
+    "_read_only": true
+  },
+  "brief": {
+    "what_changed": "risk_radar dominant_scare=growth with drawdown_prob.h21=0.19 (rising from 0.16 06-23)",
+    "whats_rotating": "XLV +8.0% 63d RS, XLU rising; XLK late_cycle Peak/Topping (6-session DEF_over_OFF episode)",
+    "wheres_the_risk": "Regime label STABLE vs 3 validated planes risk_off; label conflict at 73% validated consensus",
+    "posture_implication": "posture_floor_defense=True; label cannot override validated-plane consensus"
+  }
+}

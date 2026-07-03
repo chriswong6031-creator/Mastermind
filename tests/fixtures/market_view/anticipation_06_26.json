@@ -1,0 +1,45 @@
+{
+  "_note": "Frozen anticipation fixture for 2026-06-26 (incident window). CRASH-RISK escalates to ELEVATED on this date (build_plan.md \u00a74.1 assert: >=ELEVATED by 06-26). risk_radar dominant_scare=growth, drawdown_prob.h21=0.19 (rising). Values RECONSTRUCTED from build_plan.md \u00a74 and incident post-mortem.",
+  "schema_version": 1,
+  "as_of": "2026-06-26",
+  "built_at": "2026-06-26T22:45:00Z",
+  "advisory": true,
+  "cold_start": true,
+  "alarms": {
+    "sector_top": {
+      "level": "CRITICAL",
+      "sectors": [
+        "XLK",
+        "tech_semis"
+      ],
+      "triggers": [
+        "Peak/Topping phase",
+        "osc_slope<0",
+        "pos>=70"
+      ],
+      "rs_diff_bps_day": 34.2,
+      "advisory": true,
+      "authority": "advisory"
+    },
+    "bubble_formation": {
+      "level": "WATCH",
+      "sectors": [
+        "XLK"
+      ],
+      "authority": "advisory"
+    },
+    "crash_risk": {
+      "level": "ELEVATED",
+      "triggers": [
+        "risk_radar drawdown_prob.h21=0.19 rising",
+        "growth_scare dominant",
+        "radar=caution"
+      ],
+      "authority": "advisory",
+      "note": "crash_risk ELEVATED by 06-26 \u2014 the bar build_plan.md \u00a74.1 pre-registers"
+    }
+  },
+  "net_alarm_level": "CRITICAL",
+  "notch_eligible": false,
+  "effective_n": 0
+}

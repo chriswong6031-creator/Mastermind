@@ -477,7 +477,13 @@ def _regime_brief() -> str:
     while the cycles/radar/confidence planes all disagreed with the label. The Brain must see the
     SAME enriched slice the judgment seats get (pm_conviction._full_regime_slice, W4) — the label
     plus its own uncertainty and the planes that contradict it. Degrades to the old one-liner on
-    any failure (P2: missing data coarsens, never inflates)."""
+    any failure (P2: missing data coarsens, never inflates).
+
+    E1.1 (W-E.1): now appends the market_view brief + label_vs_planes line from the E0.3 organ
+    AFTER the existing W4 frame read.  Compose, don't duplicate: the frame fields above are kept
+    as-is; the view block is an ADDITIVE tail section.  Absent view → section omitted (byte-identical
+    to current behavior when the organ hasn't been built yet).
+    """
     raw = _read_regime()
     if not raw:
         return ""
@@ -506,6 +512,18 @@ def _regime_brief() -> str:
             lines.append(f"risk state (dwell): {mrs['state']}, fragility {mrs.get('fragility')}")
         lines.append("Charter P1: never size off the label alone — cite at least one more plane "
                      "(cycles / risk state / contradicting legs) agreeing with any add.")
+        # E1.1 — market_view perception layer (ADDITIVE tail; absent view → section omitted).
+        # Read the market_view enrichment from _full_regime_slice (it's already computed there);
+        # do NOT re-read the artifact (W2: consume once per call chain).
+        _mv = fr.get("market_view") or {}
+        if _mv.get("label_vs_planes_line"):
+            lines.append("")
+            lines.append(f"PERCEPTION LAYER (market_view): {_mv['label_vs_planes_line']}")
+            _mvb = _mv.get("market_view_brief") or {}
+            if _mvb.get("posture_implication"):
+                lines.append(f"Posture implication: {_mvb['posture_implication']}")
+            if _mvb.get("wheres_the_risk"):
+                lines.append(f"Where the risk is: {_mvb['wheres_the_risk']}")
         return "\n".join(lines)
     except Exception:  # noqa: BLE001 — degrade to the legacy one-liner
         return label

@@ -1,0 +1,101 @@
+{
+  "_note": "Frozen rotation_tensor fixture for 2026-06-24 (start of defensive rotation episode). Values from rotation_spec.md \u00a71(e) worked example \u2014 REAL computed values off vendored yahoo closes through 07-01. The XLV-vs-SMH pair: +704 bps repricing over 6 sessions, ~117 bps/day. DEF/OFF bloc: +10.3 bps cumulative, 1.7 bps/day. These are REAL computed values from the spec worked example, not fabricated.",
+  "schema_version": 1,
+  "as_of": "2026-06-24",
+  "asof_by_plane": {
+    "yahoo": "2026-06-24",
+    "flows": "2026-06-20",
+    "breadth": "unavailable"
+  },
+  "freshness": {
+    "stale": false,
+    "max_age_td": 0,
+    "degraded_planes": [
+      "breadth(unavailable)"
+    ]
+  },
+  "confidence": 0.55,
+  "universe": [
+    "XLB",
+    "XLC",
+    "XLE",
+    "XLF",
+    "XLI",
+    "XLK",
+    "XLP",
+    "XLRE",
+    "XLU",
+    "XLV",
+    "XLY",
+    "SMH"
+  ],
+  "rs_velocity": {
+    "level_bps_per_day": {
+      "XLV": 20.1,
+      "XLU": 18.4,
+      "XLP": 12.3,
+      "XLK": -3.2,
+      "XLY": -5.1,
+      "SMH": null
+    },
+    "accel_bps_per_day": {
+      "XLV": 5.2,
+      "XLU": 4.8,
+      "XLP": 2.1,
+      "XLK": -6.1,
+      "XLY": -8.2
+    },
+    "top_pairs": [
+      {
+        "lead": "XLV",
+        "lag": "XLK",
+        "R_bps_day": 23.3,
+        "dR_bps_day": 11.3,
+        "accelerating": true,
+        "note": "Episode start 06-24 per rotation_spec worked example"
+      }
+    ]
+  },
+  "breadth_migration": {
+    "status": "unavailable",
+    "note": "Per-sector breadth gap \u2014 H5 handoff needed (build_plan.md \u00a75)"
+  },
+  "leadership_churn": {
+    "churn10": 0.25,
+    "rank_dist": 6,
+    "entered_top4": [
+      "XLV",
+      "XLU"
+    ],
+    "exited_top4": [
+      "XLK"
+    ],
+    "note": "Leadership transition starting 06-24 per incident post-mortem"
+  },
+  "flow": {
+    "flow_plane": "etf_so_delta",
+    "rvol_z": {
+      "XLV": 0.4,
+      "XLK": 0.2,
+      "SMH": null
+    },
+    "netflow_z": {
+      "XLV": 0.3,
+      "XLK": -0.1
+    },
+    "distribution_flag": {}
+  },
+  "headline_episode": {
+    "axis": "DEF_over_OFF",
+    "start": "2026-06-24",
+    "n_sessions": 1,
+    "magnitude_bps": 1.8,
+    "rate_bps_day": 1.8,
+    "percentile": 0.45,
+    "direction": "defensive",
+    "agreement": "1of5_blocks",
+    "note": "Episode start; requires 3 sessions durability before registering as sustained"
+  },
+  "episodes": [],
+  "advisory": true
+}

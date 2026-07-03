@@ -1,0 +1,43 @@
+{
+  "_note": "Frozen anticipation fixture for 2026-06-25 (incident window). SECTOR-TOP crossing CRITICAL by this date per the incident post-mortem: SMH osc roll 98.3\u219281.5, Peak/Topping pin, osc_slope=-16.5. Values are RECONSTRUCTED from judged_anticipation.md and incident post-mortem \u2014 not raw published data. brain/anticipation.py must produce >= ELEVATED on sector_top(tech/semis) when fed sector_cycles_incident.json.",
+  "schema_version": 1,
+  "as_of": "2026-06-25",
+  "built_at": "2026-06-25T22:45:00Z",
+  "advisory": true,
+  "cold_start": true,
+  "alarms": {
+    "sector_top": {
+      "level": "CRITICAL",
+      "sectors": [
+        "XLK",
+        "tech_semis"
+      ],
+      "triggers": [
+        "Peak/Topping phase",
+        "osc_slope=-16.5 (falling)",
+        "pos=80.8 (>=70)"
+      ],
+      "rs_diff_bps_day": 117.0,
+      "advisory": true,
+      "authority": "advisory",
+      "note": "Sector-top: XLK phase=Peak, osc_slope<0, pos>=70. CRITICAL per design."
+    },
+    "bubble_formation": {
+      "level": "WATCH",
+      "sectors": [
+        "XLK"
+      ],
+      "authority": "advisory",
+      "note": "Crowding leg not yet graded \u2014 advisory only (needs H4 manifest extension)"
+    },
+    "crash_risk": {
+      "level": "WATCH",
+      "triggers": [],
+      "authority": "advisory",
+      "note": "crash_risk WATCH on 06-25; escalates to ELEVATED by 06-26 per the incident"
+    }
+  },
+  "net_alarm_level": "CRITICAL",
+  "notch_eligible": false,
+  "effective_n": 0
+}

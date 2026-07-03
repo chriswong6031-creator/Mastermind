@@ -67,9 +67,17 @@ def _old_regime(**kw) -> dict:
     return base
 
 
-def _sig(regime: dict | None = None, top_sector: str = "XLK") -> str:
+def _null_view_reader() -> None:
+    """E1.3: view reader that returns None — no market_view available (offline tests)."""
+    return None
+
+
+def _sig(regime: dict | None = None, top_sector: str = "XLK",
+         view_reader=None) -> str:
     r = regime if regime is not None else _regime()
-    return gate.state_signature(r, top_sector)
+    # Default to the null view reader so tests stay fully offline (no filesystem reads).
+    vr = view_reader if view_reader is not None else _null_view_reader
+    return gate.state_signature(r, top_sector, view_reader=vr)
 
 
 def _null_reader(_asof=None) -> int:
@@ -114,11 +122,14 @@ class TestStateSignatureStability:
         hi  = _sig(_regime(macro_risk={"score": 0.9}))   # > 0.66 → hi
         assert lo != mid and mid != hi and lo != hi
 
-    def test_signature_format_has_seven_pipe_fields(self):
-        """The full 7-field format must be parseable (deploy-day change documented in module)."""
+    def test_signature_format_has_eight_pipe_fields(self):
+        """E1.3: the full 8-field format (view_reader=_null_view) is parseable.
+
+        The 8th field is the dissent token; with a null reader it is 'na' (stable).
+        """
         sig = _sig(_regime())
         parts = sig.split("|")
-        assert len(parts) == 7, f"Expected 7 fields, got {len(parts)}: {sig!r}"
+        assert len(parts) == 8, f"Expected 8 fields, got {len(parts)}: {sig!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -257,6 +268,14 @@ class TestStateSignatureMissingFieldsDegradeToNa:
         assert parts[1] == "hi"   # score 0.8 > 0.66
         assert parts[2] == "contracting"
         assert parts[3] == "XLE"
+
+    def test_missing_view_produces_na_dissent_token(self):
+        """E1.3: the 8th field (dissent) is 'na' when the view reader returns None (old behavior)."""
+        r = _old_regime()
+        sig = _sig(r)   # _sig injects _null_view_reader
+        parts = sig.split("|")
+        assert len(parts) == 8
+        assert parts[7] == "na", f"Expected 'na' for missing view, got {parts[7]!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -464,8 +483,8 @@ class TestA6Scenario:
                         contradicting=["growth_copper_gold"])
         r_crash = _regime(confidence=0.28, transition_state="WEAKENING",
                           contradicting=["growth_copper_gold", "growth_cyclical_defensive"])
-        sig_pre   = gate.state_signature(r_pre, "XLK")
-        sig_crash = gate.state_signature(r_crash, "XLK")
+        sig_pre   = gate.state_signature(r_pre, "XLK", view_reader=_null_view_reader)
+        sig_crash = gate.state_signature(r_crash, "XLK", view_reader=_null_view_reader)
         result = self._stable_run(sig_crash, sig_pre)
         assert result["run"] is True
         assert "state_change" in result["triggers"]
@@ -473,7 +492,153 @@ class TestA6Scenario:
     def test_crash_day_tripwire_also_fires_independently(self):
         """Even if the regime were somehow unchanged (same sig), the severity-2 tripwire
         must independently wake the rebuild — the gate is never blind on a crash day."""
-        sig = gate.state_signature(_regime(), "XLK")
+        sig = gate.state_signature(_regime(), "XLK", view_reader=_null_view_reader)
         result = self._stable_run(sig, sig, sev_reader=_sev2_reader)
         assert result["run"] is True
         assert "severity_tripwire" in result["triggers"]
+
+
+# ---------------------------------------------------------------------------
+# E1.3 — market-view dissent token (8th field of state_signature)
+# ---------------------------------------------------------------------------
+
+def _view_with_dissent(n: int) -> dict:
+    """Build a minimal market_view dict with ``n`` dissenting planes (for reader injection)."""
+    return {
+        "label_vs_planes": {
+            "conflict": n > 0,
+            "dissenting_planes": [f"plane_{i}" for i in range(n)],
+        }
+    }
+
+
+class TestE13DissentToken:
+    """E1.3: the 8th field of state_signature tracks VALIDATED dissenting plane count.
+
+    Contract:
+      * 0 dissenting planes → token '0'
+      * 1 dissenting plane  → token '1'
+      * 2 dissenting planes → token '2'
+      * 3+ dissenting planes → token '3p'
+      * missing/unreadable view → token 'na' (stable, no thrash)
+      * a new/flipped validated disagreement changes the token → state_change fires
+    """
+
+    def _view_reader(self, n: int):
+        """Return a view_reader closure that yields n dissenting planes."""
+        def _reader():
+            return _view_with_dissent(n)
+        return _reader
+
+    def _null_view_reader_fn(self):
+        def _reader():
+            return None
+        return _reader
+
+    def test_dissent_token_is_eighth_field(self):
+        r = _regime()
+        sig = _sig(r)   # _sig already injects _null_view_reader
+        parts = sig.split("|")
+        assert len(parts) == 8, f"Expected 8 fields, got {len(parts)}: {sig!r}"
+
+    def test_zero_dissenting_planes_token(self):
+        """0 dissenting planes → token '0'."""
+        r = _regime()
+        sig = gate.state_signature(r, "XLK", view_reader=self._view_reader(0))
+        assert sig.split("|")[7] == "0"
+
+    def test_one_dissenting_plane_token(self):
+        r = _regime()
+        sig = gate.state_signature(r, "XLK", view_reader=self._view_reader(1))
+        assert sig.split("|")[7] == "1"
+
+    def test_two_dissenting_planes_token(self):
+        r = _regime()
+        sig = gate.state_signature(r, "XLK", view_reader=self._view_reader(2))
+        assert sig.split("|")[7] == "2"
+
+    def test_three_plus_dissenting_planes_token(self):
+        """3+ dissenting planes (any count >= 3) → token '3p'."""
+        r = _regime()
+        for n in (3, 4, 5, 10):
+            sig = gate.state_signature(r, "XLK", view_reader=self._view_reader(n))
+            assert sig.split("|")[7] == "3p", f"n={n} should give '3p'"
+
+    def test_missing_view_produces_na_token(self):
+        """A missing/unreadable view (reader returns None) must produce 'na' — stable."""
+        r = _regime()
+        sig = gate.state_signature(r, "XLK", view_reader=lambda: None)
+        assert sig.split("|")[7] == "na"
+
+    def test_malformed_view_produces_na_token(self):
+        """A malformed view (missing label_vs_planes key) must produce 'na'."""
+        r = _regime()
+        sig = gate.state_signature(r, "XLK", view_reader=lambda: {"other": "stuff"})
+        assert sig.split("|")[7] == "na"
+
+    def test_reader_error_produces_na_token(self):
+        """A view reader that raises must return 'na' — never thrash the gate."""
+        def _bad_reader():
+            raise RuntimeError("disk unavailable")
+        r = _regime()
+        sig = gate.state_signature(r, "XLK", view_reader=_bad_reader)
+        assert sig.split("|")[7] == "na"
+
+    def test_stable_view_produces_stable_token(self):
+        """Same dissenting count on consecutive calls must produce the same token (no spurious wakes)."""
+        r = _regime()
+        vr = self._view_reader(2)
+        sig_a = gate.state_signature(r, "XLK", view_reader=vr)
+        sig_b = gate.state_signature(r, "XLK", view_reader=vr)
+        assert sig_a == sig_b
+
+    def test_new_dissent_wakes_rebuild(self):
+        """A flip from 0 to 1 validated dissenting plane changes the token → state_change fires.
+
+        This is the E1.3 contract: a new VALIDATED disagreement (or a flip) wakes a same-day
+        rebuild so the seats see the updated perception layer promptly.
+        """
+        r = _regime()
+        sig_agree = gate.state_signature(r, "XLK", view_reader=self._view_reader(0))
+        sig_dissent = gate.state_signature(r, "XLK", view_reader=self._view_reader(1))
+        assert sig_agree != sig_dissent, "0 to 1 dissenting planes must change the signature"
+        # should_run detects state_change
+        prev = {"state_sig": sig_agree, "asof": "2026-07-01"}
+        result = gate.should_run(sig_dissent, prev, asof="2026-07-01",
+                                 severity_reader=_null_reader)
+        assert result["run"] is True
+        assert "state_change" in result["triggers"]
+
+    def test_dissent_flip_from_2_to_3p_wakes_rebuild(self):
+        """A flip from 2 to 3+ dissenting planes also changes the token → rebuild fires."""
+        r = _regime()
+        sig_2 = gate.state_signature(r, "XLK", view_reader=self._view_reader(2))
+        sig_3 = gate.state_signature(r, "XLK", view_reader=self._view_reader(3))
+        assert sig_2 != sig_3
+
+    def test_stable_na_token_does_not_cause_rebuild_vs_na(self):
+        """Two consecutive calls with missing view both produce 'na' → no state_change.
+
+        A perception organ that is unbuilt must not cause spurious rebuilds — the 'na'
+        token is the stable 'view absent' sentinel.
+        """
+        r = _regime()
+        sig_na_a = gate.state_signature(r, "XLK", view_reader=lambda: None)
+        sig_na_b = gate.state_signature(r, "XLK", view_reader=lambda: None)
+        assert sig_na_a == sig_na_b
+        # carried (no trigger) when both are 'na'
+        prev = {"state_sig": sig_na_a, "asof": "2026-07-01"}
+        result = gate.should_run(sig_na_b, prev, asof="2026-07-01",
+                                 severity_reader=_null_reader)
+        assert result["run"] is False
+        assert result["carried"] is True
+
+    def test_deploy_day_note_one_extra_rebuild(self):
+        """Document: the first build after E1.3 ships sees the new 8-field signature vs the
+        old 7-field signature → exactly one extra rebuild fires, then subsequent runs carry.
+        """
+        old_sig = "Q1|mid|expanding|XLK|3|STABLE|none"   # old 7-field
+        r = _regime()
+        new_sig = gate.state_signature(r, "XLK", view_reader=lambda: None)  # 8-field
+        # They MUST differ (old 7-field vs new 8-field with 'na' appended)
+        assert new_sig != old_sig, "Deploy-day: new 8-field sig must differ from old 7-field sig"

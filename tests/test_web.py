@@ -21,6 +21,33 @@ def test_dashboard_serves_html():
     assert "MASTERMIND" in r.text
 
 
+def test_market_view_page_serves_html():
+    """The E1.2 mirror page (/market_view) is a standalone static page that fetches the artifact
+    client-side. Intent-only: assert it serves HTML with the render root, never a market state."""
+    client = _client()
+    r = client.get("/market_view")
+    assert r.status_code == 200
+    assert "text/html" in r.headers.get("content-type", "")
+    assert "mv-root" in r.text          # the client-side render target
+    assert "/api/market_view" in r.text  # fetches the artifact endpoint
+
+
+def test_api_market_view_serves_artifact_or_honest_stub():
+    """The E1.2 data endpoint serves data/market_view/latest.json read-only. Intent-only: either a
+    well-formed market_view.v1 artifact (schema + planes) OR an honest available:false stub — never a
+    500, and never a pinned market state."""
+    client = _client()
+    r = client.get("/api/market_view")
+    assert r.status_code in (200, 404)  # 404 = honest 'not built yet' stub
+    data = r.json()
+    if r.status_code == 200:
+        assert data.get("schema_version") == "market_view.v1"
+        assert isinstance(data.get("planes"), dict)
+        assert "label_vs_planes" in data
+    else:
+        assert data.get("available") is False
+
+
 def test_api_portfolio_schema():
     client = _client()
     r = client.get("/api/portfolio")

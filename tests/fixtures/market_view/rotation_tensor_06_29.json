@@ -1,0 +1,120 @@
+{
+  "_note": "Frozen rotation_tensor fixture for 2026-06-29 (episode well established). DEF rotation confirmed multi-session. R[XLV][SMH] positive, dR same-signed per \u00a74.2 assert. Values RECONSTRUCTED from rotation_spec.md \u00a71(e) worked example. The \u00a74 replay assert checks: top_pairs contains XLV-lead pair by 06-24, dR same-signed.",
+  "schema_version": 1,
+  "as_of": "2026-06-29",
+  "asof_by_plane": {
+    "yahoo": "2026-06-29",
+    "flows": "2026-06-25",
+    "breadth": "unavailable"
+  },
+  "freshness": {
+    "stale": false,
+    "max_age_td": 0,
+    "degraded_planes": [
+      "breadth(unavailable)",
+      "flows(4td)"
+    ]
+  },
+  "confidence": 0.62,
+  "universe": [
+    "XLB",
+    "XLC",
+    "XLE",
+    "XLF",
+    "XLI",
+    "XLK",
+    "XLP",
+    "XLRE",
+    "XLU",
+    "XLV",
+    "XLY",
+    "SMH"
+  ],
+  "rs_velocity": {
+    "level_bps_per_day": {
+      "XLV": 34.2,
+      "XLU": 28.1,
+      "XLP": 15.8,
+      "XLK": -6.3,
+      "XLY": -8.4,
+      "SMH": null
+    },
+    "accel_bps_per_day": {
+      "XLV": 9.4,
+      "XLU": 7.2,
+      "XLP": 3.1,
+      "XLK": -12.1,
+      "XLY": -9.6
+    },
+    "top_pairs": [
+      {
+        "lead": "XLV",
+        "lag": "XLK",
+        "R_bps_day": 34.2,
+        "dR_bps_day": 8.8,
+        "accelerating": true,
+        "note": "XLV outgaining XLK at 34.2 bps/day (5-session avg), still widening"
+      },
+      {
+        "lead": "XLU",
+        "lag": "XLK",
+        "R_bps_day": 28.1,
+        "dR_bps_day": 7.2,
+        "accelerating": true
+      }
+    ]
+  },
+  "breadth_migration": {
+    "status": "unavailable",
+    "note": "Per-sector breadth gap \u2014 H5 handoff needed"
+  },
+  "leadership_churn": {
+    "churn10": 0.5,
+    "rank_dist": 14,
+    "entered_top4": [
+      "XLV",
+      "XLU"
+    ],
+    "exited_top4": [
+      "XLK",
+      "XLY"
+    ]
+  },
+  "flow": {
+    "flow_plane": "etf_so_delta",
+    "rvol_z": {
+      "XLV": 0.9,
+      "XLK": 1.2,
+      "SMH": null
+    },
+    "netflow_z": {
+      "XLV": 1.2,
+      "XLK": -0.4
+    },
+    "distribution_flag": {
+      "XLK": true
+    }
+  },
+  "headline_episode": {
+    "axis": "DEF_over_OFF",
+    "start": "2026-06-24",
+    "n_sessions": 4,
+    "magnitude_bps": 6.8,
+    "rate_bps_day": 1.7,
+    "percentile": 0.78,
+    "direction": "defensive",
+    "agreement": "3of5_blocks"
+  },
+  "episodes": [
+    {
+      "axis": "XLV_over_XLK",
+      "start": "2026-06-24",
+      "n_sessions": 4,
+      "magnitude_bps": 480.0,
+      "rate_bps_day": 120.0,
+      "percentile": 0.85,
+      "direction": "defensive"
+    }
+  ],
+  "advisory": true
+}

@@ -1,0 +1,295 @@
+{
+  "meta": {
+    "asOf": "2026-07-02",
+    "n_sectors": 11,
+    "benchmark": "SPY"
+  },
+  "sectors": [
+    {
+      "ticker": "XLK",
+      "id": "xlk",
+      "kind": "sector",
+      "name": "Technology",
+      "now": {
+        "phase": "Peak",
+        "phaseLabel": "Topping",
+        "pos": 80.8,
+        "signal": "SELL",
+        "osc_slope": -18.4,
+        "action": "GET READY",
+        "above200d": true,
+        "rs_rank": 3,
+        "rs_63d": -0.014,
+        "rs_126d": 0.003,
+        "rs_above_trend": false,
+        "timing_state": "topping",
+        "dc_phase": "late",
+        "w_macd_up": false,
+        "t3_macd_up": false,
+        "_note": "XLK: Peak/Topping, osc_slope=-18.4, rs_rank=3 (falling), rs_63d=-1.4% (negative, rotating out); incident window 06-24..07-01"
+      }
+    },
+    {
+      "ticker": "XLC",
+      "id": "xlc",
+      "kind": "sector",
+      "name": "Communication Services",
+      "now": {
+        "phase": "Trough",
+        "phaseLabel": "Bottoming",
+        "pos": 0.8,
+        "signal": null,
+        "osc_slope": -19.1,
+        "action": "HIGH-RISK \u00b7 NIMBLE ONLY",
+        "above200d": false,
+        "rs_rank": 6,
+        "rs_63d": -0.005,
+        "rs_126d": 0.01
+      }
+    },
+    {
+      "ticker": "XLY",
+      "id": "xly",
+      "kind": "sector",
+      "name": "Consumer Discretionary",
+      "now": {
+        "phase": "Recovery",
+        "phaseLabel": "Prime entry",
+        "pos": 30.4,
+        "signal": null,
+        "osc_slope": -16.8,
+        "action": "HOLD",
+        "above200d": true,
+        "rs_rank": 6,
+        "rs_63d": -0.005,
+        "rs_126d": 0.01
+      }
+    },
+    {
+      "ticker": "XLF",
+      "id": "xlf",
+      "kind": "sector",
+      "name": "Financials",
+      "now": {
+        "phase": "Expansion",
+        "phaseLabel": "Trending",
+        "pos": 54.5,
+        "signal": null,
+        "osc_slope": 20.6,
+        "action": "HOLD",
+        "above200d": true,
+        "rs_rank": 6,
+        "rs_63d": -0.005,
+        "rs_126d": 0.01
+      }
+    },
+    {
+      "ticker": "XLI",
+      "id": "xli",
+      "kind": "sector",
+      "name": "Industrials",
+      "now": {
+        "phase": "Expansion",
+        "phaseLabel": "Trending",
+        "pos": 53.4,
+        "signal": null,
+        "osc_slope": 19.0,
+        "action": "TAKE PROFITS",
+        "above200d": true,
+        "rs_rank": 6,
+        "rs_63d": -0.005,
+        "rs_126d": 0.01
+      }
+    },
+    {
+      "ticker": "XLB",
+      "id": "xlb",
+      "kind": "sector",
+      "name": "Materials",
+      "now": {
+        "phase": "Downturn",
+        "phaseLabel": "Rolling over",
+        "pos": 48.4,
+        "signal": null,
+        "osc_slope": -2.4,
+        "action": "BUY SETUP",
+        "above200d": true,
+        "rs_rank": 6,
+        "rs_63d": -0.005,
+        "rs_126d": 0.01
+      }
+    },
+    {
+      "ticker": "XLE",
+      "id": "xle",
+      "kind": "sector",
+      "name": "Energy",
+      "now": {
+        "phase": "Trough",
+        "phaseLabel": "Bottoming",
+        "pos": 30.2,
+        "signal": null,
+        "osc_slope": -34.1,
+        "action": "AVOID",
+        "above200d": true,
+        "rs_rank": 6,
+        "rs_63d": -0.005,
+        "rs_126d": 0.01
+      }
+    },
+    {
+      "ticker": "XLV",
+      "id": "xlv",
+      "kind": "sector",
+      "name": "Health Care",
+      "now": {
+        "phase": "Expansion",
+        "phaseLabel": "Trending",
+        "pos": 61.7,
+        "signal": null,
+        "osc_slope": 19.3,
+        "action": "BUY SETUP",
+        "above200d": true,
+        "rs_rank": 2,
+        "rs_63d": 0.08,
+        "rs_126d": 0.052,
+        "rs_above_trend": true,
+        "timing_state": "expanding",
+        "dc_phase": "early",
+        "w_macd_up": true,
+        "t3_macd_up": true,
+        "_note": "XLV: Expansion/Trending, rs_rank=2 (rising), rs_63d=+8.0% (defense rotating in); incident window 06-24..07-01"
+      }
+    },
+    {
+      "ticker": "XLP",
+      "id": "xlp",
+      "kind": "sector",
+      "name": "Consumer Staples",
+      "now": {
+        "phase": "Downturn",
+        "phaseLabel": "Rolling over",
+        "pos": 40.9,
+        "signal": null,
+        "osc_slope": -7.7,
+        "action": "SELL SETUP",
+        "above200d": true,
+        "rs_rank": 4,
+        "rs_63d": 0.031,
+        "rs_126d": 0.015,
+        "rs_above_trend": true,
+        "timing_state": "stable"
+      }
+    },
+    {
+      "ticker": "XLU",
+      "id": "xlu",
+      "kind": "sector",
+      "name": "Utilities",
+      "now": {
+        "phase": "Trough",
+        "phaseLabel": "Bottoming",
+        "pos": 16.8,
+        "signal": "BUY",
+        "osc_slope": 11.7,
+        "action": "GET READY",
+        "above200d": true,
+        "rs_rank": 1,
+        "rs_63d": 0.062,
+        "rs_126d": 0.045,
+        "rs_above_trend": true,
+        "timing_state": "expanding",
+        "dc_phase": "early",
+        "w_macd_up": true,
+        "t3_macd_up": false,
+        "_note": "XLU: Trough (entry_favored), rs_rank=1 (top defensive)"
+      }
+    },
+    {
+      "ticker": "XLRE",
+      "id": "xlre",
+      "kind": "sector",
+      "name": "Real Estate",
+      "now": {
+        "phase": "Downturn",
+        "phaseLabel": "Rolling over",
+        "pos": 81.7,
+        "signal": "SELL",
+        "osc_slope": -5.7,
+        "action": "SELL SETUP",
+        "above200d": true,
+        "rs_rank": 6,
+        "rs_63d": -0.005,
+        "rs_126d": 0.01
+      }
+    }
+  ],
+  "baskets": [
+    {
+      "ticker": "SMH",
+      "id": "b-ai_infra",
+      "now": {
+        "phase": "Peak",
+        "phaseLabel": "Topping",
+        "pos": 81.5,
+        "signal": "SELL",
+        "osc_slope": -16.5,
+        "action": "GET READY",
+        "above200d": true
+      }
+    },
+    {
+      "ticker": "QQQ",
+      "id": "b-mag7",
+      "now": {
+        "phase": "Trough",
+        "phaseLabel": "Bottoming",
+        "pos": 29.9,
+        "signal": null,
+        "osc_slope": -36.6,
+        "action": "HIGH-RISK \u00b7 NIMBLE ONLY",
+        "above200d": true
+      }
+    },
+    {
+      "ticker": "SMH",
+      "id": "b-ai_semiconductors",
+      "now": {
+        "phase": "Peak",
+        "phaseLabel": "Topping",
+        "pos": 82.9,
+        "signal": "SELL",
+        "osc_slope": -16.3,
+        "action": "GET READY",
+        "above200d": true
+      }
+    },
+    {
+      "ticker": "SMH",
+      "id": "b-memory_storage",
+      "now": {
+        "phase": "Peak",
+        "phaseLabel": "Topping",
+        "pos": 92.0,
+        "signal": "SELL",
+        "osc_slope": -6.2,
+        "action": "GET READY",
+        "above200d": true
+      }
+    },
+    {
+      "ticker": "SMH",
+      "id": "b-semicap_equipment",
+      "now": {
+        "phase": "Peak",
+        "phaseLabel": "Topping",
+        "pos": 98.3,
+        "signal": null,
+        "osc_slope": 8.6,
+        "action": "TAKE PROFITS",
+        "above200d": true
+      }
+    }
+  ],
+  "_note": "Enriched sector_cycles fixture for market_view organ tests. RS fields (rs_rank/rs_63d/rs_126d/timing_state) are RECONSTRUCTED from incident post-mortem and rotation_spec.md worked example \u2014 not raw published data. Phase/pos/osc_slope/above200d fields are REAL (from incident fixture). See rotation_spec.md \u00a71(a) worked example for the 06-24..07-01 RS math."
+}

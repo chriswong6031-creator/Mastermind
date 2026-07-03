@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 
 from brain import client
 
@@ -48,15 +49,103 @@ def enabled() -> bool:
 _DEFENSIVE_BENCHMARK_BASKET: tuple[str, ...] = ("XLU", "XLV", "XLF", "XLP")
 
 
+def _read_market_view() -> dict | None:
+    """Read data/market_view/latest.json, returning None on any miss/error.
+
+    E1.1 — the view artifact is the single source of truth for the perception enrichment the
+    seats receive.  Lazy: returns None while the organ is unbuilt (W-E.0 is a prior wave;
+    graceful degrade is the invariant).  Never raises.
+    """
+    try:
+        p = Path(__file__).resolve().parent.parent / "data" / "market_view" / "latest.json"
+        if p.exists():
+            d = json.loads(p.read_text())
+            return d if isinstance(d, dict) else None
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _market_view_enrichment(view: dict | None) -> dict:
+    """Extract the perception enrichment the seats need from the market_view artifact.
+
+    E1.1 — compose the view's brief + PlaneRecord summaries + label_vs_planes line into a
+    compact, prompt-ready sub-dict.  Returns {} when the view is absent (degrade silently;
+    the seats already render W4's enriched frame read — this is ADDITIVE).
+
+    Returned keys:
+      market_view_brief     — the deterministic brief dict {what_changed, whats_rotating,
+                              wheres_the_risk, posture_implication}
+      plane_summaries       — list of {name, direction, status, reading} for every
+                              directional plane (advisory + validated, non-absent), compact
+                              for prompt injection (no raw/freshness bulk)
+      label_vs_planes_line  — a human-readable sentence for the prompt ("3 validated planes
+                              dissent from the risk_on label — no semis seed" pattern)
+    """
+    if not isinstance(view, dict):
+        return {}
+    brief = view.get("brief")
+    lvp = view.get("label_vs_planes") or {}
+    planes = view.get("planes") or {}
+
+    # compact plane summaries — include every plane with a determinable direction
+    summaries = []
+    for name, rec in planes.items():
+        if not isinstance(rec, dict):
+            continue
+        d = rec.get("direction")
+        if d is None:
+            continue
+        summaries.append({
+            "name": name,
+            "direction": d,
+            "status": rec.get("status"),
+            "reading": str(rec.get("reading") or "")[:120],
+        })
+
+    # label_vs_planes human-readable line
+    conflict = lvp.get("conflict")
+    dissenting = lvp.get("dissenting_planes") or []
+    n_dissent = len(dissenting)
+    label_dir = lvp.get("label_direction")
+    consensus = lvp.get("plane_consensus_direction")
+    if conflict and n_dissent:
+        label_vs_planes_line = (
+            f"{n_dissent} validated plane{'s' if n_dissent != 1 else ''} dissent "
+            f"from the {label_dir} label (consensus: {consensus}) — "
+            f"{', '.join(dissenting)}"
+        )
+    elif conflict:
+        label_vs_planes_line = (
+            f"label-vs-planes conflict: label {label_dir} vs plane consensus {consensus}"
+        )
+    else:
+        label_vs_planes_line = "Label and validated planes agree — no conflict."
+
+    out: dict = {}
+    if isinstance(brief, dict) and any(brief.values()):
+        out["market_view_brief"] = {k: str(v or "")[:400]
+                                    for k, v in brief.items() if v is not None}
+    if summaries:
+        out["plane_summaries"] = summaries
+    out["label_vs_planes_line"] = label_vs_planes_line
+    return out
+
+
 def _full_regime_slice(regime: dict | None) -> dict:
-    """The FULL regime read the seats receive (W4 prompt edit 3a).
+    """The FULL regime read the seats receive (W4 prompt edit 3a + E1.1 view enrichment).
 
     Upgrades from the confidence-blind 3-field lens_row to the enriched regime_frame.frame()
     (confidence / transition_state / contradicting / flip_margin / flag_confidence_decay) PLUS the
     dwell risk-state. Best-effort layering: start from whatever `regime` dict the caller passed
     (keeps today's fields), overlay frame() where it has richer values, then attach the cycles()
     summary + the dwell risk state. Any failure degrades to the plain 3-field slice — the invariant
-    holds (missing data COARSENS the read, never inflates it)."""
+    holds (missing data COARSENS the read, never inflates it).
+
+    E1.1 (W-E.1): EXTENDS (does not duplicate) with the market_view brief + PlaneRecord summaries
+    + label_vs_planes line from data/market_view/latest.json.  Lazy — missing view degrades to
+    current W4 behavior; the organ was not yet built when the W4 reads were established.
+    """
     reg = {k: (regime or {}).get(k) for k in
            ("quad", "quad_name", "growth_score", "inflation_score", "liquidity_overlay",
             "cycle_tag", "sector_rs_top")}
@@ -90,6 +179,15 @@ def _full_regime_slice(regime: dict | None) -> dict:
                             or None, regime, state_saver=lambda rec: None)
         reg["risk_state"] = {k: rs.get(k) for k in ("state", "fragility", "gross_cap", "allow_adds")}
     except Exception:  # noqa: BLE001
+        pass
+    # E1.1 — market_view enrichment: brief + PlaneRecord summaries + label_vs_planes line.
+    # Lazy: missing/unbuilt view degrades to {} so the W4 slice is byte-identical in that case.
+    try:
+        mv = _read_market_view()
+        enrichment = _market_view_enrichment(mv)
+        if enrichment:
+            reg["market_view"] = enrichment
+    except Exception:  # noqa: BLE001 — additive; never break the seat
         pass
     return reg
 
@@ -259,6 +357,29 @@ def _build_prompt(payload: dict, directive: str | None = None) -> str:
         lines += [f"Macro Risk Officer (dwell) state: {str(_rs.get('state')).upper()} "
                   f"(fragility {_rs.get('fragility')}; gross cap {_rs.get('gross_cap')}; "
                   f"adds {'BLOCKED' if _rs.get('allow_adds') is False else 'allowed'}).", ""]
+    # E1.1 — market_view perception enrichment (ADDITIVE; absent view degrades silently).
+    # The ad-hoc W4 regime slices above are NOT removed — this section EXTENDS them with the
+    # validated-plane disagreement layer from the E0.3 organ.  Degrade = section omitted.
+    _mv = reg.get("market_view") or {}
+    if _mv.get("label_vs_planes_line"):
+        lines += ["## Perception layer (market_view — validated-plane read)"]
+        lines += [f"Plane disagreement: {_mv['label_vs_planes_line']}"]
+        _mvb = _mv.get("market_view_brief") or {}
+        if _mvb.get("wheres_the_risk"):
+            lines += [f"Where the risk is: {_mvb['wheres_the_risk']}"]
+        if _mvb.get("whats_rotating"):
+            lines += [f"Rotating: {_mvb['whats_rotating']}"]
+        if _mvb.get("posture_implication"):
+            lines += [f"Posture implication: {_mvb['posture_implication']}"]
+        _ps = _mv.get("plane_summaries") or []
+        if _ps:
+            risk_off_planes = [p for p in _ps if p.get("direction") == "risk_off"]
+            if risk_off_planes:
+                lines += ["Risk-off planes: " + "; ".join(
+                    f"{p['name']}({'V' if p.get('status') == 'validated' else 'A'}): {p['reading']}"
+                    for p in risk_off_planes[:6]
+                )]
+        lines += [""]
     lines += ["BENCHMARK YOU MUST BEAT (risk-off / weakening regimes): "
               f"max(SPY, the defensive basket {', '.join(payload.get('defensive_benchmark') or [])}). "
               "That static defensive book is currently beating every Brain — a book that holds "

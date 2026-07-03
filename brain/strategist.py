@@ -145,6 +145,17 @@ def _strategist_input(regime: dict | None, asof: str) -> dict:
     vol_sentiment = {k: vs.get(k) for k in
                      ("vix", "vix_pctile", "term_structure", "put_call", "sentiment_en")}
 
+    # E1.1 — market_view perception enrichment (ADDITIVE; absent view degrades to {} key).
+    # Compose from the market_view artifact — do NOT re-read regime/cycles sub-blocks here
+    # (already covered by the frame() overlay above, following the W2 one-reader rule).
+    market_view_enrichment: dict = {}
+    try:
+        from brain.pm_conviction import _read_market_view, _market_view_enrichment
+        mv = _read_market_view()
+        market_view_enrichment = _market_view_enrichment(mv)
+    except Exception:  # noqa: BLE001 — additive; never break the seat
+        pass
+
     return {
         "asof": str(asof)[:10],
         "regime": reg,
@@ -153,6 +164,9 @@ def _strategist_input(regime: dict | None, asof: str) -> dict:
         "emergence": emergence,
         "macro_narrative": macro_narrative,
         "vol_sentiment": vol_sentiment,
+        # market_view is absent ({}) when the organ is unbuilt — the strategist still
+        # runs without it; the key is always present so the payload schema is stable.
+        "market_view": market_view_enrichment,
     }
 
 

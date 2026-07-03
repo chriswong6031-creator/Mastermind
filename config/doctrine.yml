@@ -290,6 +290,23 @@ liquidity_quality:
 cycles:
   stale_after_trading_days: 5   # (unverified-prior) meta.asOf older than this -> cycles() == {}
 
+# ---- THE market view (brain/market_view.py — W-E.0 task E0.3) ----
+# The one deterministic, freshness+confidence-stamped perception view (charter P7), assembled from
+# the planes ALREADY embedded in the regime file the bot reads every build (risk_radar, mtf_signals,
+# froth_fragility, risk_state.gross_factor, turning_point, vol_shock, cross_asset, market_drivers,
+# dislocation, macro_risk) + regime_frame.cycles() + the W-I planes + the E0.1/E0.2 organs + null
+# stubs for the H4-handoff planes. It sizes NOTHING (the wave contract is zero behaviour change); the
+# posture decider (E2.x) is a later wave behind Fable sign-off. The disagreement layer is the point:
+# net_posture_tilt is built ONLY from VALIDATED, FRESH planes (risk_radar / mtf_signals / cycles — the
+# three with on-disk forward grading); advisory/absent/stale planes annotate and shrink but can NEVER
+# sign the tilt or lower disagreement (charter P2 — degrade-never-fabricate). Every plane's freshness
+# is computed from THAT block's OWN asof, never the file mtime.
+market_view:
+  stale_after_trading_days: 5   # (unverified-prior) a plane whose OWN asof is older than this many
+                                #   NYSE sessions is stale:true -> excluded from the validated tilt
+  coverage_floor:          0.30 # (unverified-prior) below this present-plane fraction the view is
+                                #   "degraded" (may only refuse to loosen, never tighten offense)
+
 # ---- us_standouts board gate (P-NEW-2) ----
 # The dashboard's standout BUY board publishes its OWN Phase-0 gate verdict, `gate_go`. When it is
 # FALSE the board is explicitly "a confluence read, NOT a standalone alpha" (validation_status
@@ -421,3 +438,101 @@ rotation_evidence:
   liquidity_stress_labels: [stress-expansion, neutral-hollow]   # (unverified-prior)
   # which risk_radar states count as a caution agreement (risk_on / neutral do NOT):
   radar_caution_states: [caution, risk_off, risk-off]           # (unverified-prior)
+
+# ---- ROTATION TENSOR (brain/rotation_tensor.py — W-E.0 E0.1) ----
+# Perception organ: 12×12 pairwise RS-velocity matrix (R/dR in bps/day) + breadth-migration +
+# leadership churn + flow proxies + episode detection / rarity percentile.
+# Ships advisory:true (display-only, budget-term display-only) until §3 walk-forward gate passes.
+# Universe: 11 GICS SPDRs {XLB XLC XLE XLF XLI XLK XLP XLRE XLU XLV XLY} + SMH (semis bloc).
+# All constants (unverified-prior) — re-calibrate with the §3 walk-forward and W5 marks ledger.
+rotation_tensor:
+  # Pairwise RS-velocity block (a)
+  rsm_window:          20   # (unverified-prior) 20d relative-momentum window (= distribution_tells)
+  vel_window:           5   # (unverified-prior) 5d acceleration window
+  min_history_sessions: 260 # (unverified-prior) minimum sessions before the block runs
+  top_pairs_n:          6   # (unverified-prior) top-N accelerating pairs published to top_pairs
+
+  # Episode detection (e) — deterministic hysteresis
+  episode_min_sessions: 3   # (unverified-prior) consecutive same-sign vel sessions to open an episode
+  episode_history_start: "2015-01-01"  # (unverified-prior) calibration history start date
+  episode_pctile_advisory: 0.70  # (unverified-prior) advisory note threshold (no sizing gate here)
+
+  # Bloc definitions for the headline DEF/OFF axis
+  defensive_bloc: [XLV, XLU, XLP]   # (unverified-prior) mirrors rotation_spec.md §1e
+  offensive_bloc: [SMH, XLK, XLY]   # (unverified-prior)
+
+  # Flow proxies (d)
+  rvol_sma:            20   # (unverified-prior) SMA window for relative-volume ratio
+  flows_max_age_td:     7   # (unverified-prior) calendar days before flows block degrades
+
+  # Leadership churn (c)
+  churn_k:              4   # (unverified-prior) top-K sectors in the Jaccard churn index
+  churn_lookback:      10   # (unverified-prior) session lookback for rank-displacement
+
+  # Validation battery: pre-registered falsifiers (P3 — rotation_spec.md §4)
+  # AUC > 0.55 AND hit-rate lift >= 8pp over base AND survives risk-off subsample (SPY<200d).
+  # advisory:true until BOTH gates pass; failed gate = budget-term stays display-only forever.
+  # These are RECORD-KEEPING constants, not runtime gates (gate runs in the walk-forward harness).
+  validation_auc_gate:       0.55   # (unverified-prior) minimum AUC for episode→spread-persistence
+  validation_hitrate_lift:   0.08   # (unverified-prior) minimum pp lift over unconditional base
+  validation_fires_max_frac: 0.10   # (unverified-prior) must fire on <10% of all sessions
+
+# ---- ANTICIPATION BATTERY (brain/anticipation.py — W-E.0 task E0.2, the look-ahead perception organ) ----
+# Three graded alarms (WATCH / ELEVATED / CRITICAL) composed from VENDORED planes only in v1:
+#   SECTOR-TOP        (per sector): distribution aggregate (distribution_tells 3D/wk MACD + crowding)
+#                     + sector_cycles Topping/Peak phase + RS deceleration; carries the def/off rs_diff
+#                     magnitude. Advisory forever-until-gated; barred from severity.
+#   BUBBLE-FORMATION  (per sector): crowding pctile + parabolic share + froth_fragility read.
+#                     cold_start=true, ADVISORY FOREVER until a forward-graded crowding artifact exists.
+#   CRASH-RISK        (market): vol_shock structure + READ-ONLY dealer-gamma classification (derisk owns
+#                     gex for severity) + credit/liquidity_quality label + auction stress if vendored.
+#                     cold_start=true; the severity notch arms only after the E1.4 AUC>0.55 gate.
+#
+# AUTHORITY (charter P3): every alarm carries status/cold_start/notch_eligible. notch_eligible is
+# HARD-RESTRICTED to forward-graded legs — NONE exist in v1 — so it is False on every alarm this wave
+# (the severity-notch seam ships DARK). Nothing here signs a posture tilt or releases a cap; it is a
+# read-only perception artifact (data/anticipation/<asof>.json) + PM-payload enrichment.
+#
+# INVARIANT: missing/stale/thin data COARSENS or DROPS a leg — never fabricates a level, never raises
+# authority, never flips notch_eligible True. All constants heuristic priors — W5 ledger re-calibrates.
+anticipation:
+  # SECTOR-TOP legs
+  stop_osc_slope_max:  -5.0    # (unverified-prior) sector_cycles osc_slope <= this (rolling over) = a topping leg
+  stop_pos_min:        70.0    # (unverified-prior) cycle position >= this (extended into the top) = a topping leg
+  stop_crowd_pctile:   0.90    # (unverified-prior) sector-ETF crowding percentile >= this = crowded
+  stop_rs_decel_min:   0.0     # (unverified-prior) rs_63d - rs_126d < this (RS decelerating) = a decel leg
+  stop_elevated_legs:  2       # (unverified-prior) >= this many topping legs -> ELEVATED
+  stop_critical_legs:  3       # (unverified-prior) >= this many topping legs (or 2 + a Topping/SELL phase) -> CRITICAL
+  # BUBBLE-FORMATION legs
+  bub_crowd_pctile:    0.90    # (unverified-prior) crowding percentile floor for a bubble
+  bub_parabolic_pctile: 0.97   # (unverified-prior) crowding percentile floor for the parabolic leg
+  # CRASH-RISK legs
+  crash_vol_elevated:  50.0    # (unverified-prior) vol_shock score >= this -> an elevated vol leg
+  crash_vol_critical:  65.0    # (unverified-prior) vol_shock score >= this -> a critical vol leg (early CRITICAL)
+  crash_gamma_flip_pct: 0.0    # (unverified-prior) spot_vs_flip_pct <= this (below the gamma flip) counts
+  # which liquidity_quality labels count as a crash-risk stress leg (benign/unknown do NOT):
+  crash_liquidity_stress_labels: [stress-expansion, neutral-hollow, contracting]   # (unverified-prior)
+
+# ---- PERCEPTION VALIDATION HARNESS (scripts/validate_perception.py — W-E.1 task E1.4) ----
+# The pre-registered walk-forward battery (charter P3, build-plan §3). Runs on-demand (NOT in the
+# daily loop) and writes research/eyes/validation_runs/<object>_<date>.md with an HONEST pass/fail
+# verdict per object. These verdicts DECIDE WHAT E2/E3 MAY ARM — the harness WIRES NOTHING.
+#
+# HONEST COLD-START (the nowcast precedent, P3): the CRASH-RISK alarm and the label_vs_planes
+# disagreement plane depend on HISTORICAL regime blocks (drawdown_prob, vol_shock, gamma, the label)
+# that DO NOT EXIST over the walk-forward window — only price parquets and a 4-row live risk_radar
+# forward-log do. So those two jobs are UNCOMPUTABLE with vendored history: the harness reports them
+# FAIL/cold_start (ship ADVISORY, seam stays dark) and states exactly which vendored series would make
+# them computable. Only the rotation_tensor composite is fully computable from the price parquets.
+perception_validation:
+  fwd_sessions:          5      # (unverified-prior) forward horizon for max-drawdown (SPY 5d fwd)
+  drawdown_bps_min:      200    # (unverified-prior) label a fwd 5d SPY max-drawdown "event" at <= -2%
+  benchmark:             SPY    # (unverified-prior) the drawdown benchmark
+  # rotation_tensor composite: a DEFENSIVE headline episode with dR confirming (same sign) at
+  # percentile >= this (the tensor's percentile = fraction of same-dir sessions with a SMALLER |rate|,
+  # so >= 0.95 is the rarest 5% — build-plan §3's "percentile<5%" extreme rotation).
+  episode_extreme_pctile: 0.95  # (unverified-prior) defensive-episode rarity trigger
+  auc_gate:              0.55   # (unverified-prior) AUC(signal, fwd-drawdown-event) must exceed
+  fires_max_frac:        0.10   # (unverified-prior) signal must fire on < this fraction of all days
+  walk_start_full:       "2011-01-01"  # (unverified-prior) preferred window start (parquets allow)
+  walk_start_fallback:   "2015-01-01"  # (unverified-prior) fallback when history is short

@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MASTERMIND — Market View</title>
+
+<!-- No-flash theme init — MUST be first, before stylesheets (mirrors index.html). -->
+<script>
+try {
+  document.documentElement.setAttribute('data-theme', localStorage.getItem('theme') || 'dark');
+  document.documentElement.setAttribute('data-lang', localStorage.getItem('lang') || 'en');
+} catch(e) {}
+</script>
+
+<link rel="stylesheet" href="/theme.css">
+
+<style>
+* { box-sizing: border-box; }
+
+body.page-mv {
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 Inter, -apple-system, "Segoe UI", Roboto, Helvetica, sans-serif;
+  margin: 0;
+  padding: 18px;
+}
+@media (min-width: 1100px) {
+  body.page-mv { padding: 26px max(40px, calc((100vw - 1280px) / 2)); }
+}
+
+body.page-mv a { text-decoration: none; color: var(--link); }
+
+.mv-head { display: flex; align-items: baseline; justify-content: space-between;
+  gap: 14px; flex-wrap: wrap; margin: 0 0 18px; }
+.mv-head h1 { font-size: 19px; margin: 0; letter-spacing: .01em; }
+.mv-head .sub { color: var(--muted); font-size: 12px; }
+
+body.page-mv h2 {
+  font-size: 11px; margin: 0 0 12px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .08em; font-weight: 700;
+  padding-bottom: 8px; border-bottom: 1px solid var(--line);
+}
+
+.panel {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 14px; padding: 16px 18px; margin: 0 0 16px;
+}
+
+/* ── label-vs-planes banner ─────────────────────────────────────────────── */
+.banner { border-radius: 12px; padding: 14px 16px; margin: 0 0 16px;
+  border: 1px solid var(--line); background: var(--panel2); }
+.banner.conflict {
+  --c: var(--act);
+  border-color: color-mix(in srgb, var(--c) 45%, var(--line));
+  background: color-mix(in srgb, var(--c) 10%, var(--panel));
+}
+.banner.agree { --c: var(--ok);
+  border-color: color-mix(in srgb, var(--c) 32%, var(--line));
+  background: color-mix(in srgb, var(--c) 7%, var(--panel)); }
+.banner .bx-title { font-weight: 700; font-size: 14px; margin: 0 0 4px;
+  color: color-mix(in srgb, var(--c, var(--muted)) 82%, var(--text)); }
+.banner .bx-detail { font-size: 13px; color: var(--text); }
+.banner .bx-detail b { color: color-mix(in srgb, var(--c, var(--muted)) 82%, var(--text)); }
+
+/* ── direction / status pills ────────────────────────────────────────────── */
+.pill { display: inline-block; padding: 2px 9px; border-radius: 999px;
+  font-size: 11px; font-weight: 700; letter-spacing: .02em; line-height: 1.5;
+  border: 1px solid color-mix(in srgb, var(--c, var(--muted)) 30%, transparent);
+  background: color-mix(in srgb, var(--c, var(--muted)) 15%, var(--panel));
+  color: color-mix(in srgb, var(--c, var(--muted)) 82%, var(--text)); }
+.pill.risk_off { --c: var(--act); }
+.pill.risk_on  { --c: var(--ok); }
+.pill.neutral  { --c: var(--muted); }
+.pill.none     { --c: var(--muted); opacity: .6; }
+.pill.validated { --c: var(--info); }
+.pill.advisory  { --c: var(--muted); }
+.pill.stale     { --c: var(--warn); }
+
+/* ── planes table ────────────────────────────────────────────────────────── */
+table.mv-tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.mv-tbl th { text-align: left; color: var(--muted); font-weight: 600;
+  font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+  padding: 6px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+table.mv-tbl td { padding: 8px 10px; border-bottom: 1px solid var(--line);
+  vertical-align: top; }
+table.mv-tbl tr:last-child td { border-bottom: none; }
+table.mv-tbl tr.absent td { opacity: .5; }
+.mv-name { font-weight: 600; white-space: nowrap; }
+.mv-name .src { display: block; color: var(--muted); font-size: 11px; font-weight: 400; }
+.mv-reading { color: var(--text); max-width: 520px; }
+.mv-reading.muted { color: var(--muted); font-style: italic; }
+.mv-fresh { white-space: nowrap; color: var(--muted); font-size: 12px; }
+.num { font-variant-numeric: tabular-nums; }
+
+/* ── rotation pairs ──────────────────────────────────────────────────────── */
+.pairs { display: grid; gap: 8px; grid-template-columns: 1fr; }
+@media (min-width: 640px) { .pairs { grid-template-columns: 1fr 1fr; } }
+.pair { background: var(--panel2); border: 1px solid var(--line);
+  border-radius: 10px; padding: 9px 12px; font-size: 13px; }
+.pair .lead { font-weight: 700; }
+.pair .arrow { color: var(--muted); margin: 0 5px; }
+.pair .metric { color: var(--muted); font-size: 12px; margin-top: 3px;
+  font-variant-numeric: tabular-nums; }
+.pair.accel { border-color: color-mix(in srgb, var(--warn) 40%, var(--line)); }
+
+.brief-row { margin: 0 0 12px; }
+.brief-row:last-child { margin-bottom: 0; }
+.brief-row .k { color: var(--muted); font-size: 11px; text-transform: uppercase;
+  letter-spacing: .05em; font-weight: 700; margin: 0 0 3px; }
+.brief-row .v { color: var(--text); font-size: 13px; }
+
+.tilt-strip { display: flex; gap: 18px; flex-wrap: wrap; margin: 0 0 4px; }
+.tilt-strip .kv { font-size: 13px; }
+.tilt-strip .kv .k { color: var(--muted); }
+.tilt-strip .kv .v { font-weight: 700; }
+
+.msg { color: var(--muted); padding: 30px 0; text-align: center; }
+.footnote { color: var(--muted); font-size: 11px; margin-top: 10px; }
+</style>
+</head>
+<body class="page-mv">
+
+<div class="mv-head">
+  <div>
+    <h1>Market View <span class="pill validated" style="vertical-align:middle">PERCEPTION</span></h1>
+    <div class="sub" id="mv-sub">loading the one view…</div>
+  </div>
+  <div class="sub"><a href="/">&larr; dashboard</a></div>
+</div>
+
+<div id="mv-root">
+  <div class="msg">Loading market_view.v1 artifact…</div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var root = document.getElementById("mv-root");
+  var sub = document.getElementById("mv-sub");
+
+  function esc(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  function fmtNum(v, digits) {
+    if (v === null || v === undefined || v === "") return "—";
+    var n = Number(v);
+    if (!isFinite(n)) return esc(v);
+    return n.toFixed(digits == null ? 3 : digits);
+  }
+
+  function dirPill(d) {
+    var cls = (d === "risk_off" || d === "risk_on" || d === "neutral") ? d : "none";
+    return '<span class="pill ' + cls + '">' + esc(d || "—") + "</span>";
+  }
+
+  function statusPill(rec) {
+    var stale = rec.freshness && rec.freshness.stale;
+    var present = !(rec.raw && rec.raw.present === false);
+    if (!present) return '<span class="pill none">absent</span>';
+    var s = rec.status || "advisory";
+    var html = '<span class="pill ' + esc(s) + '">' + esc(s) + "</span>";
+    if (stale) html += ' <span class="pill stale">stale</span>';
+    return html;
+  }
+
+  function freshCell(rec) {
+    var f = rec.freshness || {};
+    if (f.asof == null) return '<span class="mv-fresh">—</span>';
+    var age = (f.age_sessions == null) ? "?" : f.age_sessions;
+    return '<span class="mv-fresh">' + esc(f.asof) + " · " + esc(age) + "s</span>";
+  }
+
+  // ── label-vs-planes banner ────────────────────────────────────────────────
+  function renderBanner(view) {
+    var lvp = view.label_vs_planes || {};
+    var conflict = !!lvp.conflict;
+    var floor = !!view.posture_floor_defense;
+    var cls = conflict ? "conflict" : "agree";
+    var title, detail;
+    if (conflict) {
+      var diss = (lvp.dissenting_planes || []).join(", ") || "—";
+      title = "LABEL vs PLANES — CONFLICT";
+      detail = "The regime label reads <b>" + esc(lvp.label_direction) +
+        "</b> while the validated-plane consensus reads <b>" +
+        esc(lvp.plane_consensus_direction) + "</b> (magnitude " +
+        fmtNum(lvp.magnitude, 3) + "). Dissenting validated planes: <b>" + esc(diss) + "</b>." +
+        (floor ? " Perception warrants a <b>defensive floor</b> (shrink-only)." : "");
+    } else {
+      title = "LABEL vs PLANES — no conflict";
+      detail = "Label (<b>" + esc(lvp.label_direction) + "</b>) and the validated-plane consensus (<b>" +
+        esc(lvp.plane_consensus_direction) + "</b>) agree.";
+    }
+    return '<div class="banner ' + cls + '"><div class="bx-title">' + esc(title) +
+      '</div><div class="bx-detail">' + detail + "</div></div>";
+  }
+
+  // ── net posture tilt strip ────────────────────────────────────────────────
+  function renderTilt(view) {
+    var t = view.net_posture_tilt || {};
+    var kvs = [
+      ["Tilt", dirPill(t.direction) + ' <span class="num">' + fmtNum(t.tilt, 3) + "</span>"],
+      ["Validated planes", '<span class="num">' + (t.n_validated == null ? "—" : t.n_validated) + "</span>"],
+      ["Coherence", '<span class="num">' + fmtNum(view.coherence, 3) + "</span>"],
+      ["Coverage", '<span class="num">' + fmtNum(view.coverage, 3) + "</span>"]
+    ];
+    var out = '<div class="tilt-strip">';
+    kvs.forEach(function (kv) {
+      out += '<div class="kv"><span class="k">' + esc(kv[0]) + ':</span> <span class="v">' + kv[1] + "</span></div>";
+    });
+    out += "</div>";
+    var a = view.assembly || {};
+    out += '<div class="footnote">Contributors: ' + esc((t.contributors || []).join(", ") || "none") +
+      " · assembly " + (a.present || 0) + "/" + (a.total || 0) + " present, " +
+      (a.fresh || 0) + " fresh, " + (a.stale || 0) + " stale, " + (a.missing || 0) + " missing" +
+      (a.degraded ? " · <b>DEGRADED</b> (may only refuse to loosen)" : "") + "</div>";
+    return out;
+  }
+
+  // ── planes table ──────────────────────────────────────────────────────────
+  var PLANE_ORDER = [
+    "risk_radar", "mtf_signals", "froth_fragility", "gross_factor", "turning_point",
+    "vol_shock", "cross_asset", "market_drivers", "dislocation", "macro_risk",
+    "cycles", "distribution_tells", "liquidity_quality", "regime_nowcast",
+    "rotation_tensor", "anticipation", "rrg", "group_flow", "event_calendar", "intl_spillover"
+  ];
+
+  function renderPlanes(view) {
+    var planes = view.planes || {};
+    // preserve the artifact's own plane order, falling back to the canonical order.
+    var names = Object.keys(planes);
+    if (!names.length) names = PLANE_ORDER;
+    var rows = "";
+    names.forEach(function (name) {
+      var rec = planes[name];
+      if (!rec) return;
+      var present = !(rec.raw && rec.raw.present === false);
+      var reading = rec.reading;
+      var readingHtml = (reading == null || reading === "")
+        ? '<span class="mv-reading muted">' + (present ? "—" : esc((rec.raw && rec.raw.note) || "absent")) + "</span>"
+        : '<span class="mv-reading">' + esc(reading) + "</span>";
+      var mag = rec.magnitude;
+      rows += '<tr class="' + (present ? "" : "absent") + '">' +
+        '<td class="mv-name">' + esc(name) +
+          '<span class="src">' + esc(rec.source_contract || "") + "</span></td>" +
+        "<td>" + readingHtml + "</td>" +
+        "<td>" + dirPill(rec.direction) + "</td>" +
+        '<td class="num">' + (mag == null ? "—" : fmtNum(mag, 3)) + "</td>" +
+        "<td>" + freshCell(rec) + "</td>" +
+        "<td>" + statusPill(rec) + "</td>" +
+        "</tr>";
+    });
+    return '<table class="mv-tbl"><thead><tr>' +
+      "<th>Plane</th><th>Reading</th><th>Direction</th><th>Magnitude</th>" +
+      "<th>Freshness</th><th>Status</th></tr></thead><tbody>" + rows + "</tbody></table>";
+  }
+
+  // ── deterministic brief ───────────────────────────────────────────────────
+  function renderBrief(view) {
+    var b = view.brief || {};
+    var order = [
+      ["what_changed", "What changed"],
+      ["whats_rotating", "What's rotating"],
+      ["wheres_the_risk", "Where's the risk"],
+      ["posture_implication", "Posture implication"]
+    ];
+    var out = "";
+    order.forEach(function (kv) {
+      var v = b[kv[0]];
+      if (v == null || v === "") return;
+      out += '<div class="brief-row"><div class="k">' + esc(kv[1]) + '</div>' +
+        '<div class="v">' + esc(v) + "</div></div>";
+    });
+    return out || '<div class="msg">No brief available.</div>';
+  }
+
+  // ── top rotation pairs (from the rotation_tensor plane's raw) ──────────────
+  function renderPairs(view) {
+    var planes = view.planes || {};
+    var rt = planes.rotation_tensor || {};
+    var raw = rt.raw || {};
+    var pairs = raw.top_pairs;
+    // The tensor plane exposes headline_episode; top_pairs may live under raw or headline.
+    if (!Array.isArray(pairs)) {
+      pairs = (raw.headline_episode && raw.headline_episode.top_pairs) || null;
+    }
+    if (!Array.isArray(pairs) || !pairs.length) {
+      var note = (rt.raw && rt.raw.note) || "rotation_tensor organ not present";
+      return '<div class="msg">' + esc(note) + "</div>";
+    }
+    var out = '<div class="pairs">';
+    pairs.slice(0, 8).forEach(function (p) {
+      var accel = p.accelerating ? " accel" : "";
+      out += '<div class="pair' + accel + '">' +
+        '<span class="lead">' + esc(p.lead) + '</span><span class="arrow">&raquo;</span>' +
+        esc(p.lag) + (p.accelerating ? ' <span class="pill stale">accelerating</span>' : "") +
+        '<div class="metric">R ' + fmtNum(p.R_bps_day, 2) + " bps/day · dR " +
+        fmtNum(p.dR_bps_day, 2) + " bps/day</div></div>";
+    });
+    out += "</div>";
+    return out;
+  }
+
+  function render(view) {
+    sub.textContent = "region " + (view.region || "us") + " · asof " +
+      (view.asof || "—") + " · seq " + (view.seq == null ? 0 : view.seq) +
+      " · " + (view.schema_version || "");
+    var html = "";
+    html += renderBanner(view);
+    html += '<div class="panel"><h2>Net Posture Tilt (validated planes only)</h2>' +
+      renderTilt(view) + "</div>";
+    html += '<div class="panel"><h2>Planes</h2>' + renderPlanes(view) + "</div>";
+    html += '<div class="panel"><h2>Brief (deterministic — zero LLM)</h2>' + renderBrief(view) + "</div>";
+    html += '<div class="panel"><h2>Top Rotation Pairs</h2>' + renderPairs(view) + "</div>";
+    html += '<div class="footnote">Read-only mirror of data/market_view/latest.json. This view sizes ' +
+      "nothing (W-E wave contract: zero behavior change).</div>";
+    root.innerHTML = html;
+  }
+
+  fetch("/api/market_view", { headers: { "Accept": "application/json" } })
+    .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }); })
+    .then(function (res) {
+      if (!res.ok || (res.body && res.body.available === false)) {
+        var note = (res.body && (res.body.note || res.body.error)) || "market view unavailable";
+        root.innerHTML = '<div class="msg">' + esc(note) + "</div>";
+        sub.textContent = "unavailable";
+        return;
+      }
+      render(res.body);
+    })
+    .catch(function (e) {
+      root.innerHTML = '<div class="msg">Failed to load market view: ' + esc(e && e.message) + "</div>";
+      sub.textContent = "error";
+    });
+})();
+</script>
+
+</body>
+</html>
