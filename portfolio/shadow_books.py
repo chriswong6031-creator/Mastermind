@@ -58,7 +58,22 @@ POLICIES = [
      "desc_zh": "实盘组合 + 仅做减法的波动管理/反彩票规模折减 — 对唯一经回测确认的边际的前瞻检验"
                 "（低风险是夏普/回撤杠杆，而非选股器）。",
      "committee": True, "calibration": True, "sizing": "research", "risk_tilt": True},
+    # ── W-L / L1: the two counterfactuals the incident audit proved UNPRICEABLE until now ──
+    {"id": "do_nothing", "label": "Do-nothing (carry)", "label_zh": "按兵不动（结转）",
+     "desc": "Yesterday's positions carried forward untouched — the cost of churn. Never trades on a "
+             "new signal; only marks forward.",
+     "desc_zh": "结转昨日持仓、原封不动 — 换手的代价。不因新信号交易，仅前瞻标记。",
+     "synthetic": "do_nothing"},
+    {"id": "defensive", "label": "Defensive basket (XLU/XLV/XLF/XLP)", "label_zh": "防御篮子",
+     "desc": "The user's static equal-weight defensive sleeve (utilities/healthcare/financials/"
+             "staples) — the benchmark the semis unwind proved beat the Brain.",
+     "desc_zh": "用户的静态等权防御板块（公用/医疗/金融/必需消费）— 半导体崩盘中战胜大脑的基准。",
+     "synthetic": "defensive"},
 ]
+
+# The static equal-weight defensive basket (mirror of brain.benchmark_ledger.DEFENSIVE_BASKET —
+# one defensive pool, charter P7). The `defensive` arm rebalances to this each run.
+_DEFENSIVE_BASKET = ["XLU", "XLV", "XLF", "XLP"]
 
 _POLICY_BY_ID = {p["id"]: p for p in POLICIES}
 
@@ -362,11 +377,25 @@ def _book_summary(policy: dict, theses: list, account: dict, nav_rows: list) -> 
 # ─────────────────────────────────────────────────────────────────────────────
 # driver
 # ─────────────────────────────────────────────────────────────────────────────
-def _gather_prices(tickers: set, seed: dict | None) -> dict:
-    px = dict(seed or {})
+def _gather_prices(tickers: set, seed: dict | None, asof: str | None = None) -> dict:
+    """Mark every needed symbol through the ONE marking layer (portfolio.marks, W-L / L1) so the
+    do-nothing + defensive arms — and every policy arm — read the same price every other book does
+    (polygon-EOD → yahoo-parquet → last-good-carry, never avg_cost). Any symbol `marks` can't price
+    falls back to the legacy paper_account accessor, and `seed` (test/shared fetch) always wins."""
+    px = {(k or "").upper(): v for k, v in (seed or {}).items() if v and v > 0}
+    want = {(t or "").upper() for t in tickers} | {"SPY", *(_DEFENSIVE_BASKET)}
+    want = {t for t in want if t}
+    try:
+        from portfolio import marks
+        marked = marks.prices_for(want, asof or str(date.today()), seed=px, persist=False)
+        for t, v in marked.items():
+            if t not in px and v and v > 0:
+                px[t] = v
+    except Exception:  # noqa: BLE001
+        pass
     try:
         from portfolio import paper_account
-        for t in tickers | {"SPY"}:
+        for t in want:
             if t not in px or not px.get(t):
                 q = paper_account._current_price(t)
                 if q and q > 0:
@@ -407,12 +436,50 @@ def _risk_mult(panel: dict, ticker: str, asof: str) -> float:
         return 1.0
 
 
+def _synthetic_carry_targets(book_id: str, inputs: list) -> dict:
+    """The do-nothing arm's target = whatever it already holds (marked forward, never traded).
+
+    Cold-start: an empty do-nothing book inherits PROD's target weights on the first day prod has a
+    non-empty allocation, so it has a real inception snapshot to carry (a do-nothing book that starts
+    empty and never trades would carry $0 of positions forever). After that inception it NEVER changes
+    its targets — it just re-marks its held weights each run (held_value / nav)."""
+    acct = _load_account(book_id)
+    positions = acct.get("positions") or {}
+    if positions:                                          # already seeded → carry current holdings
+        nav = acct.get("cash", 0.0) + sum(
+            (p.get("shares") or 0.0) * (p.get("avg_cost") or 0.0) for p in positions.values())
+        if nav <= 0:
+            return {t: 0.0 for t in positions}
+        # target = current dollar weight at avg_cost (a mark-agnostic snapshot; _rebalance re-solves
+        # shares at live prices but the delta is ~0 since these ARE the held shares).
+        return {t: round((p.get("shares") or 0.0) * (p.get("avg_cost") or 0.0) / nav, 4)
+                for t, p in positions.items()}
+    # cold-start inception: adopt prod's weights so there is something to freeze
+    prod_targets = apply_policy(_POLICY_BY_ID["prod"], inputs)
+    return prod_targets
+
+
 def run(asof: str, prices: dict | None = None, inputs: list | None = None) -> dict:
     """Re-derive every policy book for `asof`, mark each forward, label its theses, and write the
     leaderboard. `inputs` defaults to the persisted decision-inputs file. Best-effort; never raises."""
     asof = str(asof)[:10]
     inputs = inputs if inputs is not None else read_inputs(asof)
-    targets_by_book = {p["id"]: apply_policy(p, inputs) for p in POLICIES}
+    targets_by_book = {p["id"]: apply_policy(p, inputs)
+                       for p in POLICIES if not p.get("synthetic")}
+    # ── W-L / L1 synthetic arms — targets are NOT derived from decision inputs ──
+    # do_nothing: carry whatever this arm already holds (targets == current held weights → no trade,
+    #             just a forward mark). On a fresh book with no positions it stays all-cash until it
+    #             inherits prod's inception snapshot on its first non-empty run.
+    # defensive:  a static equal-weight basket, rebalanced back to EW each run.
+    for p in POLICIES:
+        syn = p.get("synthetic")
+        if not syn:
+            continue
+        if syn == "do_nothing":
+            targets_by_book[p["id"]] = _synthetic_carry_targets(p["id"], inputs)
+        elif syn == "defensive":
+            targets_by_book[p["id"]] = {t: round(1.0 / len(_DEFENSIVE_BASKET), 4)
+                                        for t in _DEFENSIVE_BASKET}
     # risk_tilt = prod weights scaled by a leakage-free, subtract-only risk-quality multiplier, then
     # re-capped. Gross only SHRINKS (more cash) → it's the forward A/B of the low-risk Sharpe lever.
     if "risk_tilt" in targets_by_book and targets_by_book["risk_tilt"]:
@@ -432,7 +499,7 @@ def run(asof: str, prices: dict | None = None, inputs: list | None = None) -> di
         needed |= set(tw)
     for p in POLICIES:                                     # also re-mark names still held
         needed |= set(_load_account(p["id"]).get("positions", {}))
-    px = _gather_prices(needed, prices)
+    px = _gather_prices(needed, prices, asof)
     # GUARD against the empty-inputs LIQUIDATION trap: on a day that carried NO decision input (a
     # quiet/carried flagship day → inputs==[]) every policy's targets are {}, and an unguarded
     # _rebalance would drive every held position to zero — wiping the forward A/B books. On such a

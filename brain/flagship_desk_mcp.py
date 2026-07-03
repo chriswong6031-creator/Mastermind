@@ -113,7 +113,27 @@ async def get_my_book(args):
                                  "be rotating into — each with ticker, why_now, probability (0-1), check_by",
                                  "items": {"type": "object", "properties": {
                                      "ticker": {"type": "string"}, "why_now": {"type": "string"},
-                                     "probability": {"type": "number"}, "check_by": {"type": "string"}}}}},
+                                     "probability": {"type": "number"}, "check_by": {"type": "string"}}}},
+          # W-L / L2 — the JOURNAL DUTY (charter P6). Additive (schema growth only): a submission that
+          # omits these is still accepted; the judgment book logs 'journal_incomplete'. For EACH of your
+          # past calls that graded badly (listed in your prompt's JOURNAL DUTY block) you record a lesson;
+          # successes may be narrated too. Each lesson references its draft_id from the duty block.
+          "journal_lessons": {"type": "array",
+                              "description": "one lesson per badly-graded past call (from your JOURNAL DUTY "
+                              "block). MISTAKE: {draft_id, what_i_believed, what_actually_happened, why_wrong "
+                              "(one of bad-signal|bad-timing|bad-sizing|ignored-plane|crowd-follow|label-trust|"
+                              "thesis-drift|luck-bad), rule_i_adopt (ONE falsifiable sentence), confidence_in_rule "
+                              "(0-1)}. SUCCESS: {draft_id, what_worked, skill_or_luck, rule_i_keep, confidence_in_rule}",
+                              "items": {"type": "object", "properties": {
+                                  "draft_id": {"type": "string"},
+                                  "what_i_believed": {"type": "string"},
+                                  "what_actually_happened": {"type": "string"},
+                                  "why_wrong": {"type": "string"},
+                                  "rule_i_adopt": {"type": "string"},
+                                  "what_worked": {"type": "string"},
+                                  "skill_or_luck": {"type": "string"},
+                                  "rule_i_keep": {"type": "string"},
+                                  "confidence_in_rule": {"type": "number"}}}}},
        "required": ["holdings", "summary"]})
 async def submit_book(args):
     holdings = args.get("holdings") or []
@@ -145,7 +165,9 @@ async def submit_book(args):
                # three-questions fields passed through verbatim (pm_conviction normalises them).
                "own_more": args.get("own_more") or [],
                "own_less": args.get("own_less") or [],
-               "not_holding_should": args.get("not_holding_should") or []}
+               "not_holding_should": args.get("not_holding_should") or [],
+               # W-L / L2 journal duty completions, passed through verbatim (judgment_book records them).
+               "journal_lessons": args.get("journal_lessons") or []}
     p = submission_path(SUBMIT_PORTFOLIO)          # <- the FIX: write to the flagship_judgment path
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(payload, indent=2, default=str, ensure_ascii=False))

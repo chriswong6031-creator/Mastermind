@@ -188,6 +188,11 @@ def test_daily_mark_job_skips_empty_books(tmp_books: Path, monkeypatch) -> None:
     from portfolio import paper_account
 
     monkeypatch.setattr(paper_account, "_current_price", lambda t: None)  # nothing priceable
+    # W-L / L1: the job also consults the ONE marking layer — stub it dark too so "nothing
+    # priceable" holds across BOTH accessors (else the real yahoo parquet prices SPY for the
+    # benchmark-only row). Both marks + the benchmark-ledger builder are best-effort here.
+    from portfolio import marks
+    monkeypatch.setattr(marks, "prices_for", lambda syms, asof, **kw: {})
     monkeypatch.setattr(scheduler, "_today_iso", lambda: "2026-01-03")
 
     scheduler._daily_mark_job()  # no positions anywhere, no prices → no rows

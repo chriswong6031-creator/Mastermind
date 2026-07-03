@@ -279,3 +279,64 @@ def test_market_clock_next_open_skips_weekend() -> None:
     no = mc.next_open(datetime(2026, 6, 19, 17, 0))
     # 2026-06-19 is Juneteenth (holiday, Friday); 20/21 weekend -> next session Mon 22nd
     assert no.date().isoformat() == "2026-06-22"
+
+
+# ---------------------------------------------------------------------------
+# W-L / L1 — the mark seam + the injected marking layer (phantom-zero-return fix)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def sd_nav(tmp_path: Path) -> "Generator":
+    """Same as `sd`, plus the nav_history path redirected (the new mark seam)."""
+    from portfolio import self_directed as sd_mod
+    with (
+        mock.patch.object(sd_mod, "_DATA", tmp_path),
+        mock.patch.object(sd_mod, "_ACCOUNT_PATH", tmp_path / "account.json"),
+        mock.patch.object(sd_mod, "_FILLS_PATH", tmp_path / "fills.jsonl"),
+        mock.patch.object(sd_mod, "_PENDING_PATH", tmp_path / "pending.json"),
+        mock.patch.object(sd_mod, "_THESES_PATH", tmp_path / "theses.json"),
+        mock.patch.object(sd_mod, "_NAV_PATH", tmp_path / "nav_history.jsonl"),
+    ):
+        yield sd_mod
+
+
+def test_injected_resolver_is_consulted_first(sd) -> None:
+    """set_price_resolver installs the ONE marking layer as _current_price's first source."""
+    try:
+        sd.set_price_resolver(lambda t: {"AAPL": 321.0}.get(t))
+        assert sd._current_price("AAPL") == 321.0
+        # a name the resolver can't price falls through to the legacy path (None here → None)
+        assert sd._current_price("ZZZZ") in (None,)
+    finally:
+        sd.set_price_resolver(None)
+    # cleared → the resolver is no longer consulted
+    assert sd._price_resolver is None
+
+
+def test_injected_mark_gives_a_non_zero_return(sd_nav) -> None:
+    """THE fix: with no live quote the OLD path fell back to avg_cost → a phantom ZERO return.
+    Through the injected marking layer the book now shows the real move."""
+    # buy 1000 AAPL @ $100 while the market is open (fills immediately)
+    sd_nav.place_order("AAPL", "buy", 1000, price=100.0, market_open=True)
+    # the marking layer says AAPL is now $130 (a real +30% mark), SPY priced for the bench line
+    sd_nav.set_price_resolver(lambda t: {"AAPL": 130.0, "SPY": 500.0}.get(t))
+    try:
+        row = sd_nav.mark(asof="2026-06-02")
+    finally:
+        sd_nav.set_price_resolver(None)
+    # 900k cash + 1000*130 = 1,030,000 → +3% on the $1M book (NOT the flat avg_cost mark)
+    assert abs(row["nav"] - 1_030_000.0) < 1.0
+    assert row["nav"] > sd_nav._STARTING_NAV                # non-zero, positive return
+    # persisted to nav_history and idempotent per date
+    rows = [__import__("json").loads(l) for l in
+            (sd_nav._NAV_PATH.read_text().splitlines())]
+    assert len(rows) == 1 and rows[0]["date"] == "2026-06-02"
+    sd_nav.mark(asof="2026-06-02", prices={"AAPL": 130.0, "SPY": 500.0})  # re-mark same day
+    rows = [__import__("json").loads(l) for l in (sd_nav._NAV_PATH.read_text().splitlines())]
+    assert len(rows) == 1, "mark() must be idempotent per date"
+
+
+def test_mark_prices_override_wins(sd_nav) -> None:
+    sd_nav.place_order("AAPL", "buy", 1000, price=100.0, market_open=True)
+    row = sd_nav.mark(prices={"AAPL": 150.0, "SPY": 500.0}, asof="2026-06-03")
+    assert abs(row["nav"] - 1_050_000.0) < 1.0             # 900k + 1000*150

@@ -125,6 +125,37 @@ def _isolate_research_papers(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_wl_marks_and_benchmark(tmp_path, monkeypatch):
+    """Isolate the W-L / L1 artifacts (the ONE marking layer's carry store + per-day logs, the
+    benchmark ledger's output dir + rolling series, and the Self-Directed NAV history) so a test that
+    runs the daily-mark job or builds the ledger never writes into the LIVE data/ tree. All are
+    ABSOLUTE module paths resolved at import; redirect them per test. Idempotent + safe."""
+    try:
+        from portfolio import marks
+        md = tmp_path / "_marks"
+        monkeypatch.setattr(marks, "_MARKS_DIR", md, raising=False)
+        monkeypatch.setattr(marks, "_CARRY_PATH", md / "last_good.json", raising=False)
+    except Exception:
+        pass
+    try:
+        from brain import benchmark_ledger as bl
+        monkeypatch.setattr(bl, "_BENCH_DIR", tmp_path / "_benchmark", raising=False)
+    except Exception:
+        pass
+    try:
+        from portfolio import self_directed as sd
+        sdd = tmp_path / "_self_directed"
+        monkeypatch.setattr(sd, "_DATA", sdd, raising=False)
+        monkeypatch.setattr(sd, "_ACCOUNT_PATH", sdd / "account.json", raising=False)
+        monkeypatch.setattr(sd, "_NAV_PATH", sdd / "nav_history.jsonl", raising=False)
+        monkeypatch.setattr(sd, "_FILLS_PATH", sdd / "fills.jsonl", raising=False)
+        monkeypatch.setattr(sd, "_PENDING_PATH", sdd / "pending.json", raising=False)
+        monkeypatch.setattr(sd, "_THESES_PATH", sdd / "theses.json", raising=False)
+    except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
 def _no_tushare_network(monkeypatch):
     """Default the Tushare feed OFF in tests so the suite never makes a live network call (and
     _live_price falls back to the vendored snapshot); the tushare-specific tests re-enable it
@@ -181,3 +212,25 @@ def _clear_portfolios_cache():
         web._portfolios_cache.clear()
     except Exception:
         yield
+
+
+@pytest.fixture(autouse=True)
+def _isolate_experiment_registry(tmp_path, monkeypatch):
+    """Isolate the W-L / L6 experiment registry (brain/experiment_registry._REGISTRY_PATH) so
+    that tests that call brain.experiment_registry.matured() (directly or via improvement_agenda)
+    never promote items in the real data/experiments/registry.json — which is the long-lived seed
+    for the programme and must not be mutated by the test suite.  Provides a COPY of the real seed
+    so registry-shape tests still see a realistic corpus; the copy is discarded after each test.
+    Idempotent + safe."""
+    try:
+        import brain.experiment_registry as er
+        import shutil
+        isolated_dir = tmp_path / "_experiments"
+        isolated_dir.mkdir(parents=True, exist_ok=True)
+        isolated_path = isolated_dir / "registry.json"
+        real_path = er._REGISTRY_PATH
+        if real_path.exists():
+            shutil.copy2(real_path, isolated_path)
+        monkeypatch.setattr(er, "_REGISTRY_PATH", isolated_path, raising=False)
+    except Exception:
+        pass

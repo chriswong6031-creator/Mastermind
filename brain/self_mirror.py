@@ -361,4 +361,22 @@ def inject(prompt: str, agent: str, asof: date | None = None) -> str:
         if rc:
             d = (d + "\n" + rc) if d else ("--- YOUR TRACK RECORD (self-mirror; de-confidence only) ---"
                                            "\n" + rc)
+
+    # W-L / L2 — the JOURNAL rides the SAME injection contract (charter P7: one seat injection seam,
+    # extended not duplicated). Two additive blocks, both gated by the same MASTERMIND_SELF_MIRROR flag:
+    #   * the DUTY block  — the seat's last-N badly-graded drafts it MUST write a lesson for this build,
+    #   * the PINNED block — the seat's earned, auto-unpinning rules (top-K by grade-weighted recurrence).
+    # Empty (nothing owed / nothing pinned) → no change (P2 no-op). Best-effort: a journal failure never
+    # touches the seat.
+    try:
+        from brain import journal
+        duty = journal.duty_block(agent)
+        if duty:
+            d = (d + "\n\n" + duty) if d else duty
+        pinned = journal.injection_block(agent)
+        if pinned:
+            d = (d + "\n\n" + pinned) if d else pinned
+    except Exception:  # noqa: BLE001 — journal is additive; never break the seat
+        pass
+
     return (prompt + "\n\n" + d) if d else prompt

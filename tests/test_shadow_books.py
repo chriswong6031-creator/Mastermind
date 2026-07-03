@@ -137,7 +137,9 @@ def test_run_isolates_to_sandbox_and_builds_all_books(sandbox, monkeypatch):
     ]
     res = S.run("2026-06-01", prices={"AAA": 100.0, "BBB": 50.0, "SPY": 400.0}, inputs=inputs)
     ids = {b["id"] for b in res["leaderboard"]}
-    assert ids == {"prod", "no_committee", "no_calibration", "engine_only", "risk_tilt"}
+    # 5 policy arms + the 2 W-L synthetic counterfactual arms (do-nothing carry, defensive basket)
+    assert ids == {"prod", "no_committee", "no_calibration", "engine_only", "risk_tilt",
+                   "do_nothing", "defensive"}
     books = res["books"]
     assert books["prod"]["holdings"] == ["AAA"]                 # committee dropped BBB
     assert books["no_committee"]["holdings"] == ["AAA", "BBB"]  # committee off → keeps BBB
@@ -246,3 +248,52 @@ def test_write_read_inputs_roundtrip(sandbox):
     got = S.read_inputs("2026-06-01")
     assert len(got) == 1 and got[0]["ticker"] == "AAA"
     assert S.read_inputs("2099-01-01") == []      # missing → empty, no raise
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# W-L / L1 — the two new synthetic arms (do-nothing + defensive basket)
+# ─────────────────────────────────────────────────────────────────────────────
+def test_defensive_arm_holds_the_equal_weight_basket(sandbox):
+    """The defensive arm rebalances to XLU/XLV/XLF/XLP equal-weight regardless of inputs."""
+    prices = {t: 100.0 for t in S._DEFENSIVE_BASKET} | {"SPY": 500.0}
+    res = S.run("2026-06-01", prices=prices, inputs=[_rec("NVDA")])
+    held = set(S._load_account("defensive").get("positions", {}))
+    assert held == set(S._DEFENSIVE_BASKET)
+    # each name ~ 1/4 of the book
+    acct = S._load_account("defensive")
+    nav = acct["cash"] + sum(p["shares"] * 100.0 for p in acct["positions"].values())
+    for t in S._DEFENSIVE_BASKET:
+        w = acct["positions"][t]["shares"] * 100.0 / nav
+        assert abs(w - 0.25) < 0.02
+
+
+def test_do_nothing_arm_carries_and_does_not_churn(sandbox):
+    """Do-nothing inherits prod's inception weights, then NEVER trades on a new signal."""
+    px1 = {"AAA": 100.0, "SPY": 500.0}
+    S.run("2026-06-01", prices=px1, inputs=[_rec("AAA", weight_prod=0.20)])
+    held0 = dict(S._load_account("do_nothing").get("positions", {}))
+    assert "AAA" in held0                                   # seeded from prod's inception
+
+    # a NEW signal for a DIFFERENT name arrives; do-nothing must not buy it
+    px2 = {"AAA": 110.0, "BBB": 50.0, "SPY": 510.0}
+    S.run("2026-06-02", prices=px2, inputs=[_rec("BBB", weight_prod=0.20)])
+    held1 = set(S._load_account("do_nothing").get("positions", {}))
+    assert held1 == {"AAA"}                                 # still only the carried name, no BBB
+
+
+def test_do_nothing_arm_survives_a_no_inputs_day(sandbox):
+    """The empty-inputs guard must not liquidate the carried do-nothing book."""
+    S.run("2026-06-01", prices={"AAA": 100.0, "SPY": 500.0},
+          inputs=[_rec("AAA", weight_prod=0.20)])
+    assert "AAA" in S._load_account("do_nothing").get("positions", {})
+    # a quiet/carried day: NO decision inputs at all
+    S.run("2026-06-02", prices={"AAA": 105.0, "SPY": 505.0}, inputs=[])
+    held = set(S._load_account("do_nothing").get("positions", {}))
+    assert held == {"AAA"}, "a no-inputs day must HOLD the carried positions, never liquidate"
+
+
+def test_synthetic_arms_appear_in_leaderboard(sandbox):
+    prices = {t: 100.0 for t in S._DEFENSIVE_BASKET} | {"AAA": 100.0, "SPY": 500.0}
+    res = S.run("2026-06-01", prices=prices, inputs=[_rec("AAA")])
+    ids = {b["id"] for b in res["leaderboard"]}
+    assert "defensive" in ids and "do_nothing" in ids

@@ -222,6 +222,15 @@ def build(sized: list[dict], rejected: list[dict], *, regime: dict | None, asof:
     except Exception:  # noqa: BLE001 — additive; a broken generator contributes nothing
         defensive = []
 
+    # (B0) JOURNAL AUTO-DRAFT (W-L / L2) — draft any newly-resolved PM calls BEFORE the build so the
+    # seat's prompt carries its fresh JOURNAL DUTY block (self_mirror injects it). Deterministic, no
+    # LLM; best-effort — a failure leaves the duty block empty (P2 no-op), never blocks the build.
+    try:
+        from brain import journal as _journal
+        _journal.draft_resolutions("pm", _journal_asof(asof))
+    except Exception:  # noqa: BLE001 — the journal is additive; never break the build
+        pass
+
     # (B) PM-CONVICTION — the armed Opus PM builds the Flagship target book. Now piped the FULL
     # sleeve-tagged book: the conviction candidates (sized) + the leadership legs + the defensive pool.
     try:
@@ -372,6 +381,14 @@ def build(sized: list[dict], rejected: list[dict], *, regime: dict | None, asof:
     except Exception:  # noqa: BLE001 — the duty is additive; never break the build
         pass
 
+    # (H) JOURNAL DUTY (W-L / L2) — record the PM's conscious lessons for its badly-graded drafts
+    # (charter P6). Additive: an incomplete lesson is ACCEPTED + logged 'journal_incomplete', never
+    # rejected (mirrors three_questions_incomplete). Best-effort; never raises.
+    try:
+        _record_journal_lessons(book, asof)
+    except Exception:  # noqa: BLE001 — the duty is additive; never break the build
+        pass
+
     return out
 
 
@@ -488,3 +505,45 @@ def _emit_three_questions(book: dict, asof: str, shadow_inputs: list | None) -> 
                 _ledger.append(d)
             except Exception:  # noqa: BLE001
                 pass
+
+
+def _journal_asof(asof):
+    """Coerce the build's ``asof`` (str or date) to a date for the journal. None on failure."""
+    try:
+        from datetime import date as _date
+        if hasattr(asof, "isoformat") and not isinstance(asof, str):
+            return asof
+        return _date.fromisoformat(str(asof)[:10]) if asof else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _record_journal_lessons(book: dict, asof) -> None:
+    """Record the PM seat's conscious JOURNAL lessons for its badly-graded drafts (W-L / L2, P6).
+
+    ``book['journal_lessons']`` is the seat's list of lesson completions (each references a draft_id
+    from the JOURNAL DUTY block it was shown). We hand them to ``brain.journal.complete`` which
+    records the valid ones, logs 'journal_incomplete' for any that omit their required fields (never
+    rejecting — add-only, the three_questions_incomplete posture), and recomputes the seat's pins so a
+    newly-adopted rule can earn a pin. Best-effort; never raises."""
+    if not isinstance(book, dict):
+        return
+    lessons = book.get("journal_lessons")
+    try:
+        from brain import journal
+    except Exception:  # noqa: BLE001
+        return
+    # even with NO completions, surface the incomplete duty (mirrors three_questions_incomplete): if
+    # the seat had pending bad drafts and returned none, log it — add-only, emits nothing else.
+    if not lessons:
+        try:
+            pend = journal.pending_for("pm")
+            if pend:
+                journal._log_incomplete("pm", f"{len(pend)} pending", "no_lessons_submitted")
+        except Exception:  # noqa: BLE001
+            pass
+        return
+    try:
+        journal.complete("pm", lessons, _journal_asof(asof))
+    except Exception:  # noqa: BLE001
+        pass

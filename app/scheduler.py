@@ -143,15 +143,50 @@ def _macro_refresh_job():
 
 
 def _cio_weekly_job():
-    """CIO / Meta-PM weekly accountability review: reads per-role calibration multipliers + each seat's
-    graded KPIs + book NAV-vs-benchmark + the shadow leaderboard, and WRITES a 'what is working / who is
-    miscalibrated' note + non-binding tuning recommendations to data/brain/cio/<isoweek>.{json,md}.
-    It RECOMMENDS ONLY — it never trades, never flips a flag, never changes a seat's behavior. Lazy
-    import + try/except so a review miss never kills the scheduler."""
+    """CIO / Meta-PM weekly accountability review (W-L / L3 reads all-7 books). Reads per-role
+    calibration multipliers + each seat's graded KPIs + all-7-book NAV-vs-benchmark + the shadow
+    leaderboard, and WRITES the 'what is working / who is miscalibrated' note to
+    data/brain/cio/<isoweek>.{json,md}. RECOMMENDS ONLY — never trades, flips a flag, or mutates a
+    seat. The Improvement Agenda that fuses over this note runs as its OWN dedicated job
+    (``_improvement_agenda_job``) 30 min later, so this job passes ``with_agenda=False`` to avoid a
+    double-write. Lazy import + try/except so a review miss never kills the scheduler."""
     try:
         from scripts.run_cio import run as run_cio
-        run_cio()
+        run_cio(with_agenda=False)     # the dedicated agenda job owns the scheduled agenda write
     except Exception:  # noqa: BLE001 — a CIO miss must never kill the scheduler
+        pass
+
+
+def _improvement_agenda_job():
+    """W-L / L6: weekly improvement agenda build.
+
+    Fuses every accountability artifact (calibration, journal lesson clusters, shadow-vs-live gaps,
+    benchmark-ledger gaps, validation verdicts, experiment-registry maturities, deploy-lag, student
+    drift) into a RANKED list of concrete improvement items and writes it to:
+      • data/agenda/<date>.json  (the machine artifact)
+      • data/agenda/AGENDA.md    (the human briefing — what any maintenance session opens cold)
+
+    This is the answer to 'what should we tell the AI to fix': a scheduled Opus session (or Fable)
+    opens AGENDA.md and the top items are pre-argued with evidence. Display + advisory ONLY — it never
+    trades, never flips a flag, never changes a seat's behavior. Runs 30 minutes after the CIO review
+    so it can consume the fresh CIO artifact. Never raises."""
+    try:
+        from brain import improvement_agenda
+        improvement_agenda.write()
+    except Exception:  # noqa: BLE001 — an agenda miss must never kill the scheduler
+        pass
+
+
+def _experiment_maturity_job():
+    """W-L / L6: daily experiment-registry maturity check.
+
+    Promotes any OPEN experiment whose comeback_date has been reached to MATURED, persisting the
+    status change in data/experiments/registry.json so the next agenda build surfaces it at the top.
+    Cheap, deterministic, LLM-free. Never raises into the scheduler."""
+    try:
+        from brain import experiment_registry
+        experiment_registry.matured()       # side-effect: promotes date-reached items → matured
+    except Exception:  # noqa: BLE001 — a maturity check miss must never kill the scheduler
         pass
 
 
@@ -290,6 +325,35 @@ def _daily_mark_job():
         from portfolio import paper_account, registry
     except Exception:  # noqa: BLE001
         return
+    asof = _today_iso()
+    # ── W-L / L1: mark through the ONE marking layer (portfolio.marks) ──
+    # Build a SINGLE union prices dict for the whole sweep (every book's held names + every book's
+    # benchmark + the defensive basket) in ONE pass, logged source-by-source (polygon-EOD →
+    # yahoo-parquet → last-good-carry, never avg_cost). Per-book USD→base-ccy conversion still
+    # happens below. One snapshot per run = no out-of-order dup rows, one price per symbol (P7).
+    union_usd: dict = {}
+    try:
+        from portfolio import marks
+        from brain.benchmark_ledger import DEFENSIVE_BASKET
+        want: set = set(DEFENSIVE_BASKET)
+        for _pid in registry.ids():
+            try:
+                _st = paper_account._load_account(_pid) if _pid != "self_directed" else {}
+                want |= set(_st.get("positions", {}).keys())
+                want.add(paper_account._benchmark_for(_pid))
+            except Exception:  # noqa: BLE001
+                pass
+        # US symbols only for the marking layer (yahoo/polygon are USD feeds); *.HK/*.SS/*.SZ keep
+        # the legacy per-book accessor path below (Tushare/Yahoo-local + FX).
+        us_want = {t for t in want if t and "." not in t}
+        union_usd = marks.prices_for(us_want, asof)
+    except Exception:  # noqa: BLE001
+        union_usd = {}
+    # ── the defensive-benchmark ledger (P6 — the book that beats us is a named daily input) ──
+    try:
+        _build_benchmark_ledger(asof, union_usd)
+    except Exception:  # noqa: BLE001
+        pass
     for pid in _MARK_BOOK_IDS:
         try:
             # cash sweep first: idle cash earns ~4%/yr (money-market), idempotent per date, so the
@@ -308,7 +372,10 @@ def _daily_mark_job():
                 pass
             prices: dict = {}
             for t in tickers:
-                px = paper_account._current_price(t)        # ALWAYS in USD
+                # prefer the ONE marking layer's union mark (L1); fall back to the legacy accessor
+                # for names it couldn't price (esp. *.HK/*.SS/*.SZ, which route through Tushare/Yahoo
+                # -local below via _current_price). ALWAYS in USD at this point.
+                px = union_usd.get((t or "").upper()) or paper_account._current_price(t)
                 if not (px and px > 0):
                     continue
                 # A non-USD book is priced end-to-end in its BASE currency (cash, avg_cost, AND its
@@ -328,9 +395,60 @@ def _daily_mark_job():
                 if px and px > 0:
                     prices[t] = px
             if prices:
-                paper_account.mark(prices, _today_iso(), portfolio_id=pid, benchmark=bench)
+                paper_account.mark(prices, asof, portfolio_id=pid, benchmark=bench)
         except Exception:  # noqa: BLE001 — one book's mark miss must never kill the sweep
             continue
+    # ── W-L / L1: mark the Self-Directed book too (its own engine, its own nav_history) ──
+    # It is NOT a paper_account book, so it marks through its own mark seam. Install the ONE marking
+    # layer as its injected resolver for this sweep so it reads the same price every other book does
+    # (fixing the phantom-zero-return bug), then snapshot its NAV.
+    try:
+        from portfolio import self_directed, marks
+        _sd_state = self_directed._load_account()
+        # only advance a NAV history once the hand-driven book actually HOLDS something (an empty
+        # book has nothing to mark; this also keeps the empty-books contract of the daily sweep).
+        if _sd_state.get("positions"):
+            self_directed.set_price_resolver(lambda t: marks.mark_one(t, asof))
+            try:
+                self_directed.mark(prices=union_usd, asof=asof)
+            finally:
+                self_directed.set_price_resolver(None)      # never leave the seam installed
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _build_benchmark_ledger(asof: str, union_usd: dict) -> None:
+    """Build the four-bogey benchmark ledger for `asof` from a rolling mark history of SPY + the
+    defensive basket. We accumulate today's marks into data/benchmark/_series.json (a small
+    {ticker:{date:px}} store) so the renorm has a real window; the ledger then renorms every bogey
+    to growth-of-$1 and ranks them. Best-effort; never raises. Regime read is the live risk frame
+    (degrades to plain-SPY if absent — never pins a state)."""
+    import json as _json
+    from pathlib import Path as _Path
+    from brain import benchmark_ledger
+    root = _Path(__file__).resolve().parent.parent
+    series_path = root / "data" / "benchmark" / "_series.json"
+    want = [benchmark_ledger.SPY, *benchmark_ledger.DEFENSIVE_BASKET]
+    try:
+        series = _json.loads(series_path.read_text()) if series_path.exists() else {}
+    except Exception:  # noqa: BLE001
+        series = {}
+    for t in want:
+        px = union_usd.get(t)
+        if px and px > 0:
+            series.setdefault(t, {})[asof] = round(float(px), 6)
+    try:
+        series_path.parent.mkdir(parents=True, exist_ok=True)
+        series_path.write_text(_json.dumps(series, indent=2, sort_keys=True))
+    except Exception:  # noqa: BLE001
+        pass
+    regime = None
+    try:
+        from brain import macro_risk
+        regime = macro_risk.latest() if hasattr(macro_risk, "latest") else None
+    except Exception:  # noqa: BLE001
+        regime = None
+    benchmark_ledger.build(series, asof=asof, regime=regime)
 
 
 def _today_iso() -> str:
@@ -460,6 +578,15 @@ def start():
     sch.add_job(_cio_weekly_job,
                 CronTrigger(day_of_week=cio_dow, hour=cio_hour, minute=0, timezone="UTC"),
                 id="cio_weekly", replace_existing=True, misfire_grace_time=7200, coalesce=True)
+    # IMPROVEMENT AGENDA (W-L / L6) — weekly fusion of all accountability artifacts into a ranked
+    # AGENDA.md (human) + data/agenda/<date>.json (machine). Runs 30 min after CIO so it can consume
+    # the fresh CIO note. Configurable via AGENDA_WEEKLY_DAY / AGENDA_WEEKLY_UTC_HOUR.
+    agenda_dow = os.environ.get("AGENDA_WEEKLY_DAY", cio_dow)
+    agenda_hour = int(os.environ.get("AGENDA_WEEKLY_UTC_HOUR", str(cio_hour)))
+    sch.add_job(_improvement_agenda_job,
+                CronTrigger(day_of_week=agenda_dow, hour=agenda_hour, minute=30, timezone="UTC"),
+                id="improvement_agenda_weekly", replace_existing=True,
+                misfire_grace_time=7200, coalesce=True)
     # FORWARD-LEARNING MAINTENANCE — advance the accountability/learning substrate EVERY trading day,
     # independent of the flagship's material-change gate. The shadow A/B books, the desk-lever A/B, the
     # universe prediction log, the outcome-ledger resolution and the track-record/calibration refresh
@@ -472,6 +599,15 @@ def start():
     sch.add_job(_loop_maintenance_job,
                 CronTrigger(day_of_week="mon-fri", hour=lm_hour, minute=45, timezone="UTC"),
                 id="loop_maintenance", replace_existing=True, misfire_grace_time=3600, coalesce=True)
+    # EXPERIMENT MATURITY CHECK (W-L / L6) — daily sweep that promotes any OPEN experiment whose
+    # comeback_date has been reached to MATURED, persisting the status change in
+    # data/experiments/registry.json so the next agenda build surfaces it at the top (nothing rots).
+    # Runs at <loop-maint hour>:50, just AFTER loop_maintenance (23:45), so the fresh resolved-thesis
+    # count feeds the maturity check. LLM-free; deterministic; never raises into the scheduler.
+    sch.add_job(_experiment_maturity_job,
+                CronTrigger(day_of_week="mon-fri", hour=lm_hour, minute=50, timezone="UTC"),
+                id="experiment_maturity", replace_existing=True,
+                misfire_grace_time=3600, coalesce=True)
     sch.start()
     _scheduler = sch
     return sch

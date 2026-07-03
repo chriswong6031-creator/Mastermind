@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MASTERMIND — Improvement Agenda</title>
+
+<!-- No-flash theme init — MUST be first, before stylesheets (mirrors market_view.html). -->
+<script>
+try {
+  document.documentElement.setAttribute('data-theme', localStorage.getItem('theme') || 'dark');
+  document.documentElement.setAttribute('data-lang', localStorage.getItem('lang') || 'en');
+} catch(e) {}
+</script>
+
+<link rel="stylesheet" href="/theme.css">
+
+<style>
+* { box-sizing: border-box; }
+
+body.page-ag {
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 Inter, -apple-system, "Segoe UI", Roboto, Helvetica, sans-serif;
+  margin: 0;
+  padding: 18px;
+}
+@media (min-width: 1100px) {
+  body.page-ag { padding: 26px max(40px, calc((100vw - 1080px) / 2)); }
+}
+body.page-ag a { text-decoration: none; color: var(--link); }
+
+.ag-head { display: flex; align-items: baseline; justify-content: space-between;
+  gap: 14px; flex-wrap: wrap; margin: 0 0 16px; }
+.ag-head h1 { font-size: 19px; margin: 0; letter-spacing: .01em; }
+.ag-head .sub { color: var(--muted); font-size: 12px; }
+
+.note { color: var(--muted); font-size: 12px; margin: 0 0 18px;
+  border-left: 3px solid var(--line); padding: 6px 0 6px 12px; }
+
+.summary { display: flex; gap: 8px; flex-wrap: wrap; margin: 0 0 18px; }
+.chip { border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px;
+  font-size: 12px; background: var(--panel); color: var(--muted); }
+.chip b { color: var(--text); }
+
+.item { background: var(--panel); border: 1px solid var(--line);
+  border-radius: 14px; padding: 16px 18px; margin: 0 0 14px; }
+.item .top { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 0 0 8px; }
+.item .rank { font-size: 13px; font-weight: 800; color: var(--muted);
+  min-width: 22px; }
+.item h2 { font-size: 15px; margin: 0; font-weight: 700; text-transform: none;
+  letter-spacing: 0; border: none; padding: 0; color: var(--text); flex: 1 1 auto; }
+.item .meta { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 12px; }
+
+.pill { display: inline-block; border-radius: 999px; padding: 2px 9px; font-size: 11px;
+  border: 1px solid var(--line); background: var(--panel2); color: var(--muted);
+  text-transform: uppercase; letter-spacing: .04em; }
+/* owner tones */
+.pill.owner-self-tunable  { --c: var(--ok);   }
+.pill.owner-opus-session  { --c: var(--info); }
+.pill.owner-fable-review  { --c: var(--warn); }
+.pill.owner-self-tunable, .pill.owner-opus-session, .pill.owner-fable-review {
+  border-color: color-mix(in srgb, var(--c) 45%, var(--line));
+  background: color-mix(in srgb, var(--c) 12%, var(--panel));
+  color: color-mix(in srgb, var(--c) 70%, var(--text)); }
+.pill.age { background: transparent; }
+
+.block-label { font-size: 11px; color: var(--muted); text-transform: uppercase;
+  letter-spacing: .06em; font-weight: 700; margin: 12px 0 5px; }
+.evidence { margin: 0; padding: 0 0 0 18px; }
+.evidence li { margin: 0 0 3px; color: var(--text); font-size: 13px; }
+.fix, .impact { font-size: 13px; margin: 0; color: var(--text); }
+.fix b, .impact b { color: var(--muted); font-weight: 600; }
+
+.footnote { color: var(--muted); font-size: 11px; margin: 20px 0 0;
+  border-top: 1px solid var(--line); padding-top: 10px; }
+.msg { color: var(--muted); padding: 40px 0; text-align: center; }
+</style>
+</head>
+<body class="page-ag">
+<div class="ag-head">
+  <h1>Improvement Agenda</h1>
+  <div class="sub" id="sub">loading…</div>
+</div>
+<div id="root"><div class="msg">Loading agenda…</div></div>
+
+<script>
+(function () {
+  var root = document.getElementById("root");
+  var sub = document.getElementById("sub");
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function renderSummary(a) {
+    var oc = a.owners || {};
+    var cc = a.class_counts || {};
+    var out = '<div class="summary">';
+    out += '<span class="chip"><b>' + (a.n_items || 0) + '</b> open items</span>';
+    out += '<span class="chip"><b>' + (oc["self-tunable"] || 0) + '</b> self-tunable</span>';
+    out += '<span class="chip"><b>' + (oc["opus-session"] || 0) + '</b> opus-session</span>';
+    out += '<span class="chip"><b>' + (oc["fable-review"] || 0) + '</b> fable-review</span>';
+    Object.keys(cc).sort().forEach(function (k) {
+      out += '<span class="chip">' + esc(k) + ': <b>' + cc[k] + '</b></span>';
+    });
+    out += "</div>";
+    return out;
+  }
+
+  function renderItem(it) {
+    var age = it.age_weeks || 0;
+    var agetag = age ? ("open " + age + "w") : "NEW";
+    var out = '<div class="item">';
+    out += '<div class="top"><span class="rank">' + esc(it.rank) + ".</span>" +
+      "<h2>" + esc(it.title) + "</h2></div>";
+    out += '<div class="meta">' +
+      '<span class="pill">' + esc(it["class"]) + "</span>" +
+      '<span class="pill">' + esc(it.fix_type) + "</span>" +
+      '<span class="pill owner-' + esc(it.owner) + '">' + esc(it.owner) + "</span>" +
+      '<span class="pill age">rank ' + esc(it.rank_score) + "</span>" +
+      '<span class="pill age">' + esc(agetag) + "</span>" +
+      "</div>";
+    out += '<div class="block-label">Evidence</div><ul class="evidence">';
+    (it.evidence || []).forEach(function (e) { out += "<li>" + esc(e) + "</li>"; });
+    out += "</ul>";
+    out += '<div class="block-label">Suggested fix</div>' +
+      '<p class="fix">' + esc(it.suggested_fix) + "</p>";
+    out += '<div class="block-label">Expected impact</div>' +
+      '<p class="impact">' + esc(it.expected_impact) + "</p>";
+    out += "</div>";
+    return out;
+  }
+
+  function render(a) {
+    sub.textContent = "as of " + (a.as_of || "—") + " · " + (a.schema_version || "");
+    var html = "";
+    html += '<div class="note">' + esc(a.note ||
+      "Advisory only. This agenda ranks and reports — it never trades, flips a flag, or mutates a seat.") +
+      "</div>";
+    html += renderSummary(a);
+    var items = a.items || [];
+    if (!items.length) {
+      html += '<div class="msg">No items — every accountability source is clean or absent.</div>';
+    } else {
+      items.forEach(function (it) { html += renderItem(it); });
+    }
+    html += '<div class="footnote">Read-only mirror of data/agenda/&lt;date&gt;.json. This view sizes ' +
+      "nothing — the agenda is the pre-argued \"what to tell the AI to fix\", not a sizing path.</div>";
+    root.innerHTML = html;
+  }
+
+  fetch("/api/agenda", { headers: { "Accept": "application/json" } })
+    .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, body: j }; }); })
+    .then(function (res) {
+      if (!res.ok || (res.body && res.body.available === false)) {
+        var note = (res.body && (res.body.note || res.body.error)) || "agenda unavailable";
+        root.innerHTML = '<div class="msg">' + esc(note) + "</div>";
+        sub.textContent = "unavailable";
+        return;
+      }
+      render(res.body);
+    })
+    .catch(function (e) {
+      root.innerHTML = '<div class="msg">Failed to load agenda: ' + esc(e && e.message) + "</div>";
+      sub.textContent = "error";
+    });
+})();
+</script>
+</body>
+</html>

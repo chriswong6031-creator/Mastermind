@@ -1,5 +1,5 @@
 {
-  "_note": "Trimmed ETF closes 2026-06-22 through 2026-07-01 from vendor/macro/data/yahoo/*.parquet (real production data, dividend-adjusted). Used by incident replay tests. SMH peaked 2026-06-22 at 668.91 and fell to 620.46 by 07-01 (-7.2%). XLV rose from 150.06 (06-22) to 159.54 (+6.3%). The defensive-vs-offensive divergence is the core of the incident.",
+  "_note": "Trimmed ETF closes 2026-06-22 through 2026-07-01 from vendor/macro/data/yahoo/*.parquet (real production data, dividend-adjusted). Used by incident replay tests. SMH peaked 2026-06-22 at 668.91 and fell to 620.46 by 07-01 (-7.2%). XLV rose from 150.06 (06-22) to 159.54 (+6.3%). XLF/XLP/XLU (the rest of the user's defensive basket) also held up (+2.0%/+1.4%/+0.1%) while SMH/XLK unwound. The defensive-vs-offensive divergence is the core of the incident, and the equal-weight XLU/XLV/XLF/XLP basket (~+2.4%) is the benchmark that beat the Brain (W-L benchmark_ledger acceptance).",
   "SMH": {
     "2026-06-22": 668.909973,
     "2026-06-23": 622.049988,
@@ -39,6 +39,26 @@
     "2026-06-29": 46.02,
     "2026-06-30": 45.34,
     "2026-07-01": 44.77
+  },
+  "XLF": {
+    "2026-06-22": 53.70,
+    "2026-06-23": 53.88,
+    "2026-06-24": 53.72,
+    "2026-06-25": 53.45,
+    "2026-06-26": 53.57,
+    "2026-06-29": 53.72,
+    "2026-06-30": 53.61,
+    "2026-07-01": 54.78
+  },
+  "XLP": {
+    "2026-06-22": 82.18,
+    "2026-06-23": 83.72,
+    "2026-06-24": 84.44,
+    "2026-06-25": 83.94,
+    "2026-06-26": 84.71,
+    "2026-06-29": 84.37,
+    "2026-06-30": 83.07,
+    "2026-07-01": 83.30
   },
   "SPY": {
     "2026-06-22": 744.390015,

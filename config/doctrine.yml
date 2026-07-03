@@ -536,3 +536,119 @@ perception_validation:
   fires_max_frac:        0.10   # (unverified-prior) signal must fire on < this fraction of all days
   walk_start_full:       "2011-01-01"  # (unverified-prior) preferred window start (parquets allow)
   walk_start_fallback:   "2015-01-01"  # (unverified-prior) fallback when history is short
+
+# ---- BOUNDED SELF-REPAIR (brain/self_tune.py — W-L / L4) ----
+# The self-modification boundary, drawn by charter P3/P8. self_tune may propose new values for
+# doctrine keys — but ONLY keys carrying the literal '(unverified-prior)' tag in THIS file, and NEVER
+# a key whose dotted path matches the DENYLIST below (cap hard-bounds, gate/replay/charter config)
+# even if such a key were mistagged. One PARAMETER FAMILY per week (a family = one top-level doctrine
+# block, e.g. `budget` or `risk_state`). The pipeline (design §3):
+#   (1) the weekly agenda's evidence NAMES a family → (2) bounded candidate values (±25% or one
+#   band-edge, per `step`) → (3) each candidate is scored through loop/harness.py's IMMUTABLE judge +
+#   pbo.cscv + a ONE-SHOT holdout touch (REUSED verbatim — self_tune adds ZERO new statistics) →
+#   (4) a survivor runs SHADOW for `shadow_window_sessions` (a predicted-vs-realized ledger; a
+#   shadow_books arm where a family maps cleanly to a book policy) → (5) apply with a journal entry +
+#   an auto-revert trigger (realized underperforms the shadow projection by `revert_margin` over the
+#   window → revert + journal) → (6) a family that reverts TWICE is proposal-only FOREVER (persisted
+#   in data/self_tune/state.json — never re-armed without a human).
+# ARMING (charter P8): MASTERMIND_SELF_TUNE defaults OFF — self_tune earns its autonomy in shadow like
+# everything else. When OFF the module is a pure no-op (byte-identical). All constants (unverified-prior).
+self_tune:
+  step_pct:              0.25   # (unverified-prior) bounded candidate step: ±25% of the current value
+  n_candidates:          2      # (unverified-prior) candidate values proposed per family per week (the ± pair)
+  shadow_window_sessions: 21    # (unverified-prior) sessions a survivor runs shadow before it may apply
+  revert_margin:         0.20   # (unverified-prior) realized < shadow projection by >= this FRACTION → auto-revert
+  reverts_to_lock:       2      # (unverified-prior) a family that reverts this many times → proposal-only FOREVER
+  min_holdout_sharpe:    0.0    # (unverified-prior) holdout Sharpe must exceed this for a candidate to survive
+  # The literal doctrine tag a key MUST carry to be self-tunable. Hard-coded here for auditability;
+  # the module also hard-codes it (a mistyped tag in doctrine can never widen the surface).
+  unverified_tag: "(unverified-prior)"
+  # The DENYLIST — dotted-path prefixes self_tune may NEVER propose against, even if the key carries
+  # the unverified-prior tag (a mistag can never punch through this). These are cap hard-bounds and
+  # anything touching gates / replay / charter config. Matched as a case-insensitive substring of the
+  # candidate's dotted path (block.key). NEVER remove an entry to widen the surface (charter P3/P8).
+  denylist:
+    - "caps."                       # every cap block key (name_cap, ballast_cap, cluster caps, firm caps…)
+    - "armed_ceiling"               # def_sleeve hard clamp
+    - "validation_"                 # any *_validation gate threshold (rotation_tensor / perception)
+    - "perception_validation."      # the WHOLE gate-definition block (labeling params included)
+    - "auc_gate"                    # perception_validation AUC gate
+    - "fires_max_frac"              # perception_validation firing-rate gate
+    - "gate"                        # any key with 'gate' in its path (full_size_gate, *_gate…)
+    - "replay"                      # replay-battery config
+    - "charter"                     # any charter-tagged constant
+    - "hard_bound"                  # explicit hard-bound markers
+    - "governor"                    # the posture governor's OWN guards (never self-adapt the adapter)
+    - "self_tune."                  # self_tune may NEVER tune its OWN bounds (meta-boundary, P8)
+
+# ---- MARKING LAYER (portfolio/marks.py — W-L / L1) ----
+# The ONE price source's last-good-carry policy (charter P7 one marking layer; P2 missing→carry).
+marks:
+  carry_stale_max_days:  30     # (unverified-prior) drop a carried last-good mark older than this
+                                # (a >30d-stale price is not a mark — the name goes UNPRICED, held
+                                # at its prior book mark, NEVER snapped to avg_cost)
+
+# ---- REGIME-CONDITIONAL CALIBRATION (brain/calibration.py — W-L / L5a) ----
+# Calibration grades each seat's confidence against realized outcomes. L5 extends it two ways:
+#   (1) every label is tagged with the RISK-STATE at entry (backdrop_stance from the day's Strategist
+#       verdict), so a seat's multiplier is computed BOTH pooled AND per-regime-bucket. A seat that is
+#       well-calibrated in risk_on but wildly overconfident in a down-tape now shows it.
+#   (2) the binary "beat SPY over 21d" label gains a CONDITIONAL BOGEY leg: when the entry regime is
+#       NOT risk_on, the bogey is max(SPY, defensive-basket) (consumes benchmark_ledger's defensive
+#       curve). A defensive rotation that beat SPY into a down-tape but trailed the defensive sleeve is
+#       graded HONESTLY (it did not beat the best available defensive alternative) — and, symmetrically,
+#       a name that beat BOTH is credited for a genuinely good defensive call. Missing the defensive
+#       curve degrades to SPY-only (P2: no free credit, no false penalty).
+# All constants heuristic priors; the regime bucketing changes NO existing pooled multiplier math.
+regime_calibration:
+  min_bucket_n:      8     # (unverified-prior) a per-regime bucket needs this many resolved rows to score
+                          # (below it the bucket is 'building' and its multiplier is inert 1.0)
+  risk_on_states:    ["risk_on"]   # backdrop_stance values that count as risk_on (else → conditional bogey)
+
+# ---- POSTURE GOVERNOR (brain/posture_governor.py — W-L / L5c; architecture Stage 10) ----
+# The smallest safe self-adaptive corrective: nudges the leadership-budget multiplier toward defense
+# when the Self-Directed (user) book has been persistently beating the Brain's defensive posture, and
+# back toward 1.0 when that gap closes. DEFAULT OFF (MASTERMIND_POSTURE_ADAPT unset ⇒ mult == 1.0,
+# the loop is INERT and only OBSERVES). Charter P8: autonomy earned in shadow, statistically guarded.
+# Guards (ALL must hold before the mult may move off 1.0, else it snaps to 1.0):
+#   * effective_n >= min_effective_n independent gap observations (not raw session count);
+#   * the rolling brain-minus-defensive gap is HAC-significant (Newey-West t >= hac_t_min);
+#   * 3 consecutive same-sign weekly reviews (hysteresis) before a step is taken.
+# Motion: step is ±step (0.05), clamped inside [floor, ceil] (the SAME doctrine band the budget lives
+# in — the governor can only trim WITHIN the band, never widen it). On a sign flip the mult EMA-decays
+# toward 1.0 (restore-slow); shrink-toward-defense is allowed to step immediately once armed, restore
+# is slow (shrink-fast/restore-slow dead-band). A family that would push OUTSIDE the band is clamped,
+# never allowed to breach. NONE of these constants are self-tunable (denylisted below via 'governor').
+posture_governor:
+  step:              0.05   # (unverified-prior) per-review multiplier step (architecture: 0.05)
+  floor:             0.40   # (unverified-prior) hard clamp lower bound (= budget floor — never below)
+  ceil:              1.00   # (unverified-prior) multiplier ceiling (1.0 = no boost; governor only trims)
+  min_effective_n:   8      # (unverified-prior) independent gap observations required before arming
+  hac_t_min:         2.0    # (unverified-prior) Newey-West (HAC) t-stat the rolling gap must exceed
+  hac_lag:           3      # (unverified-prior) Newey-West lag for the HAC standard error
+  hysteresis_reviews: 3     # (unverified-prior) consecutive same-sign reviews required before a step
+  ema_alpha:         0.34   # (unverified-prior) restore-slow EMA weight toward 1.0 on a sign flip
+
+# ---- THE JOURNAL — per-seat memory files (brain/journal.py — W-L / L2) ----
+# The conscious-learning conscience (charter P3/P6). Two layers: DETERMINISTIC auto-drafts on every
+# graded resolution (no LLM), and the CONSCIOUS DUTY — the Opus seat completes a lesson for each
+# badly-graded draft on its next build (same enforcement pattern as the three-questions duty). The
+# most load-bearing lessons are PINNED and injected into the seat's prompt through the EXISTING
+# self_mirror seam (one injection contract, charter P7). Every pinned rule carries a FALSIFIER — its
+# own predicted effect on the seat's next-N same-taxonomy calls — and AUTO-UNPINS when it fails (P3:
+# even lessons earn their authority). All constants (unverified-prior); the pinning arithmetic is
+# heuristic and revisited once forward pinned-rule outcomes accrue (design falsifier §72).
+# INVARIANT (P2): missing/absent data degrades to a no-op — the duty is add-only (an incomplete
+# completion is ACCEPTED and logged 'journal_incomplete', never rejected), and the injection returns
+# the prompt UNCHANGED whenever there is nothing pinned.
+journal:
+  last_n_drafts:         12     # (unverified-prior) how many recent unresolved drafts a seat receives per build
+  bad_grade_max:         0.0    # (unverified-prior) a draft grade (rel vs benchmark) <= this REQUIRES a lesson
+  cap_lessons_per_seat:  200    # (unverified-prior) curated-file cap: oldest lessons past this are pruned
+  cap_drafts_per_seat:   400    # (unverified-prior) drafts ring-buffer cap (oldest resolved drafts pruned first)
+  pin_top_k:             3      # (unverified-prior) how many rules to PIN + inject per seat (top-K by weight)
+  pin_min_recurrence:    2      # (unverified-prior) a taxonomy cluster must recur >= this many times to be pinnable
+  pin_min_confidence:    0.5    # (unverified-prior) a rule below this stated confidence is never pinned
+  falsifier_window_n:    6      # (unverified-prior) a pinned rule falsifier grades its seat's next-N same-taxonomy calls
+  falsifier_min_n:       4      # (unverified-prior) do not judge a falsifier until this many post-pin same-taxonomy calls resolve
+  falsifier_fail_rate:   0.5    # (unverified-prior) a pinned rule whose taxonomy KEEPS mis-grading >= this share post-pin auto-unpins

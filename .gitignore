@@ -32,3 +32,14 @@ data/*.sqlite
 
 # dedicated build-managed macro data checkout (kept fresh by data_layer/macro_refresh)
 vendor/macro_src/
+
+# runtime state written by live jobs / tests (never commit)
+data/marks/
+data/benchmark/
+data/journal/
+data/agenda/
+data/self_tune/
+data/market_view/
+data/anticipation/
+data/deploy_lag.json
+catboost_info/

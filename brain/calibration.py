@@ -31,6 +31,10 @@ MIN_N = 12          # below this many resolved decisions, do not adjust (cold-st
 FLOOR = 0.5         # never shrink confidence below half (bounded)
 _HORIZON = 21       # forward business-day window the seat decisions are graded over
 
+# ── L5a: regime-conditional grading constants (mirror config/doctrine.yml regime_calibration:) ──
+_MIN_BUCKET_N = 8                       # a per-regime bucket needs this many rows to score
+_RISK_ON_STATES = ("risk_on",)          # backdrop_stance values that count as risk_on
+
 
 def _mult(reliability: float | None, mean_conf: float | None, n: int) -> float:
     """De-confidence-only multiplier: shrink toward realized reliability, clamp to [FLOOR, 1.0]."""
@@ -48,6 +52,140 @@ def _summarize(rows: list[tuple[int, float]]) -> dict:
     mc = sum(c for _, c in rows) / n
     return {"n": n, "reliability": round(rel, 3), "mean_confidence": round(mc, 3),
             "multiplier": _mult(rel, mc, n), "status": "scoring" if n >= MIN_N else "building"}
+
+
+# ───────────────────────── L5a: regime-conditional grading ─────────────────────────
+# Every graded label carries the RISK-STATE at entry (the day's Strategist backdrop_stance). A seat's
+# multiplier is then computed BOTH pooled (the existing math, unchanged) AND per-regime-bucket. And the
+# binary beat-SPY label gains a CONDITIONAL BOGEY leg: when the entry regime is NOT risk_on, the bogey
+# becomes max(SPY, defensive_basket) — so a name that beat SPY into a down-tape but trailed the defensive
+# sleeve is graded honestly. Missing the defensive curve degrades to SPY-only (P2: no free credit).
+
+
+def _regime_cfg() -> dict:
+    """The regime_calibration doctrine block, or {} on any miss (→ fallbacks apply)."""
+    try:
+        from bot.doctrine_config import load_doctrine
+        block = load_doctrine().get("regime_calibration")
+        return block if isinstance(block, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _min_bucket_n() -> int:
+    try:
+        return int(_regime_cfg().get("min_bucket_n") or _MIN_BUCKET_N)
+    except (TypeError, ValueError):
+        return _MIN_BUCKET_N
+
+
+def _risk_on_states() -> tuple:
+    v = _regime_cfg().get("risk_on_states")
+    if isinstance(v, (list, tuple)) and v:
+        return tuple(str(x).strip().lower() for x in v)
+    return _RISK_ON_STATES
+
+
+def _is_risk_on(state: str | None) -> bool:
+    """True iff the entry-regime backdrop is a risk_on state. None/unknown → treated NON-risk_on so
+    the conditional bogey applies (we never grant the risk_on 'easy bogey' without evidence)."""
+    if state is None:
+        return False
+    return str(state).strip().lower() in _risk_on_states()
+
+
+# per-run cache of the day's risk-state read (keyed by date_iso) — the Strategist verdict is one file.
+_regime_at_cache: dict[str, str | None] = {}
+
+
+def _regime_at(date_iso: str) -> str | None:
+    """The RISK-STATE in force on `date_iso` = the day's Strategist `backdrop_stance` (the only per-date
+    regime artifact persisted in the committee tree). None if unavailable (P2 degrade). Best-effort."""
+    d = str(date_iso)[:10]
+    if d in _regime_at_cache:
+        return _regime_at_cache[d]
+    state: str | None = None
+    try:
+        sf = _COMMITTEE / d / "_FLAGSHIP" / "strategist.json"
+        if sf.exists():
+            j = json.loads(sf.read_text())
+            v = (j.get("verdict") or j)
+            bs = v.get("backdrop_stance")
+            state = str(bs).strip().lower() if bs else None
+    except Exception:  # noqa: BLE001
+        state = None
+    _regime_at_cache[d] = state
+    return state
+
+
+# per-run cache of the defensive-vs-SPY edge over a name's forward window (keyed by entry_iso).
+_defensive_edge_cache: dict[str, float | None] = {}
+
+
+def _defensive_edge(entry_iso: str, asof: date | None) -> float | None:
+    """The defensive basket's realized return MINUS SPY's over the falsifier window anchored on
+    `entry_iso` (i.e. how much the max(SPY,defensive) bogey RAISES the bar above plain SPY). Consumes
+    benchmark_ledger's DEFENSIVE_BASKET; computed as the equal-weight mean of each constituent's
+    rel_return vs SPY (reusing the leakage-free `_label_name`). None if the curve can't be built (P2).
+
+    Returns >0 when the defensive sleeve out-ran SPY over the window (the bar rises); <=0 or None when
+    it did not (the conditional bogey then collapses to plain SPY — max(0, edge) below)."""
+    d = str(entry_iso)[:10]
+    if d in _defensive_edge_cache:
+        return _defensive_edge_cache[d]
+    edge: float | None = None
+    try:
+        from brain.benchmark_ledger import DEFENSIVE_BASKET
+        rels = []
+        for tk in DEFENSIVE_BASKET:
+            r = _resolved_rel(tk, d, asof)   # each defensive ETF's rel_return vs SPY, leakage-free
+            if r is not None:
+                rels.append(r)
+        if rels:
+            edge = round(sum(rels) / len(rels), 6)
+    except Exception:  # noqa: BLE001
+        edge = None
+    _defensive_edge_cache[d] = edge
+    return edge
+
+
+def _conditional_beat(rel_return: float, entry_iso: str, state: str | None,
+                      asof: date | None) -> int:
+    """The CONDITIONAL beat-bogey outcome (0/1) for the binary beat-SPY label. In risk_on the bogey is
+    plain SPY (beat ⇔ rel_return >= 0). When NOT risk_on the bogey is max(SPY, defensive): beat ⇔
+    rel_return >= max(0, defensive_edge). Missing the defensive edge degrades to the SPY-only bar."""
+    if _is_risk_on(state):
+        return 1 if rel_return >= 0 else 0
+    edge = _defensive_edge(entry_iso, asof)
+    bar = max(0.0, edge) if edge is not None else 0.0
+    return 1 if rel_return >= bar else 0
+
+
+def _bucketize(tagged: list[tuple[int, float, str | None]]) -> dict:
+    """Split regime-tagged rows into risk_on / not_risk_on buckets and summarize each. `tagged` rows are
+    (outcome, confidence, regime_state). Returns {risk_on:{...}, not_risk_on:{...}} where each block is
+    a _summarize output; a bucket below _min_bucket_n stays inert (multiplier 1.0) via _summarize's own
+    MIN_N clamp is NOT enough (MIN_N=12) — we additionally hold buckets < min_bucket_n at multiplier 1.0
+    so a thin regime slice never moves a seat."""
+    mn = _min_bucket_n()
+    on = [(o, c) for (o, c, s) in tagged if _is_risk_on(s)]
+    off = [(o, c) for (o, c, s) in tagged if not _is_risk_on(s)]
+
+    def _bucket(rows):
+        s = _summarize(rows)
+        if s["n"] < mn:                                  # thin bucket → inert, never de-confidence
+            s = {**s, "multiplier": 1.0, "status": "building"}
+        return s
+    return {"risk_on": _bucket(on), "not_risk_on": _bucket(off)}
+
+
+def _with_conditional(pooled: dict, tagged: list[tuple[int, float, str | None]]) -> dict:
+    """Attach the regime-conditional legs to a pooled seat summary WITHOUT changing the chosen
+    multiplier (pooled stays authoritative; the buckets are diagnostic + feed the agenda). `tagged`
+    carries the regime state per row. Adds `by_regime` (the two buckets) to the block."""
+    out = dict(pooled)
+    out["by_regime"] = _bucketize(tagged)
+    return out
 
 
 def _forge_reliability(asof: date) -> dict:
@@ -311,14 +449,22 @@ def _book_decisions(portfolio_id: str):
 
 def _book_reliability(asof: date, portfolio_id: str, benchmark: str) -> dict:
     """Grade a free-form Brain book's submitted holdings forward vs its benchmark. One row per
-    (held name, decision date) whose 21d window has fully elapsed: outcome = beat benchmark
-    (rel_return >= 0), confidence = stated conviction. Reuses `_label_name` (leakage-free)."""
-    rows: list[tuple[int, float]] = []
+    (held name, decision date) whose 21d window has fully elapsed: outcome = beat benchmark,
+    confidence = stated conviction. Reuses `_label_name` (leakage-free).
+
+    L5a: the binary beat-benchmark outcome is CONDITIONAL for the SPY-benchmarked US books — when the
+    entry regime was NOT risk_on the bar rises to max(SPY, defensive) (`_conditional_beat`). For a
+    non-SPY benchmark (FXI books) the bogey is left as the raw benchmark (the defensive-basket sleeve
+    is a US construct). Rows are regime-tagged so the seat carries a `by_regime` split. The POOLED
+    multiplier is unchanged in shape; only the beat-definition tightens in down-tapes."""
+    tagged: list[tuple[int, float, str | None]] = []
+    spy_bench = str(benchmark).upper() == "SPY"
     try:
         for row in _book_decisions(portfolio_id):
             d_iso = str(row.get("asof") or "")[:10]
             if not d_iso or not _elapsed(d_iso, asof):
                 continue
+            state = _regime_at(d_iso)
             for h in (row.get("holdings") or []):
                 tk = str(h.get("ticker") or "").upper().strip()
                 if not tk:
@@ -330,10 +476,13 @@ def _book_reliability(asof: date, portfolio_id: str, benchmark: str) -> dict:
                 if not (lab and lab.get("resolved") and lab.get("rel_return") is not None):
                     continue
                 r = float(lab["rel_return"])
-                rows.append((1 if r >= 0 else 0, _conviction_conf(h.get("conviction"))))
+                # conditional bogey only for SPY-benchmarked (US) books; FXI books keep the raw bar
+                outcome = _conditional_beat(r, d_iso, state, asof) if spy_bench else (1 if r >= 0 else 0)
+                tagged.append((outcome, _conviction_conf(h.get("conviction")), state))
     except Exception:  # noqa: BLE001 — calibration never fatal
         pass
-    return _summarize(rows)
+    pooled = _summarize([(o, c) for (o, c, _s) in tagged])
+    return _with_conditional(pooled, tagged)
 
 
 # ───────────────────────── FAST-ARM: universe-fed reliability ─────────────────────────
@@ -513,8 +662,72 @@ def _prefer(owned: dict, universe: dict) -> dict:
     return out
 
 
+def _book_reliability_raw_spy(asof: date, portfolio_id: str) -> dict:
+    """The pre-L5a pooled reliability for a SPY-benchmarked book: outcome = beat SPY (rel_return >= 0),
+    NO conditional bogey. Used ONLY by the falsifier to prove the conditional leg is not inert."""
+    rows: list[tuple[int, float]] = []
+    try:
+        for row in _book_decisions(portfolio_id):
+            d_iso = str(row.get("asof") or "")[:10]
+            if not d_iso or not _elapsed(d_iso, asof):
+                continue
+            for h in (row.get("holdings") or []):
+                tk = str(h.get("ticker") or "").upper().strip()
+                if not tk:
+                    continue
+                try:
+                    lab = _label_name(tk, d_iso, asof, vs="SPY")
+                except Exception:  # noqa: BLE001
+                    continue
+                if not (lab and lab.get("resolved") and lab.get("rel_return") is not None):
+                    continue
+                rows.append((1 if float(lab["rel_return"]) >= 0 else 0, _conviction_conf(h.get("conviction"))))
+    except Exception:  # noqa: BLE001
+        pass
+    return _summarize(rows)
+
+
+def conditional_bogey_falsifier(asof: date | None = None,
+                                books: tuple = ("autonomous", "heavyweight")) -> dict:
+    """PRE-REGISTERED FALSIFIER (masterplan): the conditional bogey earns its place only if it CHANGES
+    a multiplier vs raw-SPY on the incident-window books. For each SPY-benchmarked book we compute the
+    pooled multiplier under raw-SPY and under the conditional bogey and report the delta. If NO book's
+    multiplier moves (all deltas ~0), `inert=True` and `verdict` says so LOUDLY — the incentive leg
+    would be doing nothing and should be flagged in the agenda. Best-effort; never raises."""
+    asof = asof or date.today()
+    _reset_run_caches()
+    rows = []
+    moved = False
+    for b in books:
+        try:
+            raw = _book_reliability_raw_spy(asof, b)
+            cond = _book_reliability(asof, b, "SPY")
+        except Exception:  # noqa: BLE001
+            continue
+        d = round((cond.get("multiplier") or 1.0) - (raw.get("multiplier") or 1.0), 6)
+        if abs(d) > 1e-9:
+            moved = True
+        rows.append({"book": b, "raw_spy_multiplier": raw.get("multiplier"),
+                     "conditional_multiplier": cond.get("multiplier"),
+                     "delta": d, "n": cond.get("n")})
+    inert = not moved
+    return {"as_of": asof.isoformat(), "inert": inert, "books": rows,
+            "verdict": ("INERT — the conditional bogey changed NO multiplier vs raw-SPY on these "
+                        "books; the incentive leg is doing nothing (flag in agenda)."
+                        if inert else
+                        "ACTIVE — the conditional bogey moved at least one book's multiplier vs raw-SPY.")}
+
+
+def _reset_run_caches() -> None:
+    """Clear the per-run regime / defensive-edge caches (called at the top of compute + the falsifier so
+    a monkeypatched _COMMITTEE / fixture window is never masked by a stale cache from a prior call)."""
+    _regime_at_cache.clear()
+    _defensive_edge_cache.clear()
+
+
 def compute(asof: date | None = None) -> dict:
     asof = asof or date.today()
+    _reset_run_caches()
 
     def _safe(fn):
         try:
@@ -534,7 +747,14 @@ def compute(asof: date | None = None) -> dict:
         except Exception:  # noqa: BLE001
             return _safe(owned_fn)
 
+    try:
+        cond_falsifier = conditional_bogey_falsifier(asof)
+    except Exception:  # noqa: BLE001
+        cond_falsifier = {"inert": None, "verdict": "unavailable"}
+
     return {"as_of": asof.isoformat(), "min_n": MIN_N, "floor": FLOOR,
+            "min_bucket_n": _min_bucket_n(),
+            "conditional_bogey": cond_falsifier,      # L5a pre-registered falsifier verdict
             "agents": {"forge": _safe(_forge_reliability),
                        "sentinel": _safe(_sentinel_reliability),
                        "strategist": _fast_arm(_strategist_reliability, _universe_strategist),
@@ -572,5 +792,26 @@ def multiplier(agent: str) -> float:
     try:
         m = ((load().get("agents") or {}).get(agent) or {}).get("multiplier")
         return float(m) if m is not None else 1.0
+    except Exception:  # noqa: BLE001
+        return 1.0
+
+
+def regime_multiplier(agent: str, state: str | None) -> float:
+    """L5a: the REGIME-CONDITIONAL multiplier for `agent` in the risk-state `state`. Returns the
+    matching bucket's multiplier if the seat carries a scoring `by_regime` bucket; otherwise falls
+    back to the pooled multiplier (P2: a thin/absent bucket never over-de-confidences). 1.0 if unknown.
+
+    The pooled multiplier stays authoritative at decision time — this accessor is for consumers that
+    WANT the regime-sliced read (the improvement agenda, a regime-aware seat prompt)."""
+    try:
+        block = (load().get("agents") or {}).get(agent) or {}
+        by_regime = block.get("by_regime") or {}
+        key = "risk_on" if _is_risk_on(state) else "not_risk_on"
+        bucket = by_regime.get(key) or {}
+        m = bucket.get("multiplier")
+        if m is not None and (bucket.get("status") == "scoring"):
+            return float(m)
+        pm = block.get("multiplier")
+        return float(pm) if pm is not None else 1.0
     except Exception:  # noqa: BLE001
         return 1.0

@@ -551,6 +551,10 @@ def build_book(sized: list[dict], rejected: list[dict], *, regime: dict | None, 
         "own_more": _norm_calls(sub.get("own_more")),
         "own_less": _norm_calls(sub.get("own_less")),
         "not_holding_should": _norm_calls(sub.get("not_holding_should")),
+        # W-L / L2 — the PM's JOURNAL DUTY completions, passed through verbatim (the judgment book
+        # records them via brain.journal.complete). Missing → []; an incomplete lesson is accepted +
+        # logged 'journal_incomplete', never rejected (add-only, mirrors three_questions_incomplete).
+        "journal_lessons": list(sub.get("journal_lessons") or [])[:40],
     }
 
 

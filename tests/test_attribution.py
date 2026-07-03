@@ -257,3 +257,90 @@ def test_persist_never_raises_on_unwritable(monkeypatch, tmp_path, stub_rel):
     monkeypatch.setattr(ATTR, "_read_regime", lambda: {})
     block = ATTR.persist(dt.date(2026, 6, 1))
     assert block["status"] == "building"
+
+
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+# L5b — ALLOCATION + CASH-TIMING attribution
+# ══════════════════════════════════════════════════════════════════════════════════════════════════
+
+def test_allocation_terms_reconcile_to_active():
+    """allocation + cash_timing + selection_residual must sum to active (reconcile-asserted)."""
+    t = ATTR.allocation_terms(
+        book_return=0.02, bench_return=-0.03,
+        sector_weights={"healthcare": 0.5, "semis": 0.1},
+        sector_returns={"healthcare": 0.06, "semis": -0.07},
+        bench_sector_weights={"healthcare": 0.15, "semis": 0.30},
+        cash_weight=0.20)
+    assert t["reconciled"] is True
+    assert abs((t["allocation"] + t["cash_timing"] + t["selection_residual"]) - t["active_return"]) < 1e-9
+    assert t["active_return"] == pytest.approx(0.05, abs=1e-9)   # 0.02 - (-0.03)
+
+
+def test_held_xlv_avoided_semis_is_creditable():
+    """THE ACCEPTANCE (L5b) — 'held XLV, avoided semis' becomes a POSITIVE, creditable allocation +
+    cash-timing on the incident-shaped inputs.
+
+    Incident window: SPY ~ -3%, healthcare (XLV) +6%, semis (SMH) -7%. A book that OVERWEIGHTED XLV,
+    UNDERWEIGHTED semis, and sat on cash while the tape fell must show:
+      * POSITIVE allocation (the defensive sector tilt earned active return), and
+      * POSITIVE cash_timing (holding cash beat the falling benchmark)."""
+    t = ATTR.allocation_terms(
+        book_return=0.015, bench_return=-0.03,          # book +1.5% while SPY -3%
+        sector_weights={"healthcare": 0.45, "semis": 0.05},   # overweight XLV, underweight semis
+        sector_returns={"healthcare": 0.06, "semis": -0.07},
+        bench_sector_weights={"healthcare": 0.15, "semis": 0.30},   # SPY carried lots of semis
+        cash_weight=0.25)
+    assert t["allocation"] > 0, ("held XLV / avoided semis must be a positive allocation", t)
+    assert t["cash_timing"] > 0, ("holding cash in a down-tape must be credited", t)
+    assert t["reconciled"] is True
+
+
+def test_cash_timing_is_a_drag_in_an_up_tape():
+    """Symmetry: holding cash while the benchmark RISES is an opportunity-cost DRAG (negative)."""
+    t = ATTR.allocation_terms(
+        book_return=0.04, bench_return=0.05,
+        sector_weights={}, sector_returns={}, bench_sector_weights={},
+        cash_weight=0.30)
+    assert t["cash_timing"] < 0
+    assert t["allocation"] == 0.0            # no sector tilt supplied
+
+
+def test_allocation_attribution_consumes_benchmark_ledger(monkeypatch):
+    """allocation_attribution reads benchmark_ledger.latest() and produces a reconciled per-book block
+    on the incident-shaped ledger (defensive up, SPY down, the Brain book trailing)."""
+    from brain import benchmark_ledger as BL
+    fake = {
+        "regime": {"state": "risk_off"},
+        "bogeys": {
+            "spy": {"curve": {"2026-06-22": 1.0, "2026-07-01": 0.97}},          # SPY -3%
+            "defensive": {"curve": {"2026-06-22": 1.0, "2026-07-01": 1.024}},   # defensive +2.4%
+        },
+        "leaderboard": [
+            {"id": "spy", "kind": "bogey", "return_pct": -3.0},
+            {"id": "defensive", "kind": "bogey", "return_pct": 2.4},
+            {"id": "autonomous", "kind": "book", "return_pct": -5.0},           # the Brain trailed
+        ],
+    }
+    monkeypatch.setattr(BL, "latest", lambda: fake)
+    block = ATTR.allocation_attribution(dt.date(2026, 7, 1))
+    assert block["status"] == "scoring"
+    assert "autonomous" in block["books"]
+    b = block["books"]["autonomous"]
+    assert b["reconciled"] is True
+    # the Brain returned -5% vs SPY -3% → active is negative (it trailed the market AND defense)
+    assert b["active_return"] == pytest.approx(-0.02, abs=1e-6)
+
+
+def test_allocation_attribution_degrades_without_ledger(monkeypatch):
+    from brain import benchmark_ledger as BL
+    monkeypatch.setattr(BL, "latest", lambda: {})
+    block = ATTR.allocation_attribution(dt.date(2026, 7, 1))
+    assert block["status"] == "building"
+    assert block["books"] == {}
+
+
+def test_allocation_attribution_never_raises(monkeypatch):
+    from brain import benchmark_ledger as BL
+    monkeypatch.setattr(BL, "latest", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+    block = ATTR.allocation_attribution(dt.date(2026, 7, 1))
+    assert block["status"] == "building"

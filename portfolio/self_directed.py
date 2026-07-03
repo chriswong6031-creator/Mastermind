@@ -38,6 +38,7 @@ _ACCOUNT_PATH = _DATA / "account.json"
 _FILLS_PATH = _DATA / "fills.jsonl"
 _PENDING_PATH = _DATA / "pending.json"
 _THESES_PATH = _DATA / "theses.json"
+_NAV_PATH = _DATA / "nav_history.jsonl"      # W-L / L1: this book now advances a NAV history too
 
 _STARTING_NAV = 1_000_000.0
 
@@ -169,8 +170,35 @@ def _live_quote(ticker: str) -> Optional[float]:
     return None
 
 
+# INJECTION SEAM (W-L / L1) — the ONE marking layer, opt-in.
+#
+# Historically this book had its OWN price path (live Polygon → stockdata snapshot) that NEVER read
+# the vendored parquet store, so any held name with no live quote fell through to avg_cost at the
+# call sites → the book showed a phantom ZERO return. The fix is NOT to rewrite this module (its
+# open/close-fill mechanics must stay intact); it is to let the daily-mark job route this book's
+# marks through `portfolio.marks` (polygon-EOD → yahoo-parquet → last-good-carry, never avg_cost)
+# by setting `_price_resolver`. When unset, behaviour is byte-identical to before.
+_price_resolver = None  # Optional[Callable[[str], Optional[float]]]
+
+
+def set_price_resolver(fn) -> None:
+    """Install (or clear, with None) the injected mark resolver. `fn(ticker) -> price|None` becomes
+    the FIRST source `_current_price` consults; the legacy live/snapshot path is the fallback."""
+    global _price_resolver
+    _price_resolver = fn
+
+
 def _current_price(ticker: str) -> Optional[float]:
-    """Best available current price: live Polygon quote, then the stockdata snapshot mark."""
+    """Best available current price. If a mark resolver is injected (the ONE marking layer, L1) it
+    is consulted first; otherwise the legacy live Polygon quote → stockdata snapshot path is used.
+    NEVER falls back to avg_cost (a missing mark returns None, so callers hold at the prior mark)."""
+    if _price_resolver is not None:
+        try:
+            px = _price_resolver(ticker)
+            if px and px > 0:
+                return float(px)
+        except Exception:
+            pass
     return _live_quote(ticker) or _stockdata_price(ticker)
 
 
@@ -414,6 +442,62 @@ def set_thesis(ticker: str, note: str) -> Optional[dict]:
         theses.pop(ticker, None)
     _save_theses(theses)
     return theses.get(ticker)
+
+
+# ---------------------------------------------------------------------------
+# NAV history mark (W-L / L1) — the mark seam so this book is graded like the others
+# ---------------------------------------------------------------------------
+
+def mark(*, prices: dict[str, float] | None = None, asof: str | None = None,
+         benchmark: str = "SPY") -> Optional[dict]:
+    """Snapshot this book's NAV to nav_history.jsonl (idempotent per date), so the CIO review and
+    the improvement agenda see it alongside the paper_account books. Uses the SAME price resolution
+    as book() (the injected marking layer first, then the legacy accessor) — a held name with no
+    mark falls back to its avg_cost for the NAV total ONLY (never written back as a price). The
+    benchmark line (spy_nav) initialises its shares on the first mark, mirroring paper_account.mark.
+    Best-effort; never raises."""
+    asof = str(asof or _today())[:10]
+    state = _load_account()
+    prices = {(k or "").upper(): v for k, v in (prices or {}).items() if v and v > 0}
+    positions = state.get("positions", {})
+
+    invested = 0.0
+    for ticker, pos in positions.items():
+        px = prices.get(ticker) or _current_price(ticker) or (pos.get("avg_cost") or 0.0)
+        invested += (pos.get("shares") or 0.0) * px
+    cash = state.get("cash", 0.0)
+    nav = cash + invested
+
+    # benchmark shares are pinned on the first mark (back-compat with the paper_account convention)
+    spy_px = prices.get(benchmark) or _current_price(benchmark)
+    if state.get("spy_shares") is None and spy_px and spy_px > 0:
+        state["spy_shares"] = _STARTING_NAV / spy_px
+        state["spy_inception_price"] = spy_px
+        _save_account(state)
+    spy_nav = state.get("spy_shares") * spy_px if (state.get("spy_shares") and spy_px) else None
+
+    row = {"date": asof, "nav": round(nav, 2), "cash": round(cash, 2),
+           "invested": round(invested, 2),
+           "spy_nav": round(spy_nav, 2) if spy_nav is not None else None}
+    try:
+        _ensure_dir()
+        rows: list[dict] = []
+        if _NAV_PATH.exists():
+            for line in _NAV_PATH.read_text().splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except Exception:
+                    continue
+                if r.get("date") != asof:            # idempotent per date
+                    rows.append(r)
+        rows.append(row)
+        _NAV_PATH.write_text("\n".join(json.dumps(r, default=str) for r in rows) + "\n")
+    except Exception:
+        pass
+    return row
 
 
 # ---------------------------------------------------------------------------

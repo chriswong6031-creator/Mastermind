@@ -34,11 +34,32 @@ _SEATS = [
     ("risk", "RISK OFFICER"),
 ]
 
-# books to summarize NAV-vs-benchmark for. flagship is the legacy data/portfolio/ tree.
-_NAV_BOOKS = [
-    ("flagship", _ROOT / "data" / "portfolio" / "nav_history.jsonl"),
-    ("flagship_judgment", _ROOT / "data" / "portfolios" / "flagship_judgment" / "nav_history.jsonl"),
-]
+# books to summarize NAV-vs-benchmark for. W-L / L1: extended from 2 → ALL 7 registry books (the
+# CIO weekly review + the improvement agenda now see every accountable book, not a partial view).
+# flagship keeps its legacy data/portfolio/ home; the flagship_judgment shadow is retained.
+def _nav_books() -> list[tuple[str, "Path"]]:
+    """(book_id, nav_history path) for every registry portfolio + the flagship_judgment shadow.
+
+    Resolved through portfolio.registry so a new book is picked up automatically (P7 — one source of
+    truth for the book set). self_directed's NAV lives under its own engine dir, not paper_account's,
+    so its path is special-cased. Best-effort: a registry import failure falls back to the two
+    legacy books this list used to hold."""
+    books: list[tuple[str, "Path"]] = []
+    try:
+        from portfolio import registry
+        for pid in registry.ids():
+            if pid == "self_directed":
+                books.append((pid, _ROOT / "data" / "portfolio" / "self_directed" / "nav_history.jsonl"))
+            else:
+                books.append((pid, registry.data_dir(pid) / "nav_history.jsonl"))
+    except Exception:  # noqa: BLE001
+        books = [("flagship", _ROOT / "data" / "portfolio" / "nav_history.jsonl")]
+    books.append(("flagship_judgment",
+                  _ROOT / "data" / "portfolios" / "flagship_judgment" / "nav_history.jsonl"))
+    return books
+
+
+_NAV_BOOKS = _nav_books()
 
 _MIN_DATES = 8     # independent (thinned) clusters before a KPI t-stat is reported (mirror predictions)
 _HAC_LAGS = 2      # Newey-West residual-autocorrelation lags after thinning
@@ -457,4 +478,7 @@ def write(asof: date | None = None, narrate: bool = True) -> dict:
     except Exception:  # noqa: BLE001
         ok = False
     return {"ok": ok, "week": week, "narrated": narrated,
-            "json_path": str(json_path), "md_path": str(md_path)}
+            "json_path": str(json_path), "md_path": str(md_path),
+            # W-L / L3: hand the computed review to the caller so the improvement agenda can fuse over
+            # it without a second review() pass (one source of truth — charter P7). Additive key.
+            "review": rep}

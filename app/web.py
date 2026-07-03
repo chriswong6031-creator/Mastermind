@@ -249,6 +249,15 @@ def market_view_page() -> FileResponse:
     return FileResponse(_STATIC / "market_view.html", media_type="text/html", headers=_NOCACHE)
 
 
+@router.get("/agenda", include_in_schema=False)
+def agenda_page() -> FileResponse:
+    """The Improvement Agenda mirror (W-L / L3) — a read-only render of the weekly self-critique
+    artifact (data/agenda/<date>.json): the ranked items, each with its evidence, suggested fix,
+    fix_type, and owner. Its own standalone static page (not the SPA) so a maintenance session can
+    bookmark it; fetches /api/agenda client-side. This view sizes/changes nothing — advisory only."""
+    return FileResponse(_STATIC / "agenda.html", media_type="text/html", headers=_NOCACHE)
+
+
 @router.get("/theme.css", include_in_schema=False)
 def theme_css() -> FileResponse:
     """Serve the macro design-system stylesheet the dashboard links."""
@@ -773,6 +782,29 @@ def api_market_view() -> JSONResponse:
             raise ValueError("artifact is not a JSON object")
         _enrich_rotation_pairs(view)
         return JSONResponse(view, headers=_NOCACHE)
+    except Exception as exc:  # noqa: BLE001 — never raise; degrade to an honest stub
+        return JSONResponse(
+            {"available": False, "error": str(exc)}, status_code=500, headers=_NOCACHE)
+
+
+@router.get("/api/agenda")
+def api_agenda() -> JSONResponse:
+    """The Improvement Agenda artifact (W-L / L3) — the weekly self-critique fusing every
+    accountability artifact into a ranked list of {evidence, suggested_fix, fix_type, expected_impact,
+    owner}. Serves the latest data/agenda/<date>.json verbatim (schema improvement_agenda.v1).
+
+    Read-only + advisory: this artifact ranks and reports — it never trades, flips a flag, or mutates
+    a seat. Degrades to an honest ``available:false`` stub when no agenda has been built yet (the
+    weekly CIO job writes it) rather than raising."""
+    try:
+        from brain import improvement_agenda
+        agenda = improvement_agenda.latest()
+        if not agenda:
+            return JSONResponse(
+                {"available": False, "note": "no agenda built yet "
+                 "(brain.improvement_agenda.write runs in the weekly CIO job)"},
+                status_code=404, headers=_NOCACHE)
+        return JSONResponse(agenda, headers=_NOCACHE)
     except Exception as exc:  # noqa: BLE001 — never raise; degrade to an honest stub
         return JSONResponse(
             {"available": False, "error": str(exc)}, status_code=500, headers=_NOCACHE)
@@ -1946,3 +1978,26 @@ def api_desk_firm_exposure() -> JSONResponse:
         return JSONResponse({"as_of": None, "books": [], "n_books": 0, "top_exposures": [],
                              "flags": [], "by_sector": {}, "by_chain": {}, "thresholds": {},
                              "currency_clean": False, "note": f"Firm exposure unavailable: {exc}"})
+
+
+@router.get("/api/desk/experiments")
+def api_desk_experiments() -> JSONResponse:
+    """Experiment registry — W-L / L6.
+
+    Every accruing experiment tracked with its come-back date, gate language, current status, owner,
+    and artifact paths.  Surfaces matured-but-unjudged experiments at the top (these are the
+    highest-priority agenda items).  The improvement agenda consumes this endpoint; so does the
+    dashboard's accountability page.
+
+    Returns {as_of, total, open, matured, judged, cancelled, matured_items: [...], all_items: [...]}.
+    Never 500s — degrades to an empty registry on any failure."""
+    try:
+        from brain import experiment_registry
+        s = experiment_registry.summary()
+        all_items = experiment_registry.load()
+        s["all_items"] = all_items
+        return JSONResponse(s)
+    except Exception as exc:  # noqa: BLE001 — additive; never break the desk
+        return JSONResponse({"as_of": None, "total": 0, "open": 0, "matured": 0,
+                             "judged": 0, "cancelled": 0, "matured_items": [], "all_items": [],
+                             "note": f"Experiment registry unavailable: {exc}"})
