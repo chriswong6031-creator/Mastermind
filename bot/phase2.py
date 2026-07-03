@@ -414,6 +414,26 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
         _rotation_evidence = None
         _rl_log(_run_id, "decision", "rotation-evidence error", f"{_e!r}"[:160])
 
+    # ── E2.2 SUBSUMPTION — the posture read (ONE per build; every consumer below shares it).
+    # Flag OFF ⇒ _posture is None and every seam below is byte-identical (the E3 control arm).
+    # Note lead_budget needs NO seam here: regime_frame.budget() above IS the shim when armed
+    # (single consumption — the runlog's posture_delegated input carries the provenance).
+    _posture = None
+    try:
+        from brain import posture_decider as _pd
+        if _pd.posture_flag():
+            _posture = _pd.latest()
+            if not (isinstance(_posture, dict) and _posture.get("offense_budget") is not None):
+                _posture = _pd.decide()
+            _rl_log(_run_id, "book_step", "posture (ARMED)",
+                    f"class={_posture.get('posture_class')} offense={_posture.get('offense_budget')} "
+                    f"floor={_posture.get('defense_floor')} notch={_posture.get('posture_notch_cap')} "
+                    f"provenance={_posture.get('shrink_provenance')}",
+                    posture_class=_posture.get("posture_class"),
+                    shrink_provenance=_posture.get("shrink_provenance"))
+    except Exception:  # noqa: BLE001 — P2: posture failure never blocks the build
+        _posture = None
+
     leaders = [s for s in secrs[:6] if s.get("above_200d_trend")][:4]
     lw = round(lead_budget / max(1, len(leaders)), 4)
     book = []
@@ -466,6 +486,15 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
     # churn a name in and out across builds (the NVDA in/out problem).
     _held_conv = {p["ticker"] for p in position_log.open_positions()
                   if p.get("sleeve") == "conviction"}
+    # E2.2: posture conviction_appetite scales the conviction budget (charter P5 — posture before
+    # position). Flag OFF / no posture ⇒ multiplier 1.0, byte-identical.
+    if _posture is not None:
+        try:
+            _app = float(_posture.get("conviction_appetite") or 1.0)
+            if 0.0 <= _app < 1.0:
+                conv_budget = round(conv_budget * _app, 6)
+        except Exception:  # noqa: BLE001
+            pass
     _build_result = conviction.build(conv_budget, name_cap=cfg["caps"]["name_cap"], held=_held_conv)
     # conviction.build returns (sized_list, rejected_list) as a tuple
     if isinstance(_build_result, tuple) and len(_build_result) == 2:
@@ -874,8 +903,12 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
             _rot_risk_state = _rot_mr.risk_state(asof, regime)
         except Exception:  # noqa: BLE001 — the sleeve tolerates a None risk_state (dwell term → 0)
             _rot_risk_state = None
+        # E2.2: posture ON ⇒ the decider's defense_floor IS the sleeve target and
+        # fragility_signal is not consulted (its planes live in posture D — single consumption).
         _def = _rot.build_def_sleeve(book, _rot_risk_state, _budget_inputs,
-                                     evidence=_rotation_evidence)
+                                     evidence=_rotation_evidence,
+                                     target=(_posture.get("defense_floor")
+                                             if _posture is not None else None))
         if _def.get("legs"):
             book.extend(_def["legs"])
             _rl_log(_run_id, "book_step", "DEF_SLEEVE rotation floor",

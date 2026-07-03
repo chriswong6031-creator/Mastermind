@@ -66,6 +66,10 @@ _HARD_DENYLIST = (
     "self_tune.",       # self_tune may NEVER tune its OWN bounds (step/margin/two-strikes) — a
                         # meta-boundary: a self-modifier that can widen its own leash is unbounded (P8)
     "governor",         # the posture governor's OWN arming guards — never self-adapt the adapter (P8)
+    "posture",          # the W-E.2 posture: block — class bands + hysteresis are GATE-ADJACENT config;
+                        # a tuner that could widen the ROTATE-DEFENSIVE band or shorten the de-escalation
+                        # dwell would gerrymander its own posture (P8).  Mirrors doctrine.yml
+                        # self_tune.denylist.  (Substring 'posture' also covers 'posture_governor' above.)
 )
 
 # defaults mirroring the doctrine self_tune block (degrade-safe if the block is absent)

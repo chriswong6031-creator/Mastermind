@@ -1,0 +1,39 @@
+{
+  "_note": "DISAGREEING-TAPE fixture for the posture subsumption migration suite (B0 ledger row 5). The label plane reads Goldilocks/STABLE/expanding (risk_on) while the shrink-biased evidence planes all fire defensive: nowcast doubt, liquidity stress, radar caution, defensive-RS crossover. This is the 07-01 crash-eve shape distilled to a self-contained record so the migration suite never live-reads incident-replay internals. On this tape posture-on total gross MUST be <= posture-off gross (no-compounding) and the shrink must arrive through EXACTLY ONE pathway (runlog provenance). Conf 0.327 < 0.55 and flip_margin 0.05 < 0.15 so the offense equation flexes below the calm midpoint even before D. Values chosen to reproduce build_plan.md §4 incident arithmetic (D ~0.74 -> ROTATE-DEFENSIVE).",
+  "regime": {
+    "quad": "Q1",
+    "quad_name": "Goldilocks",
+    "liquidity_overlay": "expanding",
+    "confidence": 0.327,
+    "transition_state": "STABLE",
+    "contradicting": [
+      "growth_cyclical_defensive",
+      "growth_wei_trend",
+      "inflation_sticky_cpi_direction"
+    ],
+    "flip_condition": {
+      "axis": "growth",
+      "component": "copper_gold",
+      "z": 0.5,
+      "threshold": 0.45,
+      "margin": 0.05,
+      "note": "closest supporter to its cutoff"
+    },
+    "date": "2026-07-01"
+  },
+  "evidence": {
+    "nowcast_doubt": true,
+    "liquidity_stress": true,
+    "radar_caution": true,
+    "defensive_rs_cross": true
+  },
+  "risk_state": {
+    "state": "caution",
+    "gross_cap": 1.0
+  },
+  "expected": {
+    "n_agree": 4,
+    "class_min": "ROTATE_DEFENSIVE",
+    "posture_floor_defense": true
+  }
+}

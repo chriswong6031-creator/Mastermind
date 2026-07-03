@@ -376,6 +376,53 @@ def_sleeve:
   weakening_states: [WEAKENING, ROLLING, DETERIORATING]   # (unverified-prior) mirror budget.transition_mult keys
   cash_floor:     0.05    # (unverified-prior) mirror of cash.rotation_floor — the sleeve respects it
 
+# ---- THE POSTURE DECIDER (brain/posture_decider.py — W-E.2 task E2.1) ----
+# The single posture object decided from market_view BEFORE name selection (charter P5 — perception
+# before position).  SHADOW BY DEFAULT: MASTERMIND_POSTURE_DECIDER=0 throughout this wave — the
+# decider publishes data/posture/latest.json EVERY build regardless of the flag (the shadow window),
+# but NO sizing path reads it until E3.3 arms it (a separate Fable decision).  Flag OFF ⇒ every
+# touched module is byte-identical to base (the E3 control arm; tests/test_posture_migration.py).
+#
+# DEFENSE PRESSURE D = availability-renormalizing EQUAL-WEIGHT mean over the shrink-biased planes
+# (regime fragility, transition tilt, flip fragility, W1 dwell, distribution_tells, liquidity_quality,
+# regime_nowcast ADVISORY, defensive-RS crossover, and — when a view is supplied — cycles /
+# rotation_tensor / anticipation-floor / radar).  A MISSING plane is EXCLUDED from the mean
+# (renormalize), NEVER a fabricated zero-risk read; ADVISORY planes may only RAISE D, never lower it.
+# EQUAL-WEIGHT PINNED — adaptive per-plane weights are amputated from v1 (cannot clear charter P3 in
+# 4 weeks; posture_governor stays the only learner).
+#
+# ⚠ DENYLISTED FOR self_tune (mirrored in self_tune._HARD_DENYLIST + self_tune.denylist above): the
+# class bands and hysteresis are GATE-ADJACENT config — a tuner that could widen the ROTATE-DEFENSIVE
+# band or shorten the de-escalation dwell would gerrymander its own posture (charter P8).  All values
+# are heuristic priors — the W5 E-regression sizes them later against forward SPY 5d max-drawdown.
+posture:
+  # CLASS BANDS — the defense_pressure D value at/above which each class is entered.  OFFENSE is the
+  # residual below `balanced`.  (unverified-prior; pinned by the incident replay, not hand-tuned.)
+  bands:
+    balanced:          0.25   # D >= this → BALANCED (else OFFENSE)
+    rotate_defensive:  0.50   # D >= this → ROTATE_DEFENSIVE
+    preserve:          0.75   # D >= this → PRESERVE
+  # PER-CLASS LEVERS.  offense_cap is the class's OFFENSE CEILING, MIN-COMPOSED with the verbatim W2
+  # equation (a class can only SHRINK offense toward the floor, never raise it — anti-compounding,
+  # ledger row 5).  OFFENSE's cap == the W2 clamp ceil (0.60) so a calm tape is byte-identical to
+  # today.  cash_floor / conviction_appetite / posture_notch_cap are the class's other levers;
+  # posture_notch_cap is the eff_cap ceiling min-composed in bot/derisk.py ONLY when the flag is ON.
+  class_map:
+    OFFENSE:          { offense_cap: 0.60, cash_floor: 0.05, conviction_appetite: 1.00, posture_notch_cap: 1.00 }
+    BALANCED:         { offense_cap: 0.55, cash_floor: 0.10, conviction_appetite: 0.75, posture_notch_cap: 0.90 }
+    ROTATE_DEFENSIVE: { offense_cap: 0.43, cash_floor: 0.15, conviction_appetite: 0.50, posture_notch_cap: 0.70 }
+    PRESERVE:         { offense_cap: 0.40, cash_floor: 0.25, conviction_appetite: 0.25, posture_notch_cap: 0.55 }
+  # HYSTERESIS — escalate same-session, de-escalate slowly (mirrors macro_risk dwell + tripwire clamp).
+  # This makes the 2026-07-01 un-cap structurally impossible: the regressed STABLE print drops raw D
+  # but de-escalation is dwell-blocked, so the class is HELD.
+  hysteresis:
+    deescalate_consecutive:  3    # (unverified-prior) consecutive lower-band builds required to step DOWN
+    tripwire_clamp_severity: 2    # (unverified-prior) a sev>=this derisk tripwire BLOCKS de-escalation
+    tripwire_clamp_sessions: 2    # (unverified-prior) ...within this many sessions
+    max_dwell_sessions:      15   # (unverified-prior) a class held longer than this auto-releases one step
+  # defense_floor = def_sleeve.max · D (0 until the sleeve is armed — ONE arming knob shared with the
+  # deterministic sleeve; the shadow records the WOULD-BE floor at the armed ceiling for visibility).
+
 # ---- price-action regime NOWCAST (brain/regime_nowcast.nowcast — W-I task 3) ----
 # The SECOND OPINION. On 2026-07-01 the macro label read Q1 Goldilocks / STABLE / expanding while
 # semis broke down; the PRICE TAPE said "reduce offense" days early. This module re-derives a coarse
@@ -579,6 +626,8 @@ self_tune:
     - "charter"                     # any charter-tagged constant
     - "hard_bound"                  # explicit hard-bound markers
     - "governor"                    # the posture governor's OWN guards (never self-adapt the adapter)
+    - "posture"                     # the W-E.2 posture: block — class bands + hysteresis are gate-adjacent
+                                    # config; never self-tunable (a tuner could gerrymander its own posture, P8)
     - "self_tune."                  # self_tune may NEVER tune its OWN bounds (meta-boundary, P8)
 
 # ---- MARKING LAYER (portfolio/marks.py — W-L / L1) ----

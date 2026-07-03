@@ -268,6 +268,16 @@ def _build_prompt(asof: str, inaugural: bool, directive: str | None = None) -> s
         lines += ["## ⚠ PRIORITY DIRECTIVE FOR THIS RUN", directive.strip(), ""]
     if regime:
         lines += [f"China macro regime (in-house read): {regime}", ""]
+    # E2.5 — POSTURE block (flag-independent read-only prompt enrichment).
+    # The China Brain sees the shadow posture so it can observe whether it would have agreed.
+    # Missing/absent artifact → section omitted (degrade silently; never blocks the book).
+    try:
+        from brain import posture_decider as _pd
+        _posture_block = _pd.render_directive()
+        if _posture_block:
+            lines += [_posture_block]
+    except Exception:  # noqa: BLE001 — additive; never block the book
+        pass
     # RISK GOVERNOR — the live risk-state block that governs sizing/gross (flag-gated; OFF → "").
     from brain import risk_lens
     brief = risk_lens.briefing("china", regime=_regime_dict(), asof=asof, held=sorted(positions))

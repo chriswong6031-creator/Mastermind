@@ -273,7 +273,25 @@ def _pm_input(sized: list[dict], rejected: list[dict], strategist: dict | None,
         if c.get("ticker"):
             engine_proposed_weights.setdefault(c["ticker"], c.get("weight"))
 
-    return {
+    # E2.5 — posture line in the payload: the shadow posture artifact (read-only, additive).
+    # The PM sees the shadow posture in the structured payload so it can reference the context.
+    # Missing/absent artifact → key omitted (degrade silently).
+    posture_line: dict | None = None
+    try:
+        from brain import posture_decider as _pd
+        _art = _pd.latest()
+        if isinstance(_art, dict) and _art.get("posture_class"):
+            posture_line = {
+                "posture_class": _art.get("posture_class"),
+                "offense_budget": _art.get("offense_budget"),
+                "defense_floor": _art.get("defense_floor"),
+                "shadow": _art.get("shadow", True),
+                "why": _art.get("why"),
+            }
+    except Exception:  # noqa: BLE001 — additive; never break the seat
+        pass
+
+    payload: dict = {
         "asof": str(asof)[:10],
         "regime": reg,
         "defensive_benchmark": list(_DEFENSIVE_BENCHMARK_BASKET),
@@ -286,6 +304,9 @@ def _pm_input(sized: list[dict], rejected: list[dict], strategist: dict | None,
         # DE-ANCHORED — LAST in the payload, after every candidate/defensive/regime section.
         "engine_proposed_weights_ADVISORY": engine_proposed_weights,
     }
+    if posture_line is not None:
+        payload["posture_ADVISORY"] = posture_line
+    return payload
 
 
 _PM_PERSONA = (
@@ -380,6 +401,16 @@ def _build_prompt(payload: dict, directive: str | None = None) -> str:
                     for p in risk_off_planes[:6]
                 )]
         lines += [""]
+    # E2.5 — POSTURE block (flag-independent read-only prompt enrichment).
+    # The Flagship PM sees the shadow posture so it can observe whether it would have agreed.
+    # Missing/absent artifact → section omitted (degrade silently; no block added).
+    try:
+        from brain import posture_decider as _pd
+        _posture_block = _pd.render_directive()
+        if _posture_block:
+            lines += [_posture_block]
+    except Exception:  # noqa: BLE001 — additive; never break the seat
+        pass
     lines += ["BENCHMARK YOU MUST BEAT (risk-off / weakening regimes): "
               f"max(SPY, the defensive basket {', '.join(payload.get('defensive_benchmark') or [])}). "
               "That static defensive book is currently beating every Brain — a book that holds "

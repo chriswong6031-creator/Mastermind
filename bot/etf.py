@@ -429,6 +429,16 @@ def _build_prompt(asof: str, inaugural: bool, directive: str | None = None) -> s
     if regime:
         lines += [f"Macro regime (in-house read): {regime}", ""]
     lines += [f"Risk state (drives your duration/cash): {risk.get('state')} — {', '.join(risk.get('reasons') or [])}", ""]
+    # E2.5 — POSTURE block (flag-independent read-only prompt enrichment).
+    # The ETF Brain sees the shadow posture so it can observe whether it would have agreed.
+    # Missing/absent artifact → section omitted (degrade silently; never blocks the book).
+    try:
+        from brain import posture_decider as _pd
+        _posture_block = _pd.render_directive()
+        if _posture_block:
+            lines += [_posture_block]
+    except Exception:  # noqa: BLE001 — additive; never block the book
+        pass
     # the perception-to-outcome loop: show the Brain its OWN realized track record so it self-corrects
     try:
         from portfolio import etf_outcomes

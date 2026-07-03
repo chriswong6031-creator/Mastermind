@@ -309,6 +309,23 @@ def derisk_flagship(asof: str | None = None, *, regime: dict | None = None, forc
     sev = tw.get("severity", 0)
     sev_cap = _severity_cap(sev)                             # None when severity < 2
     eff_cap = min(state_gross_cap, sev_cap) if sev_cap is not None else state_gross_cap
+    # ── E2.2 SUBSUMPTION — the posture notch joins by MIN-composition (idempotent ceilings
+    # can't double-cut; charter P7). Notch SOURCES carry {source, dedup_key}: the W-I
+    # distribution escalator already bumps `sev` upstream (one seam), and any future
+    # anticipation notch must arrive through the same _distribution_escalation-style bump —
+    # capped at the sev-3 ladder ceiling via max()-composition there, never summed here.
+    # Flag OFF ⇒ this block is dead and eff_cap is the W1 two-term min, byte-identical.
+    posture_notch_cap = None
+    try:
+        from brain import posture_decider as _pd
+        if _pd.posture_flag():
+            _rec = _pd.latest() or {}
+            _pn = _f(_rec.get("posture_notch_cap"))
+            if _pn is not None and _pn > 0:
+                posture_notch_cap = _pn
+                eff_cap = min(eff_cap, _pn)
+    except Exception:  # noqa: BLE001 — P2: degrade to the two-term min
+        pass
     try:
         from portfolio import position_log, paper_account, fragility_chain
         from brain import risk_officer, ledger
@@ -358,7 +375,7 @@ def derisk_flagship(asof: str | None = None, *, regime: dict | None = None, forc
     if gross <= eff_cap + 1e-9 and not blocked:
         artifact = {**out, "action": "hold", "gross": gross,
                     "gross_cap": eff_cap, "state_gross_cap": state_gross_cap,
-                    "severity_cap": sev_cap, "eff_cap": eff_cap,
+                    "severity_cap": sev_cap, "posture_notch_cap": posture_notch_cap, "eff_cap": eff_cap,
                     "cut_scope": sorted(_DERISKED_SLEEVES)}
         _write_artifact(asof, "flagship", artifact)
         return {**out, "action": "hold", "gross": gross, "gross_cap": eff_cap,
@@ -423,7 +440,7 @@ def derisk_flagship(asof: str | None = None, *, regime: dict | None = None, forc
 
     result = {**out, "action": "cut", "exited": exited, "realized": realized,
               "gross_before": gross, "gross_cap": eff_cap,
-              "state_gross_cap": state_gross_cap, "severity_cap": sev_cap, "eff_cap": eff_cap,
+              "state_gross_cap": state_gross_cap, "severity_cap": sev_cap, "posture_notch_cap": posture_notch_cap, "eff_cap": eff_cap,
               "cut_scope": sorted(_DERISKED_SLEEVES), "reasons": tw["reasons"]}
     _write_artifact(asof, "flagship", result)
     return result
@@ -464,6 +481,19 @@ def derisk_brain(pid: str, asof: str | None = None, *, regime: dict | None = Non
     sev = tw.get("severity", 0)
     sev_cap = _severity_cap(sev)
     eff_cap = min(state_gross_cap, sev_cap) if sev_cap is not None else state_gross_cap
+    # E2.2: the posture notch composes into the Brain-book cutter identically (min(); charter P7).
+    # Flag OFF ⇒ dead block, eff_cap byte-identical to W1.
+    posture_notch_cap = None
+    try:
+        from brain import posture_decider as _pd
+        if _pd.posture_flag():
+            _rec = _pd.latest() or {}
+            _pn = _f(_rec.get("posture_notch_cap"))
+            if _pn is not None and _pn > 0:
+                posture_notch_cap = _pn
+                eff_cap = min(eff_cap, _pn)
+    except Exception:  # noqa: BLE001 — P2
+        pass
     target = {str(k).upper(): _f(v) or 0.0 for k, v in (pt["target"] or {}).items()}
 
     try:
@@ -498,7 +528,7 @@ def derisk_brain(pid: str, asof: str | None = None, *, regime: dict | None = Non
 
     result = {**out, "action": "revised_pending_target", "gross_before": gross,
               "gross_cap": eff_cap, "state_gross_cap": state_gross_cap,
-              "severity_cap": sev_cap, "eff_cap": eff_cap,
+              "severity_cap": sev_cap, "posture_notch_cap": posture_notch_cap, "eff_cap": eff_cap,
               "scaled": scaled, "dropped_chains": sorted(blocked), "reasons": tw["reasons"],
               "n_names": len(target), "cut_scope": sorted(_DERISKED_SLEEVES)}
     _write_artifact(asof, pid, result)

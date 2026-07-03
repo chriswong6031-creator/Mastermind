@@ -717,6 +717,41 @@ def budget(region: str = "us", *, evidence: Optional[dict] = None) -> dict[str, 
     }
     The inputs block exists so runlogs can show WHY a budget landed where it did.
     """
+    # ── E2.2 THE SUBSUMPTION SHIM (charter P7 — one sizing consumer) ──────────────────────
+    # When the posture decider is ARMED, this function is a THIN SHIM: the equation below
+    # moved VERBATIM into posture_decider._offense_budget(), and the W-I evidence damp's
+    # planes live in the decider's defense_pressure D — applying the damp HERE TOO would
+    # consume the same signal twice (the W2 anti-compounding law). Flag ON ⇒ delegate to the
+    # published posture artifact (never a recursive compute; the decider reads frame()/
+    # cycles() from this module, not budget()). Every degrade path (flag off / artifact
+    # absent / import failure) falls through to the original equation — byte-identical
+    # flag-off is the E3 control arm, migration-tested.
+    try:
+        from brain import posture_decider as _pd
+        if region == "us" and _pd.posture_flag():
+            _rec = _pd.latest()
+            if not (isinstance(_rec, dict) and _rec.get("offense_budget") is not None):
+                _rec = _pd.decide()          # artifact missing → one fresh deterministic read
+            _ob = _as_float(_rec.get("offense_budget"))
+            if _ob is not None:
+                _f = frame(region)
+                return {
+                    "lead_budget": _ob,
+                    "inputs": {
+                        "confidence": _as_float(_f.get("confidence")),
+                        "transition_state": _f.get("transition_state"),
+                        "flip_margin": _as_float(_f.get("flip_margin")),
+                        "T": None, "F": None,
+                        "D": 1.0,                  # damp BYPASSED — its planes live in posture D
+                        "evidence_n_agree": 0,
+                        "evidence_sources": None,
+                        "posture_delegated": True,  # runlog provenance (single consumption)
+                        "posture_class": _rec.get("posture_class"),
+                        "shrink_provenance": _rec.get("shrink_provenance"),
+                    },
+                }
+    except Exception:  # noqa: BLE001 — P2: any failure degrades to the original equation
+        pass
     cfg = _budget_cfg()
     ev_cfg = _rotation_evidence_cfg()
     f = frame(region)

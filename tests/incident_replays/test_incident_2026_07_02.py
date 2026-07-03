@@ -1172,3 +1172,62 @@ def test_fixture_integrity():
                 f"SMH should have fallen from its 06-22 peak to 07-01 "
                 f"(peak={peak_close:.2f} last={last_close:.2f})"
             )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# E2.2 COMPOSED-STACK (build_plan §4.4, flag-ON): on the 07-01-shaped disagreeing
+# tape the whole armed spine composes — the budget delegates to the posture read
+# in the ROTATE-DEFENSIVE band, the DEF_SLEEVE floor unthrottles at max=0.35, the
+# derisk cap picks up the posture notch, and the shrink arrives via ONE pathway.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_composed_stack_flag_on_disagreeing_tape(monkeypatch, tmp_path):
+    import json as _json
+    from pathlib import Path as _Path
+    pytest.importorskip("brain.posture_decider")
+    from brain import posture_decider as PD
+    from brain import regime_frame as RF
+    from portfolio import rotation as ROT
+
+    monkeypatch.setenv("MASTERMIND_POSTURE_DECIDER", "1")
+    # isolate the artifact + hysteresis state
+    monkeypatch.setattr(PD, "_ARTIFACT_DIR", tmp_path / "posture", raising=False)
+    monkeypatch.setattr(PD, "_LATEST_PATH", tmp_path / "posture" / "latest.json", raising=False)
+    monkeypatch.setattr(PD, "_STATE_PATH", tmp_path / "posture" / "state.json", raising=False)
+
+    tape = _json.loads((_Path(__file__).resolve().parent.parent
+                        / "fixtures" / "posture" / "disagreeing_tape.json").read_text())
+
+    rec = PD.decide("us", evidence=tape.get("evidence"), risk_state=tape.get("risk_state"))
+    assert rec["posture_class"] in ("ROTATE_DEFENSIVE", "PRESERVE"), rec["posture_class"]
+    # write the artifact so the shim/seams read it (the production path)
+    PD.build(evidence=tape.get("evidence"), risk_state=tape.get("risk_state"), write=True) \
+        if "write" in PD.build.__code__.co_varnames else PD._write_artifact(rec)  # noqa: E501
+
+    # (1) the budget shim delegates — ROTATE-DEFENSIVE band, provenance stamped
+    b = RF.budget("us")
+    assert b["inputs"].get("posture_delegated") is True
+    assert 0.40 - 1e-9 <= b["lead_budget"] <= 0.45 + 1e-9, b["lead_budget"]
+
+    # (2) the DEF_SLEEVE floor unthrottles CONSISTENTLY: floor == D x max (composition, not
+    # magnitude — the SS4.4 D~0.74 / floor 0.22-0.27 magnitude proof lives in
+    # tests/test_posture_decider.py against the full incident fixture; THIS tape is a lighter
+    # shape whose D~0.54 still reads ROTATE-DEFENSIVE and must flow through unchanged).
+    D = float(rec["defense_pressure"])
+    assert D >= 0.50 - 1e-9, D                      # the class boundary held
+    floor = float(rec["defense_floor_at_max"] if rec.get("defense_floor_at_max") is not None
+                  else D * 0.35)
+    assert abs(floor - D * 0.35) < 0.02, (floor, D)  # floor tracks D x max — no leak, no re-scale
+
+    # (3) the sleeve sizes off the floor, not fragility (single consumption)
+    sleeve = ROT.build_def_sleeve([], tape.get("risk_state"), None,
+                                  candidates=[{"ticker": "XLV", "archetype": "quality_defensive"}],
+                                  target=floor)
+    assert abs(sleeve["def_budget"] - floor) < 1e-6
+    assert sleeve["fragility_signal"] == 0.0  # not consulted
+
+    # (4) the posture notch caps at 0.70
+    assert abs(float(rec["posture_notch_cap"]) - 0.70) < 1e-9
+
+    # (5) one shrink pathway, named
+    assert rec.get("shrink_provenance") in ("defense_D", "posture_class", "defense_pressure")

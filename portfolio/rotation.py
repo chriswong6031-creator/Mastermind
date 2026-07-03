@@ -359,7 +359,8 @@ def build_def_sleeve(book: list[dict],
                      budget_inputs: dict | None,
                      *,
                      candidates: list[dict] | None = None,
-                     evidence: dict | None = None) -> dict[str, Any]:
+                     evidence: dict | None = None,
+                     target: float | None = None) -> dict[str, Any]:
     """Build the deterministic DEF_SLEEVE legs (the E1-failure branch + the armed-PM floor).
 
     Parameters
@@ -373,6 +374,10 @@ def build_def_sleeve(book: list[dict],
     candidates : optional pre-read candidate list (DI for tests). None → defensive_candidates.candidates.
     evidence : the shrink-only rotation-evidence dict (regime_frame.rotation_evidence()); lifts the
            fragility signal (W-I task 6). None → no lift → byte-identical to pre-W-I.
+    target : E2.2 SUBSUMPTION — the posture decider's defense_floor. When provided (posture ON),
+           fragility_signal() is NOT consulted: the decider's defense_pressure D already consumed
+           those planes (charter P7, single consumption) and ``target`` IS the sleeve budget.
+           None (flag off / every pre-posture caller) → the fragility path, byte-identical.
 
     Returns
     -------
@@ -394,13 +399,36 @@ def build_def_sleeve(book: list[dict],
     empty = {"legs": [], "def_budget": 0.0, "def_actual": 0.0, "headroom": 0.0,
              "fragility_signal": 0.0, "reason": "inert"}
 
-    sig = fragility_signal(risk_state, budget_inputs, c, evidence=evidence)
-    tgt = float(c["max"]) * sig
+    if target is None:
+        # E2.2 defense-in-depth (charter P7): if the posture decider is ARMED but the caller did
+        # not thread its floor, self-serve it here rather than fall through to fragility_signal —
+        # the fragility legs (dwell/confidence/WEAKENING) are planes of posture D, and sizing off
+        # both would consume the same signal twice. Flag OFF / import failure ⇒ target stays None.
+        try:
+            from brain import posture_decider as _pd
+            if _pd.posture_flag():
+                _rec = _pd.latest() or {}
+                _fl = _rec.get("defense_floor")
+                if _fl is not None:
+                    target = float(_fl)
+        except Exception:  # noqa: BLE001 — P2: degrade to the fragility path
+            pass
+    if target is not None:
+        # E2.2: posture ON — the decider's floor is the budget; fragility_signal retired to the
+        # flag-off fallback below (its legs — dwell/confidence/WEAKENING — are planes of posture D).
+        sig = 0.0
+        tgt = max(0.0, float(target))
+    else:
+        sig = fragility_signal(risk_state, budget_inputs, c, evidence=evidence)
+        tgt = float(c["max"]) * sig
 
     # Control arm: max 0 (or a zero fragility read) → the sleeve is inert and the book is unchanged.
     if tgt <= 0:
         empty["fragility_signal"] = round(sig, 4)
-        empty["reason"] = "DEF_SLEEVE_MAX=0 (inert control arm)" if c["max"] <= 0 else "fragility_signal=0"
+        if target is not None:
+            empty["reason"] = "posture defense_floor=0"
+        else:
+            empty["reason"] = "DEF_SLEEVE_MAX=0 (inert control arm)" if c["max"] <= 0 else "fragility_signal=0"
         return empty
 
     # Candidates (the ONE canonical generator). A degraded/absent pool → empty sleeve (legal no-op).

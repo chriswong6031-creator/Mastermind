@@ -254,6 +254,16 @@ def _build_prompt(asof: str, inaugural: bool, directive: str | None = None) -> s
     brief = risk_lens.briefing("autonomous", regime=_regime_dict(), asof=asof, held=sorted(positions))
     if brief:
         lines += [brief, ""]
+    # E2.5 — POSTURE block (flag-independent read-only prompt enrichment).
+    # The autonomous Brain sees the shadow posture so it can observe whether it would have agreed.
+    # Missing/absent artifact → section omitted (degrade silently; never blocks the book).
+    try:
+        from brain import posture_decider as _pd
+        _posture_block = _pd.render_directive()
+        if _posture_block:
+            lines += [_posture_block]
+    except Exception:  # noqa: BLE001 — additive; never block the book
+        pass
     if inaugural:
         lines += [
             "This is your INAUGURAL run. The book is 100% cash: $1,000,000. Build the portfolio "

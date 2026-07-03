@@ -1,0 +1,36 @@
+{
+  "_note": "CALM-TAPE control fixture for the posture subsumption migration suite (B0 ledger rows 1-3 + §4 assert 6). A high-confidence agreeing window: conf 0.60 > 0.55, STABLE, wide flip_margin 0.40 (>= 0.15 -> F=1.0), and ZERO agreeing evidence sources (n_agree 0 -> D 1.0). On this tape the offense equation gives budget() == clamp(0.40 + 0.20*0.60*1.0*1.0) == 0.52 (the same value test_regime_frame.TestBudget.test_calm_tape_stable_high_confidence pins). The migration suite asserts posture-off == posture-on == today's book on this tape: ZERO drift. Class must be OFFENSE. Values self-contained so the suite never live-reads market_view/calm fixtures.",
+  "regime": {
+    "quad": "Q1",
+    "quad_name": "Goldilocks",
+    "liquidity_overlay": "expanding",
+    "confidence": 0.60,
+    "transition_state": "STABLE",
+    "contradicting": [],
+    "flip_condition": {
+      "axis": "growth",
+      "component": "copper_gold",
+      "z": 0.9,
+      "threshold": 0.45,
+      "margin": 0.40,
+      "note": "wide margin, no fragility"
+    },
+    "date": "2026-07-01"
+  },
+  "evidence": {
+    "nowcast_doubt": false,
+    "liquidity_stress": false,
+    "radar_caution": false,
+    "defensive_rs_cross": false
+  },
+  "risk_state": {
+    "state": "risk_on",
+    "gross_cap": 1.0
+  },
+  "expected": {
+    "n_agree": 0,
+    "budget": 0.52,
+    "class": "OFFENSE",
+    "posture_floor_defense": false
+  }
+}

@@ -41,5 +41,6 @@ data/agenda/
 data/self_tune/
 data/market_view/
 data/anticipation/
+data/posture/
 data/deploy_lag.json
 catboost_info/
