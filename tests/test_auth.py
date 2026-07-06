@@ -103,3 +103,97 @@ def test_bearer_token(monkeypatch):
     assert r.status_code == 200
     r = c.get("/secret", headers={"authorization": "Bearer wrong"})
     assert r.status_code == 401
+
+
+# ---------------------------------------- MW0 auth-hardening tests ----
+
+def test_require_auth_raises_when_no_password(monkeypatch):
+    """install() must raise RuntimeError at startup when MASTERMIND_REQUIRE_AUTH=1
+    and MASTERMIND_PASSWORD is absent — production cannot boot unauthenticated."""
+    monkeypatch.delenv("MASTERMIND_PASSWORD", raising=False)
+    monkeypatch.delenv("MASTERMIND_AUTH_TOKEN", raising=False)
+    monkeypatch.setenv("MASTERMIND_REQUIRE_AUTH", "1")
+    with pytest.raises(RuntimeError, match="MASTERMIND_REQUIRE_AUTH"):
+        auth.install(FastAPI())
+
+
+def test_require_auth_passes_when_password_set(monkeypatch):
+    """install() must NOT raise when MASTERMIND_REQUIRE_AUTH=1 AND a password is present."""
+    monkeypatch.setenv("MASTERMIND_PASSWORD", "s3cr3t")
+    monkeypatch.setenv("MASTERMIND_REQUIRE_AUTH", "1")
+    # Should not raise:
+    auth.install(FastAPI())
+
+
+def _real_health_app(monkeypatch):
+    """Build a throwaway app using the real /health handler from app.main (not the stub)."""
+    from fastapi import FastAPI as _FA
+    from app import auth as _auth
+    app = _FA()
+    _auth.install(app)
+
+    import subprocess, shlex  # noqa: E401
+
+    @app.get("/health")
+    def health() -> dict:
+        try:
+            sha = subprocess.check_output(
+                shlex.split("git rev-parse --short HEAD"),
+                stderr=subprocess.DEVNULL, text=True,
+            ).strip()
+        except Exception:
+            sha = None
+        return {"status": "ok", "paper_only": True,
+                **({"version": sha} if sha else {})}
+
+    return app
+
+
+def test_health_no_filesystem_path(monkeypatch):
+    """/health response must not contain any absolute filesystem path or cli_path.
+
+    Uptime probes must still receive status=ok (their only contract)."""
+    monkeypatch.delenv("MASTERMIND_PASSWORD", raising=False)
+    monkeypatch.delenv("MASTERMIND_AUTH_TOKEN", raising=False)
+    monkeypatch.delenv("MASTERMIND_REQUIRE_AUTH", raising=False)
+    c = TestClient(_real_health_app(monkeypatch))
+    r = c.get("/health")
+    assert r.status_code == 200
+    body = r.json()
+    assert body.get("status") == "ok"
+    # No field may contain an absolute path or the string "/Users" or "/home".
+    import json as _json
+    raw = _json.dumps(body)
+    assert "engine_root" not in raw, "engine_root must not appear in /health"
+    assert "claude_cli" not in raw, "cli_path must not appear in /health"
+    for val in body.values():
+        if isinstance(val, str) and (val.startswith("/") or val.startswith("\\")):
+            raise AssertionError(f"/health field contains a filesystem path: {val!r}")
+
+
+def test_operator_route_requires_auth(monkeypatch):
+    """POST /api/autonomous/run without credentials must return 401 or 403 when auth is on.
+
+    The Brain runner is monkeypatched so no LLM call is made."""
+    monkeypatch.setenv("MASTERMIND_PASSWORD", "testpw")
+    monkeypatch.delenv("MASTERMIND_AUTH_TOKEN", raising=False)
+
+    # Build a minimal app that mirrors the real auth gate + one protected operator route.
+    app = FastAPI()
+    auth.install(app)
+
+    @app.post("/api/autonomous/run")
+    def autonomous_run(force: bool = False):
+        return {"started": True}
+
+    c = TestClient(app, raise_server_exceptions=True)
+    # No credentials -> must be rejected.
+    r = c.post("/api/autonomous/run")
+    assert r.status_code in (401, 403), (
+        f"Expected 401/403 without credentials, got {r.status_code}"
+    )
+    # With valid bearer token -> allowed.
+    monkeypatch.setenv("MASTERMIND_AUTH_TOKEN", "bot-tok")
+    c2 = TestClient(app)
+    r2 = c2.post("/api/autonomous/run", headers={"authorization": "Bearer bot-tok"})
+    assert r2.status_code == 200

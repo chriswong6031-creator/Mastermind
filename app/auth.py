@@ -153,16 +153,32 @@ font-weight:600;font-size:14px;cursor:pointer}} button:hover{{background:#2f6fe0
 </form></body></html>"""
 
 
+def _require_auth() -> bool:
+    """True when the operator has demanded auth-or-refuse at startup."""
+    v = os.environ.get("MASTERMIND_REQUIRE_AUTH", "").strip()
+    return v.lower() in {"1", "true", "yes"}
+
+
 def install(app) -> None:
     """Wire the auth gate + the /login, /logout routes onto a FastAPI app.
 
     Safe to call unconditionally: when no password is configured the middleware
-    short-circuits to a pass-through (and logs a one-time warning)."""
+    short-circuits to a pass-through (and logs a one-time warning).
+
+    Raises RuntimeError at startup when MASTERMIND_REQUIRE_AUTH=1 but no
+    password is set — production must not boot unauthenticated."""
     from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
     if not enabled():
-        log.warning("MASTERMIND_PASSWORD not set — auth DISABLED. Do not expose this "
-                    "server on a public address without it.")
+        if _require_auth():
+            raise RuntimeError(
+                "MASTERMIND_REQUIRE_AUTH is set but MASTERMIND_PASSWORD is not — "
+                "refusing to start unauthenticated. Set MASTERMIND_PASSWORD in .env."
+            )
+        log.warning(
+            "MASTERMIND_PASSWORD not set — auth DISABLED. "
+            "Set MASTERMIND_REQUIRE_AUTH=1 in production to refuse startup without a password."
+        )
 
     @app.middleware("http")
     async def _gate(request: Request, call_next):
