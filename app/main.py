@@ -76,8 +76,13 @@ if FastAPI is not None:
     def health() -> dict:
         # Keep only non-sensitive fields; uptime probes check `status == "ok"` only.
         # Filesystem paths and CLI paths are omitted — they leak on an open route.
-        return {"status": "ok", "paper_only": True,
-                **({"version": _git_sha} if _git_sha else {})}
+        from app.auth import serve_only as _serve_only
+        out: dict = {"status": "ok", "paper_only": True}
+        if _git_sha:
+            out["version"] = _git_sha
+        if _serve_only():
+            out["serve_only"] = True
+        return out
 
     @app.get("/regime")
     def regime() -> dict:
@@ -97,7 +102,10 @@ if FastAPI is not None:
 
     @app.on_event("startup")
     def _start_scheduler():
+        from app import auth as _auth
         from app import scheduler
+
+        _is_serve_only = _auth.serve_only()
 
         # MW1: record an app_started event (survives restarts; JSONL is permanent).
         _current_flags = _startup_flags()
@@ -113,6 +121,7 @@ if FastAPI is not None:
                 "extra": {
                     "git_sha": _git_sha or "unknown",
                     "flags": _current_flags,
+                    **({"serve_only": True} if _is_serve_only else {}),
                 },
             })
         except Exception:
@@ -132,7 +141,21 @@ if FastAPI is not None:
         except Exception:
             pass
 
-        app.state.scheduler = scheduler.start()   # daily loops on cron; None if apscheduler absent
+        # MW6: serve-only mode — scheduler NEVER starts; all operator paths return 403.
+        if _is_serve_only:
+            log.info("MASTERMIND_SERVE_ONLY=1 — scheduler NOT started (read-only mirror mode)")
+            try:
+                from control_plane import run_events as _re
+                _re.append({
+                    "kind": "app_started", "job": "startup", "book": "",
+                    "step": "serve_only_skip", "status": "ok", "actor": "system",
+                    "extra": {"serve_only": True, "detail": "scheduler skipped in serve-only mode"},
+                })
+            except Exception:
+                pass
+            app.state.scheduler = None
+        else:
+            app.state.scheduler = scheduler.start()   # daily loops on cron; None if apscheduler absent
 
         # SCHEDULER WATCHDOG (incident 2026-07-06 ×2): APScheduler's main-loop thread can die
         # silently (observed: sqlite jobstore flipping to "readonly database") while uvicorn keeps
@@ -175,6 +198,15 @@ if FastAPI is not None:
 
         # First turn-on: let the autonomous book buy right away instead of waiting for the next
         # scheduled close. No-op once it has a track record; runs in a daemon thread (non-blocking).
+        # MW6: serve-only mode — skip all first-run daemon threads.
+        if _is_serve_only:
+            app.state.autonomous_first_run = False
+            app.state.heavyweight_first_run = False
+            app.state.china_first_run = False
+            app.state.hk_first_run = False
+            app.state.etf_first_run = False
+            return
+
         try:
             app.state.autonomous_first_run = scheduler.maybe_first_autonomous_run()
         except Exception:

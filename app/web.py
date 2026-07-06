@@ -2075,3 +2075,43 @@ def api_scheduler() -> JSONResponse:
         return JSONResponse({"jobs": scheduler_health()})
     except Exception as exc:  # noqa: BLE001 — operator endpoint; must never raise
         return JSONResponse({"jobs": [], "note": f"Scheduler health unavailable: {exc}"})
+
+
+@router.get("/api/provenance")
+def api_provenance() -> JSONResponse:
+    """MW6 provenance banner — git short-SHA, data-snapshot date, and PAPER TRADING label.
+
+    Served by every page's topbar so the operator always knows which version and
+    data snapshot they are viewing.  Read-only; best-effort; never 500s.
+    """
+    import subprocess
+    import shlex as _shlex
+
+    # git short SHA — resolved at request time (cheaper than startup import; cached by OS)
+    sha: str | None = None
+    try:
+        sha = subprocess.check_output(
+            _shlex.split("git rev-parse --short HEAD"),
+            stderr=subprocess.DEVNULL, text=True,
+            cwd=_PROJECT_ROOT,
+        ).strip() or None
+    except Exception:
+        sha = None
+
+    # data snapshot date — cheapest readable proxy: regime/latest.json's date field
+    snapshot_date: str | None = None
+    try:
+        import json as _json
+        reg_path = _macro_data() / "regime" / "latest.json"
+        if reg_path.exists():
+            reg = _json.loads(reg_path.read_text())
+            snapshot_date = str(reg.get("date") or "")[:10] or None
+    except Exception:
+        snapshot_date = None
+
+    return JSONResponse({
+        "sha": sha,
+        "snapshot_date": snapshot_date,
+        "paper_trading": True,
+        "label": "PAPER TRADING",
+    })
