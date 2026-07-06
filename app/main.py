@@ -76,8 +76,13 @@ if FastAPI is not None:
     def health() -> dict:
         # Keep only non-sensitive fields; uptime probes check `status == "ok"` only.
         # Filesystem paths and CLI paths are omitted — they leak on an open route.
-        return {"status": "ok", "paper_only": True,
-                **({"version": _git_sha} if _git_sha else {})}
+        from app.auth import serve_only as _serve_only
+        out: dict = {"status": "ok", "paper_only": True}
+        if _git_sha:
+            out["version"] = _git_sha
+        if _serve_only():
+            out["serve_only"] = True
+        return out
 
     @app.get("/regime")
     def regime() -> dict:
@@ -97,7 +102,10 @@ if FastAPI is not None:
 
     @app.on_event("startup")
     def _start_scheduler():
+        from app import auth as _auth
         from app import scheduler
+
+        _is_serve_only = _auth.serve_only()
 
         # MW1: record an app_started event (survives restarts; JSONL is permanent).
         _current_flags = _startup_flags()
@@ -113,6 +121,7 @@ if FastAPI is not None:
                 "extra": {
                     "git_sha": _git_sha or "unknown",
                     "flags": _current_flags,
+                    **({"serve_only": True} if _is_serve_only else {}),
                 },
             })
         except Exception:
@@ -132,7 +141,23 @@ if FastAPI is not None:
         except Exception:
             pass
 
-        app.state.scheduler = scheduler.start()   # daily loops on cron; None if apscheduler absent
+        # MW6: serve-only mode — scheduler NEVER starts; all operator paths return 403.
+        if _is_serve_only:
+            import logging as _logging
+            _logging.getLogger("app.main").info(
+                "MASTERMIND_SERVE_ONLY=1 — scheduler NOT started (read-only mirror mode)")
+            try:
+                from control_plane import run_events as _re
+                _re.append({
+                    "kind": "app_started", "job": "startup", "book": "",
+                    "step": "serve_only_skip", "status": "ok", "actor": "system",
+                    "extra": {"serve_only": True, "detail": "scheduler skipped in serve-only mode"},
+                })
+            except Exception:
+                pass
+            app.state.scheduler = None
+        else:
+            app.state.scheduler = scheduler.start()   # daily loops on cron; None if apscheduler absent
 
         # SCHEDULER WATCHDOG (incident 2026-07-06 ×2): APScheduler's main-loop thread can die
         # silently (observed: sqlite jobstore flipping to "readonly database") while uvicorn keeps
@@ -141,32 +166,11 @@ if FastAPI is not None:
         # supervisor (launchd KeepAlive) restarts it clean. Never trades; strictly less risk
         # than a silent scheduler death (charter P2/P10).
         def _scheduler_watchdog(sch) -> None:
-            import os as _os
             import time as _time
             while True:
                 _time.sleep(60)
-                try:
-                    th = getattr(sch, "_thread", None)
-                    if th is not None and th.is_alive():
-                        continue
-                    try:
-                        from control_plane import run_events as _re
-                        _re.append({
-                            "kind": "guardrail", "job": "scheduler", "book": "",
-                            "step": "watchdog", "status": "error", "severity": "HARD_STOP",
-                            "err": "APScheduler thread dead — exiting for supervisor restart",
-                            "actor": "system",
-                        })
-                    except Exception:
-                        pass
-                    import logging as _logging
-                    _logging.getLogger("app.main").critical(
-                        "scheduler watchdog: APScheduler thread dead — exiting (supervisor restarts)")
-                    print("scheduler watchdog: APScheduler thread dead — exiting (supervisor restarts)",
-                          flush=True)
-                    _os._exit(70)
-                except Exception:  # noqa: BLE001 — the watchdog itself must never crash the app
-                    continue
+                if not watchdog_check_once(sch):
+                    return  # unreachable in production (exit_fn exits); reachable in tests
 
         if app.state.scheduler is not None:
             import threading as _threading
@@ -175,6 +179,15 @@ if FastAPI is not None:
 
         # First turn-on: let the autonomous book buy right away instead of waiting for the next
         # scheduled close. No-op once it has a track record; runs in a daemon thread (non-blocking).
+        # MW6: serve-only mode — skip all first-run daemon threads.
+        if _is_serve_only:
+            app.state.autonomous_first_run = False
+            app.state.heavyweight_first_run = False
+            app.state.china_first_run = False
+            app.state.hk_first_run = False
+            app.state.etf_first_run = False
+            return
+
         try:
             app.state.autonomous_first_run = scheduler.maybe_first_autonomous_run()
         except Exception:
@@ -523,3 +536,40 @@ if FastAPI is not None:
                         "engine_score": p.get("engine_score"),
                         "viability": p.get("viability"), "key_risks": p.get("key_risks") or []}
         return {"error": "not found", "id": id}
+
+
+def watchdog_check_once(sch, exit_fn=None, events_root=None) -> bool:
+    """One scheduler-watchdog probe (MW1 incident hardening; extracted module-level
+    so the M7 drill tests the PRODUCTION logic, not an inline copy — S10).
+
+    Returns True when the APScheduler thread is alive (keep watching). On a dead
+    thread: writes a HARD_STOP run-event, logs critically, then calls ``exit_fn(70)``
+    (default ``os._exit`` — fail-fast for the supervisor to restart) and returns
+    False. NEVER raises.
+    """
+    import os as _os
+    if exit_fn is None:
+        exit_fn = _os._exit
+    try:
+        th = getattr(sch, "_thread", None)
+        if th is not None and th.is_alive():
+            return True
+        try:
+            from control_plane import run_events as _re
+            _re.append({
+                "kind": "guardrail", "job": "scheduler", "book": "",
+                "step": "watchdog", "status": "error", "severity": "HARD_STOP",
+                "err": "APScheduler thread dead — exiting for supervisor restart",
+                "actor": "system",
+            }, root=events_root)
+        except Exception:
+            pass
+        import logging as _logging
+        _logging.getLogger("app.main").critical(
+            "scheduler watchdog: APScheduler thread dead — exiting (supervisor restarts)")
+        print("scheduler watchdog: APScheduler thread dead — exiting (supervisor restarts)",
+              flush=True)
+        exit_fn(70)
+        return False
+    except Exception:  # noqa: BLE001 — the watchdog itself must never crash the app
+        return True

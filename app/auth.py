@@ -14,12 +14,57 @@ OPT-IN by environment, so local dev / the existing workflow is unchanged:
   - ``MASTERMIND_SESSION_DAYS`` cookie lifetime in days (default 30).
   - ``MASTERMIND_COOKIE_SECURE````=1`` -> always mark the cookie ``Secure`` (default:
         Secure only when the request arrived over https — so http://localhost works).
+  - ``MASTERMIND_SERVE_ONLY``   =1 -> serve-only mirror mode (see below).
 
 These read from ``os.environ`` at request time; ``import bot`` (via app.deps) loads
 ``.env`` first, so a value in ``.env`` is picked up automatically.
 
 Cookie = ``b64url(payload).hmac_sha256(payload, key)`` where the key is DERIVED from
 the password, so rotating the password invalidates every outstanding session.
+
+OPERATOR ROUTE TIER (MW6 docket #10 / ruling R4 second half)
+-------------------------------------------------------------
+``_OPERATOR_PATHS`` is the set of mutating/LLM-triggering routes that require the
+BEARER token (MASTERMIND_AUTH_TOKEN) — a browser session cookie is NOT sufficient.
+This prevents a compromised read session from spending LLM tokens or triggering
+book runs.  Source: data/census/CENSUS.md LLM-triggering tags.
+
+Routes included:
+  POST /daily              — gated flagship book (LLM)
+  POST /reason             — reasoning pass (LLM)
+  POST /research           — research session (LLM)
+  POST /chat               — live advisor chat (LLM)
+  POST /api/autonomous/run — autonomous Brain book (LLM)
+  POST /api/heavyweight/run— heavyweight Brain book (LLM)
+  POST /api/china/run      — China Brain book (LLM)
+  POST /api/hk/run         — HK Brain book (LLM)
+  POST /api/etf/run        — ETF Brain book (LLM)
+  POST /api/self_directed/order   — order placement (non-LLM mutating POST)
+  POST /api/self_directed/thesis  — thesis write (non-LLM mutating POST)
+  POST /api/self_directed/cancel  — order cancel (non-LLM mutating POST)
+
+Read-only dashboard GETs keep the existing cookie-or-token gate.
+When auth is disabled entirely (dev), operator paths still pass (dev ergonomics).
+
+RATE LIMITS (MW6)
+-----------------
+In-memory token-bucket per route group, keyed per group:
+  - llm     : LLM-triggering operator paths — 8 fires/hour shared + 2/min burst
+  - operator: non-LLM mutating operator POSTs — 30/hour
+Stdlib only (no slowapi).  429 with Retry-After.
+Advisory run-event emitted on each 429.
+
+SERVE-ONLY MODE (MW6)
+---------------------
+``MASTERMIND_SERVE_ONLY=1`` converts the app to a read-only mirror:
+  (a) scheduler is NEVER started (guarded in app.main startup)
+  (b) first-run daemon threads are skipped
+  (c) ALL operator paths return 403 JSON naming the mirror
+  (d) /health gains "serve_only": true
+
+NOTE: two stale worktrees from a prior session contain another agent's
+MASTERMIND_SERVE_ONLY WIP — do NOT merge or read those branches. This
+implementation is fresh with the same flag name so a later reconcile is trivial.
 """
 from __future__ import annotations
 
@@ -40,6 +85,89 @@ log = logging.getLogger("mastermind.auth")
 
 _COOKIE = "mm_session"
 _OPEN_PATHS = {"/login", "/logout", "/health"}
+
+# ---------------------------------------------------------------------------
+# operator route tier — mutating/LLM-triggering POST paths that require the
+# BEARER token (cookie is NOT sufficient).  Source: data/census/CENSUS.md.
+# ---------------------------------------------------------------------------
+
+#: LLM-triggering operator POSTs — token bucket: 8/hour shared, 2/min burst.
+_LLM_OPERATOR_PATHS: frozenset[str] = frozenset({
+    "/daily",
+    "/reason",
+    "/research",
+    "/chat",
+    "/api/autonomous/run",
+    "/api/heavyweight/run",
+    "/api/china/run",
+    "/api/hk/run",
+    "/api/etf/run",
+})
+
+#: Non-LLM mutating operator POSTs — token bucket: 30/hour.
+_NON_LLM_OPERATOR_PATHS: frozenset[str] = frozenset({
+    "/api/self_directed/order",
+    "/api/self_directed/thesis",
+    "/api/self_directed/cancel",
+})
+
+#: Union — all operator-tier paths.
+_OPERATOR_PATHS: frozenset[str] = _LLM_OPERATOR_PATHS | _NON_LLM_OPERATOR_PATHS
+
+# ---------------------------------------------------------------------------
+# serve-only mode
+# ---------------------------------------------------------------------------
+
+def serve_only() -> bool:
+    """True when MASTERMIND_SERVE_ONLY=1 — read-only mirror mode."""
+    return os.environ.get("MASTERMIND_SERVE_ONLY", "").strip() in {"1", "true", "yes"}
+
+
+# ---------------------------------------------------------------------------
+# in-memory token buckets for operator-path rate limiting (stdlib only)
+# ---------------------------------------------------------------------------
+
+class _TokenBucket:
+    """Simple token-bucket rate limiter (thread-safe via the GIL for CPython).
+
+    capacity   : max tokens (burst ceiling)
+    rate       : tokens refilled per second
+    """
+    __slots__ = ("capacity", "rate", "tokens", "last_refill")
+
+    def __init__(self, capacity: float, rate: float) -> None:
+        self.capacity = capacity
+        self.rate = rate
+        self.tokens = float(capacity)
+        self.last_refill = time.monotonic()
+
+    def consume(self) -> float | None:
+        """Consume one token.  Returns None on success, or seconds-to-wait on rejection."""
+        now = time.monotonic()
+        elapsed = now - self.last_refill
+        self.last_refill = now
+        self.tokens = min(self.capacity, self.tokens + elapsed * self.rate)
+        if self.tokens >= 1.0:
+            self.tokens -= 1.0
+            return None
+        # fractional tokens remaining — wait time until refilled to 1.0
+        return (1.0 - self.tokens) / self.rate
+
+
+# LLM bucket: burst capacity 2, sustained 8/hour (refill 1 token per 450s —
+# a single token bucket cannot independently express both 8/hr and 2/min;
+# this is the stricter composition). Module-global state: tests MUST reset
+# via reset_rate_buckets() (autouse fixture) or ordering becomes load-bearing.
+_llm_bucket = _TokenBucket(capacity=2.0, rate=8.0 / 3600.0)
+# Non-LLM operator bucket: 30/hour
+_operator_bucket = _TokenBucket(capacity=30.0, rate=30.0 / 3600.0)
+
+
+def reset_rate_buckets() -> None:
+    """Restore both operator rate buckets to full capacity (TEST hook —
+    module-global bucket state otherwise leaks across tests/orderings)."""
+    _llm_bucket.tokens = _llm_bucket.capacity
+    _operator_bucket.tokens = _operator_bucket.capacity
 
 
 # ---------------------------------------------------------------- config ----
@@ -118,6 +246,25 @@ def is_authorized(request) -> bool:
     return bool(pw) and verify_cookie(request.cookies.get(_COOKIE), pw)
 
 
+def is_operator_authorized(request) -> bool:
+    """True iff the request carries a valid BEARER token.
+
+    Operator-tier paths require the bearer token regardless of session cookie.
+    A compromised read session (cookie) must NOT be able to fire LLM-triggering
+    or mutating routes.  When auth is disabled (dev), this returns True so the
+    operator paths remain accessible in development.
+    """
+    if not enabled():
+        return True
+    tok = _bearer_token()
+    if not tok:
+        # No token configured — treat as disabled for the operator check (same as
+        # auth disabled: dev ergonomics unchanged when MASTERMIND_AUTH_TOKEN is absent).
+        return True
+    auth = request.headers.get("authorization", "")
+    return auth.lower().startswith("bearer ") and hmac.compare_digest(auth[7:].strip(), tok)
+
+
 def safe_next(raw: str | None) -> str:
     """Only allow a same-site relative path as the post-login redirect (no open redirect)."""
     if raw and raw.startswith("/") and not raw.startswith("//"):
@@ -180,16 +327,78 @@ def install(app) -> None:
             "Set MASTERMIND_REQUIRE_AUTH=1 in production to refuse startup without a password."
         )
 
+    def _emit_rate_limit_event(path: str) -> None:
+        """Emit an ADVISORY run-event on each 429. Never raises."""
+        try:
+            from control_plane import run_events
+            run_events.append({
+                "kind": "guardrail",
+                "job": "rate_limit",
+                "book": "",
+                "step": "operator_rate_limit",
+                "status": "warn",
+                "severity": "ADVISORY_ONLY",
+                "actor": "system",
+                "extra": {"path": path},
+            })
+        except Exception:  # noqa: BLE001
+            pass
+
     @app.middleware("http")
     async def _gate(request: Request, call_next):
-        if not enabled() or request.method == "OPTIONS" or request.url.path in _OPEN_PATHS:
+        path = request.url.path
+        method = request.method
+
+        if method == "OPTIONS" or path in _OPEN_PATHS:
             return await call_next(request)
-        if is_authorized(request):
-            return await call_next(request)
-        # Browser navigation -> bounce to the login page; API/XHR -> 401 JSON.
-        if request.method == "GET" and "text/html" in request.headers.get("accept", ""):
-            return RedirectResponse(url=f"/login?next={safe_next(request.url.path)}", status_code=303)
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+        # --- serve-only mode: block all operator mutations ---
+        if serve_only() and method == "POST" and path in _OPERATOR_PATHS:
+            return JSONResponse(
+                {"error": "serve_only", "detail": (
+                    "This instance is running in serve-only (read-only mirror) mode. "
+                    "Operator mutations are disabled. Use the primary instance."
+                )},
+                status_code=403,
+            )
+
+        # --- standard auth gate ---
+        if not enabled() or is_authorized(request):
+            pass  # falls through to operator-tier check below
+        else:
+            # Browser navigation -> bounce to the login page; API/XHR -> 401 JSON.
+            if method == "GET" and "text/html" in request.headers.get("accept", ""):
+                return RedirectResponse(url=f"/login?next={safe_next(path)}", status_code=303)
+            return JSONResponse({"error": "unauthorized"}, status_code=401)
+
+        # --- operator-tier gate: bearer required, cookie not sufficient ---
+        if method == "POST" and path in _OPERATOR_PATHS and enabled():
+            if not is_operator_authorized(request):
+                return JSONResponse(
+                    {"error": "operator_bearer_required",
+                     "detail": "Operator paths require a bearer token — "
+                               "a session cookie is not sufficient."},
+                    status_code=401,
+                )
+
+            # --- rate limiting on operator paths ---
+            if path in _LLM_OPERATOR_PATHS:
+                wait = _llm_bucket.consume()
+            else:
+                wait = _operator_bucket.consume()
+
+            if wait is not None:
+                retry_after = max(1, int(wait) + 1)
+                _emit_rate_limit_event(path)
+                return JSONResponse(
+                    {"error": "rate_limited",
+                     "detail": f"Rate limit exceeded. Retry after {retry_after}s.",
+                     "retry_after": retry_after},
+                    status_code=429,
+                    headers={"Retry-After": str(retry_after)},
+                )
+
+        return await call_next(request)
 
     @app.get("/login", include_in_schema=False)
     def login_page(next: str = "/"):  # noqa: A002 — query param name

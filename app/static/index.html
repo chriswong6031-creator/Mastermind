@@ -1858,6 +1858,25 @@ body.page-mm :is(.mm-nav-tab, .mm-pf-tab, .mm-rsub-tab, .mm-sd-btn, .mm-sd-qbtn,
     </div>
   </span>
 </div>
+<!-- MW6 provenance banner: git SHA + data snapshot + PAPER TRADING — always visible -->
+<div id="mm-provenance" style="display:none;text-align:center;padding:2px 12px;font-size:10px;
+  color:var(--text-muted,#8b97ad);background:color-mix(in srgb,var(--panel2,#141925) 80%,transparent);
+  border-bottom:1px solid var(--border,#232a39);letter-spacing:.03em;font-family:monospace">
+  <span id="prov-paper" style="color:var(--up,#4ade80);font-weight:700">PAPER TRADING</span>
+  &nbsp;·&nbsp;<span id="prov-sha"></span>
+  &nbsp;·&nbsp;<span id="prov-date"></span>
+</div>
+<script>
+(function(){
+  fetch('/api/provenance').then(function(r){return r.json();}).then(function(d){
+    var el=document.getElementById('mm-provenance');
+    if(!el)return;
+    if(d.sha)document.getElementById('prov-sha').textContent='sha:'+d.sha;
+    if(d.snapshot_date)document.getElementById('prov-date').textContent='data:'+d.snapshot_date;
+    el.style.display='block';
+  }).catch(function(){});
+})();
+</script>
 
 <script>
 /* "← Dashboard" back affordance for #mm-back. Mirrors the Terminal's lib/originNav:

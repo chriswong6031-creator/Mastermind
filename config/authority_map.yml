@@ -72,6 +72,17 @@ flags:
       vs memory (production since the 2026-07-06 readonly-sqlite scheduler-thread
       deaths).  No decision/sizing effect; jobs re-register identically at boot.
 
+  MASTERMIND_SERVE_ONLY:
+    authority_level: A4
+    allowed_effect: [arm_serve_only_mirror, disarm_serve_only_mirror]
+    note: >
+      MW6 serve-only (read-only mirror) mode gate.  When set to 1, the scheduler
+      is never started, all first-run daemon threads are skipped, and every operator
+      path (POST /daily, /reason, /research, /chat, /api/{autonomous,heavyweight,
+      china,hk,etf}/run, /api/self_directed/{order,thesis,cancel}) returns 403 JSON.
+      The /health endpoint gains "serve_only": true.  A4 gate: arm/disarm is a boolean
+      toggle; disarming re-enables the scheduler only on the NEXT process restart.
+
   MASTERMIND_SESSION_DAYS:
     authority_level: A1
     allowed_effect: [adjust_session_expiry]
