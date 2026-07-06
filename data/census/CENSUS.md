@@ -1,8 +1,8 @@
 # Mastermind System Census
 
 > GENERATED — do not hand-edit; architecture docs must cite this file. (R10)  
-> Generated at: `2026-07-06T08:29:04.426114+00:00`  
-> Git SHA: `0ef769f`
+> Generated at: `2026-07-06T08:52:51.136712+00:00`  
+> Git SHA: `b40e1ae`
 
 ## A. Scheduled Jobs
 
@@ -25,7 +25,7 @@
 | `derisk_us_intraday` | `0 14-20 * * mon-fri` | 14-20 | 0 | mon-fri | UTC |
 | `publish_macro_snapshot` | `25 12,22 * * *` | 12,22 | 25 | * | UTC |
 | `cio_weekly` | `0 10 * * sun` | 10 | 0 | sun | UTC |
-| `improvement_agenda_weekly` | `30 agenda_hour * * sun` | agenda_hour | 30 | sun | UTC |
+| `improvement_agenda_weekly` | `30 10 * * sun` | 10 | 30 | sun | UTC |
 | `loop_maintenance` | `45 23 * * mon-fri` | 23 | 45 | mon-fri | UTC |
 | `experiment_maturity` | `50 23 * * mon-fri` | 23 | 50 | mon-fri | UTC |
 
@@ -52,7 +52,7 @@
 
 ## D. API Endpoints
 
-**68 routes** across `app/main.py` + `app/web.py`
+**71 routes** across `app/main.py` + `app/web.py` + `app/auth.py`
 
 | method | path | open | LLM |
 |---|---|---|---|
@@ -124,6 +124,9 @@
 | GET | `/api/desk/macro-risk` | auth |  |
 | GET | `/api/desk/firm-exposure` | auth |  |
 | GET | `/api/desk/experiments` | auth |  |
+| GET | `/login` | open |  |
+| POST | `/login` | open |  |
+| GET | `/logout` | open |  |
 
 ## E. External Artifact Read Paths
 

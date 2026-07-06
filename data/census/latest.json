@@ -1,7 +1,7 @@
 {
   "_meta": {
-    "generated_at": "2026-07-06T08:29:04.426114+00:00",
-    "git_sha": "0ef769f",
+    "generated_at": "2026-07-06T08:52:51.136712+00:00",
+    "git_sha": "b40e1ae",
     "notice": "GENERATED \u2014 do not hand-edit; architecture docs must cite this file.",
     "ruling": "R10"
   },
@@ -128,8 +128,8 @@
     },
     {
       "id": "improvement_agenda_weekly",
-      "cron_spec": "30 agenda_hour * * sun",
-      "hour": "agenda_hour",
+      "cron_spec": "30 10 * * sun",
+      "hour": "10",
       "minute": "30",
       "day_of_week": "sun",
       "timezone": "UTC"
@@ -755,6 +755,27 @@
       "open": false,
       "llm_triggering": false,
       "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/login",
+      "open": true,
+      "llm_triggering": false,
+      "source": "auth.py"
+    },
+    {
+      "method": "POST",
+      "path": "/login",
+      "open": true,
+      "llm_triggering": false,
+      "source": "auth.py"
+    },
+    {
+      "method": "GET",
+      "path": "/logout",
+      "open": true,
+      "llm_triggering": false,
+      "source": "auth.py"
     }
   ],
   "artifacts": [

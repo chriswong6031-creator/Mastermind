@@ -12,7 +12,7 @@ Sections
   A  JOBS        — scheduler registrations (id, cron spec, timezone, day_of_week)
   B  BOOKS       — portfolio registry (id, kind, manager, benchmark, currency)
   C  FLAGS       — MASTERMIND_* env vars (set/known-not-set; secret values masked)
-  D  ENDPOINTS   — FastAPI routes (method, path, open vs auth-gated, LLM-triggering)
+  D  ENDPOINTS   — FastAPI routes (method, path, open vs auth-gated, LLM-triggering); includes app/auth.py routes
   E  ARTIFACTS   — external artifact read paths per reader module
   F  GUARDRAILS  — GuardrailResult construction sites found in the codebase
 
@@ -103,6 +103,10 @@ def _collect_jobs() -> list[dict]:
     env_default_re = re.compile(
         r'(\w+)\s*=\s*int\s*\(os\.environ\.get\s*\(\s*["\'][^"\']+["\'],\s*["\'](\d+)["\']'
     )
+    # Handle int(os.environ.get("FOO", str(other_var))) — default is a variable reference
+    env_int_var_re = re.compile(
+        r'(\w+)\s*=\s*int\s*\(os\.environ\.get\s*\(\s*["\'][^"\']+["\'],\s*str\s*\((\w+)\s*\)'
+    )
     # Handle multi-value env vars like "2,6,11" and string env vars like "sun"
     # Covers: x = (os.environ.get("FOO", "val").strip() or "val")
     #         x = os.environ.get("FOO", "val")
@@ -112,6 +116,10 @@ def _collect_jobs() -> list[dict]:
     var_defaults: dict[str, str] = {}
     for m in env_default_re.finditer(src):
         var_defaults[m.group(1)] = m.group(2)
+    for m in env_int_var_re.finditer(src):
+        name, ref = m.group(1), m.group(2)
+        if name not in var_defaults and ref in var_defaults:
+            var_defaults[name] = var_defaults[ref]
     for m in env_str_re.finditer(src):
         if m.group(1) not in var_defaults:
             var_defaults[m.group(1)] = m.group(2).strip().strip('"').strip("'")
@@ -239,7 +247,7 @@ _ROUTE_PATTERN = re.compile(
 
 
 def _collect_endpoints() -> list[dict]:
-    """Static-parse app/main.py and app/web.py for route declarations."""
+    """Static-parse app/main.py, app/web.py, and app/auth.py for route declarations."""
     try:
         from app import auth  # type: ignore[import]
         open_paths: set[str] = set(getattr(auth, "_OPEN_PATHS", {"/login", "/logout", "/health"}))
@@ -247,7 +255,7 @@ def _collect_endpoints() -> list[dict]:
         open_paths = {"/login", "/logout", "/health"}
 
     endpoints = []
-    for src_file in (_ROOT / "app" / "main.py", _ROOT / "app" / "web.py"):
+    for src_file in (_ROOT / "app" / "main.py", _ROOT / "app" / "web.py", _ROOT / "app" / "auth.py"):
         if not src_file.exists():
             continue
         src = src_file.read_text()
@@ -487,7 +495,7 @@ def _render_markdown(census: dict[str, Any]) -> str:
     # D. ENDPOINTS
     lines += ["## D. API Endpoints", ""]
     endpoints = census.get("endpoints") or []
-    lines.append(f"**{len(endpoints)} routes** across `app/main.py` + `app/web.py`")
+    lines.append(f"**{len(endpoints)} routes** across `app/main.py` + `app/web.py` + `app/auth.py`")
     lines.append("")
     lines.append("| method | path | open | LLM |")
     lines.append("|---|---|---|---|")

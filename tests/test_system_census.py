@@ -8,6 +8,8 @@ Verifies that the census script:
      must have value "<set>", never the real value).
   5. Generated-at timestamp and git-sha header are present.
   6. Both files are non-empty and valid JSON / non-empty Markdown.
+  7. Auth routes (GET /login, POST /login, GET /logout) are present and open-path.
+  8. No cron_spec leaks a bare lowercase identifier (unresolved variable name).
 """
 from __future__ import annotations
 
@@ -124,12 +126,54 @@ def test_census_flags_known_not_set_is_list(census_data):
 
 
 def test_census_endpoints_present(census_data):
-    """At least the well-known routes are present."""
+    """At least the well-known routes are present, including auth routes."""
     endpoints = census_data.get("endpoints") or []
     paths = {(ep["method"], ep["path"]) for ep in endpoints}
     assert ("GET", "/health") in paths, "/health route not found"
     assert ("POST", "/daily") in paths, "POST /daily not found"
     assert ("POST", "/chat") in paths, "POST /chat not found"
+    # auth routes from app/auth.py
+    assert ("GET", "/login") in paths, "GET /login route not found"
+    assert ("POST", "/login") in paths, "POST /login route not found"
+    assert ("GET", "/logout") in paths, "GET /logout route not found"
+
+
+def test_census_auth_routes_are_open_path(census_data):
+    """Auth routes (GET /login, POST /login, GET /logout) must be tagged open=True."""
+    endpoints = census_data.get("endpoints") or []
+    ep_map = {(e["method"], e["path"]): e for e in endpoints}
+    for method, path in [("GET", "/login"), ("POST", "/login"), ("GET", "/logout")]:
+        ep = ep_map.get((method, path))
+        assert ep is not None, f"{method} {path} not found in census endpoints"
+        assert ep.get("open") is True, (
+            f"{method} {path} must be tagged open=True (it is in _OPEN_PATHS)"
+        )
+
+
+def test_census_cron_specs_no_identifier_leak(census_data):
+    """No cron_spec field contains an unresolved lowercase Python identifier.
+
+    Legitimate day abbreviations (mon/tue/wed/thu/fri/sat/sun) are allowed.
+    Any other lowercase alpha token indicates an unresolved variable name leaked
+    from the static parser (e.g. 'agenda_hour').
+    """
+    _DAY_ABBREVS = {"sun", "mon", "tue", "wed", "thu", "fri", "sat"}
+    # Match sequences of 2+ lowercase letters/underscores (identifiers, not day abbrevs)
+    _IDENT_RE = re.compile(r'\b([a-z_]{2,})\b')
+    jobs = census_data.get("jobs") or []
+    leaks = []
+    for j in jobs:
+        spec = j.get("cron_spec", "")
+        for token in _IDENT_RE.findall(spec):
+            # Allow day range tokens like "mon-fri" (split on hyphen)
+            parts = re.split(r'[-,]', token)
+            bad = [p for p in parts if p and p not in _DAY_ABBREVS]
+            if bad:
+                leaks.append((j["id"], spec, bad))
+    assert not leaks, (
+        "cron_spec identifier leak(s) — unresolved variable names in cron specs:\n"
+        + "\n".join(f"  job={jid!r} spec={spec!r} tokens={tokens}" for jid, spec, tokens in leaks)
+    )
 
 
 def test_census_llm_triggering_routes_marked(census_data):
