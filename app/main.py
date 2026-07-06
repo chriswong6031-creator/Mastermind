@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from app.deps import data_dir, engine_root
+from app.deps import data_dir
 
 try:
     from fastapi import FastAPI
@@ -53,20 +53,23 @@ if FastAPI is not None:
     from app import auth
     auth.install(app)
 
+    # Resolved once at startup: /health is polled by uptime probes and must not
+    # spawn a subprocess per request. Fails closed to no version field.
+    import subprocess, shlex  # noqa: E401
+    try:
+        _git_sha = subprocess.check_output(
+            shlex.split("git rev-parse --short HEAD"),
+            stderr=subprocess.DEVNULL, text=True,
+        ).strip()
+    except Exception:
+        _git_sha = None
+
     @app.get("/health")
     def health() -> dict:
         # Keep only non-sensitive fields; uptime probes check `status == "ok"` only.
         # Filesystem paths and CLI paths are omitted — they leak on an open route.
-        import subprocess, shlex  # noqa: E401
-        try:
-            sha = subprocess.check_output(
-                shlex.split("git rev-parse --short HEAD"),
-                stderr=subprocess.DEVNULL, text=True,
-            ).strip()
-        except Exception:
-            sha = None
         return {"status": "ok", "paper_only": True,
-                **({"version": sha} if sha else {})}
+                **({"version": _git_sha} if _git_sha else {})}
 
     @app.get("/regime")
     def regime() -> dict:
