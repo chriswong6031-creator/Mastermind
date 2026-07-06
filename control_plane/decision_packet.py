@@ -46,6 +46,29 @@ log = logging.getLogger(__name__)
 PACKET_VERSION = 1
 _SENTINEL = "<not provided>"
 
+# Substance floor — a SYNTACTIC gate, not prose-quality judgment (P3: we bound
+# the surface, not the mind). Defeats '.'/'n/a'-style validator gaming.
+_MIN_SUBSTANCE_CHARS = 15
+_MIN_SUBSTANCE_TOKENS = 3
+_JUNK_TOKENS = {
+    "n/a", "na", "none", "nil", "null", "tbd", "todo", "unknown", "-", ".",
+    "?", "x", "test", "placeholder", "not applicable", "see above",
+}
+
+
+def _has_substance(text: str) -> bool:
+    """True when ``text`` clears the mechanical substance floor: minimum length,
+    minimum word count, and not a known junk token after punctuation stripping."""
+    s = (text or "").strip()
+    core = s.strip(" .!?-–—*_'\"`").lower()
+    if core in _JUNK_TOKENS or not core:
+        return False
+    if len(s) < _MIN_SUBSTANCE_CHARS:
+        return False
+    if len(s.split()) < _MIN_SUBSTANCE_TOKENS:
+        return False
+    return True
+
 # ---------------------------------------------------------------------------
 # RiskDirection enum (simple string-backed)
 # ---------------------------------------------------------------------------
@@ -93,14 +116,22 @@ class DecisionPacket:
         """Reconstruct a DecisionPacket from a dict (e.g. loaded from JSON).
 
         Unknown keys are silently ignored to allow forward-compat reads of
-        future schema versions.  Never raises; returns a best-effort packet.
+        future schema versions.  Never raises: missing required fields are
+        filled with typed defaults (str -> "", list -> [], dict -> {}) so the
+        VALIDATOR reports them as per-field errors instead of this constructor
+        exploding with one opaque TypeError.
         """
-        known = {f.name for f in dataclasses.fields(cls)}
+        _type_defaults = {"str": "", "list": [], "dict": {}, "int": 0}
         kwargs: dict[str, Any] = {}
         for f in dataclasses.fields(cls):
             if f.name in d:
                 kwargs[f.name] = d[f.name]
-        return cls(**{k: v for k, v in kwargs.items() if k in known})
+            elif f.default is dataclasses.MISSING and f.default_factory is dataclasses.MISSING:
+                base = str(f.type).split("[")[0].split("|")[0].strip()
+                default = _type_defaults.get(base, "")
+                kwargs[f.name] = list(default) if isinstance(default, list) else (
+                    dict(default) if isinstance(default, dict) else default)
+        return cls(**kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -150,26 +181,51 @@ def compute_delta(
     # ── normalise prior_book to {TICKER: weight} ──
     prior: dict[str, float] = {}
     if isinstance(prior_book, dict):
-        # shape 1: {"positions": {"TICKER": {...}}}
+        # shape 1: {"positions": {"TICKER": {...}}, "cash": ...}
+        # (paper_account._load_account). REAL position rows are
+        # {shares, avg_cost, current_price} — there is NO weight key, so weights
+        # must be DERIVED: w = shares*px / NAV, NAV = cash + Σ shares*px, with
+        # px = current_price falling back to avg_cost. A row that already
+        # carries an explicit weight (synthetic/test books) is honored first.
         positions_raw = prior_book.get("positions")
         if isinstance(positions_raw, dict):
+            mv: dict[str, float] = {}          # ticker -> market value (for derived weights)
             for k, v in positions_raw.items():
                 t = str(k or "").upper().strip()
                 if not t:
                     continue
-                # positions dict may have nested dicts or plain floats
                 if isinstance(v, dict):
+                    if v.get("weight") is not None:
+                        try:
+                            w = float(v["weight"])
+                        except (TypeError, ValueError):
+                            w = 0.0
+                        if w > 0:
+                            prior[t] = w
+                        continue
                     try:
-                        w = float(v.get("weight") or 0.0)
+                        shares = float(v.get("shares") or 0.0)
+                        px = float(v.get("current_price") or v.get("avg_cost") or 0.0)
                     except (TypeError, ValueError):
-                        w = 0.0
+                        shares, px = 0.0, 0.0
+                    if shares > 0 and px > 0:
+                        mv[t] = shares * px
                 else:
                     try:
                         w = float(v or 0.0)
                     except (TypeError, ValueError):
                         w = 0.0
-                if w > 0:
-                    prior[t] = w
+                    if w > 0:
+                        prior[t] = w
+            if mv:
+                try:
+                    cash = max(float(prior_book.get("cash") or 0.0), 0.0)
+                except (TypeError, ValueError):
+                    cash = 0.0
+                nav = cash + sum(mv.values())
+                if nav > 0:
+                    for t, m in mv.items():
+                        prior[t] = m / nav
         # shape 2: {"holdings": [...]}
         elif isinstance(prior_book.get("holdings"), list):
             for h in prior_book["holdings"]:
@@ -182,17 +238,24 @@ def compute_delta(
                     w = 0.0
                 if t and w > 0:
                     prior[t] = w
-        # shape 3: plain weight map {"TICKER": weight}
+        # shape 3: plain weight map {"TICKER": weight}. A real account.json also
+        # carries scalar bookkeeping fields (spy_shares, starting_nav, ...) —
+        # exclude reserved keys AND anything outside a plausible weight range.
         else:
+            _RESERVED = {
+                "positions", "holdings", "cash", "spy_shares", "starting_nav",
+                "spy_inception_price", "inception_date", "cash_yield_through",
+                "nav", "asof", "as_of",
+            }
             for k, v in prior_book.items():
                 t = str(k or "").upper().strip()
-                if not t or t in ("positions", "holdings", "cash"):
+                if not t or str(k).lower() in _RESERVED:
                     continue
                 try:
                     w = float(v or 0.0)
                 except (TypeError, ValueError):
                     continue
-                if w > 0:
+                if 0 < w <= 1.5:
                     prior[t] = w
 
     all_tickers = set(new) | set(prior)
@@ -260,17 +323,24 @@ def validate(
         return False, ["packet must be a DecisionPacket or dict"]
 
     # ── required non-empty string fields ──
-    def _req_str(val: Any, name: str, sentinel_ok: bool = False) -> None:
+    def _req_str(val: Any, name: str, sentinel_ok: bool = False,
+                 substance: bool = False) -> None:
         if not isinstance(val, str) or not val.strip():
             errors.append(f"{name}: required non-empty string")
             return
         if not sentinel_ok and val.strip() == _SENTINEL:
             errors.append(f"{name}: sentinel '<not provided>' is not acceptable")
+            return
+        if substance and not _has_substance(val):
+            errors.append(
+                f"{name}: fails the substance floor (>= {_MIN_SUBSTANCE_CHARS} chars, "
+                f">= {_MIN_SUBSTANCE_TOKENS} words, not a junk token)"
+            )
 
     _req_str(p.book,                  "book")
     _req_str(p.asof,                  "asof")
-    _req_str(p.mandate,               "mandate")
-    _req_str(p.expected_failure_mode, "expected_failure_mode")
+    _req_str(p.mandate,               "mandate",               substance=True)
+    _req_str(p.expected_failure_mode, "expected_failure_mode", substance=True)
     # liquidity_notes: sentinel acceptable in v1
     _req_str(p.liquidity_notes,       "liquidity_notes", sentinel_ok=True)
 
@@ -318,6 +388,7 @@ def validate(
     if not isinstance(p.falsifiers, list) or len(p.falsifiers) == 0:
         errors.append("falsifiers: must be a non-empty list")
     else:
+        substantive = 0
         for i, f in enumerate(p.falsifiers):
             if not isinstance(f, str) or not f.strip():
                 errors.append(f"falsifiers[{i}]: must be non-empty prose")
@@ -325,6 +396,16 @@ def validate(
                 errors.append(
                     f"falsifiers[{i}]: sentinel '<not provided>' is not acceptable"
                 )
+            elif not _has_substance(f):
+                errors.append(
+                    f"falsifiers[{i}]: fails the substance floor "
+                    f"(>= {_MIN_SUBSTANCE_CHARS} chars, >= {_MIN_SUBSTANCE_TOKENS} words, "
+                    f"not a junk token like '.'/'n/a')"
+                )
+            else:
+                substantive += 1
+        if substantive == 0 and not errors:
+            errors.append("falsifiers: at least one substantive falsifier required")
 
     # ── evidence_planes / source_provenance — list types ──
     if not isinstance(p.evidence_planes, list):

@@ -698,3 +698,98 @@ class TestNeverRaise:
         # Must not raise
         d = compute_delta(None, None)  # type: ignore
         assert isinstance(d, dict)
+
+
+# ---------------------------------------------------------------------------
+# re-review fixes (2026-07-06): real account shape, substance floor, from_dict
+# ---------------------------------------------------------------------------
+
+class TestRealAccountShape:
+    """compute_delta shape-1 against the REAL paper_account._load_account shape:
+    positions are {shares, avg_cost, current_price} with NO weight key, plus a
+    top-level cash float. Weights must be DERIVED (shares*px / NAV)."""
+
+    def _real_account(self):
+        # 2 positions: 100 sh @ $200 = 20k, 300 sh @ $100 = 30k; cash 50k → NAV 100k
+        return {
+            "inception_date": "2026-06-18",
+            "starting_nav": 100000.0,
+            "cash": 50000.0,
+            "positions": {
+                "AAA": {"shares": 100.0, "avg_cost": 190.0, "current_price": 200.0},
+                "BBB": {"shares": 300.0, "avg_cost": 105.0, "current_price": 100.0},
+            },
+            "spy_shares": 160.2,
+            "spy_inception_price": 624.0,
+        }
+
+    def test_weights_derived_from_shares_and_price(self):
+        from control_plane.decision_packet import compute_delta
+        d = compute_delta([{"ticker": "AAA", "weight": 0.20}], self._real_account())
+        assert abs(d["gross_before"] - 0.5) < 1e-6          # 50k invested / 100k NAV
+        assert d["n_dropped"] == 1                           # BBB exits
+        assert d["n_resized"] == 0                           # AAA 0.20 vs 0.20 held
+        assert d["gross_after"] == 0.2
+
+    def test_derisking_detected_not_stamped_increase(self):
+        from control_plane.decision_packet import compute_delta
+        # cutting to a single 10% position from 50% gross IS a reduction
+        d = compute_delta([{"ticker": "AAA", "weight": 0.10}], self._real_account())
+        assert d["gross_after"] < d["gross_before"]
+
+    def test_avg_cost_fallback_when_no_current_price(self):
+        from control_plane.decision_packet import compute_delta
+        acct = self._real_account()
+        del acct["positions"]["AAA"]["current_price"]        # falls back to avg_cost 190
+        d = compute_delta([], acct)
+        # NAV = 50k + 100*190 + 300*100 = 99k; gross_before = 49k/99k
+        assert abs(d["gross_before"] - (49000.0 / 99000.0)) < 1e-6
+
+
+class TestSubstanceFloor:
+    JUNK = [".", "n/a", "N/A", "-", "none", "tbd", "?", "x", "short one"]
+
+    @pytest.mark.parametrize("junk", JUNK)
+    def test_junk_falsifiers_fail(self, junk):
+        from control_plane.decision_packet import validate
+        p = _good_packet(falsifiers=[junk])
+        ok, errors = validate(p, _prior_with_holdings())
+        assert not ok and any("falsifiers[0]" in e for e in errors)
+
+    @pytest.mark.parametrize("junk", [".", "n/a", "tbd"])
+    def test_junk_mandate_fails(self, junk):
+        from control_plane.decision_packet import validate
+        ok, errors = validate(_good_packet(mandate=junk), _prior_with_holdings())
+        assert not ok and any("mandate" in e for e in errors)
+
+    def test_junk_expected_failure_mode_fails(self):
+        from control_plane.decision_packet import validate
+        ok, errors = validate(_good_packet(expected_failure_mode="n/a"),
+                              _prior_with_holdings())
+        assert not ok
+
+    def test_substantive_prose_still_passes(self):
+        from control_plane.decision_packet import validate
+        ok, errors = validate(_good_packet(), _prior_with_holdings())
+        assert ok, errors
+
+
+class TestFromDictStructuredErrors:
+    def test_partial_dict_yields_per_field_errors_not_typeerror(self):
+        from control_plane.decision_packet import DecisionPacket, validate
+        p = DecisionPacket.from_dict({"book": "etf"})       # must not raise
+        ok, errors = validate(p, {})
+        assert not ok
+        joined = " ".join(errors)
+        assert "mandate" in joined and "falsifiers" in joined
+        assert "TypeError" not in joined                     # structured, not opaque
+
+
+class TestShape3ReservedKeys:
+    def test_bookkeeping_scalars_not_counted_as_tickers(self):
+        from control_plane.decision_packet import compute_delta
+        d = compute_delta([], {"AAA": 0.4, "spy_shares": 160.2, "starting_nav": 1000000.0,
+                               "cash_yield_through": 0.05})
+        # spy_shares/starting_nav excluded (reserved or out-of-range); cash_yield_through
+        # is reserved even though 0.05 looks like a weight
+        assert abs(d["gross_before"] - 0.4) < 1e-9
