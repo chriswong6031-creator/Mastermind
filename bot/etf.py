@@ -291,6 +291,17 @@ def run_etf(asof: str | None = None, *, force: bool = False, armed: bool = True,
     except Exception:
         out["nav"] = None
     out["holdings"] = len(target)
+
+    # ── MW5: mandate-compliance packet (ADVISORY ONLY — never gates) ──────
+    try:
+        from portfolio import mandate_packet as _mp
+        _pkt = _mp.build(PORTFOLIO_ID, out)
+        out["mandate_packet"] = _pkt
+        _mp.write_packet(_pkt, PORTFOLIO_ID)
+        _mp.emit_run_event(_pkt, PORTFOLIO_ID, job="etf_daily")
+    except Exception:  # noqa: BLE001
+        pass
+
     return out
 
 

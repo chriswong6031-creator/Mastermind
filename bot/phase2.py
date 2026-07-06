@@ -1735,11 +1735,26 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
     except Exception:
         pass
 
-    return {"ran": True, "triggers": decision["triggers"], "book": book, "sleeves": payload["sleeves"],
-            "detectors": fired, "track_record": tr, "paths": paths, "llm_used": payload["llm_used"],
-            "safety": _safety, "safety_overlay": _safety_overlay,
-            "research": research_out, "research_held": research_held, "run_id": _run_id,
-            "stale_freeze": _stale_freeze_summary}
+    _run_out = {"ran": True, "triggers": decision["triggers"], "book": book,
+                "sleeves": payload["sleeves"],
+                "detectors": fired, "track_record": tr, "paths": paths,
+                "llm_used": payload["llm_used"],
+                "safety": _safety, "safety_overlay": _safety_overlay,
+                "research": research_out, "research_held": research_held, "run_id": _run_id,
+                "stale_freeze": _stale_freeze_summary,
+                "asof": asof, "gross": gross, "currency": "USD"}
+
+    # ── MW5: mandate-compliance packet (ADVISORY ONLY — never gates) ──────
+    try:
+        from portfolio import mandate_packet as _mp
+        _pkt = _mp.build("flagship", _run_out)
+        _run_out["mandate_packet"] = _pkt
+        _mp.write_packet(_pkt, "flagship")
+        _mp.emit_run_event(_pkt, "flagship", job="phase2_daily")
+    except Exception:  # noqa: BLE001
+        pass
+
+    return _run_out
 
 
 def run_flagship(asof: str | None = None, *, directive: str | None = None) -> dict:
