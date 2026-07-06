@@ -473,21 +473,50 @@ def _experiment_maturity_job():
         log.warning("experiment_maturity failed: %s", exc)
 
 
-def _emit_experiment_matured(experiment_ids: list) -> None:
-    """MW2 emitter (b): emit ``experiment_matured`` governance events for each promoted experiment.
-    Runs INSIDE the scheduler job wrapper — never inside experiment_registry (lane B). Never raises."""
+_MATURED_EMITTED = Path(__file__).resolve().parent.parent / "data" / "governance" / "experiment_matured_emitted.json"
+
+
+def _emit_experiment_matured(matured_items: list) -> None:
+    """MW2 emitter (b): emit ``experiment_matured`` governance events for newly promoted
+    experiments. Runs INSIDE the scheduler job wrapper — never inside experiment_registry
+    (lane B owns that file). Never raises.
+
+    Two production realities this handles:
+    - ``matured()`` returns list[dict] (whole experiment records), not ids — extract the id.
+    - ``matured()`` returns ALL matured-but-unjudged items on EVERY call (the job is a
+      mon-fri cron), so without dedup the ledger fills with a duplicate event per weekday
+      until a human judges the item. A sidecar records already-emitted ids; each id emits
+      exactly once, at its maturation transition."""
     try:
+        import json as _json
         from control_plane import governance as _gov
-        for exp_id in (experiment_ids or []):
+        ids: list[str] = []
+        for it in (matured_items or []):
+            exp_id = it.get("id") if isinstance(it, dict) else it
+            if exp_id:
+                ids.append(str(exp_id))
+        if not ids:
+            return
+        emitted: set[str] = set()
+        try:
+            if _MATURED_EMITTED.exists():
+                emitted = set(_json.loads(_MATURED_EMITTED.read_text()))
+        except Exception:  # noqa: BLE001 — unreadable sidecar degrades to re-emit, never to silence
+            emitted = set()
+        new = [i for i in ids if i not in emitted]
+        for exp_id in new:
             _gov.append({
                 "event_type": "experiment_matured",
-                "target": str(exp_id),
+                "target": exp_id,
                 "actor": "experiment_maturity_job",
                 "reason": "comeback_date reached; experiment promoted to MATURED",
                 "after": "matured",
                 "rollback": "manually set experiment status back to open in data/experiments/registry.json",
                 "source_artifact": "app.scheduler._experiment_maturity_job",
             })
+        if new:
+            _MATURED_EMITTED.parent.mkdir(parents=True, exist_ok=True)
+            _MATURED_EMITTED.write_text(_json.dumps(sorted(emitted | set(ids))))
     except Exception:  # noqa: BLE001 — governance emit must never kill the scheduler
         pass
 

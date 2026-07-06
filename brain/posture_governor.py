@@ -115,13 +115,17 @@ def _default_state() -> dict:
 # MW2 emitter (d): posture_governor armed/disarmed on TRANSITION only
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _check_emit_armed_transition(root: str | Path | None = None) -> None:
+def _check_emit_armed_transition(root: str | Path | None = None) -> bool | None:
     """MW2 emitter (d): check the MASTERMIND_POSTURE_ADAPT flag against the last-recorded
     armed state in state.json; emit ``posture_governor_armed`` or ``posture_governor_disarmed``
     on a TRANSITION only.  Persists the new armed state so subsequent calls do not re-fire.
 
-    Called at the point where arming is checked (startup path of ``review()`` + a direct
-    ``check_armed_transition()`` export for tests).  Never raises."""
+    Returns the resolved current armed state (None on failure) so callers that
+    save their own state snapshot afterwards can carry ``last_armed`` forward —
+    review()'s _save_state(out_state) would otherwise clobber the write made here.
+
+    Called at the point where arming is checked (persist path of ``review()`` + a direct
+    ``check_armed_transition()`` export).  Never raises."""
     try:
         current = armed()
         st = _load_state() or _default_state()
@@ -130,9 +134,9 @@ def _check_emit_armed_transition(root: str | Path | None = None) -> None:
             # First time: record the current state without emitting (no prior to diff against)
             st["last_armed"] = current
             _save_state(st)
-            return
+            return current
         if bool(last) == current:
-            return  # no transition
+            return current  # no transition
         # Transition detected
         event_type = "posture_governor_armed" if current else "posture_governor_disarmed"
         reason = (
@@ -157,14 +161,15 @@ def _check_emit_armed_transition(root: str | Path | None = None) -> None:
             pass
         st["last_armed"] = current
         _save_state(st)
+        return current
     except Exception:  # noqa: BLE001 — never interfere with the governor
-        pass
+        return None
 
 
-def check_armed_transition(root: str | Path | None = None) -> None:
+def check_armed_transition(root: str | Path | None = None) -> bool | None:
     """Public entry-point for MW2 emitter (d): call at startup to detect arming transitions.
     Safe to call multiple times — only emits on state CHANGE.  Never raises."""
-    _check_emit_armed_transition(root=root)
+    return _check_emit_armed_transition(root=root)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -312,10 +317,13 @@ def review(series: list[float], *, asof: date | None = None, state: dict | None 
     out_state = {**st, "multiplier": round(mult, 6), "streak_sign": streak_sign,
                  "streak_len": streak_len, "last_review": asof.isoformat()}
     if persist:
-        # MW2 emitter (d): check for armed/disarmed TRANSITION before persisting new state.
-        # The transition check reads the CURRENT persisted state (pre-write) so last_armed is
-        # compared correctly even if the review() caller supplies an injected state=… fixture.
-        _check_emit_armed_transition()
+        # MW2 emitter (d): check for armed/disarmed TRANSITION before persisting new state,
+        # then carry the reconciled last_armed INTO out_state — otherwise this
+        # _save_state(out_state) clobbers the write the transition check just made
+        # (out_state was built from the state loaded at review() start).
+        armed_now = _check_emit_armed_transition()
+        if armed_now is not None:
+            out_state["last_armed"] = armed_now
         _save_state(out_state)
 
     return {"as_of": asof.isoformat(), "armed": armed(), "multiplier": round(mult, 6),

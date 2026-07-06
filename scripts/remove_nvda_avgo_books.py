@@ -158,6 +158,20 @@ def main() -> None:
             print(f"  dropped {n_led} positions_ledger entr(ies); fixed nav_history + latest.json + portfolio.json")
         print()
     print(f"DONE. Backup at {BACKUP_ROOT}")
+    try:  # MW2 emitter (f): operator mutation of live book state → governance event
+        from control_plane import governance as _gov
+        _gov.append({
+            "event_type": "operator_action",
+            "target": "heavyweight,autonomous,self_directed",
+            "actor": "operator-script",
+            "reason": "remove_nvda_avgo_books: erased AVGO/NVDA lots as-if-never-existed (cost basis refunded to cash)",
+            "before": "books hold AVGO/NVDA lots",
+            "after": "AVGO/NVDA removed; NAV reconciled",
+            "rollback": f"restore book dirs from {BACKUP_ROOT}",
+            "source_artifact": "scripts/remove_nvda_avgo_books.py",
+        })
+    except Exception:  # noqa: BLE001 — governance emit must never fail the operator action
+        pass
 
 
 if __name__ == "__main__":

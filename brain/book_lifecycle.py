@@ -513,6 +513,11 @@ def _decide(book: str, grade: dict, noisy: bool, prior: dict, asof: str) -> dict
 
     st = {"state": new_state, "losing_streak": streak, "since": prior.get("since") or asof,
           "last_review": asof, "exempt": False}
+    if recommendation is not None:
+        # Stamp the state transition onto the rec so the governance emitter (MW2 c)
+        # can populate before/after — the emitter has no other access to these.
+        recommendation.setdefault("prev_state", prev_state)
+        recommendation.setdefault("new_state", new_state)
     return {"state": st, "recommendation": recommendation}
 
 
