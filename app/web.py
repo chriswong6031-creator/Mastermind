@@ -1996,6 +1996,36 @@ def api_desk_firm_exposure() -> JSONResponse:
                              "currency_clean": False, "note": f"Firm exposure unavailable: {exc}"})
 
 
+@router.get("/api/firm_allocator")
+def api_firm_allocator(rebuild: bool = False) -> JSONResponse:
+    """Shadow Firm Allocator — MW5 Lane A (docket M3).
+
+    DISPLAY-ONLY.  Returns the latest persisted allocator artifact, or computes a
+    fresh one if rebuild=true or no artifact exists yet.  Auth-gated via the standard
+    session cookie / bearer token (app.auth middleware applies to all /api/* routes).
+
+    The allocator is ADVISORY ONLY and has NO effect on any book's sizing.  See
+    portfolio/firm_allocator.py for the pre-committed formula.
+
+    Integration point for the weekly CIO path (lane B owns the scheduler wire):
+        from portfolio.firm_allocator import build_latest
+        artifact = build_latest()
+    """
+    try:
+        from portfolio import firm_allocator as _fa
+        if rebuild:
+            artifact = _fa.build_latest()
+        else:
+            artifact = _fa.latest_artifact()
+            if artifact is None:
+                artifact = _fa.build_latest()
+        return JSONResponse(artifact or {"advisory_only": True, "computed": False,
+                                         "reason": "no artifact available"})
+    except Exception as exc:  # noqa: BLE001 — never 500
+        return JSONResponse({"advisory_only": True, "computed": False,
+                             "reason": f"firm_allocator endpoint error: {exc}"})
+
+
 @router.get("/api/desk/experiments")
 def api_desk_experiments() -> JSONResponse:
     """Experiment registry — W-L / L6 + MW2 Lane B tri-state maturity.
