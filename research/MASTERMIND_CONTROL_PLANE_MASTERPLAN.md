@@ -224,6 +224,40 @@ Routing: **Sonnet builds, Opus reviews, Fable adjudicates/merges.** Haiku only f
 
 ## 3. Status log
 
+- **2026-07-06 (Fable): MW3 SHIPPED + merged + DEPLOYED** (merges b2a6422/a3b2425 + ops fixes
+  4c263a5/d22d587/186ebbb; uvicorn PID cycles to memory-jobstore build). Contract bridge live:
+  `config/contracts.yml` (41 artifacts: 16 synapse-declared mastermind consumers baked in + 25
+  census-discovered; per-artifact freshness budgets, tiers, allowed effects, degradation classes)
+  + `control_plane/contracts.py` loader. Stale-anchor FREEZE (R3): a FREEZE-class anchor beyond
+  budget now freezes the flagship book to prior (INSIDE phase2, before ledger/trade/publish —
+  the first-round wiring was post-return dead code against a nonexistent key; opus review
+  caught it, fix relocated to the MW1 firm-clamp seam and proven load-bearing). Kill-switch
+  MASTERMIND_STALE_FREEZE. R2 availability probe (5-ticker sample → advisory). NW feedback
+  artifact v1 (`bridge/nw_feedback.py` → site/mastermind/nw_feedback.json, published with the
+  snapshot, LIVE secret-redaction guard + sanitized keys — public-surface constraint tested with
+  secret-bearing fixtures). scored_active tier enforcement per the ASYMMETRIC ruling (unvalidated
+  keeps tightening, never loosens; structurally subtract-only today, pinned by invariant test).
+  Raw-vendored-read ratchet test (allowlist frozen; new raw readers fail CI; non-vacuity
+  self-checked after the worktree-exclusion bug). NOTES: 'prior' is now a recognized sleeve value
+  downstream of freeze paths; anchor-freeze is FLAGSHIP-ONLY — autonomous/etf/heavyweight wiring
+  is a declared follow-up (MW4/MW5 window).
+- **2026-07-06 (Fable): OPS INCIDENT #2 + hardening.** The sqlite jobstore flipped to
+  "readonly database" AGAIN (~14:30–15:00 UTC, normal-shell-launched process — provenance on
+  session-created files, not launch-context, is the operative taint) and the scheduler thread
+  died silently a second time (run ledger caught it: missing 15:00 derisk fire). Hardening
+  shipped: (1) scheduler WATCHDOG — dead APScheduler thread ⇒ HARD_STOP run-event + process
+  exit(70) (fail-fast; supervisor restarts); (2) `MASTERMIND_JOBSTORE=memory` in production
+  (persistence was redundant — boot re-registers all 18 jobs; the readonly crash class is gone);
+  (3) launchd agent com.mastermind.bot AUTHORED but BLOCKED by macOS TCC (launchd cannot read
+  ~/Documents without a user Full-Disk-Access grant — the working flow-ops agents live outside
+  Documents). Plist staged at ~/Library/LaunchAgents/com.mastermind.bot.plist, unloaded; needs
+  a user decision (grant FDA to /bin/bash for launchd, or relocate the repo). (4) Law: NEVER
+  run test suites in the Mastermind MAIN checkout — bot/__init__ loads production .env into
+  os.environ (test process gets real credentials + REQUIRE_AUTH) and test fixtures defaulting
+  root=None polluted the production run ledger ('broken_job' events, 10:15 UTC). Verification
+  runs go in worktrees (vendor-dependent suites: symlink vendor/macro_src from the main
+  checkout read-only).
+
 - **2026-07-06 (Fable): MW2 SHIPPED + merged + DEPLOYED** (merges e327a45/e4b1a55 + fixes
   ae1c33e/637f606/e075899/a85e4a4; uvicorn PID 52426, version a85e4a4). Governance ledger live:
   `control_plane/governance.py` → `data/governance/governance.jsonl` (NW-schema-compatible:
