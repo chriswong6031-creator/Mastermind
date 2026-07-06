@@ -154,10 +154,20 @@ class _TokenBucket:
         return (1.0 - self.tokens) / self.rate
 
 
-# LLM bucket: capacity=2 (burst of 2/min, i.e. 1 token per 30s), rate=8/3600
+# LLM bucket: burst capacity 2, sustained 8/hour (refill 1 token per 450s —
+# a single token bucket cannot independently express both 8/hr and 2/min;
+# this is the stricter composition). Module-global state: tests MUST reset
+# via reset_rate_buckets() (autouse fixture) or ordering becomes load-bearing.
 _llm_bucket = _TokenBucket(capacity=2.0, rate=8.0 / 3600.0)
 # Non-LLM operator bucket: 30/hour
 _operator_bucket = _TokenBucket(capacity=30.0, rate=30.0 / 3600.0)
+
+
+def reset_rate_buckets() -> None:
+    """Restore both operator rate buckets to full capacity (TEST hook —
+    module-global bucket state otherwise leaks across tests/orderings)."""
+    _llm_bucket.tokens = _llm_bucket.capacity
+    _operator_bucket.tokens = _operator_bucket.capacity
 
 
 # ---------------------------------------------------------------- config ----

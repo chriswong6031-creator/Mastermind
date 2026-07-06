@@ -143,7 +143,9 @@ if FastAPI is not None:
 
         # MW6: serve-only mode — scheduler NEVER starts; all operator paths return 403.
         if _is_serve_only:
-            log.info("MASTERMIND_SERVE_ONLY=1 — scheduler NOT started (read-only mirror mode)")
+            import logging as _logging
+            _logging.getLogger("app.main").info(
+                "MASTERMIND_SERVE_ONLY=1 — scheduler NOT started (read-only mirror mode)")
             try:
                 from control_plane import run_events as _re
                 _re.append({

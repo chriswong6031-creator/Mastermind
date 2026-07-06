@@ -315,9 +315,20 @@ class TestServeOnly:
         )
 
     def test_scheduler_is_none_in_serve_only(self, monkeypatch):
-        """When MASTERMIND_SERVE_ONLY=1, serve_only() returns True (the scheduler guard)."""
+        """When MASTERMIND_SERVE_ONLY=1 the REAL startup hook leaves app.state.scheduler
+        as None and skips every first-run daemon thread — exercised through TestClient
+        (safe precisely BECAUSE serve-only prevents the scheduler/Brain side effects)."""
         monkeypatch.setenv("MASTERMIND_SERVE_ONLY", "1")
+        monkeypatch.setenv("MASTERMIND_PASSWORD", "pw-serve-only-test")
         assert auth.serve_only() is True
+        import importlib
+        import app.main as main_mod
+        from fastapi.testclient import TestClient
+        with TestClient(main_mod.app) as c:            # triggers the real startup hook
+            assert main_mod.app.state.scheduler is None
+            assert getattr(main_mod.app.state, "autonomous_first_run", False) in (False, None)
+            r = c.get("/health")
+            assert r.json().get("serve_only") is True   # the real health route, not a copy
 
     def test_scheduler_not_none_when_serve_only_off(self, monkeypatch):
         """When MASTERMIND_SERVE_ONLY is not set, serve_only() returns False."""
