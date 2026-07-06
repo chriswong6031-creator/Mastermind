@@ -229,18 +229,40 @@ def _vol_mm(regime="backwardation-stress", **extra):
 
 
 def test_vol_regime_lens_present_and_subtract_only(monkeypatch):
-    """The vol-regime lens votes BEAR in a risk-off state and NEUTRAL when calm — it can never
-    vote BULL (it is a subtract-only gross caution, not a size driver). It rides in _macro_rows
-    so every name/theme matrix with macro context carries it."""
+    """The vol-regime lens votes BEAR in a risk-off state and NEUTRAL when calm.
+    It can never vote BULL — subtract-only gross caution (see structural invariant test below).
+    It rides in _macro_rows so every name/theme matrix with macro context carries it.
+
+    docket F7 / R7 enforcement (ASYMMETRIC, Fable ruling 2026-07-06):
+      • scored_active=False KEEPS tightening (bear stays bear) — unvalidated caution is safe.
+      • scored_active=False SUPPRESSES loosening (bull → neutral), but since the lens is
+        structurally subtract-only (never bull), this only matters as an invariant.
+    """
+    # scored_active=True, risk-off => bear (validated data affects sizing, tightening allowed)
     monkeypatch.setattr(lenses, "_load",
-                        lambda rel: _vol_mm() if "vol/mastermind" in rel else None)
+                        lambda rel: {**_vol_mm(), "scored_active": True} if "vol/mastermind" in rel else None)
+    monkeypatch.delenv("MASTERMIND_VOL_REGIME_SCORED_GATE", raising=False)
     r = lenses._vol_regime_row()
     assert r["lens"] == "vol_regime" and r["status"] == "context" and r["direction"] == "bear"
     assert r["value"]["regime"] == "backwardation-stress" and r["value"]["vol_target_scalar"] == 0.7
     assert "vol_regime" in {row["lens"] for row in lenses._macro_rows()}   # wired into the macro rows
 
+    # scored_active=False, risk-off => BEAR (Fable ruling: tightening kept — asymmetric enforcement)
     monkeypatch.setattr(lenses, "_load",
-                        lambda rel: _vol_mm(regime="normalizing", kill_switch=False) if "vol/mastermind" in rel else None)
+                        lambda rel: _vol_mm() if "vol/mastermind" in rel else None)  # _vol_mm has scored_active=False
+    r_unscored = lenses._vol_regime_row()
+    assert r_unscored["direction"] == "bear", (
+        "scored_active=False must KEEP direction='bear' for risk-off regimes. "
+        "Tightening (caution) is always allowed — asymmetric enforcement (Fable ruling 2026-07-06). "
+        "Only loosening (bull→neutral) is suppressed. "
+        "Got: " + repr(r_unscored["direction"])
+    )
+    assert r_unscored["value"]["tier_enforced"] is True
+
+    # calm (scored_active=True) => neutral (never bull — subtract-only)
+    monkeypatch.setattr(lenses, "_load",
+                        lambda rel: {**_vol_mm(regime="normalizing", kill_switch=False), "scored_active": True}
+                        if "vol/mastermind" in rel else None)
     assert lenses._vol_regime_row()["direction"] == "neutral"             # calm => no vote (never bull)
 
 
@@ -262,3 +284,59 @@ def test_vol_regime_is_in_macro_bloc_and_nudges_down():
     ]}
     s = lenses.synthesize(fake)
     assert s["bloc_macro"] == "bear"
+
+
+def test_vol_regime_subtract_only_structural_invariant(monkeypatch):
+    """Pinned structural invariant: vol_regime is SUBTRACT-ONLY — can never produce 'bull'.
+
+    Fable ruling (2026-07-06): enforcement is ASYMMETRIC — tightening (bear) always passes,
+    loosening (bull) from unvalidated data is suppressed.  The current implementation computes
+    raw_direction as 'bear' if risk_off else 'neutral', making 'bull' structurally unreachable.
+    This test pins that invariant so any future code change that adds a bull path is caught
+    immediately.  Covers: all known regime strings × scored_active {True, False} × gate {on, off}.
+    """
+    all_regimes = ["warning", "backwardation-stress", "normalizing", "normal", "calm",
+                   "elevated", "fragile", "unknown", "", None]
+
+    for regime in all_regimes:
+        for gate_env in ("1", "0"):
+            for sa in (True, False):
+                fake_vol = {"regime": regime, "scored_active": sa,
+                            "kill_switch": False, "vol_target_scalar": 1.0}
+
+                monkeypatch.setattr(lenses, "_load",
+                                    lambda rel, _fv=fake_vol: _fv if "vol" in rel else None)
+                monkeypatch.setenv("MASTERMIND_VOL_REGIME_SCORED_GATE", gate_env)
+
+                row = lenses._vol_regime_row()
+                assert row["direction"] != "bull", (
+                    f"vol_regime produced 'bull' — SUBTRACT-ONLY structural invariant violated: "
+                    f"regime={regime!r}, scored_active={sa}, gate={gate_env}. "
+                    "This lens must never loosen gross (no bull vote)."
+                )
+
+
+def test_vol_regime_unscored_bear_kept_asymmetric(monkeypatch):
+    """Fable ruling 2026-07-06 — asymmetric enforcement:
+    scored_active=False with a risk-off regime KEEPS direction='bear' (tightening is safe).
+    The earlier implementation forced bear→neutral on scored_active=False; that was the
+    blocker being reverted here.
+    """
+    fake_vol = {
+        "regime": "warning",       # risk_off=True
+        "kill_switch": False,
+        "vol_target_scalar": 0.8,
+        "scored_active": False,    # display-only
+    }
+    monkeypatch.setattr(lenses, "_load",
+                        lambda rel: fake_vol if "vol" in rel else None)
+    monkeypatch.delenv("MASTERMIND_VOL_REGIME_SCORED_GATE", raising=False)
+
+    row = lenses._vol_regime_row()
+    assert row["direction"] == "bear", (
+        "scored_active=False + risk-off must KEEP direction='bear' (asymmetric enforcement). "
+        "Tightening caution is always safe regardless of validation tier. "
+        f"Got: {row['direction']!r}"
+    )
+    assert row["value"]["tier_enforced"] is True
+    assert row["value"]["scored_active"] is False

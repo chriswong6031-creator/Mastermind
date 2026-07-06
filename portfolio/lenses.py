@@ -819,23 +819,65 @@ def _vol_regime_row() -> dict:
     it can never manufacture a bullish vote to size UP. It sits in the de-correlated _MACRO_BLOC
     (it reads the same risk-on/off surface as macro_risk / cross_asset), so it never sizes alone;
     it only sharpens the one net macro vote toward caution when market vol stress is rising.
-    Drawdown / capital-efficiency, not alpha. Absent file -> 'missing' (shown, never imputed)."""
+    Drawdown / capital-efficiency, not alpha. Absent file -> 'missing' (shown, never imputed).
+
+    scored_active enforcement (docket F7 / R7 — ASYMMETRIC, Fable ruling 2026-07-06):
+    Enforcement is ASYMMETRIC by design:
+      • TIGHTENING (bear direction) is ALWAYS allowed, even when scored_active=False.
+        Unvalidated caution is safe — extra de-risking from display-tier data is never harmful.
+      • LOOSENING (bull direction) is NEVER allowed from unvalidated data.  scored_active=False
+        → any bull direction must be forced to neutral.
+
+    Structural note: this lens is SUBTRACT-ONLY by construction — its raw direction is always
+    'bear' (risk-off) or 'neutral' (calm).  It structurally CANNOT produce 'bull', so the
+    bull→neutral guard is a pinned invariant (tested in tests/test_lenses.py) rather than a
+    runtime branch.  tier_enforced=True documents that this invariant is actively maintained.
+
+    Kill-switch: MASTERMIND_VOL_REGIME_SCORED_GATE=0 bypasses all scored_active enforcement
+    (log-only / emergency ops).  With the kill-switch, scored_active=False no longer suppresses
+    the display note.
+    """
+    import os
     v = _load("site/vol/mastermind.json") or _load("data/vol/mastermind.json")
     if not v:
         return _row("vol_regime", None, "missing", None)
     regime = v.get("regime")
     risk_off = regime in ("warning", "backwardation-stress")
+    scored_active = bool(v.get("scored_active"))
+    gate_enabled = os.environ.get("MASTERMIND_VOL_REGIME_SCORED_GATE", "1").strip().lower() \
+        not in ("0", "false", "no", "off", "")
+
+    # Raw direction: subtract-only (never bull).
+    raw_direction = "bear" if risk_off else "neutral"
+
+    # scored_active enforcement (ASYMMETRIC):
+    #   • Bear (tightening) passes through even when scored_active=False — caution is safe.
+    #   • Bull (loosening) is suppressed to neutral when scored_active=False and gate is on.
+    #     Since raw_direction is structurally never 'bull', this branch is a safety invariant
+    #     only (see tests/test_lenses.py test_vol_regime_subtract_only_structural_invariant).
+    if gate_enabled and not scored_active and raw_direction == "bull":
+        effective_direction = "neutral"
+    else:
+        effective_direction = raw_direction
+
+    # Note: show the suppression annotation only when the gate is active and the vol data is
+    # unvalidated; for tightening reads (bear) the note is unchanged regardless of scored_active.
+    if gate_enabled and not scored_active and effective_direction != "bear":
+        note = "vol_regime display-only (scored_active=False) — loosening suppressed"
+    else:
+        note = ("index vol-regime risk-off — trim gross (context caution, not a size driver)"
+                if risk_off else "")
+
     return _row("vol_regime", {
         "regime": regime,
         "kill_switch": bool(v.get("kill_switch")),
         "vol_target_scalar": v.get("vol_target_scalar"),
-        "scored_active": bool(v.get("scored_active")),     # gate state — display vs validated
+        "scored_active": scored_active,                     # gate state — display vs validated
         "scored_score": v.get("scored_score"),
         "ts_slope_state": v.get("ts_slope_state"),
         "fragility": v.get("fragility_confluence"),
-    }, "context", "bear" if risk_off else "neutral",
-        note=("index vol-regime risk-off — trim gross (context caution, not a size driver)"
-              if risk_off else ""))
+        "tier_enforced": True,                              # R7: asymmetric scored_active gate active
+    }, "context", effective_direction, note=note)
 
 
 def _macro_rows() -> list[dict]:
