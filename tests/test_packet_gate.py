@@ -471,3 +471,42 @@ class TestGovernanceConformance:
             f"Expected MASTERMIND_PACKET_GATE at A6 (book-lifecycle / Fable-human boundary), "
             f"got {entry.get('authority_level')!r}"
         )
+
+
+class TestNonMutation:
+    """process() must never mutate the Brain's submission dict or the prior book —
+    shadow-mode zero-behavior-change depends on it (wire-review nit)."""
+
+    def test_process_does_not_mutate_inputs(self, tmp_path):
+        import copy
+        from control_plane import packet_gate
+        submission = {
+            "holdings": [{"ticker": "NVDA", "weight": 0.30}],
+            "falsifiers": ["If breadth deteriorates for five straight sessions exit the book."],
+            "mandate": "Free-form autonomous book seeking asymmetric upside within caps.",
+            "expected_failure_mode": "Crowded momentum unwind takes the whole book down at once.",
+        }
+        prior = {"cash": 50000.0,
+                 "positions": {"AAA": {"shares": 100.0, "avg_cost": 190.0, "current_price": 200.0}}}
+        sub_before, prior_before = copy.deepcopy(submission), copy.deepcopy(prior)
+        res = packet_gate.process("autonomous", submission, prior,
+                                  run_events_root=tmp_path, rejections_root=tmp_path)
+        assert submission == sub_before
+        assert prior == prior_before
+        pkt = getattr(res, "packet", None)
+        if pkt is not None and getattr(pkt, "falsifiers", None):
+            assert pkt.falsifiers is not submission["falsifiers"]  # no aliasing
+
+    def test_rejection_ledger_caps_list_field_prose(self, tmp_path):
+        from control_plane.decision_packet import record_rejection
+        import json as _json
+        huge = "x" * 5000
+        record_rejection({"book": "etf", "falsifiers": [huge] * 30,
+                          "evidence_planes": [huge]}, ["some error"], root=tmp_path)
+        ledger = tmp_path / "data" / "governance" / "packet_rejections.jsonl"
+        row = _json.loads(ledger.read_text().splitlines()[-1])
+        pk = row.get("packet") or {}
+        fals = pk.get("falsifiers") or []
+        assert len(fals) <= 21                                   # 20 + truncation marker
+        assert all(len(str(f)) <= 1020 for f in fals)
+        assert len(str((pk.get("evidence_planes") or [""])[0])) <= 1020

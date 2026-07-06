@@ -492,13 +492,23 @@ def record_rejection(
         # Truncate individual error strings to keep line lengths reasonable
         trimmed_errors = [str(e)[:300] for e in (errors or [])]
 
-        # Sanitise the stored packet — keep all fields but cap long strings
-        safe_packet: dict[str, Any] = {}
-        for k, v in packet_dict.items():
-            if isinstance(v, str) and len(v) > 1000:
-                safe_packet[k] = v[:1000] + "...<truncated>"
-            else:
-                safe_packet[k] = v
+        # Sanitise the stored packet — keep all fields but cap long strings,
+        # INCLUDING inside list-valued LLM-authored fields (falsifiers,
+        # evidence_planes, source_provenance, per-holding rationale): a Brain
+        # must not be able to dump unbounded prose into the rejection ledger.
+        def _cap(v: Any, depth: int = 0) -> Any:
+            if isinstance(v, str):
+                return v[:1000] + "...<truncated>" if len(v) > 1000 else v
+            if isinstance(v, list) and depth < 3:
+                out = [_cap(x, depth + 1) for x in v[:20]]
+                if len(v) > 20:
+                    out.append(f"...<{len(v) - 20} more truncated>")
+                return out
+            if isinstance(v, dict) and depth < 3:
+                return {str(k2)[:100]: _cap(v2, depth + 1) for k2, v2 in list(v.items())[:40]}
+            return v
+
+        safe_packet: dict[str, Any] = {k: _cap(v) for k, v in packet_dict.items()}
 
         row: dict[str, Any] = {
             "ts":            ts,
