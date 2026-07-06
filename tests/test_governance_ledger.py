@@ -394,13 +394,21 @@ class TestStartupFlagDiffEmitter:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestExperimentMaturedEmitter:
-    def test_emit_experiment_matured_single(self, tmp_path, monkeypatch):
-        """_emit_experiment_matured emits one governance event per id."""
+    @staticmethod
+    def _isolate(tmp_path, monkeypatch):
+        """Redirect BOTH the governance ledger and the dedup sidecar to tmp_path —
+        the sidecar is stateful production data; tests must never touch it."""
         import app.scheduler as sched
         import control_plane.governance as gov_mod
 
         orig_lp = gov_mod._ledger_path
         monkeypatch.setattr(gov_mod, "_ledger_path", lambda root=None: orig_lp(tmp_path))
+        monkeypatch.setattr(sched, "_MATURED_EMITTED", tmp_path / "matured_emitted.json")
+        return sched
+
+    def test_emit_experiment_matured_single(self, tmp_path, monkeypatch):
+        """_emit_experiment_matured emits one governance event per id."""
+        sched = self._isolate(tmp_path, monkeypatch)
 
         sched._emit_experiment_matured(["exp-001"])
 
@@ -414,11 +422,7 @@ class TestExperimentMaturedEmitter:
         assert "rollback" in ev
 
     def test_emit_experiment_matured_multiple(self, tmp_path, monkeypatch):
-        import app.scheduler as sched
-        import control_plane.governance as gov_mod
-
-        orig_lp = gov_mod._ledger_path
-        monkeypatch.setattr(gov_mod, "_ledger_path", lambda root=None: orig_lp(tmp_path))
+        sched = self._isolate(tmp_path, monkeypatch)
 
         sched._emit_experiment_matured(["exp-A", "exp-B", "exp-C"])
 
@@ -426,6 +430,15 @@ class TestExperimentMaturedEmitter:
         assert len(events) == 3
         targets = {e["target"] for e in events}
         assert targets == {"exp-A", "exp-B", "exp-C"}
+
+    def test_emit_dedupes_on_second_call(self, tmp_path, monkeypatch):
+        sched = self._isolate(tmp_path, monkeypatch)
+
+        sched._emit_experiment_matured([{"id": "exp-D"}])   # dict-shaped input
+        sched._emit_experiment_matured([{"id": "exp-D"}])   # same item next cron day
+
+        events = _events_of_type(tmp_path, "experiment_matured")
+        assert len(events) == 1 and events[0]["target"] == "exp-D"
 
     def test_emit_experiment_matured_empty_list(self, tmp_path, monkeypatch):
         import app.scheduler as sched
