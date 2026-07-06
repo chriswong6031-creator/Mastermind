@@ -144,6 +144,24 @@ def main(pid: str) -> int:
     res = settle(pid)
     if res.get("note") == "no pending":
         print(f"[{pid or registry.DEFAULT_ID}] no pending orders — nothing to settle.")
+        return 0
+    try:  # MW2 emitter (f): operator mutation of live book state → governance event
+        from control_plane import governance as _gov
+        _gov.append({
+            "event_type": "operator_action",
+            "target": pid or registry.DEFAULT_ID,
+            "actor": "operator-script",
+            "reason": (
+                f"fill_pending_now: force-settled {res.get('filled', 0)} pending order(s) "
+                f"outside the scheduled settle path (marked_nav={res.get('marked_nav')})"
+            ),
+            "before": "pending orders queued for scheduled settle",
+            "after": f"filled ({res.get('filled', 0)} orders; {res.get('remaining', 0)} remaining)",
+            "rollback": "restore the book dir under data/portfolios/<id>/ from git or the run backup",
+            "source_artifact": "scripts/fill_pending_now.py",
+        })
+    except Exception:  # noqa: BLE001 — governance emit must never fail the operator action
+        pass
     return 0
 
 

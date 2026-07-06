@@ -100,6 +100,7 @@ if FastAPI is not None:
         from app import scheduler
 
         # MW1: record an app_started event (survives restarts; JSONL is permanent).
+        _current_flags = _startup_flags()
         try:
             from control_plane import run_events
             run_events.append({
@@ -111,9 +112,23 @@ if FastAPI is not None:
                 "actor": "system",
                 "extra": {
                     "git_sha": _git_sha or "unknown",
-                    "flags": _startup_flags(),
+                    "flags": _current_flags,
                 },
             })
+        except Exception:
+            pass
+
+        # MW2: governance emitters — (a) flag-state diff vs previous startup,
+        # (e) doctrine-hash change detection.  Both are additive; never raise.
+        try:
+            from control_plane import governance as _gov
+            _prior_flags = _gov._last_startup_flags() or {}
+            _gov.append_flag_diff(_prior_flags, _current_flags, source_artifact="startup")
+        except Exception:
+            pass
+        try:
+            from control_plane import governance as _gov
+            _gov.check_doctrine_hash()
         except Exception:
             pass
 

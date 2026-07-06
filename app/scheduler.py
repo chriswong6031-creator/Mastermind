@@ -456,15 +456,69 @@ def _experiment_maturity_job():
 
     Promotes any OPEN experiment whose comeback_date has been reached to MATURED, persisting the
     status change in data/experiments/registry.json so the next agenda build surfaces it at the top.
-    Cheap, deterministic, LLM-free. Never raises into the scheduler."""
+    Cheap, deterministic, LLM-free. Never raises into the scheduler.
+
+    MW2: emits a ``experiment_matured`` governance event for each experiment promoted, via the
+    governance emitter (b).  The emit happens IN THIS WRAPPER — never inside experiment_registry
+    (lane B owns that file)."""
     handle = _ledger_start("experiment_maturity", trigger="cron")
     try:
         from brain import experiment_registry
-        experiment_registry.matured()  # side-effect: promotes date-reached items → matured
+        matured_ids = experiment_registry.matured()  # side-effect: promotes date-reached items → matured
         _ledger_end(handle, "ok")
+        # MW2 emitter (b): one governance event per matured experiment
+        _emit_experiment_matured(matured_ids or [])
     except Exception as exc:  # noqa: BLE001 — a maturity check miss must never kill the scheduler
         _ledger_end(handle, "error")
         log.warning("experiment_maturity failed: %s", exc)
+
+
+_MATURED_EMITTED = Path(__file__).resolve().parent.parent / "data" / "governance" / "experiment_matured_emitted.json"
+
+
+def _emit_experiment_matured(matured_items: list) -> None:
+    """MW2 emitter (b): emit ``experiment_matured`` governance events for newly promoted
+    experiments. Runs INSIDE the scheduler job wrapper — never inside experiment_registry
+    (lane B owns that file). Never raises.
+
+    Two production realities this handles:
+    - ``matured()`` returns list[dict] (whole experiment records), not ids — extract the id.
+    - ``matured()`` returns ALL matured-but-unjudged items on EVERY call (the job is a
+      mon-fri cron), so without dedup the ledger fills with a duplicate event per weekday
+      until a human judges the item. A sidecar records already-emitted ids; each id emits
+      exactly once, at its maturation transition."""
+    try:
+        import json as _json
+        from control_plane import governance as _gov
+        ids: list[str] = []
+        for it in (matured_items or []):
+            exp_id = it.get("id") if isinstance(it, dict) else it
+            if exp_id:
+                ids.append(str(exp_id))
+        if not ids:
+            return
+        emitted: set[str] = set()
+        try:
+            if _MATURED_EMITTED.exists():
+                emitted = set(_json.loads(_MATURED_EMITTED.read_text()))
+        except Exception:  # noqa: BLE001 — unreadable sidecar degrades to re-emit, never to silence
+            emitted = set()
+        new = [i for i in ids if i not in emitted]
+        for exp_id in new:
+            _gov.append({
+                "event_type": "experiment_matured",
+                "target": exp_id,
+                "actor": "experiment_maturity_job",
+                "reason": "comeback_date reached; experiment promoted to MATURED",
+                "after": "matured",
+                "rollback": "manually set experiment status back to open in data/experiments/registry.json",
+                "source_artifact": "app.scheduler._experiment_maturity_job",
+            })
+        if new:
+            _MATURED_EMITTED.parent.mkdir(parents=True, exist_ok=True)
+            _MATURED_EMITTED.write_text(_json.dumps(sorted(emitted | set(ids))))
+    except Exception:  # noqa: BLE001 — governance emit must never kill the scheduler
+        pass
 
 
 def _loop_maintenance_job():
