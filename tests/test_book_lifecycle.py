@@ -321,3 +321,29 @@ def test_history_from_ledgers_differences_cumulative(sandbox):
     # second review increment: flagship 3.0−1.0 = 2.0% → 0.02; spy 1.5−0.5 = 1.0% → 0.01
     assert hist[1]["books"]["flagship"] == pytest.approx(0.02, abs=1e-9)
     assert hist[1]["bogeys"]["spy"] == pytest.approx(0.01, abs=1e-9)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Fix-2: _regional_review_history never-raises guarantee — malformed row guard
+# ─────────────────────────────────────────────────────────────────────────────
+def test_regional_review_history_tolerates_malformed_leaderboard_rows():
+    """A ledger whose 'leaderboard' contains non-dict rows (e.g. a string annotation or None
+    injected by a corrupt write) must NOT raise AttributeError.  Before the fix the dict-
+    comprehension `{r.get('id'): r for r in leaderboard}` would blow up on r.get() when r is
+    not a dict.  The function is documented Never raises — this guards that contract."""
+    malformed_ledgers = [
+        # leaderboard mixes valid dict rows with a stray string + a None
+        {"as_of": "2026-05-01",
+         "leaderboard": [
+             {"id": "china", "kind": "book", "return_pct": 2.0},
+             {"id": "regional", "kind": "bogey", "return_pct": 1.0},
+             "stray_annotation",   # non-dict — must not raise
+             None,                 # None — must not raise
+         ]},
+    ]
+    # _regional_review_history is a module-private function; reach it via regional_review()
+    # which calls it internally and is also documented Never raises.
+    result = BL.regional_review(cn_ledgers=malformed_ledgers, hk_ledgers=[])
+    # the call must complete without AttributeError and return a well-formed dict
+    assert isinstance(result, dict), "regional_review must return a dict on malformed input"
+    assert "grades" in result

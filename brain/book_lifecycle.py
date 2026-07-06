@@ -72,6 +72,11 @@ REFERENCE_BOOK = "flagship"
 # P6). Hard-coded here and asserted in the tests so no future edit can quietly make it killable.
 EXEMPT_BOOKS = frozenset({"self_directed"})
 
+# Regional books — graded against their proxy bogey (FXI) under a separate lifecycle frame.
+# They are NOT in the US orthogonality matrix (different clocks, different instruments).  Their
+# bogey rows carry bogey_is_proxy=True so every recommendation cites the caveat.
+REGIONAL_BOOKS = ["china", "hk"]
+
 # lifecycle states (append-only progression; a human resets a book to active by executing/declining)
 STATE_ACTIVE = "active"
 STATE_PROBATION = "probation"
@@ -148,8 +153,9 @@ def _loss_significance(active_series: list[float]) -> dict:
     t_min = _cf("hac_t_min", _HAC_T_MIN)
     lags = _ci("hac_lag", _HAC_LAG)
     eff_n = len(s)
-    out = {"effective_n": eff_n, "min_effective_n": min_n, "mean": None,
-           "hac_t": None, "hac_t_min": t_min, "significant": False, "losing": False,
+    reviews_remaining = max(0, min_n - eff_n)
+    out = {"effective_n": eff_n, "min_effective_n": min_n, "reviews_remaining": reviews_remaining,
+           "mean": None, "hac_t": None, "hac_t_min": t_min, "significant": False, "losing": False,
            "status": "insufficient-n"}
     if eff_n < min_n:
         # honest paper-n answer: not enough independent reviews to test a loss (P3)
@@ -403,12 +409,18 @@ def grade_book(book: str, review_history: list[dict], *, book_curves: dict | Non
 
     mdd = _max_drawdown(_book_curve(book_curves, book))
     mdd_watch = (mdd is not None and mdd >= _cf("max_drawdown_watch", _MAX_DD_WATCH))
+    # reviews_remaining: how many more independent weekly reviews are needed before this book
+    # can be scored (min_effective_n − effective_n, floored 0).  Surfaced on the lifecycle card
+    # and in the CIO note so the reader knows exactly when the first verdict is reachable.
+    reviews_remaining = (loss.get("reviews_remaining")
+                         or max(0, _ci("min_effective_n", _MIN_EFFECTIVE_N) - loss.get("effective_n", 0)))
     return {
         "book": book,
         "exempt": exempt,
         "graded_vs": reg_bogey,
         "graded_vs_label": _BOGEY_LABELS.get(reg_bogey, reg_bogey),
-        "loss_test": loss,                      # {effective_n, mean, hac_t, significant, losing, status}
+        "loss_test": loss,                      # {effective_n, mean, hac_t, significant, losing, status, reviews_remaining}
+        "reviews_remaining": reviews_remaining,
         "active_vs_spy": _mean("spy"),
         "active_vs_defensive": _mean("defensive"),
         "active_vs_regime_max": _mean("regime_max"),
@@ -562,6 +574,11 @@ def review(review_history: list[dict] | None = None, *, asof: date | None = None
                  if not g["exempt"] and (g["loss_test"] or {}).get("status") == "scoring")
     insufficient = sum(1 for g in grades
                        if not g["exempt"] and (g["loss_test"] or {}).get("status") == "insufficient-n")
+    # reviews_remaining: max over all non-exempt books (the soonest-evaluable headline number)
+    max_reviews_remaining = max(
+        ((g.get("loss_test") or {}).get("reviews_remaining") or 0)
+        for g in grades if not g.get("exempt")
+    ) if grades else 0
 
     result = {
         "as_of": asof_iso,
@@ -575,9 +592,12 @@ def review(review_history: list[dict] | None = None, *, asof: date | None = None
         "paper_n": {
             "scored_books": scored, "insufficient_n_books": insufficient,
             "min_effective_n": _ci("min_effective_n", _MIN_EFFECTIVE_N),
+            "max_reviews_remaining": max_reviews_remaining,
             "note": ("At paper-n, honesty is the deliverable: a book below the effective_n gate is "
                      "'insufficient-n' and gets NO recommendation. KILL IS NEVER AUTOMATED — a human "
-                     "executes any retirement. Self-Directed is exempt (the yardstick)."),
+                     "executes any retirement. Self-Directed is exempt (the yardstick)."
+                     + (f" {max_reviews_remaining} more weekly review(s) needed before any US book "
+                        f"is evaluable." if max_reviews_remaining > 0 else "")),
         },
     }
     if persist:
@@ -654,6 +674,254 @@ def latest() -> dict:
         return json.loads(files[-1].read_text()) if files else {}
     except Exception:  # noqa: BLE001
         return {}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# REGIONAL LIFECYCLE — china / hk graded against their proxy bogeys
+# ─────────────────────────────────────────────────────────────────────────────
+# China and HK are governance orphans: they are outside the US orthogonality frame and were never
+# graded against any bogey.  This section adds the same honest-at-paper-n discipline the US frame
+# applies, with three key differences:
+#
+#   1. The bogey is PROXY-FLAGGED (bogey_is_proxy=True): FXI is NOT CSI300 / Hang Seng; every grade
+#      row and every recommendation cites bogey_is_proxy so a probation/retire rec cannot be acted
+#      on without human acknowledgement of the proxy caveat.
+#   2. Regional books are NOT in the US orthogonality matrix — different instruments, different clocks.
+#      A separate CN/HK pairwise correlation is computed instead (advisory; display-only).
+#   3. KILL IS STILL NOT AUTOMATED and the recommendation system is display/advisory only — same as
+#      the US frame (charter P8).
+
+def _regional_bench_history(book_id: str) -> list[dict]:
+    """Persisted regional benchmark ledgers for `book_id`, oldest-first. Best-effort ([] on miss).
+    Regional ledgers live under data/benchmark/<book_id>/*.json."""
+    try:
+        d = _BENCH_DIR / book_id
+        out = []
+        for f in sorted(d.glob("20*.json")):
+            try:
+                out.append(json.loads(f.read_text()))
+            except Exception:  # noqa: BLE001
+                continue
+        return out
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _regional_review_history(book_id: str, ledgers: list[dict] | None = None) -> list[dict]:
+    """Derive a per-review review_history from the regional benchmark ledgers for `book_id`.
+
+    The regional ledger has a 'regional' bogey (the FXI proxy) and a 'leaderboard'.  We extract
+    per-review increments from the cumulative return_pct in each snapshot, matching the format that
+    _active_series() and _loss_significance() consume.  Each row: {date, books:{book_id: r},
+    bogeys:{regional: r}}.  Best-effort; [] on missing data."""
+    hist = ledgers if ledgers is not None else _regional_bench_history(book_id)
+    rows: list[tuple[str, dict]] = []
+    for lg in hist:
+        if not isinstance(lg, dict):
+            continue
+        lb = {r.get("id"): r for r in (lg.get("leaderboard") or []) if isinstance(r, dict)}
+        d = str(lg.get("as_of") or "")[:10]
+        regional_ret = (lb.get("regional") or {}).get("return_pct")
+        book_ret = (lb.get(book_id) or {}).get("return_pct")
+        cum: dict = {}
+        if regional_ret is not None:
+            try:
+                cum["regional"] = float(regional_ret) / 100.0
+            except (TypeError, ValueError):
+                pass
+        if book_ret is not None:
+            try:
+                cum[book_id] = float(book_ret) / 100.0
+            except (TypeError, ValueError):
+                pass
+        if cum and d:
+            rows.append((d, cum))
+    rows.sort(key=lambda x: x[0])
+    out: list[dict] = []
+    prev: dict = {}
+    for d, cum in rows:
+        snap: dict = {"date": d, "books": {}, "bogeys": {}}
+        for rid, cr in cum.items():
+            inc = cr - prev.get(rid, 0.0) if rid in prev else cr
+            if rid == book_id:
+                snap["books"][rid] = inc
+            else:
+                snap["bogeys"][rid] = inc
+        if snap["books"] or snap["bogeys"]:
+            out.append(snap)
+        prev = cum
+    return out
+
+
+def grade_regional_book(book_id: str, review_history: list[dict], *,
+                        book_curves: dict | None = None,
+                        bogey_is_proxy: bool = True) -> dict:
+    """Grade one regional book (china / hk) against its proxy bogey ('regional' in the history).
+
+    Returns the same shape as grade_book() so CIO callers are compatible, plus:
+      · bogey_is_proxy: True (always for regional books today)
+      · proxy_reason: human-readable note on why the proxy is used
+    The active mean is taken vs the 'regional' bogey (not spy / defensive / regime_max — those are
+    US-only concepts). Loss significance uses the same HAC/effective_n discipline. Pure; never raises."""
+    # active series vs the 'regional' bogey key
+    series = _active_series(review_history, book_id, "regional")
+    loss = _loss_significance(series)
+    mdd = _max_drawdown((book_curves or {}).get(book_id) or {})
+    mdd_watch = (mdd is not None and mdd >= _cf("max_drawdown_watch", _MAX_DD_WATCH))
+    _proxy_reasons = {
+        "china": "FXI (iShares China Large-Cap, USD-listed) is a proxy for CSI300/A-shares; "
+                 "2800.HK and MCHI/ASHR are not in the yahoo parquet store as of 2026-07-03.",
+        "hk":    "FXI is the only China-region ETF in the yahoo parquet store; "
+                 "2800.HK (Tracker Fund of HK) is the canonical HK proxy but is not yet priced.",
+    }
+    return {
+        "book": book_id,
+        "exempt": False,
+        "graded_vs": "regional",
+        "graded_vs_label": "regional proxy bogey (FXI — see proxy_reason)",
+        "bogey_is_proxy": bogey_is_proxy,
+        "proxy_reason": _proxy_reasons.get(book_id,
+                                            f"regional proxy bogey for {book_id}; update when canonical instrument is available."),
+        "loss_test": loss,
+        "reviews_remaining": loss.get("reviews_remaining", max(0, _ci("min_effective_n", _MIN_EFFECTIVE_N) - len(series))),
+        "active_vs_regional": (round(sum(series) / len(series), 6) if series else None),
+        "max_drawdown": mdd,
+        "max_drawdown_watch": bool(mdd_watch),
+    }
+
+
+def _cn_hk_pairwise_corr(cn_history: list[dict], hk_history: list[dict]) -> dict:
+    """Advisory pairwise active-return correlation between the china and hk books (display-only;
+    NOT in the US orthogonality matrix). Returns {corr, n_pairs, status}. Both books' active
+    return is vs their respective 'regional' bogey (same FXI proxy today — so a high corr is
+    expected and is a known artefact of the shared proxy instrument, not evidence of strategy overlap).
+    Pure; never raises."""
+    min_pairs = _ci("noisy_mirror_min_pairs", _NOISY_MIRROR_MIN_PAIRS)
+
+    def _series(hist: list[dict], book_id: str) -> dict:
+        m: dict = {}
+        for snap in (hist or []):
+            d = str(snap.get("date") or "")
+            br = (snap.get("books") or {}).get(book_id)
+            rg = (snap.get("bogeys") or {}).get("regional")
+            if br is None or rg is None or not d:
+                continue
+            try:
+                m[d] = float(br) - float(rg)
+            except Exception:  # noqa: BLE001
+                continue
+        return m
+
+    cn_m = _series(cn_history, "china")
+    hk_m = _series(hk_history, "hk")
+    common = sorted(set(cn_m) & set(hk_m))
+    n_pairs = len(common)
+    if n_pairs < min_pairs:
+        return {"corr": None, "n_pairs": n_pairs, "status": "insufficient-n",
+                "note": "shared FXI proxy means corr is not indicative of strategy overlap"}
+    corr = _pearson([cn_m[d] for d in common], [hk_m[d] for d in common])
+    return {"corr": corr, "n_pairs": n_pairs,
+            "status": "scoring" if corr is not None else "undefined",
+            "note": "shared FXI proxy: high corr expected; not indicative of strategy overlap"}
+
+
+def regional_review(*, asof: date | None = None,
+                    cn_ledgers: list[dict] | None = None,
+                    hk_ledgers: list[dict] | None = None,
+                    book_curves: dict | None = None,
+                    states: dict | None = None,
+                    persist: bool = False) -> dict:
+    """Grade china + hk against their (proxy-flagged) bogeys.
+
+    Same honest-at-paper-n discipline as review(): grades show reviews_remaining, status is
+    'insufficient-n' below the effective_n gate, NO recommendation is made until enough reviews
+    exist.  Proxy caveat is prominently labeled on every grade and recommendation.  Pure; the
+    `states` + `ledgers` inputs are injected (in prod: read from data/benchmark/china/ + data/
+    benchmark/hk/). Never raises.
+
+    Returns {as_of, regional_books, grades, cn_hk_pairwise_corr, recommendations, states, paper_n}.
+    Persisted under data/lifecycle/regional/<asof>.json when persist=True."""
+    asof = asof or date.today()
+    asof_iso = asof.isoformat()
+    cn_hist = _regional_review_history("china", cn_ledgers)
+    hk_hist = _regional_review_history("hk", hk_ledgers)
+    hist_by_book = {"china": cn_hist, "hk": hk_hist}
+    states = dict(states if states is not None else _load_states())
+
+    grades: list[dict] = []
+    new_states: dict = {}
+    recommendations: list[dict] = []
+
+    for book_id in REGIONAL_BOOKS:
+        hist = hist_by_book.get(book_id) or []
+        grade = grade_regional_book(book_id, hist, book_curves=book_curves)
+        grades.append(grade)
+        prior = states.get(book_id) or {}
+        # _decide uses the same probation logic; regional books are never noisy-mirror-flagged
+        dec = _decide(book_id, grade, False, prior, asof_iso)
+        new_states[book_id] = dec["state"]
+        if dec.get("recommendation"):
+            rec = {**dec["recommendation"],
+                   "prev_state": prior.get("state") or STATE_ACTIVE,
+                   "new_state": dec["state"]["state"],
+                   # ── PROXY CAVEAT: always propagated onto any recommendation ──
+                   "bogey_is_proxy": True,
+                   "proxy_caveat": grade.get("proxy_reason"),
+                   "note": (dec["recommendation"].get("note") or "") +
+                           " PROXY CAVEAT: bogey is FXI (proxy), not the canonical index. "
+                           "Human must acknowledge proxy before executing any lifecycle action."}
+            recommendations.append(rec)
+
+    pairwise = _cn_hk_pairwise_corr(cn_hist, hk_hist)
+
+    scored = sum(1 for g in grades if (g.get("loss_test") or {}).get("status") == "scoring")
+    insufficient = sum(1 for g in grades if (g.get("loss_test") or {}).get("status") == "insufficient-n")
+
+    result = {
+        "as_of": asof_iso,
+        "regional_books": REGIONAL_BOOKS,
+        "grades": grades,
+        "cn_hk_pairwise_corr": pairwise,
+        "recommendations": recommendations,
+        "states": new_states,
+        "paper_n": {
+            "scored_books": scored,
+            "insufficient_n_books": insufficient,
+            "min_effective_n": _ci("min_effective_n", _MIN_EFFECTIVE_N),
+            "note": ("Regional lifecycle is display/advisory only. Proxy bogey (FXI) is NOT "
+                     "the canonical index for either book — any recommendation citing the proxy "
+                     "MUST acknowledge this caveat before execution. KILL IS NEVER AUTOMATED "
+                     "(charter P8). At paper-n a book below the effective_n gate is "
+                     "'insufficient-n' and gets NO recommendation."),
+        },
+        # source label on each grade — reviewers should see whether data is live or derived
+        "bogey_source": "live" if (cn_ledgers is None and hk_ledgers is None) else "derived",
+    }
+    if persist:
+        try:
+            dest = _OUT / "regional"
+            dest.mkdir(parents=True, exist_ok=True)
+            (dest / f"{asof_iso}.json").write_text(json.dumps(result, indent=2, default=str))
+        except Exception:  # noqa: BLE001
+            pass
+    return result
+
+
+def write_regional(*, asof: date | None = None,
+                   cn_ledgers: list[dict] | None = None,
+                   hk_ledgers: list[dict] | None = None,
+                   book_curves: dict | None = None) -> dict:
+    """Build the regional review and persist data/lifecycle/regional/<asof>.json. Returns
+    {ok, as_of, json_path, n_recommendations}. Never raises."""
+    asof = asof or date.today()
+    try:
+        rep = regional_review(asof=asof, cn_ledgers=cn_ledgers, hk_ledgers=hk_ledgers,
+                              book_curves=book_curves, persist=True)
+    except Exception as e:  # noqa: BLE001
+        rep = {"as_of": asof.isoformat(), "recommendations": [], "error": str(e)}
+    return {"ok": "error" not in rep, "as_of": rep.get("as_of"),
+            "json_path": str(_OUT / "regional" / f"{asof.isoformat()}.json"),
+            "n_recommendations": len(rep.get("recommendations") or [])}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
