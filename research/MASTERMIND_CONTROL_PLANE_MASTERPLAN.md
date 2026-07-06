@@ -224,6 +224,31 @@ Routing: **Sonnet builds, Opus reviews, Fable adjudicates/merges.** Haiku only f
 
 ## 3. Status log
 
+- **2026-07-06 (Fable): MW1 SHIPPED + merged + DEPLOYED** (merges 7627a26/33962c0/88bbd35/c1eaeb9
+  + hotfix c6df214; uvicorn PID 14770). The control plane exists: `control_plane/` package
+  (run_events append-only ledger w/ SHA event-ids, GuardrailResult severity taxonomy R3,
+  flock per-book+global locks, job run ledger w/ git-sha+flags snapshot, flags enumeration) +
+  retrofits: 4 bot clamp-exception sites now freeze-to-prior (per-name ≤ prior, no new adds —
+  P2-proof), enforce_book_caps failure freezes instead of passing raw uncapped positions,
+  marks/settle failures HARD_STOP-logged, R9 peer-expectation sentinel (36h budget, freeze
+  adds not liquidate; kill-switch MASTERMIND_PEER_SENTINEL), all 18 jobs + HTTP + first-run
+  paths ledgered + locked (settle holds both its books' locks alphabetically; daily_mark
+  per-book), loop_maintenance's 12 sub-steps emit step_failed events, GET /api/scheduler +
+  dashboard pane, weekend hygiene (daily_loop + snapshot → mon-fri), scripts/system_census.py
+  (18 jobs/7 books/flags-masked/71 endpoints/artifact readers → data/census/), hermetic
+  engine.canon stub fixes test_distribution_tells data-drift reds. Review gates EARNED THEIR
+  KEEP: opus caught (1) substrate end_run never-raise violation, (2) L2 freeze-at-built-weight
+  EXCEEDING baseline + enforce_book_caps raw-passthrough + R9 zeroing-all-positions (forced
+  liquidation, contra R9) + verification-theater tests, (3) L3 settle paths unlocked. All fixed
+  + re-review APPROVEs. **INCIDENT during deploy:** first restart launched uvicorn through a
+  sandbox-disabled shell → child had poisoned FS grants → APScheduler jobstore readonly →
+  scheduler THREAD DIED silently ~2h (missed CN/HK builds + macro_refresh); recovered via
+  normal-shell restart + operator-endpoint re-fires (run ledger recorded them — first live
+  proof). **Second find:** flags snapshot wrote PASSWORD/TOKEN values into run_events.jsonl —
+  hotfix masks secret-bearing flags (<set>), ledger scrubbed, data/governance+locks excluded
+  via .git/info/exclude. M1 acceptance: failures in caps/marks/auth/locks/peer-reads are now
+  severity-coded, queryable events that cannot raise exposure (tested numerically vs baseline).
+
 - **2026-07-06 (Fable): MW0 SHIPPED + merged + DEPLOYED** (merges 7749010/a0759de/ca1fb90;
   uvicorn PID 13054, /health version ca1fb90). Auth ON in production: `MASTERMIND_PASSWORD` +
   `MASTERMIND_AUTH_TOKEN` + `MASTERMIND_REQUIRE_AUTH=1` in `.env`; startup now refuses
