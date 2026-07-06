@@ -108,7 +108,63 @@ def _save_state(state: dict) -> None:
 
 def _default_state() -> dict:
     return {"multiplier": 1.0, "streak_sign": 0, "streak_len": 0, "last_review": None,
-            "reverts": 0, "locked": False}
+            "reverts": 0, "locked": False, "last_armed": None}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MW2 emitter (d): posture_governor armed/disarmed on TRANSITION only
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _check_emit_armed_transition(root: str | Path | None = None) -> None:
+    """MW2 emitter (d): check the MASTERMIND_POSTURE_ADAPT flag against the last-recorded
+    armed state in state.json; emit ``posture_governor_armed`` or ``posture_governor_disarmed``
+    on a TRANSITION only.  Persists the new armed state so subsequent calls do not re-fire.
+
+    Called at the point where arming is checked (startup path of ``review()`` + a direct
+    ``check_armed_transition()`` export for tests).  Never raises."""
+    try:
+        current = armed()
+        st = _load_state() or _default_state()
+        last = st.get("last_armed")
+        if last is None:
+            # First time: record the current state without emitting (no prior to diff against)
+            st["last_armed"] = current
+            _save_state(st)
+            return
+        if bool(last) == current:
+            return  # no transition
+        # Transition detected
+        event_type = "posture_governor_armed" if current else "posture_governor_disarmed"
+        reason = (
+            f"MASTERMIND_POSTURE_ADAPT {'set' if current else 'unset'}: posture governor "
+            f"{'armed to move live budget' if current else 'disarmed; multiplier pinned to 1.0'}"
+        )
+        try:
+            from control_plane import governance as _gov
+            _gov.append({
+                "event_type": event_type,
+                "target": _ADAPT_ENV,
+                "actor": "system",
+                "reason": reason,
+                "before": bool(last),
+                "after": current,
+                "rollback": (
+                    f"{'unset' if current else 'set'} MASTERMIND_POSTURE_ADAPT env var"
+                ),
+                "source_artifact": "brain.posture_governor",
+            }, root=root)
+        except Exception:  # noqa: BLE001
+            pass
+        st["last_armed"] = current
+        _save_state(st)
+    except Exception:  # noqa: BLE001 — never interfere with the governor
+        pass
+
+
+def check_armed_transition(root: str | Path | None = None) -> None:
+    """Public entry-point for MW2 emitter (d): call at startup to detect arming transitions.
+    Safe to call multiple times — only emits on state CHANGE.  Never raises."""
+    _check_emit_armed_transition(root=root)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -256,6 +312,10 @@ def review(series: list[float], *, asof: date | None = None, state: dict | None 
     out_state = {**st, "multiplier": round(mult, 6), "streak_sign": streak_sign,
                  "streak_len": streak_len, "last_review": asof.isoformat()}
     if persist:
+        # MW2 emitter (d): check for armed/disarmed TRANSITION before persisting new state.
+        # The transition check reads the CURRENT persisted state (pre-write) so last_armed is
+        # compared correctly even if the review() caller supplies an injected state=… fixture.
+        _check_emit_armed_transition()
         _save_state(out_state)
 
     return {"as_of": asof.isoformat(), "armed": armed(), "multiplier": round(mult, 6),

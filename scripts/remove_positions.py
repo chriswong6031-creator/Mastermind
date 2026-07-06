@@ -139,6 +139,29 @@ def main(pid: str, tickers: list[str]) -> int:
         print(f"   positions_ledger.json: dropped {n_led} entry(s)")
         print(f"   decisions.jsonl: dropped {n_dec} holdings/executed entry(s)")
     print(f"[{pid}] done.")
+
+    # MW2 emitter (f): operator-script governance event
+    try:
+        from control_plane import governance as _gov
+        _gov.append({
+            "event_type": "operator_action",
+            "target": pid,
+            "actor": "operator-script",
+            "reason": (
+                f"remove_positions: erased {sorted(targets)} from book '{pid}' "
+                f"(cost basis {res.get('restored')} returned to cash; fills.jsonl scrubbed)"
+            ),
+            "before": f"positions held: {sorted(targets)}",
+            "after": f"positions removed; cash restored to {res.get('cash_after')}",
+            "rollback": (
+                f"restore data/portfolios/{pid}/ (account.json, fills.jsonl, "
+                "latest.json, positions_ledger.json, decisions.jsonl) from git backup"
+            ),
+            "source_artifact": "scripts/remove_positions.py",
+        })
+    except Exception:  # noqa: BLE001
+        pass
+
     return 0
 
 

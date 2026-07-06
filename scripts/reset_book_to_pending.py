@@ -132,6 +132,30 @@ def main() -> None:
     print(f"  total queued ≈ ${total_est:,.0f} ({total_est/_STARTING_NAV:.1%} of NAV); "
           f"cash after fills ≈ ${_STARTING_NAV-total_est:,.0f}.")
 
+    # MW2 emitter (f): operator-script governance event
+    try:
+        from control_plane import governance as _gov
+        _gov.append({
+            "event_type": "operator_action",
+            "target": "flagship",
+            "actor": "operator-script",
+            "reason": (
+                f"reset_book_to_pending: voided market-closed fills, reset account to "
+                f"${_STARTING_NAV:,.0f} cash, re-queued {len(pending)} pending buy orders "
+                f"(fill at next open {next_open_day})"
+            ),
+            "before": "filled (off-hours fills)",
+            "after": f"pending ({len(pending)} orders queued for {next_open_day})",
+            "rollback": (
+                "restore data/portfolio/ from git (account.json, fills.jsonl, "
+                "nav_history.jsonl, pending_orders.json, latest.json, portfolio.json, "
+                "positions_ledger.json)"
+            ),
+            "source_artifact": "scripts/reset_book_to_pending.py",
+        })
+    except Exception:  # noqa: BLE001 — governance emit must not abort the script
+        pass
+
 
 if __name__ == "__main__":
     main()

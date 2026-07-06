@@ -456,15 +456,40 @@ def _experiment_maturity_job():
 
     Promotes any OPEN experiment whose comeback_date has been reached to MATURED, persisting the
     status change in data/experiments/registry.json so the next agenda build surfaces it at the top.
-    Cheap, deterministic, LLM-free. Never raises into the scheduler."""
+    Cheap, deterministic, LLM-free. Never raises into the scheduler.
+
+    MW2: emits a ``experiment_matured`` governance event for each experiment promoted, via the
+    governance emitter (b).  The emit happens IN THIS WRAPPER — never inside experiment_registry
+    (lane B owns that file)."""
     handle = _ledger_start("experiment_maturity", trigger="cron")
     try:
         from brain import experiment_registry
-        experiment_registry.matured()  # side-effect: promotes date-reached items → matured
+        matured_ids = experiment_registry.matured()  # side-effect: promotes date-reached items → matured
         _ledger_end(handle, "ok")
+        # MW2 emitter (b): one governance event per matured experiment
+        _emit_experiment_matured(matured_ids or [])
     except Exception as exc:  # noqa: BLE001 — a maturity check miss must never kill the scheduler
         _ledger_end(handle, "error")
         log.warning("experiment_maturity failed: %s", exc)
+
+
+def _emit_experiment_matured(experiment_ids: list) -> None:
+    """MW2 emitter (b): emit ``experiment_matured`` governance events for each promoted experiment.
+    Runs INSIDE the scheduler job wrapper — never inside experiment_registry (lane B). Never raises."""
+    try:
+        from control_plane import governance as _gov
+        for exp_id in (experiment_ids or []):
+            _gov.append({
+                "event_type": "experiment_matured",
+                "target": str(exp_id),
+                "actor": "experiment_maturity_job",
+                "reason": "comeback_date reached; experiment promoted to MATURED",
+                "after": "matured",
+                "rollback": "manually set experiment status back to open in data/experiments/registry.json",
+                "source_artifact": "app.scheduler._experiment_maturity_job",
+            })
+    except Exception:  # noqa: BLE001 — governance emit must never kill the scheduler
+        pass
 
 
 def _loop_maintenance_job():

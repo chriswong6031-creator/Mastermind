@@ -1,0 +1,383 @@
+# config/authority_map.yml — Mastermind A0-A7 authority ladder
+#
+# DOCUMENTATION-AS-CONFIG: this file is both the human-readable authority map
+# and the machine-verifiable conformance table.  test_governance_ledger.py asserts
+# that every decision-affecting MASTERMIND_* flag in control_plane.flags.KNOWN_FLAGS
+# (excluding the doc-reference pseudo-flags section) has an entry here, and that
+# every governance event_type is mapped to an authority level.
+#
+# SOURCE LAW: Charter P2 (shrink-only), P3 (earned authority), P8 (shadow-first);
+# Program §1 R3 (severity taxonomy), R5 (experiment maturity), R6 (DecisionPacket
+# boundary), R2 (governance ledger).
+#
+# AUTHORITY LEVELS (A0 → A7, weakest → strongest)
+# -------------------------------------------------
+# A0  TELEMETRY      Logging/cost failure; no execution-path effect.
+# A1  ADVISORY       Lens/journal/dashboard failure; execution continues.
+# A2  DISPLAY_ONLY   Value visible in UI; no allocation or risk effect.
+# A3  SHRINK         Can reduce/narrow/coarsen; can never add or expand.
+# A4  GATE           Boolean arm/disarm; controls whether a system is active.
+# A5  SIZE_STEP      One bounded step inside a pre-declared doctrine band.
+# A6  BOOK_LIFECYCLE Probation/retire RECOMMENDATION (human executes; no auto-kill).
+# A7  FABLE_HUMAN    Irreversible or cross-book change; requires Fable/human approval.
+#
+# ENFORCEMENT: the conformance test (test_governance_ledger.py) validates:
+#   (1) every decision-affecting flag in KNOWN_FLAGS has an entry in 'flags';
+#   (2) every governance event_type in 'events' is listed here.
+# A CI failure means a new decision-affecting flag was added without mapping it.
+#
+# Convention in 'allowed_effect': a list of legal verbs that describe what
+# changing this flag to its set/unset state may cause.
+# 'authority_level' is the minimum level required to execute that effect.
+
+# ───────────────────────────────────────────────────────────────────────────────
+# FLAGS
+# ───────────────────────────────────────────────────────────────────────────────
+flags:
+  # ── Auth / deployment ────────────────────────────────────────────────────────
+  MASTERMIND_AUTH_TOKEN:
+    authority_level: A7
+    allowed_effect: [enable_auth, disable_auth, rotate_token]
+    note: >
+      Gate key for bearer-token auth on operator/LLM-triggering endpoints (MW0/MW6).
+      Setting or rotating changes who can fire Brain + sizing endpoints.  Fable/human
+      approval required; secret value masked to <set> in all ledgers.
+
+  MASTERMIND_COOKIE_SECURE:
+    authority_level: A1
+    allowed_effect: [set_cookie_security_flag]
+    note: >
+      Controls Secure attribute on session cookies.  Deployment-time setting;
+      changing it in dev/staging has no portfolio effect.
+
+  MASTERMIND_PASSWORD:
+    authority_level: A7
+    allowed_effect: [enable_auth, disable_auth, rotate_password]
+    note: >
+      UI/API password gate.  Unset = auth OFF in production (live hole closed MW0).
+      Secret value masked to <set> in all ledgers.
+
+  MASTERMIND_REQUIRE_AUTH:
+    authority_level: A7
+    allowed_effect: [enforce_startup_auth_gate, disable_startup_auth_gate]
+    note: >
+      When set, uvicorn refuses to start without MASTERMIND_PASSWORD being set
+      (startup refusal gate, R4).  Unset = auth optional (development).
+
+  MASTERMIND_SESSION_DAYS:
+    authority_level: A1
+    allowed_effect: [adjust_session_expiry]
+    note: >
+      Cookie/session lifetime in days.  No portfolio effect; advisory-level change.
+
+  # ── Bot / phase2 ─────────────────────────────────────────────────────────────
+  MASTERMIND_FAST_DERISK:
+    authority_level: A4
+    allowed_effect: [arm_fast_derisk_sweep, disarm_fast_derisk_sweep]
+    note: >
+      Arms the intraday US-session fast de-risk sweep (MW1 doc incident 2026-06-23).
+      When armed, a confirmed macro RISK-OFF/gamma-flip tripwire auto-cuts flagship
+      gross and revises US Brain queued targets.  A4 (gate): arm/disarm is a boolean
+      toggle within the pre-declared doctrine band; no new risk can be added.
+
+  MASTERMIND_FLAGSHIP_JUDGMENT:
+    authority_level: A4
+    allowed_effect: [arm_flagship_judgment_layer, disarm_flagship_judgment_layer]
+    note: >
+      Enables the judgment-book overlay for the flagship build.
+
+  MASTERMIND_MACRO_RISK:
+    authority_level: A4
+    allowed_effect: [arm_macro_risk_layer, disarm_macro_risk_layer]
+    note: >
+      Enables the macro-risk overlay layer feeding Brain prompts.
+
+  MASTERMIND_RISK_OFFICER:
+    authority_level: A4
+    allowed_effect: [arm_risk_officer, disarm_risk_officer]
+    note: >
+      Enables the risk-officer guardrail layer.
+
+  MASTERMIND_TIMING_GATE:
+    authority_level: A4
+    allowed_effect: [arm_timing_gate, disarm_timing_gate]
+    note: >
+      Enables the cycle-timing gate on conviction entries.
+
+  # ── Brain modules ─────────────────────────────────────────────────────────────
+  MASTERMIND_COMMITTEE:
+    authority_level: A4
+    allowed_effect: [arm_committee_layer, disarm_committee_layer]
+    note: >
+      Enables the flagship committee deliberation layer.
+
+  MASTERMIND_DWELL:
+    authority_level: A4
+    allowed_effect: [arm_dwell_filter, disarm_dwell_filter]
+    note: >
+      Enables minimum-dwell-time filtering on Brain book decisions.
+
+  MASTERMIND_GATE_OFFICER:
+    authority_level: A4
+    allowed_effect: [arm_gate_officer, disarm_gate_officer]
+    note: >
+      Enables the gate-officer confirmation check on Brain submissions.
+
+  MASTERMIND_NW_CONTEXT:
+    authority_level: A4
+    allowed_effect: [arm_nw_context_bridge, disarm_nw_context_bridge]
+    note: >
+      Arms the Neural Web typed-adapter context bridge (R7); dark-shipped MW0,
+      arm after 5 present builds.  Come-back 2026-07-19.
+
+  MASTERMIND_POSTURE_DECIDER:
+    authority_level: A4
+    allowed_effect: [arm_posture_decider, disarm_posture_decider]
+    note: >
+      Enables the posture-decider module feeding Brain's risk posture.
+
+  MASTERMIND_REPUTATION_WEIGHTING:
+    authority_level: A4
+    allowed_effect: [arm_reputation_weighting, disarm_reputation_weighting]
+    note: >
+      Enables reputation-weighted scoring in the Brain's decision layer.
+
+  MASTERMIND_RESEARCH_LLM:
+    authority_level: A4
+    allowed_effect: [arm_research_llm, disarm_research_llm]
+    note: >
+      Enables LLM-based research desk calls from the Brain.
+
+  MASTERMIND_RISK_GOVERNOR:
+    authority_level: A4
+    allowed_effect: [arm_risk_governor, disarm_risk_governor]
+    note: >
+      Enables the risk-governor guardrail module.
+
+  MASTERMIND_SELF_MIRROR:
+    authority_level: A4
+    allowed_effect: [arm_self_mirror, disarm_self_mirror]
+    note: >
+      Enables the self-mirror accountability overlay.
+
+  MASTERMIND_SELF_TUNE:
+    authority_level: A5
+    allowed_effect: [arm_self_tune_bounded_step, disarm_self_tune]
+    note: >
+      Enables the self-tuning layer (bounded ±step, inside doctrine denylist — the
+      governor may never adapt its own guards, P8).  A5 because it can apply a
+      bounded step to doctrine parameters.
+
+  MASTERMIND_STUDENT:
+    authority_level: A4
+    allowed_effect: [arm_student_model, disarm_student_model]
+    note: >
+      Arms the distilled CatBoost student for cheap-call routing.
+
+  # ── Portfolio / sizing ────────────────────────────────────────────────────────
+  MASTERMIND_ALLOW_FRACTIONAL:
+    authority_level: A3
+    allowed_effect: [permit_fractional_share_sizing]
+    note: >
+      Permits fractional share quantities.  Additive but bounded; A3 (shrink-class)
+      because it affects order sizing within the existing cap structure.
+
+  MASTERMIND_CAUTION_GROSS:
+    authority_level: A3
+    allowed_effect: [set_caution_gross_cap]
+    note: >
+      Caution-regime gross-exposure cap.  A3: can only reduce exposure vs the
+      un-cautioned cap; never widens it.
+
+  MASTERMIND_CAUTION_SCORE:
+    authority_level: A3
+    allowed_effect: [set_caution_score_threshold]
+    note: >
+      Score threshold triggering the caution regime.  A3: a lower threshold triggers
+      caution sooner (more restrictive), a higher one is a shrink-class expansion
+      that requires doctrine review.
+
+  MASTERMIND_CHAIN_CAP:
+    authority_level: A3
+    allowed_effect: [set_chain_exposure_cap]
+    note: >
+      Cap on aggregate chain exposure.  A3: can restrict; any relaxation of the cap
+      is A7 (requires Fable/human approval under P3).
+
+  MASTERMIND_DERISK_THEME_DROP:
+    authority_level: A3
+    allowed_effect: [arm_derisk_theme_drop_threshold]
+    note: >
+      De-risk threshold for theme-drop events.  A3: only triggers de-risking (shrink).
+
+  MASTERMIND_EXPLORE_EPS:
+    authority_level: A5
+    allowed_effect: [set_exploration_epsilon_step]
+    note: >
+      Exploration epsilon (bounded step).  A5: small step within pre-declared range.
+
+  MASTERMIND_EXPLORE_WEIGHT:
+    authority_level: A5
+    allowed_effect: [set_exploration_weight_step]
+    note: >
+      Exploration weight (bounded step within the exploration sleeve budget).  A5.
+
+  MASTERMIND_FIRM_CAPS:
+    authority_level: A3
+    allowed_effect: [set_firm_caps_enforced, relax_firm_caps]
+    note: >
+      Master switch for firm-caps enforcement.  A3: disabling caps can only happen
+      under A7 (cross-book risk expansion); enabling/tightening is A3.
+
+  MASTERMIND_FIRM_CLUSTER_CAP:
+    authority_level: A3
+    allowed_effect: [set_cluster_cap]
+    note: >
+      Cluster-level exposure cap.  A3: tightening is A3; relaxation requires A7.
+
+  MASTERMIND_FIRM_NAME_CAP:
+    authority_level: A3
+    allowed_effect: [set_name_cap]
+    note: >
+      Per-name exposure cap.  A3: tightening is A3; relaxation requires A7.
+
+  MASTERMIND_HW_FIRM_UNIVERSE:
+    authority_level: A7
+    allowed_effect: [change_heavyweight_source_universe]
+    note: >
+      Controls the Heavyweight book's firm-union universe (book list).  R1 removed
+      self_directed; any future change is cross-book and irreversible mid-window.
+      Requires Fable/human approval.
+
+  MASTERMIND_HW_MIN_FUNDABLE:
+    authority_level: A3
+    allowed_effect: [set_heavyweight_min_fundable_threshold]
+    note: >
+      Minimum fundable weight for Heavyweight entries.  A3: tightening is A3.
+
+  MASTERMIND_MIN_POSITION_FRAC:
+    authority_level: A3
+    allowed_effect: [set_min_position_fraction]
+    note: >
+      Minimum position fraction (below which positions are not entered).  A3.
+
+  MASTERMIND_MIN_TRADE_FRAC:
+    authority_level: A3
+    allowed_effect: [set_min_trade_fraction]
+    note: >
+      Minimum trade fraction (below which trades are not executed).  A3.
+
+  MASTERMIND_NIGHTLY_USD_CAP:
+    authority_level: A3
+    allowed_effect: [set_nightly_usd_cap]
+    note: >
+      Daily USD deployment cap.  A3: tightening is A3; relaxation requires A7.
+
+  MASTERMIND_NO_TRADE_BAND_FRAC:
+    authority_level: A3
+    allowed_effect: [set_no_trade_band]
+    note: >
+      No-trade band around target weight (hysteresis).  A3.
+
+  MASTERMIND_POSTURE_ADAPT:
+    authority_level: A5
+    allowed_effect: [arm_posture_governor_bounded_step, disarm_posture_governor]
+    note: >
+      Arms the posture governor to MOVE a live budget multiplier (default OFF —
+      disarmed is observe-only).  A5: when armed, may apply a bounded ±step
+      (0.05) within the doctrine [0.40, 1.00] band; never widens the band.
+      Governed by emitter (d) which fires on TRANSITION only.
+
+  MASTERMIND_RISKOFF_GROSS:
+    authority_level: A3
+    allowed_effect: [set_riskoff_gross_cap]
+    note: >
+      RISK-OFF regime gross-exposure cap.  A3: can only restrict.
+
+  MASTERMIND_RISKOFF_SCORE:
+    authority_level: A3
+    allowed_effect: [set_riskoff_score_threshold]
+    note: >
+      Score threshold for RISK-OFF regime entry.  A3.
+
+  MASTERMIND_SELECTION_EXPLORE:
+    authority_level: A4
+    allowed_effect: [arm_exploration_selection, disarm_exploration_selection]
+    note: >
+      Arms the exploration-mode selection path.  A4 (gate).
+
+  # ── Doc-reference pseudo-flags (NOT decision-affecting; excluded from conformance test) ──
+  # The following flags appear in KNOWN_FLAGS for completeness but are program/doc references,
+  # not runtime decision-affecting env vars.  The conformance test SKIPS these.
+  # MASTERMIND_BRIDGE_PROGRAM, MASTERMIND_CHARTER_V, MASTERMIND_CONTROL_PLANE_MASTERPLAN,
+  # MASTERMIND_FIX_MASTERPLAN, MASTERMIND_LEARNING_DESIGN, MASTERMIND_V
+
+# ───────────────────────────────────────────────────────────────────────────────
+# GOVERNANCE EVENT TYPES → authority level
+# ───────────────────────────────────────────────────────────────────────────────
+events:
+  flag_changed:
+    authority_level: A4
+    description: >
+      A MASTERMIND_* env-var flag was added, removed, or changed value between
+      startups.  The authority level of the specific flag governs the actual effect;
+      A4 is the floor for any decision-affecting flag change.
+    rollback_pattern: "restore prior env var value in .env and restart"
+
+  doctrine_changed:
+    authority_level: A7
+    description: >
+      config/doctrine.yml SHA-256 hash changed since the last recorded startup.
+      Doctrine changes bind ALL books and are treated as Fable/human approval events.
+    rollback_pattern: "git checkout config/doctrine.yml and restart"
+
+  experiment_matured:
+    authority_level: A2
+    description: >
+      An experiment in data/experiments/registry.json was promoted from OPEN to
+      MATURED because its comeback_date was reached.  Display-only; the agenda
+      surfaces it; a human/Fable executes any resulting parameter change.
+    rollback_pattern: "manually set experiment status back to open in data/experiments/registry.json"
+
+  book_lifecycle_recommendation:
+    authority_level: A6
+    description: >
+      book_lifecycle.py produced a probation/retire/restore RECOMMENDATION for a book.
+      KILL IS NOT AUTOMATED (Charter P8).  A human/Fable executes any state change.
+      Self-Directed is constitutionally exempt.
+    rollback_pattern: "decline recommendation in the CIO review; no automated action to undo"
+
+  posture_governor_armed:
+    authority_level: A5
+    description: >
+      MASTERMIND_POSTURE_ADAPT transitioned from disarmed to armed.  The posture
+      governor may now apply bounded ±step multiplier adjustments to the leadership
+      budget within the doctrine [floor, ceil] band.
+    rollback_pattern: "unset MASTERMIND_POSTURE_ADAPT env var and restart"
+
+  posture_governor_disarmed:
+    authority_level: A5
+    description: >
+      MASTERMIND_POSTURE_ADAPT transitioned from armed to disarmed.  The multiplier
+      is pinned to 1.0; the governor continues to observe but cannot move the budget.
+    rollback_pattern: "set MASTERMIND_POSTURE_ADAPT=1 env var and restart"
+
+  operator_action:
+    authority_level: A7
+    description: >
+      An operator mutation script (scripts/reset_book_to_pending.py,
+      scripts/remove_positions.py, etc.) mutated portfolio state files.
+      These are irreversible without a git-backed restore; requires Fable/human
+      approval before execution in production.
+    rollback_pattern: "restore data/portfolio/<pid>/ from git backup (see rollback field)"
+
+# ───────────────────────────────────────────────────────────────────────────────
+# PSEUDO-FLAGS (excluded from conformance test — doc references, not runtime flags)
+# ───────────────────────────────────────────────────────────────────────────────
+pseudo_flags:
+  - MASTERMIND_BRIDGE_PROGRAM
+  - MASTERMIND_CHARTER_V
+  - MASTERMIND_CONTROL_PLANE_MASTERPLAN
+  - MASTERMIND_FIX_MASTERPLAN
+  - MASTERMIND_LEARNING_DESIGN
+  - MASTERMIND_V

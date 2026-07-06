@@ -594,9 +594,45 @@ def write(review_history: list[dict] | None = None, *, asof: date | None = None,
         rep = review(review_history, asof=asof, book_curves=book_curves, persist=True)
     except Exception as e:  # noqa: BLE001
         rep = {"as_of": asof.isoformat(), "recommendations": [], "error": str(e)}
+
+    # MW2 emitter (c): emit ``book_lifecycle_recommendation`` governance events for each
+    # probation/retire/restore recommendation.  Advisory-only — no authority changes, but the
+    # governance docket requires these visible as governance events.  Never raises.
+    try:
+        _emit_lifecycle_recommendations(rep.get("recommendations") or [], asof_iso=rep.get("as_of") or asof.isoformat())
+    except Exception:  # noqa: BLE001
+        pass
+
     return {"ok": "error" not in rep, "as_of": rep.get("as_of"),
             "json_path": str(_OUT / f"{asof.isoformat()}.json"),
             "n_recommendations": len(rep.get("recommendations") or [])}
+
+
+def _emit_lifecycle_recommendations(recommendations: list[dict], *, asof_iso: str) -> None:
+    """MW2 emitter (c): one ``book_lifecycle_recommendation`` governance event per recommendation.
+    Recommendation-only — no authority change, but the docket requires these visible as governance
+    events.  Never raises."""
+    try:
+        from control_plane import governance as _gov
+        for rec in (recommendations or []):
+            book = str(rec.get("book") or "")
+            recommend = str(rec.get("recommend") or "")
+            reasons = rec.get("reasons") or []
+            prev_state = str(rec.get("prev_state") or "")
+            new_state = str(rec.get("new_state") or "")
+            reason_str = "; ".join(str(r) for r in reasons) if reasons else recommend
+            _gov.append({
+                "event_type": "book_lifecycle_recommendation",
+                "target": book,
+                "actor": "book_lifecycle",
+                "reason": reason_str,
+                "before": prev_state,
+                "after": recommend,
+                "rollback": "decline recommendation in the CIO review; human executes any state change",
+                "source_artifact": f"brain.book_lifecycle.write:{asof_iso}",
+            })
+    except Exception:  # noqa: BLE001 — governance emit must never abort the review
+        pass
 
 
 def load(asof: str) -> dict:
