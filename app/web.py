@@ -2017,3 +2017,19 @@ def api_desk_experiments() -> JSONResponse:
         return JSONResponse({"as_of": None, "total": 0, "open": 0, "matured": 0,
                              "judged": 0, "cancelled": 0, "matured_items": [], "all_items": [],
                              "note": f"Experiment registry unavailable: {exc}"})
+
+
+@router.get("/api/scheduler")
+def api_scheduler() -> JSONResponse:
+    """Operator-only scheduler health.
+
+    Returns per-job records: id, next_run_time, last_started, last_finished, last_skipped,
+    last_status, last_severity.  Reads the run_events JSONL tail and the live APScheduler
+    instance.  Auth-gated via the same app-level middleware as all other /api/* routes.
+    Never 500s — degrades to an empty list on any failure.
+    """
+    try:
+        from app.scheduler import scheduler_health
+        return JSONResponse({"jobs": scheduler_health()})
+    except Exception as exc:  # noqa: BLE001 — operator endpoint; must never raise
+        return JSONResponse({"jobs": [], "note": f"Scheduler health unavailable: {exc}"})

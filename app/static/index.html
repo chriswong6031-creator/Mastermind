@@ -2180,6 +2180,16 @@ body.page-mm.view-self #view-self .mm-section { display: block !important; }
       </div>
     </div>
   </div>
+
+  <!-- Scheduler health (operator pane — MW1 run governance) -->
+  <div class="mm-section">
+    <div class="panel span12" style="grid-column:span 12">
+      <h2>Scheduler jobs</h2>
+      <div id="desk-scheduler">
+        <div class="mm-empty"><span class="mm-empty-icon">⊙</span>Loading scheduler status…</div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- ── SELF-DIRECTED VIEW (third book; toggled by #mm-nav) ──────────────────────── -->
@@ -4378,7 +4388,7 @@ function renderCalibrationPage() {
 // Lazy-loaded observability over the multi-seat Flagship desk. Fetches the four /api/desk/*
 // endpoints in parallel, then renders four sections. Every fetch degrades to null on any error
 // (the renderers then show a graceful "building" / empty state); nothing here can break the page.
-var _deskData = { strategist: null, macroRisk: null, decisions: null, watchlist: null, scorecard: null, firm: null };
+var _deskData = { strategist: null, macroRisk: null, decisions: null, watchlist: null, scorecard: null, firm: null, scheduler: null };
 
 function _deskBuilding(msgKey) {
   return '<div class="mm-desk-building"><span class="ic">⊙</span><span class="tx">' + t(msgKey) + '</span></div>';
@@ -4398,6 +4408,7 @@ window.loadDesk = function() {
     g('/api/desk/scorecard'),
     g('/api/desk/firm-exposure'),
     g('/api/desk/macro-risk'),
+    g('/api/scheduler'),
   ]).then(function(res) {
     _deskData.strategist = res[0];
     _deskData.decisions  = res[1];
@@ -4405,6 +4416,7 @@ window.loadDesk = function() {
     _deskData.scorecard  = res[3];
     _deskData.firm       = res[4];
     _deskData.macroRisk  = res[5];
+    _deskData.scheduler  = res[6];
     renderDeskPage();
   }).catch(function(){ renderDeskPage(); });
 };
@@ -4417,6 +4429,44 @@ function renderDeskPage() {
   renderDeskWatchlist();
   renderDeskScorecard();
   renderDeskFirm();
+  renderDeskScheduler();
+}
+
+function renderDeskScheduler() {
+  var host = E('desk-scheduler'); if (!host) return;
+  var d = _deskData.scheduler;
+  if (!d || !(d.jobs || []).length) {
+    host.innerHTML = '<div class="mm-empty"><span class="mm-empty-icon">⊙</span>Scheduler not available (apscheduler absent or no run events yet).</div>';
+    return;
+  }
+  var rows = '';
+  (d.jobs || []).forEach(function(j) {
+    var ok = j.last_status === 'ok';
+    var skipped = j.last_status === 'skip' || j.last_skipped;
+    var errored = j.last_status === 'error';
+    var dot = ok ? '●' : (skipped ? '◌' : (errored ? '✕' : '○'));
+    var dotColor = ok ? 'var(--up)' : (errored ? 'var(--down)' : 'var(--muted)');
+    var nextStr = j.next_run_time ? j.next_run_time.replace('T', ' ').slice(0, 16) + ' UTC' : '—';
+    var lastStr = j.last_finished ? j.last_finished.replace('T', ' ').slice(0, 16) + ' UTC' : (j.last_started ? j.last_started.replace('T', ' ').slice(0, 16) + ' UTC…' : '—');
+    var sevStr = j.last_severity ? esc(j.last_severity) : '';
+    rows += '<tr>'
+      + '<td style="font-family:monospace;font-size:11px;color:var(--muted);padding:4px 8px 4px 0">' + esc(j.id) + '</td>'
+      + '<td style="padding:4px 8px;text-align:center"><span style="color:' + dotColor + ';font-size:13px">' + dot + '</span></td>'
+      + '<td style="padding:4px 8px;font-size:11px;color:var(--text)">' + esc(j.last_status || '—') + (sevStr ? ' <span style="color:var(--warn);font-size:10px">(' + sevStr + ')</span>' : '') + '</td>'
+      + '<td style="padding:4px 8px;font-size:11px;color:var(--muted)">' + esc(lastStr) + '</td>'
+      + '<td style="padding:4px 8px;font-size:11px;color:var(--muted)">' + esc(nextStr) + '</td>'
+      + '</tr>';
+  });
+  host.innerHTML = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">'
+    + '<thead><tr style="border-bottom:1px solid var(--line)">'
+    + '<th style="text-align:left;padding:4px 8px 6px 0;font-size:11px;color:var(--muted);font-weight:600">Job</th>'
+    + '<th style="padding:4px 8px 6px;font-size:11px;color:var(--muted);font-weight:600">State</th>'
+    + '<th style="padding:4px 8px 6px;font-size:11px;color:var(--muted);font-weight:600">Last status</th>'
+    + '<th style="padding:4px 8px 6px;font-size:11px;color:var(--muted);font-weight:600">Last run</th>'
+    + '<th style="padding:4px 8px 6px;font-size:11px;color:var(--muted);font-weight:600">Next run (UTC)</th>'
+    + '</tr></thead>'
+    + '<tbody>' + rows + '</tbody>'
+    + '</table></div>';
 }
 
 function renderDeskStrategist() {
