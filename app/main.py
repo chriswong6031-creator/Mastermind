@@ -133,6 +133,46 @@ if FastAPI is not None:
             pass
 
         app.state.scheduler = scheduler.start()   # daily loops on cron; None if apscheduler absent
+
+        # SCHEDULER WATCHDOG (incident 2026-07-06 ×2): APScheduler's main-loop thread can die
+        # silently (observed: sqlite jobstore flipping to "readonly database") while uvicorn keeps
+        # serving — a zombie desk that marks nothing and settles nothing. Fail FAST instead:
+        # detect the dead thread, write a HARD_STOP run-event, and exit the process so the
+        # supervisor (launchd KeepAlive) restarts it clean. Never trades; strictly less risk
+        # than a silent scheduler death (charter P2/P10).
+        def _scheduler_watchdog(sch) -> None:
+            import os as _os
+            import time as _time
+            while True:
+                _time.sleep(60)
+                try:
+                    th = getattr(sch, "_thread", None)
+                    if th is not None and th.is_alive():
+                        continue
+                    try:
+                        from control_plane import run_events as _re
+                        _re.append({
+                            "kind": "guardrail", "job": "scheduler", "book": "",
+                            "step": "watchdog", "status": "error", "severity": "HARD_STOP",
+                            "err": "APScheduler thread dead — exiting for supervisor restart",
+                            "actor": "system",
+                        })
+                    except Exception:
+                        pass
+                    import logging as _logging
+                    _logging.getLogger("app.main").critical(
+                        "scheduler watchdog: APScheduler thread dead — exiting (supervisor restarts)")
+                    print("scheduler watchdog: APScheduler thread dead — exiting (supervisor restarts)",
+                          flush=True)
+                    _os._exit(70)
+                except Exception:  # noqa: BLE001 — the watchdog itself must never crash the app
+                    continue
+
+        if app.state.scheduler is not None:
+            import threading as _threading
+            _threading.Thread(target=_scheduler_watchdog, args=(app.state.scheduler,),
+                              name="scheduler-watchdog", daemon=True).start()
+
         # First turn-on: let the autonomous book buy right away instead of waiting for the next
         # scheduled close. No-op once it has a track record; runs in a daemon thread (non-blocking).
         try:
