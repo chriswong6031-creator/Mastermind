@@ -5,7 +5,71 @@ paths, which call brain.runlog.start_run(...) and would otherwise append real
 run-log entries into data/brain/runs/ on every `pytest` invocation — cluttering
 the live "Brain Activity" feed. Isolate the run-log to a tmp dir for all tests.
 """
+import sys
+from pathlib import Path
+
 import pytest
+
+# ---------------------------------------------------------------------------
+# engine.canon hermetic injection
+# ---------------------------------------------------------------------------
+# portfolio.distribution_tells imports ``from engine import canon`` — a module
+# that lives in vendor/macro_src (a gitignored sparse checkout present on the
+# production Mac but absent in fresh worktrees and CI).  Without it the entire
+# test_distribution_tells.py suite fails with ImportError before any test runs.
+#
+# Fix: inject the hermetic stub from tests/fixtures/engine_stub/ whenever the
+# real vendor/macro_src is absent.  The stub contains ONLY the functions
+# distribution_tells uses (resample_sessions, _resample_weekly, rsi_macd, and
+# their primitives), snapshotted from vendor/macro_src/engine/canon.py on
+# 2026-07-06.  Module code is NOT changed (ruling L4).
+#
+# If vendor/macro_src is present, its canon.py is used as-is (no override).
+_ROOT = Path(__file__).resolve().parent.parent
+_MACRO_SRC = _ROOT / "vendor" / "macro_src"
+_STUB_DIR = Path(__file__).resolve().parent / "fixtures" / "engine_stub"
+
+
+def _ensure_engine_canon() -> None:
+    """Inject the hermetic engine.canon stub into sys.modules when macro_src is absent.
+
+    Only ``engine.canon`` is injected — NOT the full engine package.  This avoids
+    shadowing the real ``engine.*`` modules that other tests need (e.g. engine.signal_archive
+    in test_self_tune, engine.lib.store in test_single_name_factor).  If vendor/macro_src
+    is present it is added to sys.path so the real canon is found naturally.
+    """
+    if "engine.canon" in sys.modules:
+        return  # already imported (real or stub) — do nothing
+    if _MACRO_SRC.exists():
+        # Real vendor checkout is present — add it to sys.path so all engine.* imports work
+        if str(_MACRO_SRC) not in sys.path:
+            sys.path.insert(0, str(_MACRO_SRC))
+        return  # the real canon.py will be found via normal import machinery
+    # vendor/macro_src absent: inject ONLY engine.canon from the hermetic stub.
+    # The full engine package is NOT registered here; other engine.* submodules remain
+    # importable only if vendor/macro_src or vendor/macro is on sys.path (not our job).
+    import importlib.util
+    import types
+    stub_canon = _STUB_DIR / "canon.py"
+    if not stub_canon.exists():
+        return
+    spec = importlib.util.spec_from_file_location("engine.canon", stub_canon)
+    if not (spec and spec.loader):
+        return
+    mod = importlib.util.module_from_spec(spec)
+    # Only register an "engine" package stub if none exists yet.
+    # If another conftest or test already registered engine (e.g. via vendor/macro_src),
+    # we must NOT overwrite it — that would shadow the real engine package.
+    if "engine" not in sys.modules:
+        pkg = types.ModuleType("engine")
+        pkg.__path__ = [str(_STUB_DIR)]  # type: ignore[assignment]
+        pkg.__package__ = "engine"
+        sys.modules["engine"] = pkg
+    sys.modules["engine.canon"] = mod
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+
+
+_ensure_engine_canon()
 
 
 @pytest.fixture(autouse=True)
