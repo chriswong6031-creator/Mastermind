@@ -224,6 +224,29 @@ Routing: **Sonnet builds, Opus reviews, Fable adjudicates/merges.** Haiku only f
 
 ## 3. Status log
 
+- **2026-07-06 (Fable): MW2 SHIPPED + merged + DEPLOYED** (merges e327a45/e4b1a55 + fixes
+  ae1c33e/637f606/e075899/a85e4a4; uvicorn PID 52426, version a85e4a4). Governance ledger live:
+  `control_plane/governance.py` → `data/governance/governance.jsonl` (NW-schema-compatible:
+  event_id/actor/reason/before/after/rollback/source_artifact; AUTHORITY changes only, distinct
+  from run_events telemetry). Emitters: flag-state diffs at boot (masked-safe), experiment
+  maturation (id-extracted + sidecar-deduped — no daily re-fires), book-lifecycle
+  recommendations (prev/new state stamped through decide_lifecycle), posture armed/disarmed
+  transitions (last_armed carried into review()'s state save — reviewer caught the clobber),
+  doctrine.yml hash changes, operator_action from all four operator mutation scripts.
+  `config/authority_map.yml`: A0–A7 mapping for every decision-affecting flag + event type,
+  conformance-tested (new unmapped flag fails). Experiment maturity is evidence-driven (R5):
+  tri-state evaluate() (not_old_enough / blocked_missing_evidence / ready_for_review) with
+  per-experiment MECHANICAL evaluators (shadow-trim-ladder counts graded trims /40;
+  governor-arming counts benchmark snapshots /8; two honest blocked-with-reason for
+  H4-external + continuous-SLA), stuck flag >14d (tracking persisted via the weekly agenda
+  build), agenda section + /api/desk/experiments tristate. NO auto-promotion path (LLM/evaluator
+  may only surface, never promote). Review gates: lane A REQUEST_CHANGES (dead posture emitter,
+  daily re-fire + str(dict) target, empty before-fields, 2 uninstrumented scripts) — all fixed;
+  re-review APPROVE with one new find (test sidecar self-poisoning) — fixed + dedup regression
+  test; post-merge combined-run failure traced to a raw setattr module stub poisoning later
+  tests — fixed via monkeypatch. Deploy verified: ledger empty at boot (correct no-transition
+  read), jobstore updating, no scheduler exceptions.
+
 - **2026-07-06 (Fable): MW1 SHIPPED + merged + DEPLOYED** (merges 7627a26/33962c0/88bbd35/c1eaeb9
   + hotfix c6df214; uvicorn PID 14770). The control plane exists: `control_plane/` package
   (run_events append-only ledger w/ SHA event-ids, GuardrailResult severity taxonomy R3,
