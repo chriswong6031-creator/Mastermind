@@ -103,6 +103,8 @@ PLANE_ORDER: tuple[str, ...] = (
     "group_flow",
     "event_calendar",
     "intl_spillover",
+    # W-NW.1 Neural Web bridge (ADVISORY-ONLY; dark-ship; validated=False per §3.3.1)
+    "neural_web",
 )
 
 # The validated set — the ONLY planes that may sign net_posture_tilt (P3).
@@ -797,6 +799,70 @@ def _adapt_anticipation() -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# W-NW.1 Neural Web advisory plane adapter
+# ---------------------------------------------------------------------------
+
+def _adapt_neural_web(nw_out: Any) -> dict[str, Any]:
+    """Adapt neural_web_context.market_plane() output to a PlaneRecord.
+
+    ALWAYS passes validated=False (ruling §3.3.1): the tilt guard is status-based,
+    so this plane is advisory-only and can never sign net_posture_tilt.
+    Absent / stale input → _absent_record.
+
+    Direction mapping (advisory caution only, per §3.3.1):
+      NW verdict label that implies caution → risk_off; neutral/absent → None.
+    """
+    if not isinstance(nw_out, dict) or nw_out.get("stale") or not nw_out.get("asof"):
+        return _absent_record(
+            "vendor/macro/site/neuralwebdata/mastermind_context.json",
+            "neural_web context absent or stale (W-NW.1 dark-ship)",
+        )
+    try:
+        verdict = nw_out.get("verdict") or {}
+        # Only map to risk_off or neutral; never risk_on (advisory caution only)
+        direction: Optional[str] = None
+        verdict_label = str(verdict.get("label_en") or verdict.get("verdict") or "").lower()
+        if any(kw in verdict_label for kw in ("caution", "risk-off", "risk_off",
+                                               "defensive", "bearish", "deteriorat")):
+            direction = _RISK_OFF
+        elif verdict_label:
+            direction = _NEUTRAL
+
+        regime = nw_out.get("regime") or {}
+        conf_raw = regime.get("confidence")
+        quad_name = regime.get("quad_name") or ""
+        cycle_tag = regime.get("cycle_tag") or ""
+        contr_count = nw_out.get("contradiction_count", 0)
+        asof = nw_out.get("asof")
+
+        reading = (
+            f"NW: {quad_name} cycle={cycle_tag} contradictions={contr_count}"
+            if (quad_name or cycle_tag) else None
+        )
+
+        return _plane_record(
+            reading=reading,
+            direction=direction,
+            magnitude=None,
+            asof=asof,
+            confidence=conf_raw,
+            validated=False,   # §3.3.1: NEVER validated; advisory-only
+            source_contract="vendor/macro/site/neuralwebdata/mastermind_context.json",
+            raw={
+                "verdict": verdict,
+                "regime": regime,
+                "contradiction_count": contr_count,
+                "advisory": True,
+            },
+        )
+    except Exception:  # noqa: BLE001
+        return _absent_record(
+            "vendor/macro/site/neuralwebdata/mastermind_context.json",
+            "neural_web adapter error",
+        )
+
+
+# ---------------------------------------------------------------------------
 # label plane — the regime label direction (what the tilt is measured AGAINST)
 # ---------------------------------------------------------------------------
 
@@ -1076,6 +1142,7 @@ def view(
     distribution_tells_out: Any = None,
     liquidity_quality_out: Any = None,
     regime_nowcast_out: Any = None,
+    neural_web_out: Any = None,
     prev_view: Any = None,
     seq: int = 0,
 ) -> dict[str, Any]:
@@ -1120,6 +1187,8 @@ def view(
                                               "H4 handoff — pending")
     planes["intl_spillover"] = _absent_record("intl spillover",
                                               "H4 handoff — pending")
+    # W-NW.1 Neural Web advisory plane — dark-ship (always-on reader; flag gates prompt/sizing)
+    planes["neural_web"] = _adapt_neural_web(neural_web_out)
 
     # keep planes in golden order (dict insertion order == PLANE_ORDER above)
     ordered_planes = {k: planes[k] for k in PLANE_ORDER}
@@ -1212,6 +1281,7 @@ def build(
     distribution_tells_out: Any = None,
     liquidity_quality_out: Any = None,
     regime_nowcast_out: Any = None,
+    neural_web_out: Any = None,
     seq: int = 0,
 ) -> dict[str, Any]:
     """Build the view and (optionally) atomically publish latest.json + a dated copy.
@@ -1227,6 +1297,7 @@ def build(
         distribution_tells_out=distribution_tells_out,
         liquidity_quality_out=liquidity_quality_out,
         regime_nowcast_out=regime_nowcast_out,
+        neural_web_out=neural_web_out,
         prev_view=prev,
         seq=seq,
     )

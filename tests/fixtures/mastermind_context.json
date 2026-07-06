@@ -1,0 +1,115 @@
+{
+  "schema": "neural_web_mastermind_context.v1",
+  "as_of": "FIXTURE_DATE",
+  "generated_utc": "2026-07-05T00:00:00Z",
+  "is_context_only": true,
+  "authority": {
+    "can_add_candidates": false,
+    "can_raise_size": false,
+    "can_lower_size": false,
+    "can_block_entry": false,
+    "can_force_exit": false,
+    "notes": "All fields advisory until explicit Fable-approved promotion."
+  },
+  "freshness": {
+    "market": {"as_of": "FIXTURE_DATE", "stale": false}
+  },
+  "lobes": {
+    "market": {
+      "verdict": {"label_en": "caution — risk-off bias", "verdict": "caution"},
+      "radar": {},
+      "regime": {
+        "quad": 3,
+        "quad_name": "Deflation",
+        "confidence": 0.62,
+        "cycle_tag": "late-cycle",
+        "transition_state": "WEAKENING",
+        "flip_margin": 0.15,
+        "liquidity_overlay": "tightening",
+        "asof": "FIXTURE_DATE"
+      },
+      "vol": {"label_en": "elevated vol"},
+      "breadth": {"label_en": "deteriorating breadth"},
+      "rotation": {},
+      "liquidity": {},
+      "alerts": {},
+      "data_health": {},
+      "contradictions": {"count": 2},
+      "live_overlay": {},
+      "sources": {}
+    },
+    "reliability": {
+      "families": {
+        "momentum_cross": {
+          "display_armed": true,
+          "fdr_cleared": false,
+          "horizon_curve": {},
+          "recency_trend": {},
+          "staleness": {}
+        }
+      },
+      "kernel_decisions": {},
+      "standing_law": "display_armed != fdr_cleared; kernel promotions require 2026-10-01 FDR batch"
+    },
+    "contradictions": {
+      "summary": {"n_active": 2},
+      "records": [
+        {"source": "regime_vs_breadth", "severity": "moderate"},
+        {"source": "vol_vs_momentum", "severity": "low"}
+      ]
+    },
+    "bottom_sensors": {
+      "as_of": "FIXTURE_DATE",
+      "counts": {"bottom_state": {"WATCH": 5, "BOTTOMING": 2}, "trigger_tier": {"T1": 1}},
+      "n_rows": 7
+    },
+    "options_entry": {
+      "gate": {"scored": true, "status": "caution", "weight": 0.4, "note": "elevated IV rank"},
+      "as_of": "FIXTURE_DATE"
+    },
+    "cortex": {
+      "memo": {"summary": "CORTEX_SENTINEL_XYZ — this should never appear in seat prompts"},
+      "probation": {}
+    }
+  },
+  "lobe_manifest": [
+    {
+      "artifact_id": "world-state-us",
+      "path": "site/neuralwebdata/world_state.json",
+      "asof": "FIXTURE_DATE",
+      "stale": false,
+      "tier": "display",
+      "horizon_role": "context",
+      "storage": "git",
+      "has_rich_summary": true
+    }
+  ],
+  "candidate_context": {
+    "NVDA": {
+      "bottom": {"bottom_state": "WATCH", "trigger_tier": null},
+      "options": {"gate_status": "caution"},
+      "graph_conflicts": ["momentum_vs_breadth"],
+      "kernel": {"display_armed": true, "fdr_cleared": false},
+      "allowed_behavior": "annotate_only"
+    },
+    "AMD": {
+      "bottom": {"bottom_state": "BOTTOMING"},
+      "options": {},
+      "graph_conflicts": [],
+      "kernel": {"display_armed": false, "fdr_cleared": false},
+      "allowed_behavior": "annotate_only"
+    }
+  },
+  "book_context": {
+    "top_macro_contradictions": [{"source": "regime_vs_breadth", "severity": "moderate"}],
+    "decaying_families": [],
+    "bottom_summary_counts": {"WATCH": 5, "BOTTOMING": 2}
+  },
+  "gap_notes": ["rotation lobe: missing - world_state stale"],
+  "source_artifacts": ["site/neuralwebdata/world_state.json"],
+  "schema_version": 1,
+  "produced_by": "engine/neuralweb/mastermind_context.py",
+  "produced_at": "2026-07-05T00:00:00Z",
+  "inputs_hash": "abc123",
+  "tier": "display"
+}

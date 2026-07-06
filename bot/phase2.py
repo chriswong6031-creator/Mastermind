@@ -267,6 +267,22 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
             quad=regime.get("quad"), quad_name=regime.get("quad_name"),
             top_sector=top_sector)
 
+    # —— W-NW.1: Neural Web context perception — flag-independent read + audit row ——
+    # Fetches context once per run regardless of MASTERMIND_NW_CONTEXT flag (dark-ship §1.7):
+    # the reader and audit rows always accrue; only prompt/plane injection is flag-gated below.
+    _nw_plane: dict = {}
+    try:
+        from brain import neural_web_context as _nwc_mod
+        _nw_audit = _nwc_mod.audit_row()
+        _rl_log(_run_id, "perception", "nw_context",
+                f"status={_nw_audit.get('status')} asof={_nw_audit.get('asof')} "
+                f"age_days={_nw_audit.get('age_days')} n_candidates={_nw_audit.get('n_candidates')}",
+                **_nw_audit)
+        if _nwc_mod.nw_prompts_enabled():
+            _nw_plane = _nwc_mod.market_plane()
+    except Exception:
+        _rl_log(_run_id, "perception", "nw_context", "nw_context unavailable")
+
     # —— E0.5: perception runlog step — P5: perception logged BEFORE any position decision ——
     # Assemble + PUBLISH THE one market view (P7: data/market_view/latest.json, all books read the
     # one artifact) before the book is touched.  Read-only enrichment — the wave contract is ZERO
@@ -275,7 +291,9 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
     # build proceeds unchanged (a perception organ never blocks the book — masterplan §4).
     try:
         from brain import market_view as _mv_mod
-        _pv = _mv_mod.build("us", write=True)
+        # Pass neural_web_out only when flag is ON (dark-ship: OFF → build call byte-identical)
+        _nw_out_for_build = _nw_plane if _nw_plane else None
+        _pv = _mv_mod.build("us", write=True, neural_web_out=_nw_out_for_build)
         _pv_brief = (_pv.get("brief") or {}).get("wheres_the_risk", "")
         _pv_conflict = (_pv.get("label_vs_planes") or {}).get("conflict", False)
         _pv_coverage = (_pv.get("assembly") or {}).get("fresh", "?")
@@ -544,7 +562,7 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
         sm = breakdown.get("size_mult") or 1.0
         wf = round(min(name_cap, (c.get("weight") or 0.0) * sm), 4) if forge_confirmed else 0.0
         _tech = _entry_tech_fields(ticker)
-        _shadow_inputs.append({
+        _row: dict = {
             "ticker": ticker, "confluence": c.get("confluence"),
             "is_new": bool(is_new), "retained": bool(c.get("retained")),
             "forge_confirmed": bool(forge_confirmed),
@@ -561,7 +579,17 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
             "extension": _tech["pct_vs_200dma"], "pct_vs_200dma": _tech["pct_vs_200dma"],
             "rs": _tech["rs"], "urgency": _tech["urgency"],
             "eq_grade": _tech["eq_grade"], "parabolic": _tech["parabolic"],
-        })
+        }
+        # W-NW.1: optional per-candidate NW context (absent-safe — shadow_books.py consumers
+        # use .get() on specific fields; unknown keys are ignored at replay time)
+        try:
+            from brain import neural_web_context as _nwc_mod  # lazy; never raises
+            _nw_cand = _nwc_mod.candidate(ticker)
+            if _nw_cand:
+                _row["nw_context"] = _nw_cand
+        except Exception:  # noqa: BLE001 — never break shadow emit
+            pass
+        _shadow_inputs.append(_row)
 
     def _maybe_explore(ticker, c, breakdown, research_block, stage, reason, *,
                        committee_block=None, sentinel=None, price=None, is_new=True):

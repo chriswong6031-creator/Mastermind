@@ -411,6 +411,25 @@ def _build_prompt(payload: dict, directive: str | None = None) -> str:
             lines += [_posture_block]
     except Exception:  # noqa: BLE001 — additive; never break the seat
         pass
+    # W-NW.1 — NEURAL WEB CONTEXT block (flag-gated; dark-ship §1.7).
+    # Appended as bounded TEXT (≤1200 chars) after E2.5 — NO new top-level payload key
+    # (payload JSON is hard-truncated at 9000 chars; test at test_pm_conviction.py:141
+    # asserts engine_proposed_weights_ADVISORY is last key — this section is text, not a key).
+    # Cortex prose is structurally excluded by seat_prompt_block().
+    try:
+        from brain.neural_web_context import seat_prompt_block as _nw_seat, nw_prompts_enabled as _nw_flag
+        if _nw_flag():
+            _cand_tickers = [r.get("ticker") for r in (payload.get("engine_candidates") or [])
+                             if isinstance(r, dict) and r.get("ticker")]
+            _nw_text = _nw_seat(_cand_tickers, max_chars=1200)
+            if _nw_text:
+                lines += [
+                    "## NEURAL WEB CONTEXT (context-only, not validated for sizing)",
+                    _nw_text,
+                    "",
+                ]
+    except Exception:  # noqa: BLE001 — additive; never break the seat
+        pass
     lines += ["BENCHMARK YOU MUST BEAT (risk-off / weakening regimes): "
               f"max(SPY, the defensive basket {', '.join(payload.get('defensive_benchmark') or [])}). "
               "That static defensive book is currently beating every Brain — a book that holds "

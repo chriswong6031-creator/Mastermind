@@ -156,6 +156,16 @@ def _strategist_input(regime: dict | None, asof: str) -> dict:
     except Exception:  # noqa: BLE001 — additive; never break the seat
         pass
 
+    # W-NW.1 — neural_web_context payload key (flag-gated; compact dict; no cap issue here).
+    # {} when flag OFF or context absent — key always present so the payload schema is stable.
+    neural_web_ctx: dict = {}
+    try:
+        from brain.neural_web_context import context as _nw_ctx, nw_prompts_enabled as _nw_flag
+        if _nw_flag():
+            neural_web_ctx = _nw_ctx()
+    except Exception:  # noqa: BLE001 — additive; never break the seat
+        pass
+
     return {
         "asof": str(asof)[:10],
         "regime": reg,
@@ -167,6 +177,8 @@ def _strategist_input(regime: dict | None, asof: str) -> dict:
         # market_view is absent ({}) when the organ is unbuilt — the strategist still
         # runs without it; the key is always present so the payload schema is stable.
         "market_view": market_view_enrichment,
+        # neural_web_context is absent ({}) when flag OFF or context absent/stale.
+        "neural_web_context": neural_web_ctx,
     }
 
 
