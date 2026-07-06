@@ -408,7 +408,23 @@ def run_heavyweight(asof: str | None = None, *, force: bool = False, armed: bool
                     out["firm_clamp"] = {"book": PORTFOLIO_ID, "freed": _fc["freed"],
                                          "clamped": _fc["clamped"]}
         except Exception as e:                           # noqa: BLE001 — a firm cap must never block the book
+            # GuardrailResult.FREEZE: clamp exception → drop any names not already held (no new risk).
+            try:
+                _held_set = set((paper_account._load_account(PORTFOLIO_ID).get("positions") or {}).keys())
+                final_weights = {_t: _w for _t, _w in final_weights.items() if _t in _held_set}
+            except Exception:  # noqa: BLE001
+                pass
             out["firm_clamp_error"] = repr(e)[:200]
+            try:
+                from control_plane.guardrail import GuardrailResult, Severity
+                GuardrailResult.failed(
+                    "firm_clamp",
+                    Severity.FREEZE,
+                    detail=f"clamp_book raised: {e!r}"[:200],
+                    action_taken="reverted to prior holdings (no new risk added)",
+                ).log(job="heavyweight_build", book=PORTFOLIO_ID)
+            except Exception:  # noqa: BLE001
+                pass
 
     # 4. price the universe we might trade (targets ∪ held ∪ SPY)
     held = list((paper_account._load_account(PORTFOLIO_ID).get("positions") or {}).keys())

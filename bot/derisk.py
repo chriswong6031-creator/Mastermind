@@ -539,6 +539,20 @@ def derisk_brain(pid: str, asof: str | None = None, *, regime: dict | None = Non
 # ─────────────────────────────────────────────────────────────────────────────
 # scheduler entrypoints
 # ─────────────────────────────────────────────────────────────────────────────
+def _log_sweep_advisory(pid: str, exc: Exception) -> None:
+    """Emit an ADVISORY GuardrailResult when a sweep leg fails. Never raises."""
+    try:
+        from control_plane.guardrail import GuardrailResult, Severity
+        GuardrailResult.failed(
+            "derisk_sweep",
+            Severity.ADVISORY_ONLY,
+            detail=f"sweep({pid}) raised: {exc!r}"[:200],
+            action_taken="sweep failure visible; de-risk not applied to this book",
+        ).log(job="derisk_sweep", book=pid)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def sweep_us(asof: str | None = None) -> dict:
     """Intraday/overnight de-risk sweep for the US books (scheduler job). Flagship cuts held; the US
     Brain books revise their queued targets. No-op unless armed + a confirmation fires. Never raises."""
@@ -549,11 +563,13 @@ def sweep_us(asof: str | None = None) -> dict:
         out["flagship"] = derisk_flagship(asof)
     except Exception as e:  # noqa: BLE001
         out["flagship"] = {"error": repr(e)[:160]}
+        _log_sweep_advisory("flagship", e)
     for pid in ("autonomous", "etf"):
         try:
             out[pid] = derisk_brain(pid, asof)
         except Exception as e:  # noqa: BLE001
             out[pid] = {"error": repr(e)[:160]}
+            _log_sweep_advisory(pid, e)
     return out
 
 
@@ -568,4 +584,5 @@ def sweep_asia(asof: str | None = None) -> dict:
             out[pid] = derisk_brain(pid, asof)
         except Exception as e:  # noqa: BLE001
             out[pid] = {"error": repr(e)[:160]}
+            _log_sweep_advisory(pid, e)
     return out

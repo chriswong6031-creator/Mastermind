@@ -461,6 +461,10 @@ def rebalance(
     - Cash floored at 0.
     - Fills recorded to fills.jsonl.
     - account.json updated atomically.
+
+    GuardrailResult contract: if the no-leverage or cash-floor check raises unexpectedly, a
+    FREEZE event is logged to run_events and the exception re-raised so the caller can decide
+    whether to abort the run (callers already wrap with try/except for best-effort runs).
     """
     state = _load_account(portfolio_id)
     gross = sum(target_weights.values())
@@ -586,10 +590,25 @@ def rebalance(
                 "value": round(value, 2),
             })
 
-    _save_account(state, portfolio_id)
-    fills_path = _paths(portfolio_id)["fills"]
-    for fill in fills:
-        _append_jsonl(fills_path, fill)
+    try:
+        _save_account(state, portfolio_id)
+        fills_path = _paths(portfolio_id)["fills"]
+        for fill in fills:
+            _append_jsonl(fills_path, fill)
+    except Exception as _exc:
+        # Log FREEZE: account write failure — do not silently lose fills or corrupt the ledger.
+        # Conservative action: we attempted the write; it failed. Re-raise so callers can handle.
+        try:
+            from control_plane.guardrail import GuardrailResult, Severity
+            GuardrailResult.failed(
+                "rebalance_account_write",
+                Severity.FREEZE,
+                detail=f"rebalance account save raised: {_exc!r}"[:200],
+                action_taken="account write failed; fills may be partially written",
+            ).log(job="paper_account_rebalance", book=str(portfolio_id or "flagship"))
+        except Exception:  # noqa: BLE001 — guardrail logging must never mask the original error
+            pass
+        raise  # re-raise so callers' existing try/except can decide next steps
 
 
 def execute_fill(ticker: str, side: str, *, weight: float | None = None,

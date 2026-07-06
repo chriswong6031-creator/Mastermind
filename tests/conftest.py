@@ -201,6 +201,17 @@ def _clear_fx_cache():
 
 
 @pytest.fixture(autouse=True)
+def _disable_peer_sentinel(monkeypatch):
+    """Disable the R9 peer-expectation sentinel (MASTERMIND_PEER_SENTINEL) by default in all
+    tests.  Existing firm_exposure tests seed only a subset of the 4 firm US books — that is
+    intentional for the scenario under test, not a sign that the pipeline failed.  With the
+    sentinel armed, those tests fail because an unseeded (but expected) peer has no latest.json.
+    The sentinel tests in test_mw1_guardrails.py re-enable it explicitly with
+    ``monkeypatch.setenv("MASTERMIND_PEER_SENTINEL", "1")`` which overrides this default."""
+    monkeypatch.setenv("MASTERMIND_PEER_SENTINEL", "0")
+
+
+@pytest.fixture(autouse=True)
 def _clear_portfolios_cache():
     """/api/portfolios memoises its assembled status payload for a short TTL (a process-global);
     clear it around every test so a payload built in one test can't leak stale NAV/return chips

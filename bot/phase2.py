@@ -971,7 +971,24 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
                         firm_clamp={"book": "flagship", "freed": _fc["freed"],
                                     "clamped": _fc["clamped"]})
     except Exception as _e:  # noqa: BLE001 — a firm cap must never break the build
+        # GuardrailResult.FREEZE: clamp exception → drop any names not already held (no new risk).
+        try:
+            _held_set = {_hp["ticker"] for _hp in position_log.open_positions() if _hp.get("ticker")}
+            book = [_p for _p in book if _p.get("ticker", "").upper() in _held_set]
+        except Exception:  # noqa: BLE001
+            pass  # if prior lookup also fails, keep whatever book is at this point
         _rl_log(_run_id, "decision", "firm cap clamp error", f"{_e!r}"[:160])
+        try:
+            from control_plane.guardrail import GuardrailResult, Severity
+            from control_plane import run_events as _re
+            GuardrailResult.failed(
+                "firm_clamp",
+                Severity.FREEZE,
+                detail=f"clamp_book raised: {_e!r}"[:200],
+                action_taken="reverted to prior holdings (no new risk added)",
+            ).log(job="phase2_flagship", book="flagship")
+        except Exception:  # noqa: BLE001
+            pass
 
     # ———— W2 GUARD-RAIL: offensive-gross floor tripwire (architecture Stage 6.5) ————
     # After ALL brakes (leadership caps + cross-sleeve firebreaks), the offensive (leadership) gross must

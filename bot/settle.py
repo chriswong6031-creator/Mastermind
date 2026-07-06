@@ -95,6 +95,16 @@ def execute_or_queue(pid: str, target: dict[str, float], prices: dict[str, float
             paper_account.rebalance(target, prices, asof, portfolio_id=pid)
         except Exception as e:                                            # noqa: BLE001
             out["error"] = repr(e)[:200]
+            try:
+                from control_plane.guardrail import GuardrailResult, Severity
+                GuardrailResult.failed(
+                    "settle_account_write",
+                    Severity.HARD_STOP,
+                    detail=f"settle/rebalance raised mid-flight: {e!r}"[:200],
+                    action_taken="account may be in partial state; no further writes attempted",
+                ).log(job="execute_or_queue", book=pid)
+            except Exception:  # noqa: BLE001
+                pass
         after = dict((paper_account._load_account(pid).get("positions") or {}))
         out["executed"] = _diff_trades(before, after, prices)
     else:
@@ -103,6 +113,16 @@ def execute_or_queue(pid: str, target: dict[str, float], prices: dict[str, float
             out["queued"] = True
         except Exception as e:                                            # noqa: BLE001
             out["error"] = repr(e)[:200]
+            try:
+                from control_plane.guardrail import GuardrailResult, Severity
+                GuardrailResult.failed(
+                    "settle_queue_write",
+                    Severity.HARD_STOP,
+                    detail=f"save_pending_target raised: {e!r}"[:200],
+                    action_taken="target NOT queued; book will not settle at next open",
+                ).log(job="execute_or_queue", book=pid)
+            except Exception:  # noqa: BLE001
+                pass
     return out
 
 
@@ -256,7 +276,20 @@ def settle_open(pid: str, asof: str | None = None,
     sym_set = set(_held(pid)) | {bench} | set((paper_account.load_pending_target(pid) or {}).get("target") or {})
     prices, sources = _price_and_sources(pid, sym_set, _open_price_fn=_open_price_fn)
     before = dict((paper_account._load_account(pid).get("positions") or {}))
-    target = paper_account.settle_target(prices, asof, portfolio_id=pid) or {}
+    try:
+        target = paper_account.settle_target(prices, asof, portfolio_id=pid) or {}
+    except Exception as _se:
+        try:
+            from control_plane.guardrail import GuardrailResult, Severity
+            GuardrailResult.failed(
+                "settle_open_account_write",
+                Severity.HARD_STOP,
+                detail=f"settle_target raised mid-flight: {_se!r}"[:200],
+                action_taken="account may be in partial state; settle aborted",
+            ).log(job="settle_open", book=pid)
+        except Exception:  # noqa: BLE001
+            pass
+        return {"ok": False, "error": repr(_se)[:200], "skipped": "settle_failed"}
     after = dict((paper_account._load_account(pid).get("positions") or {}))
     # Pass sources so each trade row is stamped with fill_price_source for auditability.
     executed = _diff_trades(before, after, prices, sources=sources)

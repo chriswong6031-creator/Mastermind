@@ -318,6 +318,20 @@ def _cluster_cap(cluster_id: str, caps: dict, name_cap: float, cap_fn=None) -> f
     return max(cap, float(name_cap))
 
 
+def _log_guardrail_freeze(guard: str, detail: str, job: str = "", book: str = "") -> None:
+    """Emit a FREEZE GuardrailResult to run_events.  Never raises."""
+    try:
+        from control_plane.guardrail import GuardrailResult, Severity
+        GuardrailResult.failed(
+            guard,
+            Severity.FREEZE,
+            detail=detail,
+            action_taken="positions unchanged (firebreak exception; no new risk added)",
+        ).log(job=job, book=book)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def enforce_book_caps(positions: list[dict], *, cluster_fn=None, cluster_cap_fn=None) -> dict:
     """Apply the firebreaks across BOTH sleeves (subtract-only). W3 A2 rebuild.
 
@@ -361,6 +375,22 @@ def enforce_book_caps(positions: list[dict], *, cluster_fn=None, cluster_cap_fn=
     cluster_cap_fn : optional cluster_id->cap callable (DI / A1's clusters.yml cap lookup). None → the
                  doctrine cluster_caps override then default_cluster_cap.
     """
+    try:
+        return _enforce_book_caps_inner(positions, cluster_fn=cluster_fn, cluster_cap_fn=cluster_cap_fn)
+    except Exception as _exc:  # noqa: BLE001 — a firebreak exception must never propagate; log + FREEZE
+        _log_guardrail_freeze(
+            "enforce_book_caps",
+            detail=f"enforce_book_caps raised: {_exc!r}"[:200],
+            job="enforce_book_caps",
+            book="",
+        )
+        # Conservative action taken BEFORE constructing the result: return positions unchanged
+        # so no new allocation is applied (freeze = keep whatever the caller had before).
+        return {"positions": positions, "breaches": [], "_guardrail_freeze": True}
+
+
+def _enforce_book_caps_inner(positions: list[dict], *, cluster_fn=None, cluster_cap_fn=None) -> dict:
+    """Inner implementation of enforce_book_caps — separated so the outer function can catch and log."""
     caps = _caps_cfg()
     name_cap = caps["name_cap"]
     allowlist = caps["broad_index_allowlist"]
