@@ -386,6 +386,40 @@ def run_heavyweight(asof: str | None = None, *, force: bool = False, armed: bool
     submitted = bool(submission and submission.get("holdings"))
     out["decided"] = submitted
 
+    # 2b. PACKET GATE (ruling R6, Charter P2/P3/P8).
+    # Boundary is BEFORE the universe + sizing rails (_enforce). Shadow mode = default.
+    # On enforce+invalid: fall back to the Brain-errored path: submitted=False → held_prior=True
+    # (carry-forward), identical to the path the book takes when the Brain errors out (P2).
+    _pgr = None
+    if submitted:
+        try:
+            from control_plane.packet_gate import process as _packet_process
+            _pgr = _packet_process(
+                PORTFOLIO_ID,
+                submission,
+                paper_account._load_account(PORTFOLIO_ID),
+                extras={
+                    "run_id":                brain.get("run_id") if isinstance(brain, dict) else "",
+                    "asof":                  asof,
+                    "mandate":               (submission.get("mandate") or
+                                              "Concentrate the firm's best-ideas into a 5-8 name book."),
+                    "evidence_planes":       submission.get("evidence_planes") or [],
+                    "source_provenance":     submission.get("source_provenance") or [],
+                    "falsifiers":            submission.get("falsifiers") or [],
+                    "liquidity_notes":       submission.get("liquidity_notes") or "<not provided>",
+                    "expected_failure_mode": submission.get("expected_failure_mode") or "<not provided>",
+                },
+            )
+            out["packet_id"]   = _pgr.packet_id
+            out["packet_meta"] = _pgr.to_meta()
+            if not _pgr.ok:
+                # ENFORCE + invalid → carry-forward (same as Brain-errored path: no new risk, P2)
+                submitted = False
+                out["decided"] = submitted
+                out["packet_rejected"] = True
+        except Exception as _pg_exc:   # noqa: BLE001 — gate must never block the book
+            out["packet_gate_error"] = repr(_pg_exc)[:200]
+
     # 3. DETERMINISTIC universe + sizing rails (the hard gate — Python owns it, not the prompt)
     # W6 T1: universe = the UNION of every published book's latest.json (firm best-ideas), NOT a
     # Flagship-only mirror. Flag-gated (MASTERMIND_HW_FIRM_UNIVERSE, default ON); the flagship-only
@@ -492,7 +526,8 @@ def run_heavyweight(asof: str | None = None, *, force: bool = False, armed: bool
     #    8. run the accountability loop (record today + resolve matured forward grades vs SPY), then
     #    9. publish the book contract.
     try:
-        _append_decision_log(asof, submission, kept, notes, executed, skipped, brain, held_prior)
+        _append_decision_log(asof, submission, kept, notes, executed, skipped, brain, held_prior,
+                             packet_id=(_pgr.packet_id if _pgr else None))
     except Exception:
         pass
     try:
@@ -741,7 +776,8 @@ def _vs_flagship(hw_return_pct) -> float | None:
 
 
 def _append_decision_log(asof: str, submission: dict | None, kept: list[dict], notes: dict,
-                         executed: list, skipped: list, brain: dict, held_prior: bool) -> None:
+                         executed: list, skipped: list, brain: dict, held_prior: bool,
+                         *, packet_id: str | None = None) -> None:
     from portfolio import registry
     p = registry.data_dir(PORTFOLIO_ID) / "decisions.jsonl"
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -764,6 +800,7 @@ def _append_decision_log(asof: str, submission: dict | None, kept: list[dict], n
         "cost_usd": brain.get("cost_usd") if isinstance(brain, dict) else None,
         "model": brain.get("model") if isinstance(brain, dict) else None,
         "error": brain.get("error") if isinstance(brain, dict) else None,
+        "packet_id": packet_id,
     }
     rows = []
     if p.exists():

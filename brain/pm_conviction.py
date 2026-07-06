@@ -549,6 +549,32 @@ def build_book(sized: list[dict], rejected: list[dict], *, regime: dict | None, 
     if not sub:
         return stub
 
+    # PACKET GATE (ruling R6, Charter P2/P3/P8) — at the PM submission boundary.
+    # Prior book for the flagship layer is the engine conviction rows (sized).
+    _pgr_pm = None
+    try:
+        from control_plane.packet_gate import process as _packet_process_pm
+        _prior_flagship = {"holdings": [{"ticker": c.get("ticker"), "weight": c.get("weight")}
+                                         for c in (sized or []) if c.get("ticker")]}
+        _pgr_pm = _packet_process_pm(
+            PORTFOLIO_ID, sub, _prior_flagship,
+            extras={
+                "run_id": "",
+                "asof": str(asof or ""),
+                "mandate": (sub.get("mandate") or "Build the Flagship conviction book."),
+                "evidence_planes": sub.get("evidence_planes") or [],
+                "source_provenance": sub.get("source_provenance") or [],
+                "falsifiers": sub.get("falsifiers") or [],
+                "liquidity_notes": sub.get("liquidity_notes") or "<not provided>",
+                "expected_failure_mode": sub.get("expected_failure_mode") or "<not provided>",
+            },
+        )
+        if _pgr_pm is not None and not _pgr_pm.ok:
+            # enforce mode + invalid packet → degrade to engine path (same as PM no-submit)
+            return stub
+    except Exception:  # noqa: BLE001 — never-raise; gate failure never blocks the build
+        pass
+
     # the leadership tickers the engine passed in — a KEPT leg with one of these tickers is tagged
     # sleeve='leadership' on the way out so the judgment book's authority clamp can enforce the
     # equal-weight (never re-weight a survivor) rule deterministically.

@@ -121,6 +121,33 @@ def run_hk(asof: str | None = None, *, force: bool = False, armed: bool = True,
     decided = bool(submission and submission.get("holdings"))
     out["decided"] = decided
 
+    # 2b. PACKET GATE (ruling R6, Charter P2/P3/P8)
+    _pgr = None
+    if decided:
+        try:
+            from control_plane.packet_gate import process as _packet_process
+            _pgr = _packet_process(
+                PORTFOLIO_ID, submission, paper_account._load_account(PORTFOLIO_ID),
+                extras={
+                    "run_id": brain.get("run_id") if isinstance(brain, dict) else "",
+                    "asof": asof,
+                    "mandate": (submission.get("mandate") or "Manage the HK paper book with full discretion."),
+                    "evidence_planes": submission.get("evidence_planes") or [],
+                    "source_provenance": submission.get("source_provenance") or [],
+                    "falsifiers": submission.get("falsifiers") or [],
+                    "liquidity_notes": submission.get("liquidity_notes") or "<not provided>",
+                    "expected_failure_mode": submission.get("expected_failure_mode") or "<not provided>",
+                },
+            )
+            out["packet_id"] = _pgr.packet_id
+            out["packet_meta"] = _pgr.to_meta()
+            if not _pgr.ok:
+                decided = False
+                out["decided"] = decided
+                out["packet_rejected"] = True
+        except Exception as _pg_exc:
+            out["packet_gate_error"] = repr(_pg_exc)[:200]
+
     # 3. price the universe we might trade (targets ∪ held ∪ benchmark) — all converted to CNY,
     #    the book's base currency. The shared price store returns USD (A-share/HK already FX'd to
     #    USD there); we convert that to CNY so A-shares stay native CNY, HK (HKD) and US ADRs (USD)
@@ -181,7 +208,8 @@ def run_hk(asof: str | None = None, *, force: bool = False, armed: bool = True,
         out["write_error"] = repr(e)[:200]
     try:
         _append_decision_log(asof, submission, executed, skipped, brain,
-                             feed_health=out.get("feed_health"))
+                             feed_health=out.get("feed_health"),
+                             packet_id=(_pgr.packet_id if _pgr else None))
     except Exception:
         pass
 
@@ -376,7 +404,8 @@ def _build_payload(asof: str, submission: dict | None, prices: dict, executed: l
 
 
 def _append_decision_log(asof: str, submission: dict | None, executed: list,
-                         skipped: list, brain: dict, feed_health: dict | None = None) -> None:
+                         skipped: list, brain: dict, feed_health: dict | None = None,
+                         *, packet_id: str | None = None) -> None:
     from portfolio import registry
     from brain import china_intake as _intake_mod
     p = registry.data_dir(PORTFOLIO_ID) / "decisions.jsonl"
@@ -399,6 +428,7 @@ def _append_decision_log(asof: str, submission: dict | None, executed: list,
         "cost_usd": brain.get("cost_usd") if isinstance(brain, dict) else None,
         "model": brain.get("model") if isinstance(brain, dict) else None,
         "error": brain.get("error") if isinstance(brain, dict) else None,
+        "packet_id": packet_id,
     }
     rows = []
     if p.exists():

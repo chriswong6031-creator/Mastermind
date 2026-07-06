@@ -133,7 +133,11 @@ async def get_my_book(args):
       "plus an overall summary, and optionally note what you sold and why. There is NO gate. Trade "
       "liquid mainland A-shares ONLY (ticker like 600519.SS / 300750.SZ); Hong Kong (*.HK) and "
       "US-listed ADRs are REJECTED by this book. Confirm a name is priceable with get_quote "
-      "before relying on it (names we cannot price are skipped). Call this ONCE, at the end.",
+      "before relying on it (names we cannot price are skipped). Call this ONCE, at the end. "
+      "OPTIONAL governance fields (provide when you can — they improve the shadow decision ledger): "
+      "falsifiers (list of strings — what would cause you to reverse this book within 5 days), "
+      "evidence_planes (list of strings — data sources you relied on), "
+      "expected_failure_mode (string — the most likely way this book loses money).",
       {"type": "object", "properties": {
           "holdings": {"type": "array", "items": {"type": "object", "properties": {
               "ticker": {"type": "string", "description": "venue-suffixed: *.SS/*.SZ A-share, *.HK Hong Kong, bare = US ADR"},
@@ -142,7 +146,13 @@ async def get_my_book(args):
               "conviction": {"type": "string", "enum": ["high", "medium", "low"]}},
               "required": ["ticker", "weight", "rationale"]}},
           "summary": {"type": "string", "description": "overall thesis / how the book is positioned today — refer to each name by company name + ticker, e.g. 贵州茅台 (600519.SS)"},
-          "sold_note": {"type": "string", "description": "optional: what you exited or trimmed and why"}},
+          "sold_note": {"type": "string", "description": "optional: what you exited or trimmed and why"},
+          "falsifiers": {"type": "array", "items": {"type": "string"},
+                         "description": "what would cause you to reverse this book within 5 days"},
+          "evidence_planes": {"type": "array", "items": {"type": "string"},
+                              "description": "data sources / signal planes you relied on for this decision"},
+          "expected_failure_mode": {"type": "string",
+                                    "description": "the most likely way this book loses money"}},
        "required": ["holdings", "summary"]})
 async def submit_book(args):
     holdings = args.get("holdings") or []
