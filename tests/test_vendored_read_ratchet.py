@@ -64,8 +64,14 @@ _V_READ_RE = re.compile(r'(read_text\(|json\.load\b).*\b_V\b|\b_V\b.*(read_text\
 
 
 def _is_excluded(path: Path) -> bool:
-    s = str(path)
-    return any(frag in s for frag in _EXCL_FRAGMENTS)
+    # Match exclusion fragments against the RELATIVE path so that this test file itself
+    # (which lives under /.worktrees/ in the filesystem) is correctly matched, but does
+    # not accidentally exclude the repo-root production files being scanned.
+    try:
+        rel = "/" + str(path.relative_to(_REPO_ROOT))
+    except ValueError:
+        rel = str(path)  # fallback: path outside repo root (e.g. tmp_path in tests)
+    return any(frag in rel for frag in _EXCL_FRAGMENTS)
 
 
 def _count_raw_reads(path: Path) -> int:
@@ -159,4 +165,27 @@ def test_ratchet_self_check_catches_new_offender(tmp_path, monkeypatch):
     new_offenders = {mod: cnt for mod, cnt in found.items() if mod not in ALLOWLIST}
     assert "fake_module_for_test/offender.py" in new_offenders, (
         "Self-check failed: the ratchet should have detected the injected fake offender"
+    )
+
+
+def test_scan_is_not_vacuous():
+    """Non-vacuity guard: scan_repo() must find every allowlisted module.
+
+    The ratchet is only meaningful when the scan actually covers the allowlisted offenders.
+    A vacuous scan (e.g. caused by _is_excluded matching repo-root files) would return {}
+    and let both test_no_new_raw_vendor_reads and test_existing_counts_not_increased pass
+    without detecting anything.
+
+    This test asserts that EACH allowlist entry is actually detected by scan_repo().
+    If an allowlisted module is legitimately cleaned up, remove it from ALLOWLIST (ratchet-down).
+    """
+    found = scan_repo()
+    missing = [mod for mod in ALLOWLIST if mod not in found]
+    assert not missing, (
+        f"scan_repo() is VACUOUS for these allowlisted modules — the ratchet detected nothing:\n"
+        + "\n".join(f"  {mod}" for mod in sorted(missing))
+        + "\n\nFix options:\n"
+        "  1. If the module was cleaned up (no more raw reads), remove it from ALLOWLIST (ratchet-down).\n"
+        "  2. If it still has raw reads, the scan's _is_excluded() is filtering it out incorrectly — "
+        "check that exclusion fragments are matched against RELATIVE paths, not absolute paths."
     )

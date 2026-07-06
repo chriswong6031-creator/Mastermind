@@ -92,10 +92,30 @@ def _load_events(window_days: int = _EVENT_WINDOW_DAYS) -> list[dict]:
         return []
 
 
+_KEY_MAX_LEN = 64
+_KEY_SAFE_RE = re.compile(r'^[a-z0-9_:.\-]+$')
+
+
+def _sanitize_key(raw: str) -> str:
+    """Sanitize a by_guard / step key for the public artifact.
+
+    Applies two rules:
+      1. Length-cap: truncate to _KEY_MAX_LEN characters.
+      2. Charset: only [a-z0-9_:.-] allowed.  Any other character → replace the entire
+         key with 'other' (length-cap is applied after downcasing so a mixed-case safe key
+         stays readable; an unsafe key becomes 'other' regardless of length).
+    Keys feed a public artifact; an injected colon-separated path or long token must not
+    reach the output verbatim.
+    """
+    s = str(raw)[:_KEY_MAX_LEN].lower()
+    return s if _KEY_SAFE_RE.match(s) else "other"
+
+
 def _gate_failures(events: list[dict], book: str) -> dict:
     """Return gate failure counts for one book: by_severity and by_guard.
 
     Only guardrail events with ok=False (status='error') are counted.
+    Guard/step keys are sanitized before inclusion (see _sanitize_key).
     """
     by_severity: dict[str, int] = defaultdict(int)
     by_guard: dict[str, int] = defaultdict(int)
@@ -107,7 +127,8 @@ def _gate_failures(events: list[dict], book: str) -> dict:
         if ev.get("status") != "error":
             continue
         sev = ev.get("severity") or "UNKNOWN"
-        guard = (ev.get("extra") or {}).get("guard") or ev.get("step") or "unknown"
+        raw_guard = (ev.get("extra") or {}).get("guard") or ev.get("step") or "unknown"
+        guard = _sanitize_key(str(raw_guard))
         by_severity[sev] += 1
         by_guard[guard] += 1
     return {
@@ -222,11 +243,51 @@ def build(window_days: int = _EVENT_WINDOW_DAYS) -> dict:
         }
 
 
+def _redact_secrets(payload: dict) -> dict:
+    """Scan the serialized payload for secret-shaped strings and redact matching values.
+
+    Walks the payload in-place (returns the modified dict).  Any string value that
+    matches a _SECRET_PATTERNS pattern is replaced with "<redacted>".  Emits a
+    GuardrailResult(ADVISORY_ONLY) run-event for each offending key found so the
+    incident is logged without ever blocking the publish.
+    """
+    def _redact_value(v: object, path: str) -> object:
+        if isinstance(v, str):
+            for pat in _SECRET_PATTERNS:
+                if pat.search(v):
+                    try:
+                        from control_plane.guardrail import GuardrailResult, Severity
+                        result = GuardrailResult.failed(
+                            guard="nw_feedback_redaction",
+                            severity=Severity.ADVISORY_ONLY,
+                            detail=f"secret-shaped value redacted at {path!r}",
+                            action_taken="value replaced with <redacted>",
+                            extra={"path": path, "pattern": pat.pattern},
+                        )
+                        result.log(job="export_macro_snapshot")
+                    except Exception:
+                        pass  # logging failure must never prevent the redaction
+                    return "<redacted>"
+            return v
+        if isinstance(v, dict):
+            return {k: _redact_value(val, f"{path}.{k}") for k, val in v.items()}
+        if isinstance(v, list):
+            return [_redact_value(item, f"{path}[{i}]") for i, item in enumerate(v)]
+        return v
+
+    return _redact_value(payload, "root")  # type: ignore[return-value]
+
+
 def write(dest_site_dir: Path | str | None = None) -> Path:
     """Build the feedback artifact and write it to <dest>/mastermind/nw_feedback.json.
 
     Mirrors the write() signature of bridge/macro_snapshot.py.
     Returns the written path. Never raises.
+
+    Secret guard: before writing, the serialized JSON is scanned for secret-shaped
+    values (_SECRET_PATTERNS). Any match is redacted (value → "<redacted>") and an
+    ADVISORY_ONLY GuardrailResult run-event is emitted. The publish is never blocked
+    by the guard — a partial redaction is better than a silent publish failure.
     """
     try:
         if dest_site_dir is None:
@@ -238,6 +299,8 @@ def write(dest_site_dir: Path | str | None = None) -> Path:
         out_dir.mkdir(parents=True, exist_ok=True)
         out = out_dir / "nw_feedback.json"
         payload = build()
+        # Scan for and redact any secret-shaped values before writing to the public artifact.
+        payload = _redact_secrets(payload)
         out.write_text(json.dumps(payload, indent=2, default=str, ensure_ascii=False))
         return out
     except Exception as exc:

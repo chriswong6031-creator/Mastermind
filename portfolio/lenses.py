@@ -821,12 +821,21 @@ def _vol_regime_row() -> dict:
     it only sharpens the one net macro vote toward caution when market vol stress is rising.
     Drawdown / capital-efficiency, not alpha. Absent file -> 'missing' (shown, never imputed).
 
-    scored_active enforcement (docket F7 / R7):
-    When scored_active=False the vol_regime reading is DISPLAY-ONLY — it must not tighten or
-    loosen sizing. The direction is forced to 'neutral' so this lens contributes zero net vote
-    to _MACRO_BLOC. The value dict retains the raw reading for display; only the sizing path
-    is suppressed. Kill-switch: MASTERMIND_VOL_REGIME_SCORED_GATE=0 bypasses the enforcement
-    (log-only / emergency ops; scored_active=False still suppresses the note).
+    scored_active enforcement (docket F7 / R7 — ASYMMETRIC, Fable ruling 2026-07-06):
+    Enforcement is ASYMMETRIC by design:
+      • TIGHTENING (bear direction) is ALWAYS allowed, even when scored_active=False.
+        Unvalidated caution is safe — extra de-risking from display-tier data is never harmful.
+      • LOOSENING (bull direction) is NEVER allowed from unvalidated data.  scored_active=False
+        → any bull direction must be forced to neutral.
+
+    Structural note: this lens is SUBTRACT-ONLY by construction — its raw direction is always
+    'bear' (risk-off) or 'neutral' (calm).  It structurally CANNOT produce 'bull', so the
+    bull→neutral guard is a pinned invariant (tested in tests/test_lenses.py) rather than a
+    runtime branch.  tier_enforced=True documents that this invariant is actively maintained.
+
+    Kill-switch: MASTERMIND_VOL_REGIME_SCORED_GATE=0 bypasses all scored_active enforcement
+    (log-only / emergency ops).  With the kill-switch, scored_active=False no longer suppresses
+    the display note.
     """
     import os
     v = _load("site/vol/mastermind.json") or _load("data/vol/mastermind.json")
@@ -838,13 +847,24 @@ def _vol_regime_row() -> dict:
     gate_enabled = os.environ.get("MASTERMIND_VOL_REGIME_SCORED_GATE", "1").strip().lower() \
         not in ("0", "false", "no", "off", "")
 
-    # scored_active enforcement: non-scored data informs display but must not tighten/loosen sizing.
-    # When the gate is active and scored_active=False, force direction to neutral (no-vol-signal).
-    if gate_enabled and not scored_active:
+    # Raw direction: subtract-only (never bull).
+    raw_direction = "bear" if risk_off else "neutral"
+
+    # scored_active enforcement (ASYMMETRIC):
+    #   • Bear (tightening) passes through even when scored_active=False — caution is safe.
+    #   • Bull (loosening) is suppressed to neutral when scored_active=False and gate is on.
+    #     Since raw_direction is structurally never 'bull', this branch is a safety invariant
+    #     only (see tests/test_lenses.py test_vol_regime_subtract_only_structural_invariant).
+    if gate_enabled and not scored_active and raw_direction == "bull":
         effective_direction = "neutral"
-        note = "vol_regime display-only (scored_active=False) — suppressed from sizing"
     else:
-        effective_direction = "bear" if risk_off else "neutral"
+        effective_direction = raw_direction
+
+    # Note: show the suppression annotation only when the gate is active and the vol data is
+    # unvalidated; for tightening reads (bear) the note is unchanged regardless of scored_active.
+    if gate_enabled and not scored_active and effective_direction != "bear":
+        note = "vol_regime display-only (scored_active=False) — loosening suppressed"
+    else:
         note = ("index vol-regime risk-off — trim gross (context caution, not a size driver)"
                 if risk_off else "")
 
@@ -856,7 +876,7 @@ def _vol_regime_row() -> dict:
         "scored_score": v.get("scored_score"),
         "ts_slope_state": v.get("ts_slope_state"),
         "fragility": v.get("fragility_confluence"),
-        "tier_enforced": True,                              # R7: scored_active gate is active
+        "tier_enforced": True,                              # R7: asymmetric scored_active gate active
     }, "context", effective_direction, note=note)
 
 

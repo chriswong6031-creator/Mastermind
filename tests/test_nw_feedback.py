@@ -234,6 +234,105 @@ def test_no_mastermind_env_var_names(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# 3b. Secret guard wire-up: write() must redact secret-shaped data
+# ---------------------------------------------------------------------------
+
+def test_write_redacts_mastermind_env_var_in_event_err(monkeypatch, tmp_path):
+    """Secret guard: if an event carries a MASTERMIND_ env var name in its err/extra fields,
+    write() must redact it in the published JSON.  The artifact must still be built (not aborted).
+
+    Uses a fixture run-event whose err field contains 'MASTERMIND_PASSWORD=abc123' — a realistic
+    credential-leak shape that could reach the artifact via error propagation.
+    """
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    events = [
+        # An error event whose err field contains a secret-shaped string
+        {"ts": now, "kind": "guardrail", "book": "flagship", "status": "error",
+         "severity": "ADVISORY_ONLY",
+         "extra": {"guard": "auth_check", "err": "MASTERMIND_PASSWORD=abc123"}},
+    ]
+    _patch_events(monkeypatch, tmp_path, events)
+
+    # Inject the secret into the payload via a patched _thesis_counts so it appears in output
+    secret_val = "MASTERMIND_PASSWORD=abc123"
+    original_thesis = nw_feedback._thesis_counts
+
+    def patched_thesis():
+        r = original_thesis()
+        r["_test_injected_secret"] = secret_val  # simulate a leak path
+        return r
+
+    monkeypatch.setattr(nw_feedback, "_thesis_counts", patched_thesis)
+
+    dest = tmp_path / "site"
+    out = nw_feedback.write(dest)
+    assert out.exists(), "write() must produce the artifact even with secret-shaped data"
+
+    payload = json.loads(out.read_text())
+    serialized = json.dumps(payload)
+
+    # The secret must have been redacted
+    assert secret_val not in serialized, (
+        "Secret string was NOT redacted from the published JSON. "
+        "write() must scan and redact via _redact_secrets() before writing."
+    )
+    # The artifact is valid — schema and books are present
+    assert payload["schema"] == "mastermind_nw_feedback.v1"
+    assert "books" in payload
+
+
+def test_write_redacts_dollar_amount_in_payload(monkeypatch, tmp_path):
+    """Secret guard: a $1,234,567 string (position-size shaped) must be redacted from write() output."""
+    _patch_events(monkeypatch, tmp_path, [])
+    dollar_val = "$1,234,567"
+    original_thesis = nw_feedback._thesis_counts
+
+    def patched_thesis():
+        r = original_thesis()
+        r["_test_injected_dollar"] = dollar_val
+        return r
+
+    monkeypatch.setattr(nw_feedback, "_thesis_counts", patched_thesis)
+
+    dest = tmp_path / "site"
+    out = nw_feedback.write(dest)
+    payload = json.loads(out.read_text())
+    serialized = json.dumps(payload)
+
+    assert dollar_val not in serialized, (
+        "Dollar-amount string was NOT redacted from the published JSON. "
+        "write() must redact via _redact_secrets() before writing."
+    )
+    assert payload["schema"] == "mastermind_nw_feedback.v1"
+
+
+def test_write_redacts_hex_token_in_payload(monkeypatch, tmp_path):
+    """Secret guard: a 48-char hex token (API-key shaped) must be redacted from write() output."""
+    _patch_events(monkeypatch, tmp_path, [])
+    # 48-char hex token — matches the long-token pattern in _SECRET_PATTERNS
+    hex_token = "a" * 48
+    original_thesis = nw_feedback._thesis_counts
+
+    def patched_thesis():
+        r = original_thesis()
+        r["_test_injected_token"] = hex_token
+        return r
+
+    monkeypatch.setattr(nw_feedback, "_thesis_counts", patched_thesis)
+
+    dest = tmp_path / "site"
+    out = nw_feedback.write(dest)
+    payload = json.loads(out.read_text())
+    serialized = json.dumps(payload)
+
+    assert hex_token not in serialized, (
+        "48-char hex token was NOT redacted from the published JSON. "
+        "write() must redact via _redact_secrets() before writing."
+    )
+    assert payload["schema"] == "mastermind_nw_feedback.v1"
+
+
+# ---------------------------------------------------------------------------
 # 4. Never-raise contract
 # ---------------------------------------------------------------------------
 
@@ -275,16 +374,27 @@ def test_write_returns_path(monkeypatch, tmp_path):
 # 5. scored_active enforcement in lenses._vol_regime_row
 # ---------------------------------------------------------------------------
 
-def test_vol_regime_unscored_suppressed_from_sizing(monkeypatch):
-    """When scored_active=False, vol_regime direction must be 'neutral' (not 'bear')."""
+def test_vol_regime_unscored_bear_kept_asymmetric(monkeypatch):
+    """Fable ruling 2026-07-06 — asymmetric enforcement: scored_active=False KEEPS 'bear'.
+
+    Enforcement is asymmetric:
+      • Tightening (bear) ALWAYS passes, even when scored_active=False.
+        Unvalidated caution from a risk-off regime is safe (conservative direction).
+      • Loosening (bull) is NEVER allowed from unvalidated data — suppressed to neutral.
+        Since this lens is structurally subtract-only (never bull), the suppression is a
+        pinned invariant (see test_vol_regime_subtract_only_structural_invariant in test_lenses.py).
+
+    This test was previously asserting direction=='neutral' for scored_active=False (the old,
+    symmetric suppress-both behavior).  That behavior has been reverted per the Fable ruling.
+    """
     from portfolio import lenses
 
     # Inject a risk-off vol file with scored_active=False
     fake_vol = {
-        "regime": "warning",       # would be risk_off=True without the gate
+        "regime": "warning",       # risk_off=True
         "kill_switch": False,
         "vol_target_scalar": 0.8,
-        "scored_active": False,    # NOT validated — must not tighten sizing
+        "scored_active": False,    # display-only (not yet validated)
         "scored_score": 0.4,
         "ts_slope_state": "warning",
         "fragility_confluence": 0.6,
@@ -299,10 +409,10 @@ def test_vol_regime_unscored_suppressed_from_sizing(monkeypatch):
     monkeypatch.delenv("MASTERMIND_VOL_REGIME_SCORED_GATE", raising=False)
 
     row = lenses._vol_regime_row()
-    assert row["direction"] == "neutral", (
-        f"scored_active=False with risk-off regime must produce direction='neutral' "
-        f"(not 'bear'), got {row['direction']!r}. "
-        "This is docket F7 — unscored vol data must not tighten sizing."
+    # Asymmetric: tightening (bear) kept even when scored_active=False
+    assert row["direction"] == "bear", (
+        f"scored_active=False + risk-off must KEEP direction='bear' (asymmetric enforcement). "
+        f"Tightening caution is safe regardless of validation tier. Got {row['direction']!r}."
     )
     # The value dict must still carry the raw reading for display
     assert row["value"]["regime"] == "warning"
@@ -390,3 +500,71 @@ def test_vol_regime_missing_file_returns_missing_row(monkeypatch):
     row = lenses._vol_regime_row()
     assert row["status"] == "missing"
     assert row["direction"] is None
+
+
+# ---------------------------------------------------------------------------
+# 6. by_guard / step key sanitization (Issue 5)
+# ---------------------------------------------------------------------------
+
+def test_guard_key_sanitization_length_cap(monkeypatch, tmp_path):
+    """Guard keys longer than 64 chars must be truncated before appearing in the artifact."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    long_key = "a" * 80  # 80 chars — must be truncated to 64
+    events = [
+        {"ts": now, "kind": "guardrail", "book": "flagship", "status": "error",
+         "severity": "ADVISORY_ONLY", "extra": {"guard": long_key}},
+    ]
+    _patch_events(monkeypatch, tmp_path, events)
+    result = nw_feedback.build()
+    books = {b["book_id"]: b for b in result["books"]}
+    if "flagship" in books:
+        guards = books["flagship"]["gate_failures"]["by_guard"]
+        for key in guards:
+            assert len(key) <= 64, (
+                f"Guard key longer than 64 chars found in artifact: {key!r} ({len(key)} chars)"
+            )
+
+
+def test_guard_key_sanitization_charset(monkeypatch, tmp_path):
+    """Guard keys with unsafe characters must be replaced with 'other'."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    events = [
+        # Contains uppercase and spaces — unsafe for a public key
+        {"ts": now, "kind": "guardrail", "book": "flagship", "status": "error",
+         "severity": "ADVISORY_ONLY", "extra": {"guard": "Has UPPERCASE & spaces"}},
+        # Normal safe key — must pass through
+        {"ts": now, "kind": "guardrail", "book": "flagship", "status": "error",
+         "severity": "ADVISORY_ONLY", "extra": {"guard": "safe_guard:v1"}},
+    ]
+    _patch_events(monkeypatch, tmp_path, events)
+    result = nw_feedback.build()
+    books = {b["book_id"]: b for b in result["books"]}
+    if "flagship" in books:
+        guards = books["flagship"]["gate_failures"]["by_guard"]
+        # The unsafe key must have been replaced with 'other'
+        assert "other" in guards, (
+            f"Unsafe guard key was not replaced with 'other'. Found keys: {list(guards.keys())}"
+        )
+        # The safe key must pass through unchanged (after lowercasing)
+        assert "safe_guard:v1" in guards, (
+            f"Safe guard key was unexpectedly sanitized. Found keys: {list(guards.keys())}"
+        )
+
+
+def test_sanitize_key_function():
+    """Unit test for _sanitize_key: length cap and charset enforcement."""
+    # Safe key — passes through (lowercased)
+    assert nw_feedback._sanitize_key("safe_key") == "safe_key"
+    assert nw_feedback._sanitize_key("peer:freshness.v2-alpha") == "peer:freshness.v2-alpha"
+    # Mixed-case key whose lowercase is safe chars — lowercased, NOT 'other'
+    assert nw_feedback._sanitize_key("SafeKey") == "safekey"
+    # Long key — truncated to 64 chars, then charset checked; all-alpha still safe
+    long_safe = "a" * 100
+    result = nw_feedback._sanitize_key(long_safe)
+    assert len(result) <= 64
+    assert result == "a" * 64
+    # Unsafe chars (spaces, punctuation other than _:.-) — becomes 'other'
+    assert nw_feedback._sanitize_key("key with spaces") == "other"
+    assert nw_feedback._sanitize_key("key!@#$") == "other"
+    # Empty string — fails the non-empty charset match, becomes 'other'
+    assert nw_feedback._sanitize_key("") == "other"

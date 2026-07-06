@@ -28,9 +28,11 @@ from pathlib import Path
 import bot  # noqa: F401  -> vendor/macro bootstrap
 
 from bridge import macro_snapshot
+from bridge import nw_feedback as _nw_feedback
 
 _ROOT = Path(__file__).resolve().parent.parent
 _REL_PATH = "site/mastermind/mastermind_snapshot.json"
+_NW_REL_PATH = "site/mastermind/nw_feedback.json"
 
 # Bot identity for the snapshot commit (matches the macro daily.yml convention).
 _GIT_NAME = "mastermind-bot"
@@ -69,6 +71,13 @@ def _commit_and_push(root: Path) -> bool:
 
     # Stage only the snapshot file (-f: site/ subtrees are partly gitignored in the macro repo).
     _git(root, "add", "-f", _REL_PATH)
+    # Stage nw_feedback.json alongside — best-effort: absent/error must never abort the snapshot push.
+    try:
+        nw_path = root / _NW_REL_PATH
+        if nw_path.exists():
+            _git(root, "add", "-f", _NW_REL_PATH)
+    except Exception as _exc:
+        print(f"[export_macro_snapshot] nw_feedback stage skipped (non-fatal): {_exc}")
     staged = _git(root, "diff", "--cached", "--quiet")
     if staged.returncode == 0:
         print("[export_macro_snapshot] no snapshot changes to commit.")
