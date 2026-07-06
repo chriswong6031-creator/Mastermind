@@ -207,6 +207,22 @@ class TestRegionalBogeys:
                 assert c not in B.DEFENSIVE_BASKET, (
                     f"CN regional bogey must not include US defensive constituent {c}")
 
+    def test_proxy_meta_stamped_on_disk_artifact(self, sandbox):
+        """proxy_meta passed to build_regional must appear in the PERSISTED JSON, not just in the
+        in-memory return value.  This guards the Fix-1 regression: the old code stamped flags post-
+        hoc onto the in-memory dict AFTER persist() had already written to disk, so the on-disk
+        artifact lacked bogey_is_proxy / proxy_reason."""
+        import json as _json
+        series = self._fxi_series()
+        proxy_meta = {"bogey_is_proxy": True, "proxy_reason": "FXI proxy test"}
+        B.build_regional(series, "china", asof="2026-01-04", proxy_meta=proxy_meta)
+        artifact = _json.loads((sandbox / "china" / "2026-01-04.json").read_text())
+        regional_bogey = artifact["bogeys"]["regional"]
+        assert regional_bogey.get("bogey_is_proxy") is True, (
+            "on-disk artifact must carry bogey_is_proxy=True; was the flag stamped before persist()?")
+        assert regional_bogey.get("proxy_reason") == "FXI proxy test", (
+            "on-disk artifact must carry proxy_reason; post-hoc in-memory mutation is not enough")
+
 
 # ── W6 T4 — registry experiment well-formed ──────────────────────────────────
 def test_cn_funnel_registry_experiment_is_well_formed():

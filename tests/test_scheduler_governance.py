@@ -623,3 +623,85 @@ class TestSettleLocks:
         events = _read_events(tmp_path)
         skipped = [e for e in events if e.get("kind") == "run_skipped"]
         assert skipped, "settle_brain_asia must emit run_skipped when book:china is held"
+
+
+# ---------------------------------------------------------------------------
+# 8. Fix-3: _cio_weekly_job calls write_regional best-effort
+# ---------------------------------------------------------------------------
+
+class TestCioWeeklyCallsWriteRegional:
+    """_cio_weekly_job must call brain.book_lifecycle.write_regional() after the US CIO review.
+    A write_regional failure must NOT abort the CIO job — it is best-effort.
+    Guards the Fix-3 wiring: regional lifecycle data/lifecycle/regional/ accrues weekly."""
+
+    def _redirect(self, monkeypatch, tmp_path):
+        import control_plane.run_events as re_mod
+        import control_plane.locks as locks_mod
+        orig_lp = re_mod._ledger_path
+        monkeypatch.setattr(re_mod, "_ledger_path", lambda root=None: orig_lp(tmp_path))
+        orig_ld = locks_mod._locks_dir
+        monkeypatch.setattr(locks_mod, "_locks_dir", lambda root=None: orig_ld(tmp_path))
+
+    def test_cio_weekly_job_calls_write_regional(self, tmp_path, monkeypatch):
+        """_cio_weekly_job must invoke write_regional() exactly once per run.
+        Verified via a spy that records the call — not by checking the disk artifact — so the
+        test is hermetic and does not depend on the full lifecycle dependency tree."""
+        import sys
+        import types
+        import app.scheduler as sched_mod
+        self._redirect(monkeypatch, tmp_path)
+
+        # Stub run_cio so the US CIO review side-effect is a no-op
+        run_cio_calls = {"n": 0}
+        fake_run_cio_mod = types.ModuleType("scripts.run_cio")
+        fake_run_cio_mod.run = lambda *a, **kw: (run_cio_calls.__setitem__("n", run_cio_calls["n"] + 1) or {"ok": True})
+        monkeypatch.setitem(sys.modules, "scripts.run_cio", fake_run_cio_mod)
+
+        # Spy on brain.book_lifecycle.write_regional
+        write_regional_calls = {"n": 0}
+        import brain.book_lifecycle as bl_mod
+        original_write_regional = bl_mod.write_regional
+
+        def _spy_write_regional(**kwargs):
+            write_regional_calls["n"] += 1
+            return {"ok": True, "as_of": "2026-07-06", "json_path": "/tmp/x.json", "n_recommendations": 0}
+
+        monkeypatch.setattr(bl_mod, "write_regional", _spy_write_regional)
+
+        try:
+            sched_mod._cio_weekly_job()
+        finally:
+            bl_mod.write_regional = original_write_regional
+
+        assert write_regional_calls["n"] == 1, (
+            f"_cio_weekly_job must call write_regional() exactly once; called {write_regional_calls['n']} times"
+        )
+
+    def test_cio_weekly_job_write_regional_failure_does_not_abort(self, tmp_path, monkeypatch):
+        """A write_regional() exception must not propagate out of _cio_weekly_job.
+        The CIO review is best-effort per charter — regional miss never kills it."""
+        import sys
+        import types
+        import app.scheduler as sched_mod
+        self._redirect(monkeypatch, tmp_path)
+
+        # Stub run_cio as a no-op success
+        fake_run_cio_mod = types.ModuleType("scripts.run_cio")
+        fake_run_cio_mod.run = lambda *a, **kw: {"ok": True}
+        monkeypatch.setitem(sys.modules, "scripts.run_cio", fake_run_cio_mod)
+
+        # Make write_regional explode
+        import brain.book_lifecycle as bl_mod
+        original_write_regional = bl_mod.write_regional
+
+        def _exploding_write_regional(**kwargs):
+            raise RuntimeError("injected: write_regional failure")
+
+        monkeypatch.setattr(bl_mod, "write_regional", _exploding_write_regional)
+
+        try:
+            # Must not raise despite write_regional blowing up
+            sched_mod._cio_weekly_job()
+        finally:
+            bl_mod.write_regional = original_write_regional
+        # reaching here = the exception was swallowed correctly

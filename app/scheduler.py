@@ -417,7 +417,10 @@ def _cio_weekly_job():
     data/brain/cio/<isoweek>.{json,md}. RECOMMENDS ONLY — never trades, flips a flag, or mutates a
     seat. The Improvement Agenda that fuses over this note runs as its OWN dedicated job
     (``_improvement_agenda_job``) 30 min later, so this job passes ``with_agenda=False`` to avoid a
-    double-write. Lazy import + try/except so a review miss never kills the scheduler."""
+    double-write. Lazy import + try/except so a review miss never kills the scheduler.
+
+    After the US review, write_regional() is called best-effort so data/lifecycle/regional/ accrues
+    weekly snapshots of the china/hk grades. A miss is logged but never aborts the CIO review."""
     handle = _ledger_start("cio_weekly", trigger="cron")
     try:
         from scripts.run_cio import run as run_cio
@@ -426,6 +429,34 @@ def _cio_weekly_job():
     except Exception as exc:  # noqa: BLE001 — a CIO miss must never kill the scheduler
         _ledger_end(handle, "error")
         log.warning("cio_weekly failed: %s", exc)
+    # regional lifecycle review — best-effort, never aborts the CIO run even on error
+    try:
+        from brain.book_lifecycle import write_regional
+        rr = write_regional()
+        _step_failed_event("cio_weekly", "regional", "write_regional",
+                           RuntimeError("ok=False")) if not rr.get("ok") else None
+        _re_append_regional(rr)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("cio_weekly write_regional failed: %s", exc)
+
+
+def _re_append_regional(rr: dict) -> None:
+    """Append a run_event for the regional lifecycle write.  Never raises."""
+    try:
+        from control_plane import run_events as _re
+        _re.append({
+            "kind": "write_regional_lifecycle",
+            "job": "cio_weekly",
+            "book": "regional",
+            "step": "write_regional",
+            "status": "ok" if rr.get("ok") else "error",
+            "as_of": rr.get("as_of"),
+            "n_recommendations": rr.get("n_recommendations"),
+            "json_path": rr.get("json_path"),
+            "actor": "system",
+        })
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _improvement_agenda_job():
@@ -834,23 +865,26 @@ def _build_benchmark_ledger(asof: str, union_usd: dict) -> None:
     # Regional bogeys (china + hk) — best-effort; a miss MUST NOT abort the US build.
     # Each bogey row carries bogey_is_proxy=True + proxy_reason so any lifecycle rec that cites
     # this bogey is honest about the instrument (FXI ≠ CSI300 / Hang Seng).
+    # proxy_meta is passed INTO build_regional so the flags are stamped BEFORE the artifact is
+    # persisted to disk — the on-disk JSON is the source of truth, not just the in-memory return.
+    _proxy_reasons = {
+        "china": "FXI (iShares China Large-Cap) is a USD-listed proxy for CSI300/A-shares; "
+                 "000300.SS and MCHI/ASHR are not in the yahoo parquet store as of 2026-07-03.",
+        "hk":    "FXI is the only China-region ETF in the yahoo parquet store; "
+                 "2800.HK (Tracker Fund of HK) is the canonical HK proxy but is not yet priced.",
+    }
     for _book_id in benchmark_ledger.BOOK_BOGEY_OVERRIDES:
         try:
-            result = benchmark_ledger.build_regional(series, _book_id, asof=asof)
-            # stamp proxy metadata onto the regional bogey row
-            _bogey = (result.get("bogeys") or {}).get("regional") or {}
-            _bogey["bogey_is_proxy"] = True
-            _proxy_reasons = {
-                "china": "FXI (iShares China Large-Cap) is a USD-listed proxy for CSI300/A-shares; "
-                         "000300.SS and MCHI/ASHR are not in the yahoo parquet store as of 2026-07-03.",
-                "hk":    "FXI is the only China-region ETF in the yahoo parquet store; "
-                         "2800.HK (Tracker Fund of HK) is the canonical HK proxy but is not yet priced.",
-            }
-            _bogey["proxy_reason"] = _proxy_reasons.get(
+            _proxy_reason = _proxy_reasons.get(
                 _book_id,
                 f"constituent list {benchmark_ledger.BOOK_BOGEY_OVERRIDES[_book_id]} is a proxy; "
                 "update BOOK_BOGEY_OVERRIDES when a canonical instrument is available.",
             )
+            result = benchmark_ledger.build_regional(
+                series, _book_id, asof=asof,
+                proxy_meta={"bogey_is_proxy": True, "proxy_reason": _proxy_reason},
+            )
+            _bogey = (result.get("bogeys") or {}).get("regional") or {}
             _re.append({
                 "kind": "build_regional_benchmark",
                 "job": "daily_mark",
@@ -858,7 +892,7 @@ def _build_benchmark_ledger(asof: str, union_usd: dict) -> None:
                 "step": "build_regional",
                 "status": "ok",
                 "bogey_is_proxy": True,
-                "proxy_reason": _bogey["proxy_reason"],
+                "proxy_reason": _proxy_reason,
                 "n_points": _bogey.get("n_points"),
                 "actor": "system",
             })

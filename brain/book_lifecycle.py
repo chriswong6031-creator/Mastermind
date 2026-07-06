@@ -719,7 +719,7 @@ def _regional_review_history(book_id: str, ledgers: list[dict] | None = None) ->
     for lg in hist:
         if not isinstance(lg, dict):
             continue
-        lb = {r.get("id"): r for r in (lg.get("leaderboard") or [])}
+        lb = {r.get("id"): r for r in (lg.get("leaderboard") or []) if isinstance(r, dict)}
         d = str(lg.get("as_of") or "")[:10]
         regional_ret = (lb.get("regional") or {}).get("return_pct")
         book_ret = (lb.get(book_id) or {}).get("return_pct")

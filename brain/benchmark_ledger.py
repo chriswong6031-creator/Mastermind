@@ -241,7 +241,8 @@ def leaderboard(bogeys: dict, book_curves: dict) -> list:
 
 
 def build_regional(price_series: dict, book_id: str, *, asof: str,
-                   book_curves: dict | None = None, persist: bool = True) -> dict:
+                   book_curves: dict | None = None, persist: bool = True,
+                   proxy_meta: dict | None = None) -> dict:
     """Assemble the TWO-bogey ledger for a regional book (china / hk).
 
     Regional books compare against their own market index proxy (``BOOK_BOGEY_OVERRIDES``), not
@@ -250,6 +251,11 @@ def build_regional(price_series: dict, book_id: str, *, asof: str,
       ``regional``   — the book's market-index proxy (e.g. FXI), growth-of-$1.
       ``do_nothing`` — the carry shadow (same semantics as in ``build``); only present when
                        ``book_curves`` supplies a ``"do_nothing"`` curve.
+
+    ``proxy_meta`` (optional): extra key/value pairs stamped onto the ``regional`` bogey row
+    BEFORE the artifact is persisted to disk, so the on-disk JSON carries flags like
+    ``bogey_is_proxy`` and ``proxy_reason``.  The scheduler passes these so any lifecycle reader
+    of the artifact gets the honest provenance; the default (None) stamps nothing extra.
 
     Returns the same shape as ``build`` so the leaderboard and cio callers are compatible.
     Degrades to empty curves on missing marks (P2). Persisted under
@@ -288,6 +294,11 @@ def build_regional(price_series: dict, book_id: str, *, asof: str,
         b["return_pct"] = _ret_pct(c)
         b["inception"] = (sorted(c)[0] if c else None)
         b["n_points"] = len(c)
+
+    # stamp proxy_meta onto the regional bogey row BEFORE persisting so the on-disk artifact
+    # carries the flags (bogey_is_proxy, proxy_reason, …) — not just the in-memory return value.
+    if proxy_meta:
+        bogeys.get("regional", {}).update(proxy_meta)
 
     result = {"as_of": asof, "book_id": book_id, "bogeys": bogeys,
               "leaderboard": leaderboard(bogeys, book_curves or {})}
