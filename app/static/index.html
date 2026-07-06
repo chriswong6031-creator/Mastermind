@@ -1318,7 +1318,6 @@ body.page-mm .mm-macro-tag.neu  { background: color-mix(in srgb, var(--muted) 16
 /* ── top nav (Dashboard / Research view switch) ──────────────────────────── */
 body.page-mm #mm-nav { position: sticky; top: 0; z-index: 60; display: flex; align-items: center; gap: 14px;
   flex-wrap: wrap; padding: 9px 4px; margin-bottom: 4px;
-  background: var(--bg);                 /* opaque so scrolled content can't show through */
   border-bottom: 1px solid var(--line); }
 /* top loading bar — immediate feedback during portfolio switches / data loads */
 #mm-loadbar { position: fixed; top: 0; left: 0; height: 3px; width: 0; z-index: 200;
@@ -1337,6 +1336,20 @@ body.page-mm .mm-nav-tab:hover { color: var(--text); border-color: var(--muted);
 body.page-mm .mm-nav-tab.active { color: var(--bg); background: var(--text); border-color: var(--text); }
 body.page-mm .mm-nav-spacer { margin-left: auto; }
 body.page-mm .mm-nav-ctrls { display: flex; gap: 10px; align-items: center; }
+/* ── "← Dashboard" back pill — shown ONLY when the user arrived from the Macro
+   Dashboard (referrer host or ?from=macro), so direct visitors don't get a back
+   button that would dump them onto an unrelated site. Mirrors the Terminal's
+   originNav affordance (app.mastermind-x.com). Toggled by the inline #mm-back script. */
+body.page-mm .mm-back { display: none; align-items: center; gap: 7px; flex: none;
+  padding: 5px 13px 5px 10px; border-radius: 8px; cursor: pointer; text-decoration: none;
+  white-space: nowrap; font-size: 12px; font-weight: 700; letter-spacing: .02em; color: var(--info);
+  background: color-mix(in srgb, var(--info) 14%, var(--panel2));
+  border: 1px solid color-mix(in srgb, var(--info) 45%, var(--line));
+  transition: background .12s ease, border-color .12s ease, transform .12s ease; }
+body.page-mm .mm-back.show { display: inline-flex; }
+body.page-mm .mm-back:hover { transform: translateX(-1px); border-color: var(--info);
+  background: color-mix(in srgb, var(--info) 22%, var(--panel2)); }
+body.page-mm .mm-back .mm-back-chev { font-size: 15px; line-height: 1; }
 /* ── Macro Dashboard animated theme + language toggles (ported) ──────────────
    --panel2 already flips per theme, so it replaces the macro version's hardcoded
    #eef1f6 / #222732; --info = the macro --blue accent, --line = its --grid. */
@@ -1731,6 +1744,12 @@ body.page-mm.view-self #view-self .mm-section { display: block !important; }
 .mm-dec-trace-load{font-size:11px;color:var(--muted);font-style:italic}
 </style>
 <div id="mm-nav">
+  <!-- Back to the Macro Dashboard — hidden by default; the inline script below un-hides it
+       and wires the click only when the user actually arrived from the dashboard. -->
+  <a id="mm-back" class="mm-back" href="https://mastermind-x.com" rel="noopener" aria-label="Back to Macro Dashboard">
+    <span class="mm-back-chev" aria-hidden="true">&larr;</span>
+    <span class="l-en">Dashboard</span><span class="l-zh">宏观仪表盘</span>
+  </a>
   <span class="mm-nav-brand" aria-label="Mastermind">
     <svg class="mm-logo-mark" viewBox="0 0 32 32" aria-hidden="true">
       <defs><linearGradient id="mm-logo-grad" x1="0" y1="0" x2="1" y2="1">
@@ -1761,6 +1780,57 @@ body.page-mm.view-self #view-self .mm-section { display: block !important; }
     </div>
   </span>
 </div>
+
+<script>
+/* "← Dashboard" back affordance for #mm-back. Mirrors the Terminal's lib/originNav:
+   referrer-first detection (macro→bot is a cross-site HTTPS hop, so the default
+   referrer policy still sends the dashboard origin) with an explicit ?from=macro /
+   ?ref=macro override for stripped referrers, cached in sessionStorage so it survives
+   in-app view switches. Direct visitors get NO button (a back() would dump them onto
+   whatever unrelated site they came from). Back click = history.back() when the previous
+   entry IS the dashboard (restores exact page + scroll via bfcache), else a hard nav to
+   the captured dashboard URL (covers opened-in-a-new-tab, where there's nothing to pop). */
+(function () {
+  var MACRO_ORIGIN = "https://mastermind-x.com";
+  var MACRO_HOSTS = { "mastermind-x.com": 1, "www.mastermind-x.com": 1 };
+  var KEY = "mm.fromMacro", HREF = "mm.macroHref";
+  function isMacroHost(h) { return !!MACRO_HOSTS[h] || /\.github\.io$/.test(h); }
+  function ssGet(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }
+  function ssSet(k, v) { try { sessionStorage.setItem(k, v); } catch (e) {} }
+  function refIsMacro() {
+    try { if (document.referrer) return isMacroHost(new URL(document.referrer).hostname); } catch (e) {}
+    return false;
+  }
+
+  var fromMacro = false, macroHref = MACRO_ORIGIN;
+  if (ssGet(KEY) === "1") {
+    fromMacro = true;
+    macroHref = ssGet(HREF) || MACRO_ORIGIN;
+  } else {
+    var p;
+    try { p = new URLSearchParams(location.search); } catch (e) { p = null; }
+    var flagged = !!p && (p.get("from") === "macro" || p.get("ref") === "macro");
+    var refHref = refIsMacro() ? document.referrer : "";
+    if (flagged || refHref) {
+      fromMacro = true;
+      macroHref = refHref || MACRO_ORIGIN;
+      ssSet(KEY, "1");
+      ssSet(HREF, macroHref);
+    }
+  }
+
+  var btn = document.getElementById("mm-back");
+  if (btn && fromMacro) {
+    btn.setAttribute("href", macroHref);
+    btn.classList.add("show");
+    btn.addEventListener("click", function (ev) {
+      ev.preventDefault();
+      if (window.history.length > 1 && refIsMacro()) { window.history.back(); return; }
+      window.location.assign(macroHref || MACRO_ORIGIN);
+    });
+  }
+})();
+</script>
 
 <!-- ── READINESS BANNER (shown only when a forward-proof threshold has crossed) ── -->
 <div class="mm-section" id="readiness-sec" style="margin-top:0;display:none">
