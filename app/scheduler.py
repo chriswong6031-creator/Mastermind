@@ -855,8 +855,18 @@ def start():
     # 13:30 UTC under EDT / 14:30 UTC under EST); the job itself re-checks market_calendar.is_open().
     settle_hour = int(os.environ.get("SETTLE_PENDING_UTC_HOUR", "15"))
     _DB.parent.mkdir(parents=True, exist_ok=True)
-    sch = BackgroundScheduler(jobstores={"default": SQLAlchemyJobStore(url=f"sqlite:///{_DB}")},
-                              timezone="UTC")
+    # Jobstore choice (incident 2026-07-06 ×2): the sqlite jobstore flipped to
+    # "attempt to write a readonly database" hours into a run (macOS provenance on
+    # files created by an agent-session process tree) and the scheduler thread died
+    # silently. Persistence buys almost nothing here — every boot re-registers all
+    # jobs with replace_existing=True — so production runs MASTERMIND_JOBSTORE=memory
+    # (set in .env); sqlite remains the default for cross-restart misfire catch-up
+    # in environments where the file is trustworthy.
+    if os.environ.get("MASTERMIND_JOBSTORE", "sqlite").strip().lower() == "memory":
+        sch = BackgroundScheduler(timezone="UTC")  # default MemoryJobStore
+    else:
+        sch = BackgroundScheduler(jobstores={"default": SQLAlchemyJobStore(url=f"sqlite:///{_DB}")},
+                                  timezone="UTC")
     # FRESHNESS FOUNDATION: pull the vendored macro analyzer data (origin/main == the live site)
     # every 3h so no book ever decides on a stale read (the NVDA stale-"Constructive"-vs-live-"avoid"
     # bug). The staleness tripwire warns, or refuses to trade via MACRO_STALE_BLOCK=1. run_daily also

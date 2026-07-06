@@ -26,6 +26,7 @@ import os
 
 KNOWN_FLAGS: list[str] = [
     # Auth / deployment
+    "MASTERMIND_JOBSTORE",
     "MASTERMIND_AUTH_TOKEN",
     "MASTERMIND_COOKIE_SECURE",
     "MASTERMIND_PASSWORD",
