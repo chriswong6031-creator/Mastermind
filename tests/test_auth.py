@@ -58,6 +58,11 @@ def _app() -> FastAPI:
 def test_disabled_when_no_password(monkeypatch):
     monkeypatch.delenv("MASTERMIND_PASSWORD", raising=False)
     monkeypatch.delenv("MASTERMIND_AUTH_TOKEN", raising=False)
+    # bot/__init__ loads the production .env into os.environ at import — in the
+    # main checkout that carries MASTERMIND_REQUIRE_AUTH=1, which makes install()
+    # correctly REFUSE this no-password config. Clear it: this test is about the
+    # dev pass-through path, not the production refusal (covered below).
+    monkeypatch.delenv("MASTERMIND_REQUIRE_AUTH", raising=False)
     c = TestClient(_app())
     assert c.get("/secret").status_code == 200      # pass-through
 
