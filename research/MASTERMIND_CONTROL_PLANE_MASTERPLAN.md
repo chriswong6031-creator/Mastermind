@@ -224,6 +224,23 @@ Routing: **Sonnet builds, Opus reviews, Fable adjudicates/merges.** Haiku only f
 
 ## 3. Status log
 
+- **2026-07-06 (Fable): MW5 SHIPPED + merged + DEPLOYED** (merge 6e24618; backfill EXECUTED in
+  production: 60 labeled rows, 0 overwrites — R8 held). The firm ecology exists: per-book
+  mandate-compliance packets (all 6 books emit post-build; breaches -> ADVISORY run-events;
+  rails SOURCED from real enforcement — reviewer killed an imagined 0.40 ETF rail vs the real
+  0.35 and a dead eu.universe() call), SHADOW Firm Allocator (pre-committed formula: equal-weight
+  base + clipped active-return tilt + noisy-mirror and breach penalties, SD excluded as yardstick,
+  CN/HK proxy-flagged; display-only — grep-ratchet proves nothing sizing-side imports it;
+  /api/firm_allocator), regional repair (build_regional finally SCHEDULED — CN/HK benchmark dirs
+  now accrue; bogey_is_proxy persisted ON DISK; regional lifecycle graded weekly via the CIO job,
+  recommendations-only with proxy caveats), reviews_remaining/time-until-evaluable on lifecycle
+  grades, and scripts/backfill_benchmark.py (idempotent, labeled, no-overwrite). Fix round also
+  killed a latent allocator bug: it read flat orthogonality keys while book_lifecycle emits a
+  nested matrix — correlation penalties would have silently never fired (pinned against the real
+  artifact shape now). Governor effective_n note: backfilled series convert to ledger files at
+  the next nightly daily_mark.
+
+
 - **2026-07-06 (Fable): MW4 SHIPPED + merged + DEPLOYED** (merges 807c565/7461064 + fixes
   3802f9c/447e520/22fbc01; live PID on version 22fbc01). The DecisionPacket boundary (R6)
   exists at every Brain submission point: `control_plane/decision_packet.py` (schema v1,
