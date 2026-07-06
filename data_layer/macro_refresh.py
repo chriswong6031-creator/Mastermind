@@ -471,6 +471,15 @@ def _compute_freeze(report: dict, log=print) -> tuple[bool, list[str]]:
     Returns (freeze: bool, reasons: list[str]).
     freeze=True means at least one FREEZE-class anchor is stale beyond its contract budget.
     Never raises.
+
+    Sessions-to-calendar-days conversion (documented here, single source of truth):
+      - ``freshness_budget_sessions`` from contracts.yml expresses the budget in SESSIONS,
+        where 1 session corresponds to 1 market cycle ≈ _MAX_AGE_DAYS calendar days.
+      - ``max_days = budget_sessions * _MAX_AGE_DAYS`` converts to calendar days ONCE.
+      - An anchor ABSENT from the contracts map defaults to 1 session (= _MAX_AGE_DAYS days).
+        The previous code defaulted to ``_MAX_AGE_DAYS`` sessions, giving 4 days — a
+        double-multiplication bug that made the implicit default twice as permissive as the
+        1-session explicit contract budget.
     """
     freeze_reasons: list[str] = []
     try:
@@ -483,8 +492,11 @@ def _compute_freeze(report: dict, log=print) -> tuple[bool, list[str]]:
             rel = anchor_path_map.get(label)
             if rel is None:
                 continue
-            budget = budgets.get(rel, _MAX_AGE_DAYS)  # sessions; treat 1 session = _MAX_AGE_DAYS
-            max_days = budget * _MAX_AGE_DAYS
+            # Default: 1 session = _MAX_AGE_DAYS calendar days (NOT _MAX_AGE_DAYS sessions).
+            # A missing contract entry must not silently double the budget vs an explicit 1-session
+            # contract — both should allow exactly _MAX_AGE_DAYS calendar days.
+            budget_sessions = budgets.get(rel, 1)
+            max_days = budget_sessions * _MAX_AGE_DAYS
             try:
                 age = (date.today() - datetime.strptime(date_str[:10], "%Y-%m-%d").date()).days
                 if age > max_days:

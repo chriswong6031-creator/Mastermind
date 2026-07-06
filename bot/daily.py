@@ -47,93 +47,23 @@ def run_daily(asof: str | None = None, *, force: bool = False, armed: bool = Tru
     except Exception as e:  # noqa: BLE001 — freshness must never kill the build
         out["macro_data"] = {"error": str(e)[:200]}
 
-    # 1. the gated paper book (deterministic; always runs)
+    # 1. the gated paper book (deterministic; always runs).
+    #    MW3 R3: pass the macro_data refresh result so phase2 can apply the stale-anchor
+    #    freeze BEFORE ledger/store/rebalance/publish (the correct seam).  The freeze logic
+    #    lives in phase2._stale_freeze_flagship — daily.py is just the plumbing.
     try:
         from bot import phase2
-        out["book"] = phase2.run(asof=asof, force=force)
+        _macro_data = out.get("macro_data") or {}
+        out["book"] = phase2.run(asof=asof, force=force,
+                                 stale_freeze=_macro_data if isinstance(_macro_data, dict) else None)
     except Exception as e:
         out["book"] = {"error": str(e)[:200]}
 
-    # 1b. MW3 R3 STALE-ANCHOR FREEZE: when a FREEZE-class macro anchor is stale beyond its
-    #     contract budget, freeze the flagship targets to the prior published book — no new adds,
-    #     no weight increases; de-risk and existing holds are untouched.  Runs only when the
-    #     macro_data refresh found a freeze condition AND the book built successfully.
-    #     Kill-switch: MASTERMIND_STALE_FREEZE=0 suppresses application (still logs).
-    #     Reuses the firm_clamp_freeze seam in phase2 — same freeze_to_prior helper, same
-    #     GuardrailResult(FREEZE) log pattern, same stale_freeze key in out for runlog surfacing.
-    try:
-        _macro_data = out.get("macro_data") or {}
-        _book_data = out.get("book") or {}
-        if (isinstance(_macro_data, dict) and _macro_data.get("freeze")
-                and isinstance(_book_data, dict) and _book_data.get("ran")
-                and not _book_data.get("error")):
-            from data_layer.macro_refresh import _freeze_enabled
-            _positions = _book_data.get("positions") or []
-            if _freeze_enabled() and _positions:
-                from portfolio.freeze import freeze_to_prior as _ftp
-                from portfolio import firm_exposure as _firm_exp
-                _prior = _firm_exp.published_weights("flagship")
-                # Build target map from the built positions list
-                _target_map: dict[str, float] = {}
-                for _p in _positions:
-                    if isinstance(_p, dict) and _p.get("ticker"):
-                        _tk = str(_p["ticker"]).upper().strip()
-                        try:
-                            _target_map[_tk] = float(_p.get("weight") or 0.0)
-                        except (TypeError, ValueError):
-                            pass
-                _frozen_map = _ftp(_target_map, _prior)
-                # Rebuild positions list with frozen weights
-                _frozen_positions = []
-                _seen: set[str] = set()
-                for _p in _positions:
-                    _tk = str((_p or {}).get("ticker") or "").upper().strip()
-                    if not _tk or _tk in _seen:
-                        continue
-                    _fw = _frozen_map.get(_tk)
-                    if _fw is not None:
-                        _seen.add(_tk)
-                        _frozen_positions.append({**_p, "weight": round(_fw, 4)})
-                # Inject prior-only names (must not be absent = liquidated)
-                for _fk, _fw in _frozen_map.items():
-                    _ku = str(_fk or "").upper().strip()
-                    if _ku and _ku not in _seen and _fw > 0:
-                        _frozen_positions.append({"ticker": _fk, "weight": round(_fw, 4),
-                                                   "sleeve": "prior", "_sentinel_hold": True})
-                _book_data["positions"] = _frozen_positions
-                _book_data["stale_freeze"] = {
-                    "applied": True,
-                    "reasons": _macro_data.get("freeze_reasons", []),
-                    "asof": _macro_data.get("asof"),
-                }
-                out["stale_freeze"] = _book_data["stale_freeze"]
-                # GuardrailResult(FREEZE) → run_events
-                from control_plane.guardrail import GuardrailResult, Severity
-                GuardrailResult.failed(
-                    "stale_anchor",
-                    Severity.FREEZE,
-                    detail=(f"Stale FREEZE-class anchor(s): "
-                            f"{_macro_data.get('freeze_reasons', [])}"),
-                    action_taken="freeze_to_prior applied to flagship targets "
-                                 "(no new adds, no weight increases)",
-                    extra={"asof": _macro_data.get("asof"),
-                           "freeze_reasons": _macro_data.get("freeze_reasons", [])},
-                ).log(job="daily_loop", book="flagship")
-                _log.warning(
-                    "[daily] STALE-ANCHOR FREEZE applied to flagship: %s",
-                    _macro_data.get("freeze_reasons", []))
-            elif not _freeze_enabled():
-                # Kill-switch: log but do not apply
-                out["stale_freeze"] = {
-                    "applied": False,
-                    "kill_switch": True,
-                    "reasons": _macro_data.get("freeze_reasons", []),
-                }
-                _log.warning(
-                    "[daily] STALE-ANCHOR FREEZE suppressed (MASTERMIND_STALE_FREEZE=0): %s",
-                    _macro_data.get("freeze_reasons", []))
-    except Exception as _e:  # noqa: BLE001 — freeze helper must never kill the build
-        out["stale_freeze"] = {"error": str(_e)[:200]}
+    # Surface the stale_freeze summary from the book result for the daily out dict
+    # (callers / runlog readers expect out["stale_freeze"]).
+    _book_result = out.get("book") or {}
+    if isinstance(_book_result, dict) and _book_result.get("stale_freeze") is not None:
+        out["stale_freeze"] = _book_result["stale_freeze"]
 
     # NOTE: the flagship book's safety scorecard is computed + CONSUMED inside phase2 (it
     # de-grosses a fragile book before sizing cash) and persisted to data/portfolio/safety.json.
