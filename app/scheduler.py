@@ -269,19 +269,42 @@ def _settle_pending_job():
     morning sweep settles them at the real session open: the flagship's queued buy orders
     (queue_orders → fill_pending) and the US Brain books' queued target (autonomous + etf →
     paper_account.settle_target, a full rebalance to the decided book at the open mark), then
-    republishes so the dashboard renders the freshly-filled positions. Idempotent + never raises."""
+    republishes so the dashboard renders the freshly-filled positions. Idempotent + never raises.
+
+    LOCKING (MW1 fix): settle_us touches both the autonomous AND etf books' account state — the
+    same state mutated by _autonomous_job and _etf_job.  We must hold BOTH locks before running;
+    if either is busy (a concurrent build is in progress), skip the entire settle and log.
+    Acquisition order is alphabetical (book:autonomous < book:etf) — settle is the only multi-lock
+    holder and single-book jobs hold exactly one lock each, so this fixed order is deadlock-safe."""
     handle = _ledger_start("settle_pending", trigger="cron")
     try:
-        from scripts.fill_pending_now import settle
+        from control_plane import locks
+        # Acquire both locks in alphabetical order (deadlock-safe — see docstring).
+        lock_auto = locks.acquire_or_log("book:autonomous", job="settle_pending", book="autonomous")
+        if lock_auto is None:
+            _skip_event("settle_pending", "autonomous+etf")
+            _ledger_end(handle, "skip", severity="ADVISORY_ONLY")
+            return
+        lock_etf = locks.acquire_or_log("book:etf", job="settle_pending", book="etf")
+        if lock_etf is None:
+            lock_auto.release()
+            _skip_event("settle_pending", "autonomous+etf")
+            _ledger_end(handle, "skip", severity="ADVISORY_ONLY")
+            return
         try:
-            settle("flagship", require_open=True)
-        except Exception as exc:  # noqa: BLE001 — a settle miss must never kill the scheduler
-            _step_failed_event("settle_pending", "flagship", "fill_pending_flagship", exc)
-        try:
-            from bot import settle as _settle
-            _settle.settle_us()  # autonomous + etf: settle the queued target at the US open
-        except Exception as exc:  # noqa: BLE001
-            _step_failed_event("settle_pending", "autonomous+etf", "settle_us", exc)
+            from scripts.fill_pending_now import settle
+            try:
+                settle("flagship", require_open=True)
+            except Exception as exc:  # noqa: BLE001 — a settle miss must never kill the scheduler
+                _step_failed_event("settle_pending", "flagship", "fill_pending_flagship", exc)
+            try:
+                from bot import settle as _settle
+                _settle.settle_us()  # autonomous + etf: settle the queued target at the US open
+            except Exception as exc:  # noqa: BLE001
+                _step_failed_event("settle_pending", "autonomous+etf", "settle_us", exc)
+        finally:
+            lock_etf.release()
+            lock_auto.release()
         _ledger_end(handle, "ok")
     except Exception as exc:  # noqa: BLE001
         _ledger_end(handle, "error")
@@ -291,11 +314,34 @@ def _settle_pending_job():
 def _settle_brain_asia_job():
     """Settle the Greater-China Brain books' queued targets at the A-share OPEN (~01:30 UTC). The
     china/hk books decide after their close and queue; this fills the queued target at the next open
-    via a full rebalance, then republishes. No-op when the market is shut or nothing is queued."""
+    via a full rebalance, then republishes. No-op when the market is shut or nothing is queued.
+
+    LOCKING (MW1 fix): settle_asia touches both the china AND hk books' account state — the same
+    state mutated by _china_job and _hk_job.  We must hold BOTH locks before running; if either is
+    busy, skip the entire settle and log.
+    Acquisition order is alphabetical (book:china < book:hk) — deadlock-safe for the same reason
+    as _settle_pending_job (settle is the only multi-lock holder; single-book jobs hold one lock)."""
     handle = _ledger_start("settle_brain_asia", trigger="cron")
     try:
-        from bot import settle as _settle
-        _settle.settle_asia()  # china + hk
+        from control_plane import locks
+        # Acquire both locks in alphabetical order (deadlock-safe — see docstring).
+        lock_china = locks.acquire_or_log("book:china", job="settle_brain_asia", book="china")
+        if lock_china is None:
+            _skip_event("settle_brain_asia", "china+hk")
+            _ledger_end(handle, "skip", severity="ADVISORY_ONLY")
+            return
+        lock_hk = locks.acquire_or_log("book:hk", job="settle_brain_asia", book="hk")
+        if lock_hk is None:
+            lock_china.release()
+            _skip_event("settle_brain_asia", "china+hk")
+            _ledger_end(handle, "skip", severity="ADVISORY_ONLY")
+            return
+        try:
+            from bot import settle as _settle
+            _settle.settle_asia()  # china + hk
+        finally:
+            lock_hk.release()
+            lock_china.release()
         _ledger_end(handle, "ok")
     except Exception as exc:  # noqa: BLE001
         _ledger_end(handle, "error")
@@ -614,46 +660,57 @@ def _daily_mark_job():
         pass
     for pid in _MARK_BOOK_IDS:
         try:
-            # cash sweep first: idle cash earns ~4%/yr (money-market), idempotent per date, so the
-            # NAV we mark below already reflects today's accrued cash. Best-effort (never raises).
-            paper_account.accrue_cash_yield(_today_iso(), portfolio_id=pid)
-            state = paper_account._load_account(pid)
-            bench = paper_account._benchmark_for(pid)
-            ccy = registry.currency(pid)
-            tickers = set(state.get("positions", {}).keys()) | {bench}
-            # batch-warm the US live quotes in ONE request so the per-name loop below hits a warm
-            # cache instead of firing a separate yfinance download per holding.
-            try:
-                from data_layer import yahoo_feed
-                yahoo_feed.warm([t for t in tickers if t and "." not in t])
-            except Exception:  # noqa: BLE001
-                pass
-            prices: dict = {}
-            for t in tickers:
-                # prefer the ONE marking layer's union mark (L1); fall back to the legacy accessor
-                # for names it couldn't price (esp. *.HK/*.SS/*.SZ, which route through Tushare/Yahoo
-                # -local below via _current_price). ALWAYS in USD at this point.
-                px = union_usd.get((t or "").upper()) or paper_account._current_price(t)
-                if not (px and px > 0):
-                    continue
-                # A non-USD book is priced end-to-end in its BASE currency (cash, avg_cost, AND its
-                # benchmark inception price), so the USD mark must be converted before it hits
-                # mark()/NAV — exactly as bot/settle._price does (it converts EVERY symbol, benchmark
-                # included). WITHOUT this the daily sweep books a CNY/HKD position at its USD value
-                # (~÷7) against base-currency cash, so a china/hk book it merely re-marks (didn't
-                # rebuild) shows a phantom crash in nav_history (the 2026-06-23 china/hk cliff). The
-                # benchmark is converted too: its inception price was stored in base currency, so
-                # leaving the live mark in USD would crater the spy_nav line by the same factor.
-                if ccy != "USD":
-                    try:
-                        from portfolio import fx
-                        px = fx.usd_to(px, ccy)
-                    except Exception:  # noqa: BLE001
+            # LOCKING (MW1 fix): take each book's lock briefly while we mark it to avoid racing a
+            # concurrent build (e.g. flagship at 22:40 vs daily_mark at 22:35).  This job is read-
+            # only w.r.t. positions/cash — it only appends a nav_history row — but mark() writes
+            # to the account file, so it shares the same mutation surface.  If the lock is held
+            # (a build started early), skip this book and log; the build itself will mark.
+            from control_plane import locks as _locks
+            _book_lock = _locks.acquire_or_log(f"book:{pid}", job="daily_mark", book=pid)
+            if _book_lock is None:
+                _step_failed_event("daily_mark", pid, f"lock_held:{pid}", RuntimeError("lock held — skipping mark"))
+                continue
+            with _book_lock:
+                # cash sweep first: idle cash earns ~4%/yr (money-market), idempotent per date, so the
+                # NAV we mark below already reflects today's accrued cash. Best-effort (never raises).
+                paper_account.accrue_cash_yield(_today_iso(), portfolio_id=pid)
+                state = paper_account._load_account(pid)
+                bench = paper_account._benchmark_for(pid)
+                ccy = registry.currency(pid)
+                tickers = set(state.get("positions", {}).keys()) | {bench}
+                # batch-warm the US live quotes in ONE request so the per-name loop below hits a warm
+                # cache instead of firing a separate yfinance download per holding.
+                try:
+                    from data_layer import yahoo_feed
+                    yahoo_feed.warm([t for t in tickers if t and "." not in t])
+                except Exception:  # noqa: BLE001
+                    pass
+                prices: dict = {}
+                for t in tickers:
+                    # prefer the ONE marking layer's union mark (L1); fall back to the legacy accessor
+                    # for names it couldn't price (esp. *.HK/*.SS/*.SZ, which route through Tushare/Yahoo
+                    # -local below via _current_price). ALWAYS in USD at this point.
+                    px = union_usd.get((t or "").upper()) or paper_account._current_price(t)
+                    if not (px and px > 0):
                         continue
-                if px and px > 0:
-                    prices[t] = px
-            if prices:
-                paper_account.mark(prices, asof, portfolio_id=pid, benchmark=bench)
+                    # A non-USD book is priced end-to-end in its BASE currency (cash, avg_cost, AND its
+                    # benchmark inception price), so the USD mark must be converted before it hits
+                    # mark()/NAV — exactly as bot/settle._price does (it converts EVERY symbol, benchmark
+                    # included). WITHOUT this the daily sweep books a CNY/HKD position at its USD value
+                    # (~÷7) against base-currency cash, so a china/hk book it merely re-marks (didn't
+                    # rebuild) shows a phantom crash in nav_history (the 2026-06-23 china/hk cliff). The
+                    # benchmark is converted too: its inception price was stored in base currency, so
+                    # leaving the live mark in USD would crater the spy_nav line by the same factor.
+                    if ccy != "USD":
+                        try:
+                            from portfolio import fx
+                            px = fx.usd_to(px, ccy)
+                        except Exception:  # noqa: BLE001
+                            continue
+                    if px and px > 0:
+                        prices[t] = px
+                if prices:
+                    paper_account.mark(prices, asof, portfolio_id=pid, benchmark=bench)
         except Exception:  # noqa: BLE001 — one book's mark miss must never kill the sweep
             continue
     # ── W-L / L1: mark the Self-Directed book too (its own engine, its own nav_history) ──
