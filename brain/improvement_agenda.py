@@ -556,6 +556,117 @@ def _from_experiment_registry(asof: date) -> list[dict]:
     return out
 
 
+def _from_experiment_tristate(asof: date) -> list[dict]:
+    """MW2 Lane B: tri-state experiment maturity section.
+
+    Uses brain.experiment_registry.open_with_tristate() to surface every open experiment
+    with its mechanical evaluation result.  Items are ranked:
+      · ready_for_review (severity=0.95) — come-back reached or evidence threshold met
+      · stuck (severity=0.9)             — blocked >14d with no comeback_date
+      · blocked (severity=0.5)           — evidence still accruing, expected date known
+      · not_old_enough (severity=0.2)    — date-driven, not reached yet (low priority)
+
+    Degrades to [] when L6 is not yet built (charter P2).  Never double-counts with
+    _from_experiment_registry(): if an experiment is already status=matured (surfaced
+    by the date-driven path), it appears here as ready_for_review with that context.
+    """
+    out: list[dict] = []
+    try:
+        from brain import experiment_registry as er
+        items = er.open_with_tristate(asof)
+    except Exception:  # noqa: BLE001
+        return out
+
+    # Persist evaluator tracking here — the weekly agenda build is the one production
+    # path that evaluates every open experiment, so the _evaluator_first_blocked stamp
+    # (which the >14d stuck flag depends on) accrues from THIS call site. Never raises.
+    for e in items:
+        try:
+            ev0 = e.get("evaluation") or {}
+            if e.get("id") and ev0.get("state"):
+                er.update_evaluator_tracking(e["id"], ev0["state"], asof)
+        except Exception:  # noqa: BLE001
+            pass
+
+    for e in items:
+        try:
+            ev = e.get("evaluation") or {}
+            state = ev.get("state") or er.STATE_BLOCKED
+            eid = e.get("id") or "experiment"
+            label = e.get("what") or eid
+            if isinstance(label, str) and len(label) > 90:
+                label = label[:87] + "…"
+            stuck = bool(ev.get("stuck"))
+            reason = ev.get("reason") or "no reason available"
+            ev_n = ev.get("evidence_n")
+            req_n = ev.get("required_n")
+            erd = ev.get("expected_ready_date")
+            cb = e.get("comeback_date")
+            gate = e.get("gate") or e.get("maturity_condition") or "gate n/a"
+            owner = e.get("owner") or OWNER_OPUS
+            if owner not in (OWNER_SELF, OWNER_OPUS, OWNER_FABLE):
+                owner = OWNER_FABLE
+
+            # Build evidence list
+            evidence: list[str] = [f"tri-state: {state} — {reason}"]
+            if ev_n is not None and req_n is not None:
+                evidence.append(f"evidence_n={ev_n} / required_n={req_n}")
+            if erd:
+                evidence.append(f"expected_ready_date: {erd}")
+            if stuck:
+                evidence.append("STUCK: blocked >14 days with no comeback_date — needs Fable review")
+            evidence.append(f"gate: {gate}")
+
+            # Severity and title by state
+            if state == er.STATE_READY:
+                title = f"Experiment '{eid}' is READY FOR REVIEW — judge it"
+                sev = 0.95
+            elif stuck:
+                title = f"Experiment '{eid}' is STUCK — blocked >14d with no comeback_date"
+                sev = 0.9
+            elif state == er.STATE_BLOCKED:
+                title = f"Experiment '{eid}' is blocked — evidence still accruing"
+                sev = 0.5
+            else:
+                title = f"Experiment '{eid}' is accruing — comeback_date not yet reached"
+                sev = 0.2
+
+            out.append(_item(
+                f"experiment-tristate:{eid}", CLASS_EXPERIMENT,
+                title,
+                evidence=evidence,
+                suggested_fix=(
+                    f"Open the experiment record and run the pre-registered gate on '{eid}'."
+                    if state == er.STATE_READY else
+                    "Define a mechanical evaluator in experiment_registry._EVALUATORS so this "
+                    "experiment can be auto-triaged."
+                    if stuck else
+                    f"Let the forward log accrue; re-check at {erd or cb or 'comeback_date'}."
+                ),
+                fix_type=FIX_EXPERIMENT, owner=owner,
+                expected_impact=(
+                    "a matured experiment gets a verdict instead of rotting"
+                    if state == er.STATE_READY else
+                    "stuck experiment gets an evaluator definition and stops silently stalling"
+                    if stuck else
+                    "experiment accrues toward its threshold"
+                ),
+                severity=sev,
+                extra={
+                    "experiment": eid,
+                    "tristate": state,
+                    "stuck": stuck,
+                    "evidence_n": ev_n,
+                    "required_n": req_n,
+                    "expected_ready_date": erd,
+                    "comeback_date": cb,
+                },
+            ))
+        except Exception:  # noqa: BLE001
+            continue
+    return out
+
+
 def _from_accruing_experiments(asof: date, leaderboard: dict | None,
                                have_registry_items: bool) -> list[dict]:
     """The real accruing experiments derivable TODAY, independent of L6. These are the experiment-class
@@ -776,7 +887,8 @@ def build(asof: date | None = None, *, cio_rep: dict | None = None) -> dict:
         except Exception:  # noqa: BLE001
             continue
 
-    # experiments: L6 registry first; if it produced nothing, derive the real accruing experiments
+    # experiments: L6 registry first; if it produced nothing, derive the real accruing experiments.
+    # MW2 Lane B: also run the tri-state evaluator section (surfaces ready/stuck/blocked/accruing).
     reg_items: list[dict] = []
     try:
         reg_items = _from_experiment_registry(asof) or []
@@ -785,6 +897,11 @@ def build(asof: date | None = None, *, cio_rep: dict | None = None) -> dict:
     items.extend(reg_items)
     try:
         items.extend(_from_accruing_experiments(asof, leaderboard, bool(reg_items)) or [])
+    except Exception:  # noqa: BLE001
+        pass
+    # MW2 tri-state section: always run, independent of reg_items (different item id prefix)
+    try:
+        items.extend(_from_experiment_tristate(asof) or [])
     except Exception:  # noqa: BLE001
         pass
 

@@ -1998,14 +1998,25 @@ def api_desk_firm_exposure() -> JSONResponse:
 
 @router.get("/api/desk/experiments")
 def api_desk_experiments() -> JSONResponse:
-    """Experiment registry — W-L / L6.
+    """Experiment registry — W-L / L6 + MW2 Lane B tri-state maturity.
 
     Every accruing experiment tracked with its come-back date, gate language, current status, owner,
     and artifact paths.  Surfaces matured-but-unjudged experiments at the top (these are the
     highest-priority agenda items).  The improvement agenda consumes this endpoint; so does the
     dashboard's accountability page.
 
-    Returns {as_of, total, open, matured, judged, cancelled, matured_items: [...], all_items: [...]}.
+    MW2 addition: each open experiment now carries an ``evaluation`` sub-dict with fields:
+      state               — not_old_enough | blocked_missing_evidence | ready_for_review
+      reason              — human-readable explanation
+      evidence_n          — current count when computable (null otherwise)
+      required_n          — threshold when computable (null otherwise)
+      expected_ready_date — ISO date estimate when computable (null otherwise)
+      stuck               — true if blocked >14 days with no comeback_date
+
+    open_tristate is sorted: ready_for_review → stuck → blocked → not_old_enough.
+
+    Returns {as_of, total, open, matured, judged, cancelled, matured_items: [...],
+             open_tristate: [...], all_items: [...]}.
     Never 500s — degrades to an empty registry on any failure."""
     try:
         from brain import experiment_registry
@@ -2016,6 +2027,7 @@ def api_desk_experiments() -> JSONResponse:
     except Exception as exc:  # noqa: BLE001 — additive; never break the desk
         return JSONResponse({"as_of": None, "total": 0, "open": 0, "matured": 0,
                              "judged": 0, "cancelled": 0, "matured_items": [], "all_items": [],
+                             "open_tristate": [],
                              "note": f"Experiment registry unavailable: {exc}"})
 
 
