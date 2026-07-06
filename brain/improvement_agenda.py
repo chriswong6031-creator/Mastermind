@@ -577,6 +577,17 @@ def _from_experiment_tristate(asof: date) -> list[dict]:
     except Exception:  # noqa: BLE001
         return out
 
+    # Persist evaluator tracking here — the weekly agenda build is the one production
+    # path that evaluates every open experiment, so the _evaluator_first_blocked stamp
+    # (which the >14d stuck flag depends on) accrues from THIS call site. Never raises.
+    for e in items:
+        try:
+            ev0 = e.get("evaluation") or {}
+            if e.get("id") and ev0.get("state"):
+                er.update_evaluator_tracking(e["id"], ev0["state"], asof)
+        except Exception:  # noqa: BLE001
+            pass
+
     for e in items:
         try:
             ev = e.get("evaluation") or {}
