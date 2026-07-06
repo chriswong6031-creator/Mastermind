@@ -318,7 +318,22 @@ def _cluster_cap(cluster_id: str, caps: dict, name_cap: float, cap_fn=None) -> f
     return max(cap, float(name_cap))
 
 
-def enforce_book_caps(positions: list[dict], *, cluster_fn=None, cluster_cap_fn=None) -> dict:
+def _log_guardrail_freeze(guard: str, detail: str, job: str = "", book: str = "") -> None:
+    """Emit a FREEZE GuardrailResult to run_events.  Never raises."""
+    try:
+        from control_plane.guardrail import GuardrailResult, Severity
+        GuardrailResult.failed(
+            guard,
+            Severity.FREEZE,
+            detail=detail,
+            action_taken="positions unchanged (firebreak exception; no new risk added)",
+        ).log(job=job, book=book)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def enforce_book_caps(positions: list[dict], *, cluster_fn=None, cluster_cap_fn=None,
+                      prior: "dict[str, float] | None" = None) -> dict:
     """Apply the firebreaks across BOTH sleeves (subtract-only). W3 A2 rebuild.
 
     positions: [{ticker, theme_id, sleeve, weight}]  (weights = fraction of book)
@@ -360,7 +375,63 @@ def enforce_book_caps(positions: list[dict], *, cluster_fn=None, cluster_cap_fn=
                  that is absent the name IS ITS OWN cluster (singleton) — degrade-safe, never groups.
     cluster_cap_fn : optional cluster_id->cap callable (DI / A1's clusters.yml cap lookup). None → the
                  doctrine cluster_caps override then default_cluster_cap.
+    prior : optional ``{ticker: weight}`` prior book weights (Charter P2 exception fallback).
+            When provided and the inner function raises, the exception arm uses
+            ``freeze_to_prior(positions, prior)`` instead of returning raw uncapped positions —
+            satisfying the "failure path exposure <= success path exposure" invariant.
+            When None and the inner function raises, falls back to prior-held-only via the
+            ``firm_exposure.published_weights`` read for the flagship book (best-effort).
     """
+    try:
+        return _enforce_book_caps_inner(positions, cluster_fn=cluster_fn, cluster_cap_fn=cluster_cap_fn)
+    except Exception as _exc:  # noqa: BLE001 — a firebreak exception must never propagate; log + FREEZE
+        _log_guardrail_freeze(
+            "enforce_book_caps",
+            detail=f"enforce_book_caps raised: {_exc!r}"[:200],
+            job="enforce_book_caps",
+            book="",
+        )
+        # Charter P2: on exception, freeze to prior — no new adds, no weight increases.
+        # "failure path may NEVER yield more exposure than the success path."
+        # The success path (inner caps) can only REDUCE weights; so the failure path must also
+        # reduce or preserve, never return positions at BUILT (potentially above-cap) weights.
+        try:
+            from portfolio.freeze import freeze_to_prior as _ftp
+            _prior = prior
+            if _prior is None:
+                # try to read the flagship's published book as the prior source
+                try:
+                    from portfolio import firm_exposure as _fe
+                    _prior = _fe.published_weights("flagship")
+                except Exception:  # noqa: BLE001
+                    _prior = {}
+            target_map = {str(p.get("ticker") or "").upper().strip(): float(p.get("weight") or 0.0)
+                          for p in positions if p.get("ticker")}
+            frozen_map = _ftp(target_map, _prior or {})
+            # rebuild the list, applying frozen weights; drop new adds (not in frozen_map)
+            frozen_positions = []
+            for p in positions:
+                tk = str(p.get("ticker") or "").upper().strip()
+                if not tk:
+                    continue
+                fw = frozen_map.get(tk)
+                if fw is None:
+                    # check casing variants
+                    for fk, fv in frozen_map.items():
+                        if str(fk or "").upper().strip() == tk:
+                            fw = fv
+                            break
+                if fw is not None:
+                    frozen_positions.append({**p, "weight": round(fw, 4)})
+                # else: new add — DROP (Charter P2)
+            return {"positions": frozen_positions, "breaches": [], "_guardrail_freeze": True}
+        except Exception:  # noqa: BLE001 — absolute last-resort fallback: empty additions preferred over raw
+            # If even freeze_to_prior fails, return empty (zero exposure) — the least-harm default.
+            return {"positions": [], "breaches": [], "_guardrail_freeze": True}
+
+
+def _enforce_book_caps_inner(positions: list[dict], *, cluster_fn=None, cluster_cap_fn=None) -> dict:
+    """Inner implementation of enforce_book_caps — separated so the outer function can catch and log."""
     caps = _caps_cfg()
     name_cap = caps["name_cap"]
     allowlist = caps["broad_index_allowlist"]

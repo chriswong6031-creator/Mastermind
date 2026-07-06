@@ -31,6 +31,44 @@ _ROOT = Path(__file__).resolve().parent.parent
 _MAX_TURNS = int(os.environ.get("AUTONOMOUS_MAX_TURNS", "30"))
 
 
+def _firm_clamp_freeze_autonomous(priceable: dict[str, float], exc: Exception) -> dict[str, float]:
+    """Exception-arm for the autonomous firm-clamp block (Charter P2).
+
+    Called when ``firm_exposure.clamp_book`` raises inside ``run_autonomous``.  Returns
+    ``priceable`` frozen to the prior published state: no new adds, no weight increases.
+
+    Prior weights come from ``firm_exposure.published_weights(PORTFOLIO_ID)`` (the
+    last-published latest.json, which carries explicit per-ticker weights).
+
+    Downstream: ``execute_or_queue`` / ``rebalance`` treats absent names as liquidate-to-zero,
+    so prior-only names are RETAINED in the output at prior weight (freeze = do-not-trade).
+
+    Never raises.
+    """
+    from portfolio.freeze import freeze_to_prior as _ftp
+    prior: dict[str, float] = {}
+    try:
+        from portfolio import firm_exposure as _fe
+        prior = _fe.published_weights(PORTFOLIO_ID)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        frozen = _ftp(priceable, prior)
+    except Exception:  # noqa: BLE001
+        frozen = {k: v for k, v in priceable.items() if k in prior}
+    try:
+        from control_plane.guardrail import GuardrailResult, Severity
+        GuardrailResult.failed(
+            "firm_clamp",
+            Severity.FREEZE,
+            detail=f"clamp_book raised: {exc!r}"[:200],
+            action_taken="frozen to prior book (no new adds, no weight increases)",
+        ).log(job="autonomous_build", book=PORTFOLIO_ID)
+    except Exception:  # noqa: BLE001
+        pass
+    return frozen
+
+
 # ---------------------------------------------------------------------------
 # the daily entrypoint
 # ---------------------------------------------------------------------------
@@ -144,6 +182,9 @@ def run_autonomous(asof: str | None = None, *, force: bool = False, armed: bool 
                     out["firm_clamp"] = {"book": PORTFOLIO_ID, "freed": _fc["freed"],
                                          "clamped": _fc["clamped"]}
         except Exception as e:                           # noqa: BLE001 — a firm cap must never block the book
+            # GuardrailResult.FREEZE: freeze to prior book — no new adds, no weight increases.
+            # Uses _firm_clamp_freeze_autonomous (module-level) so the logic is testable.
+            priceable = _firm_clamp_freeze_autonomous(priceable, e)
             out["firm_clamp_error"] = repr(e)[:200]
         res = _settle.execute_or_queue(PORTFOLIO_ID, priceable, prices, asof)
         executed = res.get("executed") or []

@@ -62,11 +62,28 @@ def _stale_max_days() -> int:
 # ─────────────────────────────────────────────────────────────────────────────
 # carry store (the last-good-price memory)
 # ─────────────────────────────────────────────────────────────────────────────
+def _emit_marks_hard_stop(guard: str, detail: str) -> None:
+    """Emit a HARD_STOP GuardrailResult to run_events for marks layer failures. Never raises."""
+    try:
+        from control_plane.guardrail import GuardrailResult, Severity
+        GuardrailResult.failed(
+            guard,
+            Severity.HARD_STOP,
+            detail=detail,
+            action_taken="marks layer degraded; fabrication prevented",
+        ).log(job="marks_layer", book="")
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _load_carry() -> dict:
     try:
         raw = json.loads(_CARRY_PATH.read_text())
         return raw if isinstance(raw, dict) else {}
-    except Exception:  # noqa: BLE001
+    except FileNotFoundError:
+        return {}  # normal on first run — no HARD_STOP, just start fresh
+    except Exception as _exc:  # noqa: BLE001
+        _emit_marks_hard_stop("marks_carry_read", f"carry read failed: {_exc!r}"[:200])
         return {}
 
 
@@ -74,8 +91,8 @@ def _save_carry(carry: dict) -> None:
     try:
         _MARKS_DIR.mkdir(parents=True, exist_ok=True)
         _CARRY_PATH.write_text(json.dumps(carry, indent=2, default=str, sort_keys=True))
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as _exc:  # noqa: BLE001
+        _emit_marks_hard_stop("marks_carry_write", f"carry write failed: {_exc!r}"[:200])
 
 
 def _days_between(a: str, b: str) -> Optional[int]:

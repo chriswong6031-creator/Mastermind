@@ -586,19 +586,114 @@ def _cluster_id(ticker: str) -> str:
         return f"name:{t}" if t else "name:?"
 
 
-def _peer_exposure(exclude_book: str) -> dict | None:
+def _peer_sentinel_enabled() -> bool:
+    """R9 sentinel kill-switch: MASTERMIND_PEER_SENTINEL=0 disables the FREEZE behavior while still
+    logging. Default ON (R9: expected-peer enforcement is shrink-only → charter-legal default-on)."""
+    return os.environ.get("MASTERMIND_PEER_SENTINEL", "1").strip().lower() not in ("0", "false", "no", "off", "")
+
+
+def _latest_mtime(pid: str) -> float | None:
+    """Modification time (float seconds since epoch) of `pid`'s latest.json, or None when absent."""
+    try:
+        path = _data_dir(pid) / "latest.json"
+        if not path.exists():
+            return None
+        return path.stat().st_mtime
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _session_length_seconds() -> float:
+    """Approximate length of one US trading session in seconds (36 h) — the staleness budget.
+
+    36 h instead of 24 h: the flagship build runs at 22:40; any intraday headroom check on the
+    following trading day reads a peer file that is ~22 h old.  A 24 h budget fires a stale alert
+    at the nightly boundary itself (22:40 → next-day 22:40 = exactly 24 h, with clock drift).
+    36 h gives a full nightly cycle + intraday slack while still catching a book that genuinely
+    skipped two consecutive nights (48 h >> 36 h)."""
+    return 36.0 * 3600.0
+
+
+def expected_peers(asof: str | None = None) -> list[str]:
+    """The peer book IDs that ARE EXPECTED to have published today — i.e. the books that are
+    enabled in the registry AND whose venue calendar says today is/was a trading day.
+
+    A peer that IS expected but whose latest.json is ABSENT or STALE (older than one session)
+    is the sentinel trigger (R9). A peer that is expected but publishes an empty book is NOT a
+    trigger — it ran, it just had nothing to hold.
+
+    Only the firm-aggregated US books are considered (china/hk are non-USD / separate venues
+    and are never in _FIRM_US_BOOKS)."""
+    today: date
+    try:
+        today = date.fromisoformat(str(asof or "")[:10])
+    except Exception:  # noqa: BLE001
+        today = date.today()
+    result = []
+    for pid in _FIRM_US_BOOKS:
+        # All firm US books use the NYSE calendar — if today is a trading day, every one of them
+        # is expected to have built and published.  china/hk are already excluded by _FIRM_US_BOOKS.
+        try:
+            from portfolio import market_calendar
+            trading_today = market_calendar.is_trading_day(today)
+        except Exception:  # noqa: BLE001
+            trading_today = today.weekday() < 5  # degrade-safe: Mon–Fri
+        if trading_today:
+            result.append(pid)
+    return result
+
+
+def _emit_peer_sentinel(missing: list[str], stale: list[str], book_id: str) -> None:
+    """Emit a FREEZE GuardrailResult to run_events for the R9 peer-expectation sentinel.
+    Never raises (guardrail logging must never abort the calling build)."""
+    try:
+        from control_plane.guardrail import GuardrailResult, Severity
+        detail_parts = []
+        if missing:
+            detail_parts.append(f"absent: {', '.join(sorted(missing))}")
+        if stale:
+            detail_parts.append(f"stale(>1 session): {', '.join(sorted(stale))}")
+        detail = f"expected peer(s) not fresh — {'; '.join(detail_parts)}"
+        result = GuardrailResult.failed(
+            "peer_expectation",
+            Severity.FREEZE,
+            detail=detail,
+            action_taken=("firm headroom zeroed for new adds (sentinel active)"
+                          if _peer_sentinel_enabled()
+                          else "logged only (MASTERMIND_PEER_SENTINEL=0)"),
+            extra={"book": book_id, "missing_peers": missing, "stale_peers": stale,
+                   "sentinel_active": _peer_sentinel_enabled()},
+        )
+        result.log(job="firm_exposure", book=book_id)
+    except Exception:  # noqa: BLE001 — guardrail logging must never raise
+        pass
+
+
+def _peer_exposure(exclude_book: str,
+                   *,
+                   asof: str | None = None,
+                   _sentinel_emit: bool = True) -> dict | None:
     """Aggregate the OTHER US books' published exposure, by cluster and by name.
 
-    Returns ``{"by_cluster": {cid: weight}, "by_name": {TICKER: weight}, "n_peers": int}`` where each
-    weight is the SUM across peer books of that book's weight in the key — this is intentionally the
-    additive firm contribution (four books each at 0.08 in SMH ⇒ 0.32 firm-cluster weight), so a firm
-    cap of 0.30 binds. Returns None when NO peer file could be read at all (the caller then returns
-    +inf — absent peer data must not clamp). A book that publishes an empty/corrupt file is simply
-    skipped; the firm view is built from whatever peers DID publish (never raises)."""
+    Returns ``{"by_cluster": {cid: weight}, "by_name": {TICKER: weight}, "n_peers": int,
+    "sentinel_fired": bool}`` where each weight is the SUM across peer books of that book's
+    weight in the key — this is intentionally the additive firm contribution (four books each
+    at 0.08 in SMH ⇒ 0.32 firm-cluster weight), so a firm cap of 0.30 binds.
+    Returns None when NO peer file could be read at all (the caller then returns +inf —
+    absent peer data must not clamp).  A book that publishes an empty/corrupt file is simply
+    skipped; the firm view is built from whatever peers DID publish (never raises).
+
+    R9 SENTINEL: if >=1 expected peer's latest.json is absent or stale (>1 session), a
+    GuardrailResult(FREEZE, guard="peer_expectation") is emitted to run_events.  When the
+    sentinel is ACTIVE (MASTERMIND_PEER_SENTINEL != 0, the default), ``sentinel_fired=True``
+    is set in the return dict — callers (headroom/clamp_book) then treat firm headroom as 0
+    for new adds in the affected books.  The kill-switch (=0) logs only; sentinel_fired stays
+    False so the freeze behavior is suppressed."""
     by_cluster: dict[str, float] = {}
     by_name: dict[str, float] = {}
     n_peers = 0
     any_readable = False
+
     for pid in _FIRM_US_BOOKS:
         if pid == exclude_book:
             continue
@@ -631,7 +726,43 @@ def _peer_exposure(exclude_book: str) -> dict | None:
             by_cluster[_cluster_id(tk)] = by_cluster.get(_cluster_id(tk), 0.0) + wv
     if not any_readable:
         return None                       # no peer file exists at all → caller returns +inf (no clamp)
-    return {"by_cluster": by_cluster, "by_name": by_name, "n_peers": n_peers}
+
+    # R9 SENTINEL: check which expected peers are missing or stale.
+    # The sentinel fires only when the PIPELINE IS RUNNING TODAY — i.e., at least one expected
+    # peer has a FRESH file (written within the session budget).  This distinguishes:
+    #   (a) "some peers ran today but a specific expected book is absent" → sentinel (problem)
+    #   (b) "pipeline hasn't run / cold start / test isolation" → no sentinel (normal)
+    # Without the "fresh peer present" guard, any test that seeds only a subset of peer books
+    # would trigger the sentinel for the unseeded books, breaking existing test isolation.
+    import time as _time
+    expected = expected_peers(asof)
+    budget = _session_length_seconds()
+    now_ts = _time.time()
+    missing_peers: list[str] = []
+    stale_peers: list[str] = []
+    fresh_count = 0   # expected peers (excluding self) with a file written within the session budget
+    for pid in expected:
+        if pid == exclude_book:
+            continue
+        mtime = _latest_mtime(pid)
+        if mtime is None:
+            missing_peers.append(pid)
+        elif (now_ts - mtime) > budget:
+            stale_peers.append(pid)
+        else:
+            fresh_count += 1   # this peer has a file AND it was written within the session
+
+    sentinel_fired = False
+    # Only arm the sentinel when the pipeline demonstrably ran today for at least one other peer.
+    # If NO expected peer has a fresh file, we are in a cold/test state — the sentinel must not fire.
+    if fresh_count > 0 and (missing_peers or stale_peers):
+        if _sentinel_emit:
+            _emit_peer_sentinel(missing_peers, stale_peers, exclude_book)
+        if _peer_sentinel_enabled():
+            sentinel_fired = True
+
+    return {"by_cluster": by_cluster, "by_name": by_name, "n_peers": n_peers,
+            "sentinel_fired": sentinel_fired}
 
 
 def headroom(cluster_or_ticker: str, book_id: str, own_weight: float | None = None) -> float:
@@ -650,10 +781,19 @@ def headroom(cluster_or_ticker: str, book_id: str, own_weight: float | None = No
     Returns the MAX fraction of NAV this book may hold for the key = firm_cap − peer_weight, floored at
     0.0. Returns ``float('inf')`` (NO clamp) when no peer file is readable at all — the invariant's
     'absent peer data may not un-cap' means we NEVER raise; absent data simply removes the firm clamp
-    and leaves the per-book caps as the only binding limit."""
+    and leaves the per-book caps as the only binding limit.
+
+    R9 SENTINEL: if an expected peer's file is missing/stale, returns 0.0 (no new adds allowed)
+    when the sentinel is active (MASTERMIND_PEER_SENTINEL != 0, the default).  De-risking is
+    unaffected — the caller may still REDUCE positions."""
     peers = _peer_exposure(str(book_id or ""))
     if peers is None:
         return float("inf")               # no peer data → no firm clamp (never un-caps; per-book caps bind)
+
+    # R9: when the sentinel fired, headroom is 0 for new adds (charter-legal: shrink-only).
+    if peers.get("sentinel_fired"):
+        return 0.0
+
     caps = _firm_caps()
 
     key = str(cluster_or_ticker or "").strip()
@@ -682,6 +822,23 @@ def headroom(cluster_or_ticker: str, book_id: str, own_weight: float | None = No
     name_room = caps["name_cap"] - float(peers["by_name"].get(tk, 0.0))
     cluster_room = caps["cluster_cap"] - float(peers["by_cluster"].get(cid, 0.0))
     return max(0.0, min(name_room, cluster_room))
+
+
+def published_weights(book_id: str) -> dict[str, float]:
+    """Return the last-published ``{ticker: weight}`` for ``book_id`` from its latest.json.
+
+    Used by the four US books' firm-clamp exception arms to obtain prior weights for
+    ``portfolio.freeze.freeze_to_prior``.  Returns ``{}`` when the file is absent or
+    unreadable — callers fall back to prior-keys-only mode (no new adds, existing weights
+    unchanged). Never raises."""
+    try:
+        book = _load_book({"id": str(book_id or "")})
+        if book and isinstance(book.get("holdings"), dict):
+            return {tk: float(w) for tk, w in book["holdings"].items()
+                    if isinstance(w, (int, float)) and w > 0}
+    except Exception:  # noqa: BLE001
+        pass
+    return {}
 
 
 def clamp_book(positions: Any, book_id: str) -> dict:
@@ -739,6 +896,54 @@ def clamp_book(positions: Any, book_id: str) -> dict:
     caps = _firm_caps()
     clamped: list[dict] = []
     freed = 0.0
+
+    # ---- R9 sentinel: freeze to prior book — FREEZE NEW ADDS, de-risking allowed, existing
+    # book MAINTAINED (Ruling R9: "FREEZE NEW ADDS, de-risking allowed, existing book MAINTAINED").
+    # Zeroing ALL positions was over-aggressive: it liquidated EVERY held position (forced
+    # liquidation is an act of NEW risk, not "no new risk"). Correct behaviour: no new adds,
+    # no increases; holds and reductions pass through.
+    # Only active when MASTERMIND_PEER_SENTINEL != 0 (default ON). ----
+    if peers.get("sentinel_fired"):
+        from portfolio.freeze import freeze_to_prior as _ftp
+        prior_w = published_weights(str(book_id or ""))
+        # Build the target map from the working (already-coerced) dict
+        frozen = _ftp(work, prior_w)
+        for tk in list(work.keys()):
+            old_w = work[tk]
+            new_w = frozen.get(tk.upper(), frozen.get(tk, 0.0))
+            # normalise: frozen keys track prior casing but work keys are already UPPER
+            # find the frozen value via the upper key directly (freeze_to_prior uses prior casing)
+            new_w_upper = 0.0
+            for fk, fv in frozen.items():
+                if str(fk or "").upper().strip() == tk:
+                    new_w_upper = fv
+                    break
+            new_w = new_w_upper
+            if old_w > new_w + 1e-12:
+                clamped.append({"key": tk, "kind": "sentinel",
+                                "from": round(old_w, 4), "to": round(new_w, 4),
+                                "freed": round(old_w - new_w, 4)})
+                freed += old_w - new_w
+                work[tk] = new_w
+        # Add prior-only names (held but not in the built target — must be retained, not zeroed)
+        for fk, fv in frozen.items():
+            ku = str(fk or "").upper().strip()
+            if ku and ku not in work:
+                work[ku] = fv
+        if as_mapping:
+            out_map = {tk: round(w, 4) for tk, w in work.items() if w > 0}
+            return {"positions": out_map, "clamped": clamped, "freed": round(freed, 4), "bound": True}
+        # list shape: update existing rows and add prior-only rows
+        row_tks = {str(r.get("ticker") or "").upper().strip() for r in rows}
+        for r in rows:
+            t = str(r.get("ticker") or "").upper().strip()
+            if t in work:
+                r["weight"] = round(work[t], 4)
+        # inject prior-only tickers as minimal rows so they are not absent (= not liquidated)
+        for ku, fw in work.items():
+            if ku not in row_tks and fw > 0:
+                rows.append({"ticker": ku, "weight": round(fw, 4), "sleeve": "prior", "_sentinel_hold": True})
+        return {"positions": positions, "clamped": clamped, "freed": round(freed, 4), "bound": True}
 
     # ---- pass 1: firm NAME cap ----
     for tk in list(work.keys()):
