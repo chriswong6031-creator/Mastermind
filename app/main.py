@@ -55,8 +55,18 @@ if FastAPI is not None:
 
     @app.get("/health")
     def health() -> dict:
-        return {"status": "ok", "engine_root": engine_root(),
-                "reasoning": {"claude_cli": cli_bridge.cli_path(), "available": cli_bridge.available()}}
+        # Keep only non-sensitive fields; uptime probes check `status == "ok"` only.
+        # Filesystem paths and CLI paths are omitted — they leak on an open route.
+        import subprocess, shlex  # noqa: E401
+        try:
+            sha = subprocess.check_output(
+                shlex.split("git rev-parse --short HEAD"),
+                stderr=subprocess.DEVNULL, text=True,
+            ).strip()
+        except Exception:
+            sha = None
+        return {"status": "ok", "paper_only": True,
+                **({"version": sha} if sha else {})}
 
     @app.get("/regime")
     def regime() -> dict:
