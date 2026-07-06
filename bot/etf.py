@@ -64,6 +64,44 @@ def _guardrails() -> dict:
     }
 
 
+def _firm_clamp_freeze_etf(target: dict[str, float], exc: Exception) -> dict[str, float]:
+    """Exception-arm for the ETF firm-clamp block (Charter P2).
+
+    Called when ``firm_exposure.clamp_book`` raises inside ``run_etf``.  Returns ``target``
+    frozen to the prior published state: no new adds, no weight increases.
+
+    Prior weights come from ``firm_exposure.published_weights(PORTFOLIO_ID)`` (the
+    last-published latest.json).
+
+    Downstream: ``execute_or_queue`` / ``rebalance`` treats absent names as liquidate-to-zero,
+    so prior-only names are RETAINED in the output at prior weight (freeze = do-not-trade).
+
+    Never raises.
+    """
+    from portfolio.freeze import freeze_to_prior as _ftp
+    prior: dict[str, float] = {}
+    try:
+        from portfolio import firm_exposure as _fe
+        prior = _fe.published_weights(PORTFOLIO_ID)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        frozen = _ftp(target, prior)
+    except Exception:  # noqa: BLE001
+        frozen = {k: v for k, v in target.items() if k in prior}
+    try:
+        from control_plane.guardrail import GuardrailResult, Severity
+        GuardrailResult.failed(
+            "firm_clamp",
+            Severity.FREEZE,
+            detail=f"clamp_book raised: {exc!r}"[:200],
+            action_taken="frozen to prior book (no new adds, no weight increases)",
+        ).log(job="etf_build", book=PORTFOLIO_ID)
+    except Exception:  # noqa: BLE001
+        pass
+    return frozen
+
+
 # ---------------------------------------------------------------------------
 # the daily entrypoint
 # ---------------------------------------------------------------------------
@@ -156,24 +194,10 @@ def run_etf(asof: str | None = None, *, force: bool = False, armed: bool = True,
                     out["firm_clamp"] = {"book": PORTFOLIO_ID, "freed": _fc["freed"],
                                          "clamped": _fc["clamped"]}
         except Exception as e:                           # noqa: BLE001 — a firm cap must never block the book
-            # GuardrailResult.FREEZE: clamp exception → drop any names not already held (no new risk).
-            try:
-                from portfolio import paper_account as _pa_etf
-                _held_set = set((_pa_etf._load_account(PORTFOLIO_ID).get("positions") or {}).keys())
-                target = {_t: _w for _t, _w in target.items() if _t in _held_set}
-            except Exception:  # noqa: BLE001
-                pass
+            # GuardrailResult.FREEZE: freeze to prior book — no new adds, no weight increases.
+            # Uses _firm_clamp_freeze_etf (module-level) so the logic is testable.
+            target = _firm_clamp_freeze_etf(target, e)
             out["firm_clamp_error"] = repr(e)[:200]
-            try:
-                from control_plane.guardrail import GuardrailResult, Severity
-                GuardrailResult.failed(
-                    "firm_clamp",
-                    Severity.FREEZE,
-                    detail=f"clamp_book raised: {e!r}"[:200],
-                    action_taken="reverted to prior holdings (no new risk added)",
-                ).log(job="etf_build", book=PORTFOLIO_ID)
-            except Exception:  # noqa: BLE001
-                pass
 
     # 4. EXECUTE — market-hours-aware. When the US session is OPEN, rebalance to the (guardrailed)
     #    target at the live mark. When CLOSED (the normal post-close run, or any off-hours manual

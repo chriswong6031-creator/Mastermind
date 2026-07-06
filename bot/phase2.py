@@ -66,6 +66,97 @@ def _conv_theme_id(t: str) -> str:
     return f"name:{t.upper()}"
 
 
+def _firm_clamp_freeze_flagship(book: list[dict], exc: Exception,
+                                run_id: object = None) -> list[dict]:
+    """Exception-arm for the flagship firm-clamp block (Charter P2).
+
+    Called when ``firm_exposure.clamp_book`` raises inside ``run_flagship``.  Returns the
+    book frozen to the prior published state: no new adds, no increases vs. the prior book,
+    held names retained at ``min(target, prior)`` weight.
+
+    Prior weights come from two sources (in priority order):
+      1. ``firm_exposure.published_weights("flagship")`` — the last-published latest.json
+         (exact weights, best source).
+      2. ``position_log.open_positions()`` — the position ledger (``current_weight`` field),
+         used as a cross-check / fallback when the published file is absent.
+
+    The downstream consumer (phase2 rebalance) treats absent names as liquidate-to-zero, so
+    prior-only names are RETAINED in the output (freeze = do-not-trade, not liquidate).
+
+    Never raises (guardrail helpers must be unconditionally safe).
+    """
+    from portfolio.freeze import freeze_to_prior as _ftp
+    # Build target map from the list-shaped book
+    try:
+        target_map = {str(p.get("ticker") or "").upper().strip(): float(p.get("weight") or 0.0)
+                      for p in book if p.get("ticker")}
+    except Exception:  # noqa: BLE001
+        target_map = {}
+    # Prior weights from published latest.json
+    prior: dict[str, float] = {}
+    try:
+        from portfolio import firm_exposure as _firm_exp
+        prior = _firm_exp.published_weights("flagship")
+    except Exception:  # noqa: BLE001
+        pass
+    # Fallback: position_log.open_positions
+    if not prior:
+        try:
+            from portfolio import position_log as _pl
+            for hp in (_pl.open_positions() or []):
+                tk = str(hp.get("ticker") or "").upper().strip()
+                if tk:
+                    w = hp.get("current_weight") or 0.0
+                    try:
+                        prior[tk] = float(w)
+                    except (TypeError, ValueError):
+                        prior[tk] = 0.0
+        except Exception:  # noqa: BLE001
+            pass
+    frozen_map = _ftp(target_map, prior)
+    # Rebuild a list-of-dicts book preserving all non-weight fields from original rows
+    tk_to_rows: dict[str, list[dict]] = {}
+    for p in book:
+        tk = str(p.get("ticker") or "").upper().strip()
+        if tk:
+            tk_to_rows.setdefault(tk, []).append(p)
+    out_rows: list[dict] = []
+    seen: set[str] = set()
+    for fk, fw in frozen_map.items():
+        ku = str(fk or "").upper().strip()
+        if not ku or ku in seen:
+            continue
+        seen.add(ku)
+        if ku in tk_to_rows:
+            rows = tk_to_rows[ku]
+            # distribute frozen weight pro-rata across duplicate rows for the same ticker
+            orig_total = sum(float(r.get("weight") or 0.0) for r in rows)
+            for r in rows:
+                orig_w = float(r.get("weight") or 0.0)
+                share = (orig_w / orig_total) if orig_total > 0 else (1.0 / len(rows))
+                out_rows.append({**r, "weight": round(fw * share, 4)})
+        else:
+            # prior-only name: no built row exists; inject a minimal hold row
+            out_rows.append({"ticker": fk, "weight": round(fw, 4),
+                             "sleeve": "prior", "_sentinel_hold": True})
+    # Log + emit guardrail event
+    try:
+        _rl_log(run_id, "decision", "firm cap clamp error", f"{exc!r}"[:160])
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from control_plane.guardrail import GuardrailResult, Severity
+        GuardrailResult.failed(
+            "firm_clamp",
+            Severity.FREEZE,
+            detail=f"clamp_book raised: {exc!r}"[:200],
+            action_taken="frozen to prior book (no new adds, no weight increases)",
+        ).log(job="phase2_flagship", book="flagship")
+    except Exception:  # noqa: BLE001
+        pass
+    return out_rows
+
+
 _STANDOUT_ROWS: dict[str, dict] | None = None      # ticker -> buy row, indexed once per build
 _STANDOUT_ROWS_ASOF: str | None = None             # the file as_of the index was built from
 
@@ -971,24 +1062,9 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
                         firm_clamp={"book": "flagship", "freed": _fc["freed"],
                                     "clamped": _fc["clamped"]})
     except Exception as _e:  # noqa: BLE001 — a firm cap must never break the build
-        # GuardrailResult.FREEZE: clamp exception → drop any names not already held (no new risk).
-        try:
-            _held_set = {_hp["ticker"] for _hp in position_log.open_positions() if _hp.get("ticker")}
-            book = [_p for _p in book if _p.get("ticker", "").upper() in _held_set]
-        except Exception:  # noqa: BLE001
-            pass  # if prior lookup also fails, keep whatever book is at this point
-        _rl_log(_run_id, "decision", "firm cap clamp error", f"{_e!r}"[:160])
-        try:
-            from control_plane.guardrail import GuardrailResult, Severity
-            from control_plane import run_events as _re
-            GuardrailResult.failed(
-                "firm_clamp",
-                Severity.FREEZE,
-                detail=f"clamp_book raised: {_e!r}"[:200],
-                action_taken="reverted to prior holdings (no new risk added)",
-            ).log(job="phase2_flagship", book="flagship")
-        except Exception:  # noqa: BLE001
-            pass
+        # GuardrailResult.FREEZE: freeze to prior book — no new adds, no weight increases.
+        # Uses _firm_clamp_freeze_flagship (module-level) so the logic is independently testable.
+        book = _firm_clamp_freeze_flagship(book, _e, run_id=_run_id)
 
     # ———— W2 GUARD-RAIL: offensive-gross floor tripwire (architecture Stage 6.5) ————
     # After ALL brakes (leadership caps + cross-sleeve firebreaks), the offensive (leadership) gross must

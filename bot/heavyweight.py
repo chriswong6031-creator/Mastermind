@@ -297,6 +297,44 @@ def _enforce(holdings: list[dict], allowed: set[str]) -> tuple[dict, list[dict],
     return final, kept, notes
 
 
+def _firm_clamp_freeze_heavyweight(final_weights: dict[str, float], exc: Exception) -> dict[str, float]:
+    """Exception-arm for the heavyweight firm-clamp block (Charter P2).
+
+    Called when ``firm_exposure.clamp_book`` raises inside ``run_heavyweight``.  Returns
+    ``final_weights`` frozen to the prior published state: no new adds, no weight increases.
+
+    Prior weights come from ``firm_exposure.published_weights(PORTFOLIO_ID)`` (the
+    last-published latest.json).
+
+    Downstream: ``paper_account.rebalance`` treats absent names as liquidate-to-zero, so
+    prior-only names are RETAINED in the output at prior weight (freeze = do-not-trade).
+
+    Never raises.
+    """
+    from portfolio.freeze import freeze_to_prior as _ftp
+    prior: dict[str, float] = {}
+    try:
+        from portfolio import firm_exposure as _fe
+        prior = _fe.published_weights(PORTFOLIO_ID)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        frozen = _ftp(final_weights, prior)
+    except Exception:  # noqa: BLE001
+        frozen = {k: v for k, v in final_weights.items() if k in prior}
+    try:
+        from control_plane.guardrail import GuardrailResult, Severity
+        GuardrailResult.failed(
+            "firm_clamp",
+            Severity.FREEZE,
+            detail=f"clamp_book raised: {exc!r}"[:200],
+            action_taken="frozen to prior book (no new adds, no weight increases)",
+        ).log(job="heavyweight_build", book=PORTFOLIO_ID)
+    except Exception:  # noqa: BLE001
+        pass
+    return frozen
+
+
 # ---------------------------------------------------------------------------
 # the daily entrypoint
 # ---------------------------------------------------------------------------
@@ -408,23 +446,10 @@ def run_heavyweight(asof: str | None = None, *, force: bool = False, armed: bool
                     out["firm_clamp"] = {"book": PORTFOLIO_ID, "freed": _fc["freed"],
                                          "clamped": _fc["clamped"]}
         except Exception as e:                           # noqa: BLE001 — a firm cap must never block the book
-            # GuardrailResult.FREEZE: clamp exception → drop any names not already held (no new risk).
-            try:
-                _held_set = set((paper_account._load_account(PORTFOLIO_ID).get("positions") or {}).keys())
-                final_weights = {_t: _w for _t, _w in final_weights.items() if _t in _held_set}
-            except Exception:  # noqa: BLE001
-                pass
+            # GuardrailResult.FREEZE: freeze to prior book — no new adds, no weight increases.
+            # Uses _firm_clamp_freeze_heavyweight (module-level) so the logic is testable.
+            final_weights = _firm_clamp_freeze_heavyweight(final_weights, e)
             out["firm_clamp_error"] = repr(e)[:200]
-            try:
-                from control_plane.guardrail import GuardrailResult, Severity
-                GuardrailResult.failed(
-                    "firm_clamp",
-                    Severity.FREEZE,
-                    detail=f"clamp_book raised: {e!r}"[:200],
-                    action_taken="reverted to prior holdings (no new risk added)",
-                ).log(job="heavyweight_build", book=PORTFOLIO_ID)
-            except Exception:  # noqa: BLE001
-                pass
 
     # 4. price the universe we might trade (targets ∪ held ∪ SPY)
     held = list((paper_account._load_account(PORTFOLIO_ID).get("positions") or {}).keys())

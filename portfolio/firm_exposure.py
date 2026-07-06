@@ -604,9 +604,14 @@ def _latest_mtime(pid: str) -> float | None:
 
 
 def _session_length_seconds() -> float:
-    """Approximate length of one US trading session in seconds (24 h) — the staleness budget."""
-    # One calendar day is generous: a file from yesterday's nightly is ≤ 24 h old at any intraday check.
-    return 24.0 * 3600.0
+    """Approximate length of one US trading session in seconds (36 h) — the staleness budget.
+
+    36 h instead of 24 h: the flagship build runs at 22:40; any intraday headroom check on the
+    following trading day reads a peer file that is ~22 h old.  A 24 h budget fires a stale alert
+    at the nightly boundary itself (22:40 → next-day 22:40 = exactly 24 h, with clock drift).
+    36 h gives a full nightly cycle + intraday slack while still catching a book that genuinely
+    skipped two consecutive nights (48 h >> 36 h)."""
+    return 36.0 * 3600.0
 
 
 def expected_peers(asof: str | None = None) -> list[str]:
@@ -819,6 +824,23 @@ def headroom(cluster_or_ticker: str, book_id: str, own_weight: float | None = No
     return max(0.0, min(name_room, cluster_room))
 
 
+def published_weights(book_id: str) -> dict[str, float]:
+    """Return the last-published ``{ticker: weight}`` for ``book_id`` from its latest.json.
+
+    Used by the four US books' firm-clamp exception arms to obtain prior weights for
+    ``portfolio.freeze.freeze_to_prior``.  Returns ``{}`` when the file is absent or
+    unreadable — callers fall back to prior-keys-only mode (no new adds, existing weights
+    unchanged). Never raises."""
+    try:
+        book = _load_book({"id": str(book_id or "")})
+        if book and isinstance(book.get("holdings"), dict):
+            return {tk: float(w) for tk, w in book["holdings"].items()
+                    if isinstance(w, (int, float)) and w > 0}
+    except Exception:  # noqa: BLE001
+        pass
+    return {}
+
+
 def clamp_book(positions: Any, book_id: str) -> dict:
     """Clamp a finalized US book's target weights DOWN to firm headroom (subtract-only). PURE helper the
     four US books' finalize paths call; NEVER raises, NEVER increases a weight, freed weight → cash.
@@ -875,26 +897,52 @@ def clamp_book(positions: Any, book_id: str) -> dict:
     clamped: list[dict] = []
     freed = 0.0
 
-    # ---- R9 sentinel: if expected peer data is missing/stale, zero ALL positions (no new adds).
-    # "De-risking unaffected" means: the caller's own per-book logic handles de-risking;
-    # clamp_book returning all-zero means the firm clamp removes every new add when peer context
-    # is unreliable.  Only active when MASTERMIND_PEER_SENTINEL != 0 (default ON). ----
+    # ---- R9 sentinel: freeze to prior book — FREEZE NEW ADDS, de-risking allowed, existing
+    # book MAINTAINED (Ruling R9: "FREEZE NEW ADDS, de-risking allowed, existing book MAINTAINED").
+    # Zeroing ALL positions was over-aggressive: it liquidated EVERY held position (forced
+    # liquidation is an act of NEW risk, not "no new risk"). Correct behaviour: no new adds,
+    # no increases; holds and reductions pass through.
+    # Only active when MASTERMIND_PEER_SENTINEL != 0 (default ON). ----
     if peers.get("sentinel_fired"):
+        from portfolio.freeze import freeze_to_prior as _ftp
+        prior_w = published_weights(str(book_id or ""))
+        # Build the target map from the working (already-coerced) dict
+        frozen = _ftp(work, prior_w)
         for tk in list(work.keys()):
-            w = work[tk]
-            if w > 1e-12:
-                clamped.append({"key": tk, "kind": "sentinel", "from": round(w, 4),
-                                "to": 0.0, "freed": round(w, 4)})
-                freed += w
-                work[tk] = 0.0
-        # write zeros back
+            old_w = work[tk]
+            new_w = frozen.get(tk.upper(), frozen.get(tk, 0.0))
+            # normalise: frozen keys track prior casing but work keys are already UPPER
+            # find the frozen value via the upper key directly (freeze_to_prior uses prior casing)
+            new_w_upper = 0.0
+            for fk, fv in frozen.items():
+                if str(fk or "").upper().strip() == tk:
+                    new_w_upper = fv
+                    break
+            new_w = new_w_upper
+            if old_w > new_w + 1e-12:
+                clamped.append({"key": tk, "kind": "sentinel",
+                                "from": round(old_w, 4), "to": round(new_w, 4),
+                                "freed": round(old_w - new_w, 4)})
+                freed += old_w - new_w
+                work[tk] = new_w
+        # Add prior-only names (held but not in the built target — must be retained, not zeroed)
+        for fk, fv in frozen.items():
+            ku = str(fk or "").upper().strip()
+            if ku and ku not in work:
+                work[ku] = fv
         if as_mapping:
-            out_map = {tk: 0.0 for tk in work}
+            out_map = {tk: round(w, 4) for tk, w in work.items() if w > 0}
             return {"positions": out_map, "clamped": clamped, "freed": round(freed, 4), "bound": True}
+        # list shape: update existing rows and add prior-only rows
+        row_tks = {str(r.get("ticker") or "").upper().strip() for r in rows}
         for r in rows:
             t = str(r.get("ticker") or "").upper().strip()
             if t in work:
-                r["weight"] = 0.0
+                r["weight"] = round(work[t], 4)
+        # inject prior-only tickers as minimal rows so they are not absent (= not liquidated)
+        for ku, fw in work.items():
+            if ku not in row_tks and fw > 0:
+                rows.append({"ticker": ku, "weight": round(fw, 4), "sleeve": "prior", "_sentinel_hold": True})
         return {"positions": positions, "clamped": clamped, "freed": round(freed, 4), "bound": True}
 
     # ---- pass 1: firm NAME cap ----
