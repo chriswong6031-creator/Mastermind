@@ -309,3 +309,16 @@ def _isolate_experiment_registry(tmp_path, monkeypatch):
         monkeypatch.setattr(er, "_REGISTRY_PATH", isolated_path, raising=False)
     except Exception:
         pass
+
+
+@pytest.fixture(autouse=True)
+def _reset_operator_rate_buckets():
+    """MW6: operator rate-limit buckets are module-global mutable state — reset to
+    full capacity before every test so collection ORDER is never load-bearing
+    (reproduced: mw6 tests draining the LLM bucket failed a later auth test)."""
+    try:
+        from app import auth as _auth
+        _auth.reset_rate_buckets()
+    except Exception:
+        pass
+    yield
