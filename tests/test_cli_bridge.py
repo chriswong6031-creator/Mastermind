@@ -23,6 +23,25 @@ def test_model_tier_routing():
     assert cli_bridge.resolve_model("scout", model="claude-opus-4-8") == "claude-opus-4-8"
 
 
+def test_deep_role_same_model_family_both_backends():
+    """CLI and API backends must resolve role='deep' to the same model family.
+
+    The CLI backend reads config/agents.yml roles.deep → 'opus' (a tier label);
+    the API backend uses brain/client.py TIERS['deep']['model'] (a concrete API id).
+    Both must target the opus family so a CLI-bridge dropout does not silently promote
+    all five Brain books to Fable tokens.
+    """
+    cli_tier = cli_bridge.resolve_model("deep")        # reads config/agents.yml → 'opus'
+    api_model = client.TIERS["deep"]["model"]          # reads brain/client.py TIERS dict
+    # The CLI tier label 'opus' must appear somewhere in the API model id (e.g. 'claude-opus-4-8').
+    # A mismatch here means one backend runs a different tier than the other.
+    assert "opus" in cli_tier, f"CLI backend resolves 'deep' to '{cli_tier}', expected opus tier"
+    assert "opus" in api_model, (
+        f"API backend TIERS['deep'] model is '{api_model}', expected opus family; "
+        "if this regresses the CLI bridge drops to Fable on all five Brain books"
+    )
+
+
 def test_backend_resolution(monkeypatch):
     monkeypatch.delenv("BOT_LLM_BACKEND", raising=False)
     assert client.backend() == "cli"                      # default from config/agents.yml

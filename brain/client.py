@@ -18,7 +18,10 @@ from brain import cli_bridge
 TIERS = {
     "pm": {"model": "claude-opus-4-8", "effort": "high"},
     "analyst": {"model": "claude-haiku-4-5", "effort": "low"},
-    "deep": {"model": "claude-fable-5", "effort": "high"},
+    # deep → opus: matches config/agents.yml roles.deep and the API's expected behaviour.
+    # brain.yml previously listed claude-fable-5 here; reconciled to opus so the CLI and
+    # API backends agree that role='deep' always resolves to the opus tier.
+    "deep": {"model": "claude-opus-4-8", "effort": "high"},
 }
 
 

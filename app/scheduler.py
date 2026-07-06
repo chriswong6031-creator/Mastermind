@@ -1,9 +1,24 @@
 """APScheduler wiring — fire the daily loops on a cron cadence (the "loop").
 
-Single in-process scheduler on a SQLite jobstore so the schedule survives restarts. Two jobs:
-  * 'daily_loop'       — the gated flagship book (bot.daily.run_daily, every day after close).
-  * 'autonomous_daily' — the free-form Opus-Brain book (bot.autonomous.run_autonomous,
-                          Mon–Fri only, after close).
+Single in-process scheduler on a SQLite jobstore so the schedule survives restarts. 18 jobs:
+  * 'macro_refresh'       — pull vendored macro data every 3 h (belt-and-suspenders freshness).
+  * 'daily_mark'          — mark all paper books to NAV daily before the flagship build.
+  * 'daily_loop'          — gated flagship book (bot.daily.run_daily, every day after close).
+  * 'autonomous_daily'    — free-form Opus-Brain US book (bot.autonomous, Mon–Fri).
+  * 'heavyweight_daily'   — heavyweight book (bot.heavyweight, Mon–Fri).
+  * 'china_daily'         — CN Brain book (bot.china_daily, Mon–Fri).
+  * 'hk_daily'            — HK Brain book (bot.hk_daily, Mon–Fri).
+  * 'etf_daily'           — ETF Brain book (bot.etf_daily, Mon–Fri).
+  * 'settle_pending'      — settle Self-Directed pending orders at the US open (Mon–Fri).
+  * 'settle_brain_asia'   — settle asia Brain pending orders at the HK/CN open (Mon–Fri).
+  * 'watch_us'            — intraday watchlist review for US books (Mon–Fri).
+  * 'watch_asia'          — intraday watchlist review for Asia books (Mon–Fri).
+  * 'derisk_us'           — fast de-risk tripwire for US books (Mon–Fri; armed via MASTERMIND_FAST_DERISK).
+  * 'snapshot'            — portfolio snapshot capture at configured hours.
+  * 'cio_weekly'          — weekly CIO review (Mon only).
+  * 'improvement_agenda'  — weekly improvement-agenda refresh.
+  * 'loop_maintenance'    — periodic ledger + experiment maintenance.
+  * 'experiment_maturity' — experiment maturity sweep.
 Started from app.main on startup; the flagship is also exposed via POST /daily and the
 autonomous book via POST /api/autonomous/run. Configure the hours with BOT_DAILY_UTC_HOUR /
 AUTONOMOUS_DAILY_UTC_HOUR.

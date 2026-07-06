@@ -7,7 +7,7 @@ llm:
   tiers:
     pm:      { model: claude-opus-4-8,  effort: high }   # adjudicator / risk synthesis
     analyst: { model: claude-haiku-4-5, effort: low }    # 4-way panel fan-out
-    deep:    { model: claude-fable-5,   effort: high }    # gated; off until evals justify
+    deep:    { model: claude-opus-4-8,   effort: high }    # gated; off until evals justify; matches agents.yml roles.deep=opus
   deep_enabled: false
   max_tokens: 8000
   monthly_cost_cap_usd: 75
