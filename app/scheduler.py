@@ -3,7 +3,7 @@
 Single in-process scheduler on a SQLite jobstore so the schedule survives restarts. 18 jobs:
   * 'macro_refresh'       — pull vendored macro data every 3 h (belt-and-suspenders freshness).
   * 'daily_mark'          — mark all paper books to NAV daily before the flagship build.
-  * 'daily_loop'          — gated flagship book (bot.daily.run_daily, every day after close).
+  * 'daily_loop'          — gated flagship book (bot.daily.run_daily, Mon–Fri after close).
   * 'autonomous_daily'    — free-form Opus-Brain US book (bot.autonomous, Mon–Fri).
   * 'heavyweight_daily'   — heavyweight book (bot.heavyweight, Mon–Fri).
   * 'china_daily'         — CN Brain book (bot.china_daily, Mon–Fri).
@@ -14,7 +14,7 @@ Single in-process scheduler on a SQLite jobstore so the schedule survives restar
   * 'watch_us'            — intraday watchlist review for US books (Mon–Fri).
   * 'watch_asia'          — intraday watchlist review for Asia books (Mon–Fri).
   * 'derisk_us'           — fast de-risk tripwire for US books (Mon–Fri; armed via MASTERMIND_FAST_DERISK).
-  * 'snapshot'            — portfolio snapshot capture at configured hours.
+  * 'snapshot'            — portfolio snapshot capture at configured hours (Mon–Fri).
   * 'cio_weekly'          — weekly CIO review (Mon only).
   * 'improvement_agenda'  — weekly improvement-agenda refresh.
   * 'loop_maintenance'    — periodic ledger + experiment maintenance.
@@ -22,63 +22,243 @@ Single in-process scheduler on a SQLite jobstore so the schedule survives restar
 Started from app.main on startup; the flagship is also exposed via POST /daily and the
 autonomous book via POST /api/autonomous/run. Configure the hours with BOT_DAILY_UTC_HOUR /
 AUTONOMOUS_DAILY_UTC_HOUR.
+
+WEEKEND HYGIENE NOTE (MW1 investigation)
+-----------------------------------------
+daily_loop fires the flagship book build; a session requires market data (which only exists on
+trading days) — no documented intent to run on weekends. Changed to mon-fri.
+
+publish_macro_snapshot pushes a snapshot of the portfolio/regime state.  Its content is
+date-stamped market data only (no weekend quotes, no book rebuild on weekends).  A weekend
+push would only ship a stale carry from Friday.  No documented external freshness requirement
+for weekend stamps.  Changed to mon-fri.  To restore weekend behaviour, set
+MACRO_SNAPSHOT_UTC_HOURS and ensure the macro repo accepts weekend pushes.
+
+GOVERNANCE WIRING (MW1)
+------------------------
+Every job is wrapped with control_plane.run_ledger (start_run/end_run, trigger="cron").
+Per-book jobs additionally hold a per-book advisory file lock (control_plane.locks) via
+acquire_or_log; if the lock is held by a concurrent run, the job SKIPS and emits a
+run_skipped event (status="lock_held").  The global _loop_maintenance_job holds
+global:loop_maintenance; all concurrent callers skip + log.
+
+Swallowed exceptions in _loop_maintenance_job, _settle_pending_job, _derisk_us_job, and
+_watch_us_job now each append a run_events record (kind="step_failed", severity=ADVISORY_ONLY)
+before continuing, so silent failures become queryable records.
 """
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
 import bot  # noqa: F401
 
+log = logging.getLogger(__name__)
+
 _DB = Path(__file__).resolve().parent.parent / "data" / "scheduler.sqlite"
 _scheduler = None
 
+# ---------------------------------------------------------------------------
+# governance helpers
+# ---------------------------------------------------------------------------
+
+def _ledger_start(job: str, book: str | None = None, trigger: str = "cron"):
+    """Start a run-ledger record.  Never raises."""
+    try:
+        from control_plane import run_ledger
+        return run_ledger.start_run(job, book=book, trigger=trigger)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _ledger_end(handle, status: str, *, severity: str | None = None):
+    """End a run-ledger record.  Never raises."""
+    if handle is None:
+        return
+    try:
+        from control_plane import run_ledger
+        run_ledger.end_run(handle, status, severity=severity)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _step_failed_event(job: str, book: str, step: str, exc: BaseException):
+    """Append a step_failed run_event for a swallowed exception.  Never raises."""
+    try:
+        from control_plane import run_events
+        run_events.append({
+            "kind": "step_failed",
+            "job": job,
+            "book": book,
+            "step": step,
+            "status": "error",
+            "severity": "ADVISORY_ONLY",
+            "err": exc,
+            "actor": "system",
+        })
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _skip_event(job: str, book: str):
+    """Append a run_skipped event when a lock is held.  Never raises."""
+    try:
+        from control_plane import run_events
+        run_events.append({
+            "kind": "run_skipped",
+            "job": job,
+            "book": book,
+            "step": "acquire",
+            "status": "lock_held",
+            "severity": "ADVISORY_ONLY",
+            "actor": "system",
+        })
+    except Exception:  # noqa: BLE001
+        pass
+
+
+# ---------------------------------------------------------------------------
+# per-book book-id lookup (used by lock names)
+# ---------------------------------------------------------------------------
+#
+# Per-book builds hold "book:<id>" locks; jobs that touch multiple books or no
+# specific book hold "global:<op>" locks.
+
+# ---------------------------------------------------------------------------
+# job implementations
+# ---------------------------------------------------------------------------
 
 def _job():
-    from bot.daily import run_daily
-    run_daily()
+    """Flagship daily loop: gated book build (Mon–Fri after close)."""
+    handle = _ledger_start("daily_loop", book="flagship", trigger="cron")
+    try:
+        from control_plane import locks
+        lock = locks.acquire_or_log("book:flagship", job="daily_loop", book="flagship")
+        if lock is None:
+            _skip_event("daily_loop", "flagship")
+            _ledger_end(handle, "skip", severity="ADVISORY_ONLY")
+            return
+        with lock:
+            from bot.daily import run_daily
+            run_daily()
+        _ledger_end(handle, "ok")
+    except Exception as exc:  # noqa: BLE001
+        _ledger_end(handle, "error")
+        log.warning("daily_loop failed: %s", exc)
 
 
 def _autonomous_job():
     """The free-form Opus-Brain book: researches + rebalances itself once per trading day."""
-    from bot.autonomous import run_autonomous
-    run_autonomous()
+    handle = _ledger_start("autonomous_daily", book="autonomous", trigger="cron")
+    try:
+        from control_plane import locks
+        lock = locks.acquire_or_log("book:autonomous", job="autonomous_daily", book="autonomous")
+        if lock is None:
+            _skip_event("autonomous_daily", "autonomous")
+            _ledger_end(handle, "skip", severity="ADVISORY_ONLY")
+            return
+        with lock:
+            from bot.autonomous import run_autonomous
+            run_autonomous()
+        _ledger_end(handle, "ok")
+    except Exception as exc:  # noqa: BLE001
+        _ledger_end(handle, "error")
+        log.warning("autonomous_daily failed: %s", exc)
 
 
 def _heavyweight_job():
     """The concentrated Opus-Brain book: studies Flagship's book and presses its best ideas. Runs
     AFTER flagship + autonomous so it constrains against a fresh Flagship book."""
-    from bot.heavyweight import run_heavyweight
-    run_heavyweight()
+    handle = _ledger_start("heavyweight_daily", book="heavyweight", trigger="cron")
+    try:
+        from control_plane import locks
+        lock = locks.acquire_or_log("book:heavyweight", job="heavyweight_daily", book="heavyweight")
+        if lock is None:
+            _skip_event("heavyweight_daily", "heavyweight")
+            _ledger_end(handle, "skip", severity="ADVISORY_ONLY")
+            return
+        with lock:
+            from bot.heavyweight import run_heavyweight
+            run_heavyweight()
+        _ledger_end(handle, "ok")
+    except Exception as exc:  # noqa: BLE001
+        _ledger_end(handle, "error")
+        log.warning("heavyweight_daily failed: %s", exc)
 
 
 def _china_job():
     """The free-form China A-share Opus-Brain book: researches the China desks + rebalances itself
     once per Asia trading day, after the mainland A-share close (~07:00 UTC)."""
-    from bot.china import run_china
-    run_china()
+    handle = _ledger_start("china_daily", book="china", trigger="cron")
+    try:
+        from control_plane import locks
+        lock = locks.acquire_or_log("book:china", job="china_daily", book="china")
+        if lock is None:
+            _skip_event("china_daily", "china")
+            _ledger_end(handle, "skip", severity="ADVISORY_ONLY")
+            return
+        with lock:
+            from bot.china import run_china
+            run_china()
+        _ledger_end(handle, "ok")
+    except Exception as exc:  # noqa: BLE001
+        _ledger_end(handle, "error")
+        log.warning("china_daily failed: %s", exc)
 
 
 def _hk_job():
     """The free-form Hong-Kong Opus-Brain book (HK listings only, HKD): researches the China desks +
     rebalances itself once per Asia trading day, after the HK close (~08:00 UTC)."""
-    from bot.hk import run_hk
-    run_hk()
+    handle = _ledger_start("hk_daily", book="hk", trigger="cron")
+    try:
+        from control_plane import locks
+        lock = locks.acquire_or_log("book:hk", job="hk_daily", book="hk")
+        if lock is None:
+            _skip_event("hk_daily", "hk")
+            _ledger_end(handle, "skip", severity="ADVISORY_ONLY")
+            return
+        with lock:
+            from bot.hk import run_hk
+            run_hk()
+        _ledger_end(handle, "ok")
+    except Exception as exc:  # noqa: BLE001
+        _ledger_end(handle, "error")
+        log.warning("hk_daily failed: %s", exc)
 
 
 def _etf_job():
     """The free-form ETF Opus-Brain book: rotates across US-listed ETFs (index/sector/factor/duration/
     cash) under an ETF-adapted doctrine + risk guardrails, once per US trading day after the close."""
-    from bot.etf import run_etf
-    run_etf()
+    handle = _ledger_start("etf_daily", book="etf", trigger="cron")
+    try:
+        from control_plane import locks
+        lock = locks.acquire_or_log("book:etf", job="etf_daily", book="etf")
+        if lock is None:
+            _skip_event("etf_daily", "etf")
+            _ledger_end(handle, "skip", severity="ADVISORY_ONLY")
+            return
+        with lock:
+            from bot.etf import run_etf
+            run_etf()
+        _ledger_end(handle, "ok")
+    except Exception as exc:  # noqa: BLE001
+        _ledger_end(handle, "error")
+        log.warning("etf_daily failed: %s", exc)
 
 
 def _snapshot_job():
     """Publish a static snapshot of the dashboard to the public Macro Dashboard (GitHub Pages).
     Writes site/mastermind/mastermind_snapshot.json into the macro repo (via the vendor/macro
     symlink) and pushes it to origin/main. Resilient — never raises into the scheduler."""
-    from scripts.export_macro_snapshot import run as export_snapshot
-    export_snapshot()
+    handle = _ledger_start("publish_macro_snapshot", trigger="cron")
+    try:
+        from scripts.export_macro_snapshot import run as export_snapshot
+        export_snapshot()
+        _ledger_end(handle, "ok")
+    except Exception as exc:  # noqa: BLE001
+        _ledger_end(handle, "error")
+        log.warning("publish_macro_snapshot failed: %s", exc)
 
 
 def _settle_pending_job():
@@ -89,49 +269,113 @@ def _settle_pending_job():
     morning sweep settles them at the real session open: the flagship's queued buy orders
     (queue_orders → fill_pending) and the US Brain books' queued target (autonomous + etf →
     paper_account.settle_target, a full rebalance to the decided book at the open mark), then
-    republishes so the dashboard renders the freshly-filled positions. Idempotent + never raises."""
+    republishes so the dashboard renders the freshly-filled positions. Idempotent + never raises.
+
+    LOCKING (MW1 fix): settle_us touches both the autonomous AND etf books' account state — the
+    same state mutated by _autonomous_job and _etf_job.  We must hold BOTH locks before running;
+    if either is busy (a concurrent build is in progress), skip the entire settle and log.
+    Acquisition order is alphabetical (book:autonomous < book:etf) — settle is the only multi-lock
+    holder and single-book jobs hold exactly one lock each, so this fixed order is deadlock-safe."""
+    handle = _ledger_start("settle_pending", trigger="cron")
     try:
-        from scripts.fill_pending_now import settle
-        settle("flagship", require_open=True)
-    except Exception:  # noqa: BLE001 — a settle miss must never kill the scheduler
-        pass
-    try:
-        from bot import settle as _settle
-        _settle.settle_us()                      # autonomous + etf: settle the queued target at the US open
-    except Exception:  # noqa: BLE001
-        pass
+        from control_plane import locks
+        # Acquire both locks in alphabetical order (deadlock-safe — see docstring).
+        lock_auto = locks.acquire_or_log("book:autonomous", job="settle_pending", book="autonomous")
+        if lock_auto is None:
+            _skip_event("settle_pending", "autonomous+etf")
+            _ledger_end(handle, "skip", severity="ADVISORY_ONLY")
+            return
+        lock_etf = locks.acquire_or_log("book:etf", job="settle_pending", book="etf")
+        if lock_etf is None:
+            lock_auto.release()
+            _skip_event("settle_pending", "autonomous+etf")
+            _ledger_end(handle, "skip", severity="ADVISORY_ONLY")
+            return
+        try:
+            from scripts.fill_pending_now import settle
+            try:
+                settle("flagship", require_open=True)
+            except Exception as exc:  # noqa: BLE001 — a settle miss must never kill the scheduler
+                _step_failed_event("settle_pending", "flagship", "fill_pending_flagship", exc)
+            try:
+                from bot import settle as _settle
+                _settle.settle_us()  # autonomous + etf: settle the queued target at the US open
+            except Exception as exc:  # noqa: BLE001
+                _step_failed_event("settle_pending", "autonomous+etf", "settle_us", exc)
+        finally:
+            lock_etf.release()
+            lock_auto.release()
+        _ledger_end(handle, "ok")
+    except Exception as exc:  # noqa: BLE001
+        _ledger_end(handle, "error")
+        log.warning("settle_pending outer failed: %s", exc)
 
 
 def _settle_brain_asia_job():
     """Settle the Greater-China Brain books' queued targets at the A-share OPEN (~01:30 UTC). The
     china/hk books decide after their close and queue; this fills the queued target at the next open
-    via a full rebalance, then republishes. No-op when the market is shut or nothing is queued."""
+    via a full rebalance, then republishes. No-op when the market is shut or nothing is queued.
+
+    LOCKING (MW1 fix): settle_asia touches both the china AND hk books' account state — the same
+    state mutated by _china_job and _hk_job.  We must hold BOTH locks before running; if either is
+    busy, skip the entire settle and log.
+    Acquisition order is alphabetical (book:china < book:hk) — deadlock-safe for the same reason
+    as _settle_pending_job (settle is the only multi-lock holder; single-book jobs hold one lock)."""
+    handle = _ledger_start("settle_brain_asia", trigger="cron")
     try:
-        from bot import settle as _settle
-        _settle.settle_asia()                    # china + hk
-    except Exception:  # noqa: BLE001
-        pass
+        from control_plane import locks
+        # Acquire both locks in alphabetical order (deadlock-safe — see docstring).
+        lock_china = locks.acquire_or_log("book:china", job="settle_brain_asia", book="china")
+        if lock_china is None:
+            _skip_event("settle_brain_asia", "china+hk")
+            _ledger_end(handle, "skip", severity="ADVISORY_ONLY")
+            return
+        lock_hk = locks.acquire_or_log("book:hk", job="settle_brain_asia", book="hk")
+        if lock_hk is None:
+            lock_china.release()
+            _skip_event("settle_brain_asia", "china+hk")
+            _ledger_end(handle, "skip", severity="ADVISORY_ONLY")
+            return
+        try:
+            from bot import settle as _settle
+            _settle.settle_asia()  # china + hk
+        finally:
+            lock_hk.release()
+            lock_china.release()
+        _ledger_end(handle, "ok")
+    except Exception as exc:  # noqa: BLE001
+        _ledger_end(handle, "error")
+        log.warning("settle_brain_asia failed: %s", exc)
 
 
 def _watch_us_job():
     """Overnight watch for the US Brain books: between the US close and the next open, re-read the live
     overnight tape; on a MATERIAL move (deterministic tripwire — free, no LLM) re-prompt the Brain to
     revise its queued target (which settles at the open). Cheap on a calm tape; never raises."""
+    handle = _ledger_start("watch_us_overnight", trigger="cron")
     try:
         from bot import overnight
-        overnight.watch_us()
-    except Exception:  # noqa: BLE001 — a watch miss must never kill the scheduler
-        pass
+        try:
+            overnight.watch_us()
+        except Exception as exc:  # noqa: BLE001 — a watch miss must never kill the scheduler
+            _step_failed_event("watch_us_overnight", "", "watch_us", exc)
+        _ledger_end(handle, "ok")
+    except Exception as exc:  # noqa: BLE001
+        _ledger_end(handle, "error")
+        log.warning("watch_us_overnight outer failed: %s", exc)
 
 
 def _watch_asia_job():
     """Overnight watch for the Greater-China Brain books (china + hk) between their close and the next
     A-share open. Same tripwire→refine discipline as the US watch. Never raises."""
+    handle = _ledger_start("watch_asia_overnight", trigger="cron")
     try:
         from bot import overnight
         overnight.watch_asia()
-    except Exception:  # noqa: BLE001
-        pass
+        _ledger_end(handle, "ok")
+    except Exception as exc:  # noqa: BLE001
+        _ledger_end(handle, "error")
+        log.warning("watch_asia_overnight failed: %s", exc)
 
 
 def _derisk_us_job():
@@ -140,21 +384,30 @@ def _derisk_us_job():
     day — free, no LLM) auto-cuts the held Flagship book to the gross cap and revises the US Brain books'
     queued targets. Flag-gated (MASTERMIND_FAST_DERISK); a no-op when disarmed or no unwind is confirmed.
     Never raises."""
+    handle = _ledger_start("derisk_us_intraday", trigger="cron")
     try:
         from bot import derisk
-        derisk.sweep_us()
-    except Exception:  # noqa: BLE001 — a de-risk miss must never kill the scheduler
-        pass
+        try:
+            derisk.sweep_us()
+        except Exception as exc:  # noqa: BLE001 — a de-risk miss must never kill the scheduler
+            _step_failed_event("derisk_us_intraday", "", "sweep_us", exc)
+        _ledger_end(handle, "ok")
+    except Exception as exc:  # noqa: BLE001
+        _ledger_end(handle, "error")
+        log.warning("derisk_us_intraday outer failed: %s", exc)
 
 
 def _macro_refresh_job():
     """Keep the vendored macro analyzer data fresh (origin/main == the live site) + run the
     staleness tripwire. The book once bought NVDA off a days-stale read; never raises."""
+    handle = _ledger_start("macro_refresh", trigger="cron")
     try:
         from data_layer import macro_refresh
         macro_refresh.refresh_and_check()
-    except Exception:  # noqa: BLE001 — a refresh miss must never kill the scheduler
-        pass
+        _ledger_end(handle, "ok")
+    except Exception as exc:  # noqa: BLE001 — a refresh miss must never kill the scheduler
+        _ledger_end(handle, "error")
+        log.warning("macro_refresh failed: %s", exc)
 
 
 def _cio_weekly_job():
@@ -165,11 +418,14 @@ def _cio_weekly_job():
     seat. The Improvement Agenda that fuses over this note runs as its OWN dedicated job
     (``_improvement_agenda_job``) 30 min later, so this job passes ``with_agenda=False`` to avoid a
     double-write. Lazy import + try/except so a review miss never kills the scheduler."""
+    handle = _ledger_start("cio_weekly", trigger="cron")
     try:
         from scripts.run_cio import run as run_cio
-        run_cio(with_agenda=False)     # the dedicated agenda job owns the scheduled agenda write
-    except Exception:  # noqa: BLE001 — a CIO miss must never kill the scheduler
-        pass
+        run_cio(with_agenda=False)  # the dedicated agenda job owns the scheduled agenda write
+        _ledger_end(handle, "ok")
+    except Exception as exc:  # noqa: BLE001 — a CIO miss must never kill the scheduler
+        _ledger_end(handle, "error")
+        log.warning("cio_weekly failed: %s", exc)
 
 
 def _improvement_agenda_job():
@@ -185,11 +441,14 @@ def _improvement_agenda_job():
     opens AGENDA.md and the top items are pre-argued with evidence. Display + advisory ONLY — it never
     trades, never flips a flag, never changes a seat's behavior. Runs 30 minutes after the CIO review
     so it can consume the fresh CIO artifact. Never raises."""
+    handle = _ledger_start("improvement_agenda_weekly", trigger="cron")
     try:
         from brain import improvement_agenda
         improvement_agenda.write()
-    except Exception:  # noqa: BLE001 — an agenda miss must never kill the scheduler
-        pass
+        _ledger_end(handle, "ok")
+    except Exception as exc:  # noqa: BLE001 — an agenda miss must never kill the scheduler
+        _ledger_end(handle, "error")
+        log.warning("improvement_agenda_weekly failed: %s", exc)
 
 
 def _experiment_maturity_job():
@@ -198,11 +457,14 @@ def _experiment_maturity_job():
     Promotes any OPEN experiment whose comeback_date has been reached to MATURED, persisting the
     status change in data/experiments/registry.json so the next agenda build surfaces it at the top.
     Cheap, deterministic, LLM-free. Never raises into the scheduler."""
+    handle = _ledger_start("experiment_maturity", trigger="cron")
     try:
         from brain import experiment_registry
-        experiment_registry.matured()       # side-effect: promotes date-reached items → matured
-    except Exception:  # noqa: BLE001 — a maturity check miss must never kill the scheduler
-        pass
+        experiment_registry.matured()  # side-effect: promotes date-reached items → matured
+        _ledger_end(handle, "ok")
+    except Exception as exc:  # noqa: BLE001 — a maturity check miss must never kill the scheduler
+        _ledger_end(handle, "error")
+        log.warning("experiment_maturity failed: %s", exc)
 
 
 def _loop_maintenance_job():
@@ -222,7 +484,30 @@ def _loop_maintenance_job():
     others) and never raises into the scheduler. Runs Mon–Fri at 23:45 UTC, after the flagship
     (22:40) + autonomous (23:10) + heavyweight (23:25) builds: on a rebuild day it picks up today's
     fresh decision inputs; on a carried day the shadow/desk-A/B runs HOLD + re-mark (empty-inputs
-    guard) instead of liquidating."""
+    guard) instead of liquidating.
+
+    GOVERNANCE (MW1): global:loop_maintenance lock prevents concurrent runs (e.g. HTTP-triggered
+    manual run overlapping the nightly cron).  Swallowed sub-step exceptions each write a
+    step_failed run_event (ADVISORY_ONLY) before the next step continues — so every silent failure
+    is now queryable."""
+    handle = _ledger_start("loop_maintenance", trigger="cron")
+    try:
+        from control_plane import locks
+        lock = locks.acquire_or_log("global:loop_maintenance", job="loop_maintenance", book="")
+        if lock is None:
+            _skip_event("loop_maintenance", "")
+            _ledger_end(handle, "skip", severity="ADVISORY_ONLY")
+            return
+        with lock:
+            _run_loop_maintenance_steps()
+        _ledger_end(handle, "ok")
+    except Exception as exc:  # noqa: BLE001
+        _ledger_end(handle, "error")
+        log.warning("loop_maintenance outer failed: %s", exc)
+
+
+def _run_loop_maintenance_steps():
+    """Execute the ~12 maintenance sub-steps; each failure emits a step_failed event and continues."""
     from datetime import date
     asof = date.today().isoformat()
     asof_d = date.today()
@@ -233,65 +518,66 @@ def _loop_maintenance_job():
     try:
         from portfolio import predictions
         predictions.record(asof)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        _step_failed_event("loop_maintenance", "", "predictions.record", exc)
     try:
         from portfolio import rejections
         rejections.record(asof)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        _step_failed_event("loop_maintenance", "", "rejections.record", exc)
     # 1c. retrain the fast statistical STUDENT (CatBoost) on the resolved universe log (#3) — nightly,
     #     cheap, LLM-free, walk-forward OOS, degrade-safe (no-op without catboost / enough resolved rows).
     #     Its calibrated read feeds the Brain prompts (flag-gated MASTERMIND_STUDENT).
     try:
         from brain import student
         student.train(asof)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        _step_failed_event("loop_maintenance", "", "student.train", exc)
     # 1d. retrain the DISTILLED-OPUS classifier (#3 v2) — mimics Opus's buy decisions so easy calls can
     #     be routed cheaply (don't-waste-Opus). LLM-free, degrade-safe, 'building' until Opus accrues
     #     months of decisions. No-op if catboost absent / too few buys.
     try:
         from brain import distill
         distill.train(asof)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        _step_failed_event("loop_maintenance", "", "distill.train", exc)
     # 1e. INTERIM MARKS (#11) — log day-5/day-10 trajectory checkpoints for open conviction theses
     #     (early-warning for the risk layer weeks before the 21-bday grade). Evidence only, never the
     #     label; idempotent keep-first; degrade-safe.
     try:
         from brain import interim_marks
         interim_marks.record(asof)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        _step_failed_event("loop_maintenance", "", "interim_marks.record", exc)
 
     # 2. parallel forward shadow books + desk-lever A/B — re-derive (or HOLD on a carried day) + mark
     #    forward. The empty-inputs guard inside run() prevents a no-decision day from liquidating them.
     try:
         from portfolio import shadow_books
         shadow_books.run(asof)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        _step_failed_event("loop_maintenance", "", "shadow_books.run", exc)
     try:
         from portfolio import desk_ab
         desk_ab.run(asof)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        _step_failed_event("loop_maintenance", "", "desk_ab.run", exc)
 
     # 3. grade matured theses ONCE via the entry→horizon path-replay grader, then fan the result into
     #    (a) the OUTCOME LEDGER (reliability + lens-edge substrate), (b) the Brier TRACK RECORD + prod
     #    ledger close, and (c) the empirical CALIBRATION refresh — so the perception→outcome loop
     #    advances every trading day, not only on a flagship rebuild. Each step is idempotent.
+    realized: dict = {}
     try:
         from brain import outcomes as _outcomes
         realized = _outcomes.realized_returns(asof_d)
-    except Exception:  # noqa: BLE001
-        realized = {}
+    except Exception as exc:  # noqa: BLE001
+        _step_failed_event("loop_maintenance", "", "outcomes.realized_returns", exc)
     try:
         from brain import outcome_ledger
-        outcome_ledger.resolve(asof, realized=realized)     # {} → no-op; shares the same grader
-    except Exception:  # noqa: BLE001
-        pass
+        outcome_ledger.resolve(asof, realized=realized)  # {} → no-op; shares the same grader
+    except Exception as exc:  # noqa: BLE001
+        _step_failed_event("loop_maintenance", "", "outcome_ledger.resolve", exc)
     if realized:
         try:
             from brain import scorer as _scorer, ledger as _ledger
@@ -307,13 +593,13 @@ def _loop_maintenance_job():
                         _ledger.close(_th["subject"], "resolved", realized=_rr)
                     except Exception:  # noqa: BLE001
                         pass
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as exc:  # noqa: BLE001
+            _step_failed_event("loop_maintenance", "", "track_record+ledger_close", exc)
     try:
         from brain import calibration as _calibration
         _calibration.persist(asof_d)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as exc:  # noqa: BLE001
+        _step_failed_event("loop_maintenance", "", "calibration.persist", exc)
 
 
 # The books that the deterministic/Brain builders mark only on their OWN run day. flagship marks
@@ -336,9 +622,12 @@ def _daily_mark_job():
     Runs Mon–Fri shortly BEFORE the flagship build (22:35 UTC) so a fresh daily mark is in place
     before the evening builds; mark() is idempotent per date, so a later same-day build just
     replaces the row. Never raises into the scheduler."""
+    handle = _ledger_start("daily_mark", trigger="cron")
     try:
         from portfolio import paper_account, registry
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        _ledger_end(handle, "error")
+        log.warning("daily_mark: import failed: %s", exc)
         return
     asof = _today_iso()
     # ── W-L / L1: mark through the ONE marking layer (portfolio.marks) ──
@@ -371,46 +660,57 @@ def _daily_mark_job():
         pass
     for pid in _MARK_BOOK_IDS:
         try:
-            # cash sweep first: idle cash earns ~4%/yr (money-market), idempotent per date, so the
-            # NAV we mark below already reflects today's accrued cash. Best-effort (never raises).
-            paper_account.accrue_cash_yield(_today_iso(), portfolio_id=pid)
-            state = paper_account._load_account(pid)
-            bench = paper_account._benchmark_for(pid)
-            ccy = registry.currency(pid)
-            tickers = set(state.get("positions", {}).keys()) | {bench}
-            # batch-warm the US live quotes in ONE request so the per-name loop below hits a warm
-            # cache instead of firing a separate yfinance download per holding.
-            try:
-                from data_layer import yahoo_feed
-                yahoo_feed.warm([t for t in tickers if t and "." not in t])
-            except Exception:  # noqa: BLE001
-                pass
-            prices: dict = {}
-            for t in tickers:
-                # prefer the ONE marking layer's union mark (L1); fall back to the legacy accessor
-                # for names it couldn't price (esp. *.HK/*.SS/*.SZ, which route through Tushare/Yahoo
-                # -local below via _current_price). ALWAYS in USD at this point.
-                px = union_usd.get((t or "").upper()) or paper_account._current_price(t)
-                if not (px and px > 0):
-                    continue
-                # A non-USD book is priced end-to-end in its BASE currency (cash, avg_cost, AND its
-                # benchmark inception price), so the USD mark must be converted before it hits
-                # mark()/NAV — exactly as bot/settle._price does (it converts EVERY symbol, benchmark
-                # included). WITHOUT this the daily sweep books a CNY/HKD position at its USD value
-                # (~÷7) against base-currency cash, so a china/hk book it merely re-marks (didn't
-                # rebuild) shows a phantom crash in nav_history (the 2026-06-23 china/hk cliff). The
-                # benchmark is converted too: its inception price was stored in base currency, so
-                # leaving the live mark in USD would crater the spy_nav line by the same factor.
-                if ccy != "USD":
-                    try:
-                        from portfolio import fx
-                        px = fx.usd_to(px, ccy)
-                    except Exception:  # noqa: BLE001
+            # LOCKING (MW1 fix): take each book's lock briefly while we mark it to avoid racing a
+            # concurrent build (e.g. flagship at 22:40 vs daily_mark at 22:35).  This job is read-
+            # only w.r.t. positions/cash — it only appends a nav_history row — but mark() writes
+            # to the account file, so it shares the same mutation surface.  If the lock is held
+            # (a build started early), skip this book and log; the build itself will mark.
+            from control_plane import locks as _locks
+            _book_lock = _locks.acquire_or_log(f"book:{pid}", job="daily_mark", book=pid)
+            if _book_lock is None:
+                _step_failed_event("daily_mark", pid, f"lock_held:{pid}", RuntimeError("lock held — skipping mark"))
+                continue
+            with _book_lock:
+                # cash sweep first: idle cash earns ~4%/yr (money-market), idempotent per date, so the
+                # NAV we mark below already reflects today's accrued cash. Best-effort (never raises).
+                paper_account.accrue_cash_yield(_today_iso(), portfolio_id=pid)
+                state = paper_account._load_account(pid)
+                bench = paper_account._benchmark_for(pid)
+                ccy = registry.currency(pid)
+                tickers = set(state.get("positions", {}).keys()) | {bench}
+                # batch-warm the US live quotes in ONE request so the per-name loop below hits a warm
+                # cache instead of firing a separate yfinance download per holding.
+                try:
+                    from data_layer import yahoo_feed
+                    yahoo_feed.warm([t for t in tickers if t and "." not in t])
+                except Exception:  # noqa: BLE001
+                    pass
+                prices: dict = {}
+                for t in tickers:
+                    # prefer the ONE marking layer's union mark (L1); fall back to the legacy accessor
+                    # for names it couldn't price (esp. *.HK/*.SS/*.SZ, which route through Tushare/Yahoo
+                    # -local below via _current_price). ALWAYS in USD at this point.
+                    px = union_usd.get((t or "").upper()) or paper_account._current_price(t)
+                    if not (px and px > 0):
                         continue
-                if px and px > 0:
-                    prices[t] = px
-            if prices:
-                paper_account.mark(prices, asof, portfolio_id=pid, benchmark=bench)
+                    # A non-USD book is priced end-to-end in its BASE currency (cash, avg_cost, AND its
+                    # benchmark inception price), so the USD mark must be converted before it hits
+                    # mark()/NAV — exactly as bot/settle._price does (it converts EVERY symbol, benchmark
+                    # included). WITHOUT this the daily sweep books a CNY/HKD position at its USD value
+                    # (~÷7) against base-currency cash, so a china/hk book it merely re-marks (didn't
+                    # rebuild) shows a phantom crash in nav_history (the 2026-06-23 china/hk cliff). The
+                    # benchmark is converted too: its inception price was stored in base currency, so
+                    # leaving the live mark in USD would crater the spy_nav line by the same factor.
+                    if ccy != "USD":
+                        try:
+                            from portfolio import fx
+                            px = fx.usd_to(px, ccy)
+                        except Exception:  # noqa: BLE001
+                            continue
+                    if px and px > 0:
+                        prices[t] = px
+                if prices:
+                    paper_account.mark(prices, asof, portfolio_id=pid, benchmark=bench)
         except Exception:  # noqa: BLE001 — one book's mark miss must never kill the sweep
             continue
     # ── W-L / L1: mark the Self-Directed book too (its own engine, its own nav_history) ──
@@ -433,9 +733,10 @@ def _daily_mark_job():
                 # this only ADDS the display-only yardstick — it can never shape the books it measures.
                 self_directed.publish(prices=union_usd, asof=asof)
             finally:
-                self_directed.set_price_resolver(None)      # never leave the seam installed
+                self_directed.set_price_resolver(None)  # never leave the seam installed
     except Exception:  # noqa: BLE001
         pass
+    _ledger_end(handle, "ok")
 
 
 def _build_benchmark_ledger(asof: str, union_usd: dict) -> None:
@@ -516,10 +817,10 @@ def start():
     sch.add_job(_daily_mark_job,
                 CronTrigger(day_of_week="mon-fri", hour=hour, minute=35, timezone="UTC"),
                 id="daily_mark", replace_existing=True, misfire_grace_time=3600, coalesce=True)
-    # UTC-pinned for the same reason as settle_pending below: a bare CronTrigger INSTANCE inherits
-    # the machine's local tz (not the scheduler's UTC default), drifting the build off the intended
-    # post-close anchor on a non-UTC host.
-    sch.add_job(_job, CronTrigger(hour=hour, minute=40, timezone="UTC"), id="daily_loop",
+    # FLAGSHIP DAILY LOOP — Mon–Fri only.  A weekend run finds no market data and a no-op build
+    # would confuse the dashboard's "last built" display.  day_of_week added in MW1.
+    sch.add_job(_job, CronTrigger(day_of_week="mon-fri", hour=hour, minute=40, timezone="UTC"),
+                id="daily_loop",
                 replace_existing=True, misfire_grace_time=3600, coalesce=True)
     # Mon–Fri only (no Sat/Sun) — the autonomous book refreshes once per trading day after close.
     sch.add_job(_autonomous_job, CronTrigger(day_of_week="mon-fri", hour=a_hour, minute=10, timezone="UTC"),
@@ -579,16 +880,13 @@ def start():
     sch.add_job(_derisk_us_job,
                 CronTrigger(day_of_week="mon-fri", hour=derisk_hours, minute="0,30", timezone="UTC"),
                 id="derisk_us_intraday", replace_existing=True, misfire_grace_time=1800, coalesce=True)
-    # Publish the dashboard snapshot to the public Macro Dashboard (GitHub Pages) TWICE a day:
-    #   • ~12:25 UTC — a morning refresh that picks up the overnight China book (08:00) and the
-    #     prior night's autonomous/heavyweight Brain books (23:xx).
-    #   • ~22:25 UTC — a post-close push, after the 22:00 flagship book and BEFORE the macro
-    #     daily build (22:40 UTC), so the evening deploy carries a fresh snapshot.
-    # Hours are configurable via MACRO_SNAPSHOT_UTC_HOURS (comma-separated, default "12,22").
-    # Runs every day (the macro site refreshes daily); touches only the macro repo's
-    # site/mastermind/ path and pushes to its origin/main.
+    # MACRO SNAPSHOT PUSH — Mon–Fri only.  Content is date-stamped market data; a weekend push
+    # would only ship a stale Friday carry.  No external freshness requirement for weekend stamps
+    # was documented.  day_of_week added in MW1.  To restore weekend behaviour, set
+    # MACRO_SNAPSHOT_UTC_HOURS and ensure the macro repo accepts weekend pushes.
     snap_hours = (os.environ.get("MACRO_SNAPSHOT_UTC_HOURS", "12,22").strip() or "12,22")
-    sch.add_job(_snapshot_job, CronTrigger(hour=snap_hours, minute=25, timezone="UTC"),
+    sch.add_job(_snapshot_job,
+                CronTrigger(day_of_week="mon-fri", hour=snap_hours, minute=25, timezone="UTC"),
                 id="publish_macro_snapshot", replace_existing=True,
                 misfire_grace_time=3600, coalesce=True)
 
@@ -634,6 +932,99 @@ def start():
     return sch
 
 
+# ---------------------------------------------------------------------------
+# /api/scheduler health query
+# ---------------------------------------------------------------------------
+
+def scheduler_health() -> list[dict]:
+    """Return per-job health records for the /api/scheduler endpoint.
+
+    Each record:
+      id, next_run_time (ISO or null), last_started (ISO or null),
+      last_finished (ISO or null), last_skipped (ISO or null),
+      last_status (str or null), last_severity (str or null).
+
+    Reads the tail of data/governance/run_events.jsonl.  Never raises.
+    """
+    import json as _json
+
+    # ── read tail of run_events.jsonl (last 2000 lines is plenty) ──
+    events_by_job: dict[str, list[dict]] = {}
+    try:
+        from control_plane.run_events import _ledger_path
+        p = _ledger_path()
+        if p.exists():
+            lines = p.read_text().splitlines()
+            for line in lines[-2000:]:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = _json.loads(line)
+                    job = ev.get("job") or ""
+                    if job:
+                        events_by_job.setdefault(job, []).append(ev)
+                except Exception:  # noqa: BLE001
+                    pass
+    except Exception:  # noqa: BLE001
+        pass
+
+    # ── build per-job last-event lookup ──
+    def _last(job: str, kind: str) -> dict | None:
+        evs = events_by_job.get(job, [])
+        for ev in reversed(evs):
+            if ev.get("kind") == kind:
+                return ev
+        return None
+
+    # ── known job ids (from scheduler) ──
+    job_ids = [
+        "macro_refresh", "daily_mark", "daily_loop",
+        "autonomous_daily", "heavyweight_daily", "china_daily", "hk_daily", "etf_daily",
+        "settle_pending", "settle_brain_asia",
+        "watch_us_overnight", "watch_asia_overnight",
+        "derisk_us_intraday",
+        "publish_macro_snapshot",
+        "cio_weekly", "improvement_agenda_weekly",
+        "loop_maintenance", "experiment_maturity",
+    ]
+
+    # ── next_run_time from APScheduler ──
+    next_run: dict[str, str | None] = {}
+    try:
+        global _scheduler
+        if _scheduler is not None:
+            for job in _scheduler.get_jobs():
+                nrt = job.next_run_time
+                next_run[job.id] = nrt.isoformat() if nrt else None
+    except Exception:  # noqa: BLE001
+        pass
+
+    records = []
+    for jid in job_ids:
+        started_ev = _last(jid, "run_started")
+        finished_ev = _last(jid, "run_finished")
+        skipped_ev = _last(jid, "run_skipped")
+
+        last_status = finished_ev.get("status") if finished_ev else None
+        last_severity = finished_ev.get("severity") if finished_ev else None
+
+        records.append({
+            "id": jid,
+            "next_run_time": next_run.get(jid),
+            "last_started": started_ev.get("ts") if started_ev else None,
+            "last_finished": finished_ev.get("ts") if finished_ev else None,
+            "last_skipped": skipped_ev.get("ts") if skipped_ev else None,
+            "last_status": last_status,
+            "last_severity": last_severity,
+        })
+    return records
+
+
+# ---------------------------------------------------------------------------
+# first-run daemon threads (startup)
+# ---------------------------------------------------------------------------
+
 def maybe_first_autonomous_run() -> bool:
     """On first turn-on, immediately build the autonomous book so it can buy right away —
     instead of waiting for the next scheduled close. No-op once it has a NAV track record.
@@ -648,23 +1039,33 @@ def maybe_first_autonomous_run() -> bool:
         from portfolio import registry
         nav_path = registry.data_dir("autonomous") / "nav_history.jsonl"
         if nav_path.exists() and nav_path.read_text().strip():
-            return False                       # already has a track record — the cron owns it now
+            return False  # already has a track record — the cron owns it now
     except Exception:
         pass
     try:
         from brain import cli_bridge
         if not cli_bridge.available():
-            return False                       # no subscription/CLI → don't fire a doomed armed run
+            return False  # no subscription/CLI → don't fire a doomed armed run
     except Exception:
         return False
     import threading
 
     def _go():
+        handle = _ledger_start("autonomous_daily", book="autonomous", trigger="first_run")
         try:
-            from bot.autonomous import run_autonomous
-            run_autonomous()
-        except Exception:
-            pass
+            from control_plane import locks
+            lock = locks.acquire_or_log("book:autonomous", job="autonomous_daily", book="autonomous")
+            if lock is None:
+                _skip_event("autonomous_daily", "autonomous")
+                _ledger_end(handle, "skip", severity="ADVISORY_ONLY")
+                return
+            with lock:
+                from bot.autonomous import run_autonomous
+                run_autonomous()
+            _ledger_end(handle, "ok")
+        except Exception as exc:  # noqa: BLE001
+            _ledger_end(handle, "error")
+            log.warning("autonomous first-run failed: %s", exc)
 
     threading.Thread(target=_go, name="autonomous-first-run", daemon=True).start()
     return True
@@ -681,29 +1082,39 @@ def maybe_first_heavyweight_run() -> bool:
         from portfolio import registry
         nav_path = registry.data_dir("heavyweight") / "nav_history.jsonl"
         if nav_path.exists() and nav_path.read_text().strip():
-            return False                       # already tracking — the cron owns it now
+            return False  # already tracking — the cron owns it now
     except Exception:
         pass
     try:
         from bot.heavyweight import _flagship_universe
         if not _flagship_universe():
-            return False                       # nothing to constrain against yet — wait for Flagship
+            return False  # nothing to constrain against yet — wait for Flagship
     except Exception:
         return False
     try:
         from brain import cli_bridge
         if not cli_bridge.available():
-            return False                       # no subscription/CLI → don't fire a doomed armed run
+            return False  # no subscription/CLI → don't fire a doomed armed run
     except Exception:
         return False
     import threading
 
     def _go():
+        handle = _ledger_start("heavyweight_daily", book="heavyweight", trigger="first_run")
         try:
-            from bot.heavyweight import run_heavyweight
-            run_heavyweight()
-        except Exception:
-            pass
+            from control_plane import locks
+            lock = locks.acquire_or_log("book:heavyweight", job="heavyweight_daily", book="heavyweight")
+            if lock is None:
+                _skip_event("heavyweight_daily", "heavyweight")
+                _ledger_end(handle, "skip", severity="ADVISORY_ONLY")
+                return
+            with lock:
+                from bot.heavyweight import run_heavyweight
+                run_heavyweight()
+            _ledger_end(handle, "ok")
+        except Exception as exc:  # noqa: BLE001
+            _ledger_end(handle, "error")
+            log.warning("heavyweight first-run failed: %s", exc)
 
     threading.Thread(target=_go, name="heavyweight-first-run", daemon=True).start()
     return True
@@ -719,23 +1130,33 @@ def maybe_first_china_run() -> bool:
         from portfolio import registry
         nav_path = registry.data_dir("china") / "nav_history.jsonl"
         if nav_path.exists() and nav_path.read_text().strip():
-            return False                       # already has a track record — the cron owns it now
+            return False  # already has a track record — the cron owns it now
     except Exception:
         pass
     try:
         from brain import cli_bridge
         if not cli_bridge.available():
-            return False                       # no subscription/CLI → don't fire a doomed armed run
+            return False  # no subscription/CLI → don't fire a doomed armed run
     except Exception:
         return False
     import threading
 
     def _go():
+        handle = _ledger_start("china_daily", book="china", trigger="first_run")
         try:
-            from bot.china import run_china
-            run_china()
-        except Exception:
-            pass
+            from control_plane import locks
+            lock = locks.acquire_or_log("book:china", job="china_daily", book="china")
+            if lock is None:
+                _skip_event("china_daily", "china")
+                _ledger_end(handle, "skip", severity="ADVISORY_ONLY")
+                return
+            with lock:
+                from bot.china import run_china
+                run_china()
+            _ledger_end(handle, "ok")
+        except Exception as exc:  # noqa: BLE001
+            _ledger_end(handle, "error")
+            log.warning("china first-run failed: %s", exc)
 
     threading.Thread(target=_go, name="china-first-run", daemon=True).start()
     return True
@@ -750,23 +1171,33 @@ def maybe_first_hk_run() -> bool:
         from portfolio import registry
         nav_path = registry.data_dir("hk") / "nav_history.jsonl"
         if nav_path.exists() and nav_path.read_text().strip():
-            return False                       # already has a track record — the cron owns it now
+            return False  # already has a track record — the cron owns it now
     except Exception:
         pass
     try:
         from brain import cli_bridge
         if not cli_bridge.available():
-            return False                       # no subscription/CLI → don't fire a doomed armed run
+            return False  # no subscription/CLI → don't fire a doomed armed run
     except Exception:
         return False
     import threading
 
     def _go():
+        handle = _ledger_start("hk_daily", book="hk", trigger="first_run")
         try:
-            from bot.hk import run_hk
-            run_hk()
-        except Exception:
-            pass
+            from control_plane import locks
+            lock = locks.acquire_or_log("book:hk", job="hk_daily", book="hk")
+            if lock is None:
+                _skip_event("hk_daily", "hk")
+                _ledger_end(handle, "skip", severity="ADVISORY_ONLY")
+                return
+            with lock:
+                from bot.hk import run_hk
+                run_hk()
+            _ledger_end(handle, "ok")
+        except Exception as exc:  # noqa: BLE001
+            _ledger_end(handle, "error")
+            log.warning("hk first-run failed: %s", exc)
 
     threading.Thread(target=_go, name="hk-first-run", daemon=True).start()
     return True
@@ -782,23 +1213,33 @@ def maybe_first_etf_run() -> bool:
         from portfolio import registry
         nav_path = registry.data_dir("etf") / "nav_history.jsonl"
         if nav_path.exists() and nav_path.read_text().strip():
-            return False                       # already has a track record — the cron owns it now
+            return False  # already has a track record — the cron owns it now
     except Exception:
         pass
     try:
         from brain import cli_bridge
         if not cli_bridge.available():
-            return False                       # no subscription/CLI → don't fire a doomed armed run
+            return False  # no subscription/CLI → don't fire a doomed armed run
     except Exception:
         return False
     import threading
 
     def _go():
+        handle = _ledger_start("etf_daily", book="etf", trigger="first_run")
         try:
-            from bot.etf import run_etf
-            run_etf()
-        except Exception:
-            pass
+            from control_plane import locks
+            lock = locks.acquire_or_log("book:etf", job="etf_daily", book="etf")
+            if lock is None:
+                _skip_event("etf_daily", "etf")
+                _ledger_end(handle, "skip", severity="ADVISORY_ONLY")
+                return
+            with lock:
+                from bot.etf import run_etf
+                run_etf()
+            _ledger_end(handle, "ok")
+        except Exception as exc:  # noqa: BLE001
+            _ledger_end(handle, "error")
+            log.warning("etf first-run failed: %s", exc)
 
     threading.Thread(target=_go, name="etf-first-run", daemon=True).start()
     return True

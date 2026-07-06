@@ -64,6 +64,14 @@ if FastAPI is not None:
     except Exception:
         _git_sha = None
 
+    def _startup_flags() -> dict:
+        """Snapshot of MASTERMIND_* env vars at startup time — embedded in the app_started event."""
+        try:
+            from control_plane import flags
+            return flags.enumerate_flags()
+        except Exception:
+            return {}
+
     @app.get("/health")
     def health() -> dict:
         # Keep only non-sensitive fields; uptime probes check `status == "ok"` only.
@@ -90,6 +98,25 @@ if FastAPI is not None:
     @app.on_event("startup")
     def _start_scheduler():
         from app import scheduler
+
+        # MW1: record an app_started event (survives restarts; JSONL is permanent).
+        try:
+            from control_plane import run_events
+            run_events.append({
+                "kind": "app_started",
+                "job": "startup",
+                "book": "",
+                "step": "init",
+                "status": "ok",
+                "actor": "system",
+                "extra": {
+                    "git_sha": _git_sha or "unknown",
+                    "flags": _startup_flags(),
+                },
+            })
+        except Exception:
+            pass
+
         app.state.scheduler = scheduler.start()   # daily loops on cron; None if apscheduler absent
         # First turn-on: let the autonomous book buy right away instead of waiting for the next
         # scheduled close. No-op once it has a track record; runs in a daemon thread (non-blocking).
@@ -123,10 +150,22 @@ if FastAPI is not None:
     @app.post("/daily")
     def daily(force: bool = False) -> dict:
         """Manually fire the daily loop (gated book + armed research + competitor edge note)."""
-        from bot.daily import run_daily
-        out = run_daily(force=force)
-        return {k: out.get(k) for k in ("asof", "research", "competitor")} | {
-            "book_ran": (out.get("book") or {}).get("ran")}
+        from control_plane import run_ledger, locks
+        handle = run_ledger.start_run("daily_loop", book="flagship", trigger="http")
+        lock = locks.acquire_or_log("book:flagship", job="daily_loop", book="flagship")
+        if lock is None:
+            run_ledger.end_run(handle, "skip", severity="ADVISORY_ONLY")
+            return {"skipped": True, "reason": "lock_held"}
+        try:
+            with lock:
+                from bot.daily import run_daily
+                out = run_daily(force=force)
+            run_ledger.end_run(handle, "ok")
+            return {k: out.get(k) for k in ("asof", "research", "competitor")} | {
+                "book_ran": (out.get("book") or {}).get("ran")}
+        except Exception as exc:
+            run_ledger.end_run(handle, "error")
+            raise
 
     @app.post("/api/autonomous/run")
     async def autonomous_run(force: bool = False, wait: bool = False) -> dict:
@@ -134,16 +173,42 @@ if FastAPI is not None:
 
         The Brain call is long; by default this starts it in the background and returns
         immediately. Pass ?wait=true to block until it finishes (returns the run summary)."""
+        from control_plane import run_ledger, locks
         from bot import autonomous
         if wait:
             import asyncio as _aio
-            out = await _aio.to_thread(autonomous.run_autonomous, force=force)
-            return {k: out.get(k) for k in
-                    ("asof", "inaugural", "trading_day", "decided", "holdings",
-                     "executed", "skipped_unpriceable", "nav", "brain")}
+            handle = run_ledger.start_run("autonomous_daily", book="autonomous", trigger="http")
+            lock = locks.acquire_or_log("book:autonomous", job="autonomous_daily", book="autonomous")
+            if lock is None:
+                run_ledger.end_run(handle, "skip", severity="ADVISORY_ONLY")
+                return {"skipped": True, "reason": "lock_held"}
+            try:
+                with lock:
+                    out = await _aio.to_thread(autonomous.run_autonomous, force=force)
+                run_ledger.end_run(handle, "ok")
+                return {k: out.get(k) for k in
+                        ("asof", "inaugural", "trading_day", "decided", "holdings",
+                         "executed", "skipped_unpriceable", "nav", "brain")}
+            except Exception:
+                run_ledger.end_run(handle, "error")
+                raise
+
+        def _run():
+            handle = run_ledger.start_run("autonomous_daily", book="autonomous", trigger="http")
+            lock = locks.acquire_or_log("book:autonomous", job="autonomous_daily", book="autonomous")
+            if lock is None:
+                run_ledger.end_run(handle, "skip", severity="ADVISORY_ONLY")
+                return
+            try:
+                with lock:
+                    autonomous.run_autonomous(force=force)
+                run_ledger.end_run(handle, "ok")
+            except Exception as exc:
+                run_ledger.end_run(handle, "error")
+                raise
+
         import threading
-        threading.Thread(target=lambda: autonomous.run_autonomous(force=force),
-                         name="autonomous-manual-run", daemon=True).start()
+        threading.Thread(target=_run, name="autonomous-manual-run", daemon=True).start()
         return {"started": True, "note": "Autonomous Brain run started in the background."}
 
     @app.post("/api/heavyweight/run")
@@ -151,16 +216,42 @@ if FastAPI is not None:
         """Manually fire the Heavyweight Opus-Brain book (study Flagship → concentrated rebalance).
 
         Long call; by default starts in the background and returns immediately. ?wait=true blocks."""
+        from control_plane import run_ledger, locks
         from bot import heavyweight
         if wait:
             import asyncio as _aio
-            out = await _aio.to_thread(heavyweight.run_heavyweight, force=force)
-            return {k: out.get(k) for k in
-                    ("asof", "inaugural", "trading_day", "decided", "holdings", "flagship_universe_size",
-                     "held_prior_book", "enforcement", "executed", "skipped_unpriceable", "nav", "brain")}
+            handle = run_ledger.start_run("heavyweight_daily", book="heavyweight", trigger="http")
+            lock = locks.acquire_or_log("book:heavyweight", job="heavyweight_daily", book="heavyweight")
+            if lock is None:
+                run_ledger.end_run(handle, "skip", severity="ADVISORY_ONLY")
+                return {"skipped": True, "reason": "lock_held"}
+            try:
+                with lock:
+                    out = await _aio.to_thread(heavyweight.run_heavyweight, force=force)
+                run_ledger.end_run(handle, "ok")
+                return {k: out.get(k) for k in
+                        ("asof", "inaugural", "trading_day", "decided", "holdings", "flagship_universe_size",
+                         "held_prior_book", "enforcement", "executed", "skipped_unpriceable", "nav", "brain")}
+            except Exception:
+                run_ledger.end_run(handle, "error")
+                raise
+
+        def _run():
+            handle = run_ledger.start_run("heavyweight_daily", book="heavyweight", trigger="http")
+            lock = locks.acquire_or_log("book:heavyweight", job="heavyweight_daily", book="heavyweight")
+            if lock is None:
+                run_ledger.end_run(handle, "skip", severity="ADVISORY_ONLY")
+                return
+            try:
+                with lock:
+                    heavyweight.run_heavyweight(force=force)
+                run_ledger.end_run(handle, "ok")
+            except Exception:
+                run_ledger.end_run(handle, "error")
+                raise
+
         import threading
-        threading.Thread(target=lambda: heavyweight.run_heavyweight(force=force),
-                         name="heavyweight-manual-run", daemon=True).start()
+        threading.Thread(target=_run, name="heavyweight-manual-run", daemon=True).start()
         return {"started": True, "note": "Heavyweight Brain run started in the background."}
 
     @app.post("/api/china/run")
@@ -169,16 +260,42 @@ if FastAPI is not None:
         multi-venue, USD-marked rebalance).
 
         Long call; by default starts in the background and returns immediately. ?wait=true blocks."""
+        from control_plane import run_ledger, locks
         from bot import china
         if wait:
             import asyncio as _aio
-            out = await _aio.to_thread(china.run_china, force=force)
-            return {k: out.get(k) for k in
-                    ("asof", "inaugural", "trading_day", "decided", "holdings",
-                     "executed", "skipped_unpriceable", "nav", "brain")}
+            handle = run_ledger.start_run("china_daily", book="china", trigger="http")
+            lock = locks.acquire_or_log("book:china", job="china_daily", book="china")
+            if lock is None:
+                run_ledger.end_run(handle, "skip", severity="ADVISORY_ONLY")
+                return {"skipped": True, "reason": "lock_held"}
+            try:
+                with lock:
+                    out = await _aio.to_thread(china.run_china, force=force)
+                run_ledger.end_run(handle, "ok")
+                return {k: out.get(k) for k in
+                        ("asof", "inaugural", "trading_day", "decided", "holdings",
+                         "executed", "skipped_unpriceable", "nav", "brain")}
+            except Exception:
+                run_ledger.end_run(handle, "error")
+                raise
+
+        def _run():
+            handle = run_ledger.start_run("china_daily", book="china", trigger="http")
+            lock = locks.acquire_or_log("book:china", job="china_daily", book="china")
+            if lock is None:
+                run_ledger.end_run(handle, "skip", severity="ADVISORY_ONLY")
+                return
+            try:
+                with lock:
+                    china.run_china(force=force)
+                run_ledger.end_run(handle, "ok")
+            except Exception:
+                run_ledger.end_run(handle, "error")
+                raise
+
         import threading
-        threading.Thread(target=lambda: china.run_china(force=force),
-                         name="china-manual-run", daemon=True).start()
+        threading.Thread(target=_run, name="china-manual-run", daemon=True).start()
         return {"started": True, "note": "China Brain run started in the background."}
 
     @app.post("/api/hk/run")
@@ -186,16 +303,42 @@ if FastAPI is not None:
         """Manually fire the Hong-Kong Opus-Brain book (HK listings only, HKD-marked rebalance).
 
         Long call; by default starts in the background and returns immediately. ?wait=true blocks."""
+        from control_plane import run_ledger, locks
         from bot import hk
         if wait:
             import asyncio as _aio
-            out = await _aio.to_thread(hk.run_hk, force=force)
-            return {k: out.get(k) for k in
-                    ("asof", "inaugural", "trading_day", "decided", "holdings",
-                     "executed", "skipped_unpriceable", "nav", "brain")}
+            handle = run_ledger.start_run("hk_daily", book="hk", trigger="http")
+            lock = locks.acquire_or_log("book:hk", job="hk_daily", book="hk")
+            if lock is None:
+                run_ledger.end_run(handle, "skip", severity="ADVISORY_ONLY")
+                return {"skipped": True, "reason": "lock_held"}
+            try:
+                with lock:
+                    out = await _aio.to_thread(hk.run_hk, force=force)
+                run_ledger.end_run(handle, "ok")
+                return {k: out.get(k) for k in
+                        ("asof", "inaugural", "trading_day", "decided", "holdings",
+                         "executed", "skipped_unpriceable", "nav", "brain")}
+            except Exception:
+                run_ledger.end_run(handle, "error")
+                raise
+
+        def _run():
+            handle = run_ledger.start_run("hk_daily", book="hk", trigger="http")
+            lock = locks.acquire_or_log("book:hk", job="hk_daily", book="hk")
+            if lock is None:
+                run_ledger.end_run(handle, "skip", severity="ADVISORY_ONLY")
+                return
+            try:
+                with lock:
+                    hk.run_hk(force=force)
+                run_ledger.end_run(handle, "ok")
+            except Exception:
+                run_ledger.end_run(handle, "error")
+                raise
+
         import threading
-        threading.Thread(target=lambda: hk.run_hk(force=force),
-                         name="hk-manual-run", daemon=True).start()
+        threading.Thread(target=_run, name="hk-manual-run", daemon=True).start()
         return {"started": True, "note": "HK Brain run started in the background."}
 
     @app.post("/api/etf/run")
@@ -204,16 +347,42 @@ if FastAPI is not None:
         risk guardrails).
 
         Long call; by default starts in the background and returns immediately. ?wait=true blocks."""
+        from control_plane import run_ledger, locks
         from bot import etf
         if wait:
             import asyncio as _aio
-            out = await _aio.to_thread(etf.run_etf, force=force)
-            return {k: out.get(k) for k in
-                    ("asof", "inaugural", "trading_day", "decided", "holdings", "risk_state",
-                     "guardrails", "executed", "skipped_unpriceable", "nav", "brain")}
+            handle = run_ledger.start_run("etf_daily", book="etf", trigger="http")
+            lock = locks.acquire_or_log("book:etf", job="etf_daily", book="etf")
+            if lock is None:
+                run_ledger.end_run(handle, "skip", severity="ADVISORY_ONLY")
+                return {"skipped": True, "reason": "lock_held"}
+            try:
+                with lock:
+                    out = await _aio.to_thread(etf.run_etf, force=force)
+                run_ledger.end_run(handle, "ok")
+                return {k: out.get(k) for k in
+                        ("asof", "inaugural", "trading_day", "decided", "holdings", "risk_state",
+                         "guardrails", "executed", "skipped_unpriceable", "nav", "brain")}
+            except Exception:
+                run_ledger.end_run(handle, "error")
+                raise
+
+        def _run():
+            handle = run_ledger.start_run("etf_daily", book="etf", trigger="http")
+            lock = locks.acquire_or_log("book:etf", job="etf_daily", book="etf")
+            if lock is None:
+                run_ledger.end_run(handle, "skip", severity="ADVISORY_ONLY")
+                return
+            try:
+                with lock:
+                    etf.run_etf(force=force)
+                run_ledger.end_run(handle, "ok")
+            except Exception:
+                run_ledger.end_run(handle, "error")
+                raise
+
         import threading
-        threading.Thread(target=lambda: etf.run_etf(force=force),
-                         name="etf-manual-run", daemon=True).start()
+        threading.Thread(target=_run, name="etf-manual-run", daemon=True).start()
         return {"started": True, "note": "ETF Brain run started in the background."}
 
     @app.post("/research")
