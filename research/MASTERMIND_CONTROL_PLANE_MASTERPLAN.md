@@ -224,5 +224,25 @@ Routing: **Sonnet builds, Opus reviews, Fable adjudicates/merges.** Haiku only f
 
 ## 3. Status log
 
+- **2026-07-06 (Fable): MW0 SHIPPED + merged + DEPLOYED** (merges 7749010/a0759de/ca1fb90;
+  uvicorn PID 13054, /health version ca1fb90). Auth ON in production: `MASTERMIND_PASSWORD` +
+  `MASTERMIND_AUTH_TOKEN` + `MASTERMIND_REQUIRE_AUTH=1` in `.env`; startup now refuses
+  unauthenticated boot; `/health` path-leak fixed (verified live: unauthenticated operator
+  POST → 401, login → 303). R1 enacted: `_FIRM_UNION_BOOKS` = (flagship, autonomous, etf);
+  `hw-firm-universe-ab` annotated (condition changed mid-window). Heavyweight accountability
+  restored (`portfolio/heavyweight_outcomes.py` recreated on master lineage per the etf
+  pattern, wired into run path + Brain prompt line). Model-routing fix: API-fallback deep →
+  `claude-opus-4-8` (was silently `claude-fable-5` for all 5 Brain books). Doc-drift pack
+  landed (firm_exposure header, scheduler header, LLM-facing heavyweight_mcp descriptions,
+  registry comment, symlink-not-submodule, derisk armed-in-prod note). Write-on-GET fixed
+  (both `self_directed.book()` GET callers read_only). Reviews: APPROVE ×1,
+  APPROVE_WITH_NITS ×2 — nits fixed pre-merge. Suite: 19/19 replays green; only catalogued
+  pre-existing failures (`test_distribution_tells` reds proved to be live-mutated
+  vendor/macro_src data drift — identical at 477af10; hermetic-fixture item queued into MW1).
+  Concurrent session landed `w-nw1` (NW context bridge dark-shipped, arm after 5 present
+  builds, come-back 2026-07-19) mid-wave — MW3's first deliverable DONE; MW3 rescoped to
+  contracts.yml + per-artifact freshness + feedback artifact. MW0 findings: `interim_marks`
+  absence is BY DESIGN (no-op until theses age past 5/10bd checkpoints); posture_governor
+  mkdir pre-fixed on HEAD.
 - **2026-07-05 (Fable): program authored.** Docket verified (25-agent workflow), 10 rulings
   issued, waves MW0–MW6 defined. MW0 build dispatched.
