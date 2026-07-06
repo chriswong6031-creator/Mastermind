@@ -274,10 +274,12 @@ class TestS2MissingPeerBookSentinel:
         assert freeze_evs, (
             f"S2: no FREEZE guardrail event for peer_expectation found — events: {evs[:5]}"
         )
-        # (iii) no risk increase: when sentinel_fired, headroom for new adds must be 0
-        # We verify sentinel_fired itself is the zero-headroom signal (the policy is: sentinel_fired
-        # → headroom() returns 0 for new adds in affected books).
-        assert result["sentinel_fired"], "S2 invariant iii: sentinel_fired must be True"
+        # (iii) no risk increase: NUMERIC — headroom() for a new add must be exactly 0.0
+        # while the sentinel is firing (not merely the boolean signal).
+        h = fe.headroom("NVDA", "etf")
+        assert h == 0.0, (
+            f"S2 invariant iii: headroom must be 0.0 under a firing sentinel, got {h!r}"
+        )
 
     def test_legit_empty_peer_does_not_fire_sentinel(self, tmp_path, monkeypatch):
         """A peer that ran but holds nothing (empty book) is NOT a sentinel trigger."""
@@ -682,6 +684,33 @@ class TestS7LowAuthoritySignalAsymmetricGate:
             f"S7: scored_active=False must not produce direction='bull' (loosen), got {direction!r}"
         )
 
+    def test_never_bull_across_regime_sweep(self, monkeypatch):
+        """PRODUCTION sweep: across every regime input × scored_active × gate state, the
+        vol_regime lens direction is NEVER 'bull' — unvalidated OR validated vol data can
+        tighten, but the lens is structurally subtract-only (ruling: asymmetric tier gate).
+        Real function, real inputs — no constructed branch."""
+        from portfolio import lenses
+
+        for regime in ("calm", "warning", "stress", "unknown", "", None):
+            for scored in (True, False):
+                for gate in ("0", "1"):
+                    vol_data = {
+                        "regime": regime, "scored_active": scored, "kill_switch": False,
+                        "vol_target_scalar": 1.0, "ts_slope_state": "flat",
+                        "fragility_confluence": 0.1, "scored_score": None,
+                    }
+                    monkeypatch.setattr(
+                        lenses, "_load",
+                        lambda path, _v=vol_data: _v if "vol" in str(path) else None,
+                        raising=False)
+                    monkeypatch.setenv("MASTERMIND_VOL_REGIME_SCORED_GATE", gate)
+                    row = lenses._vol_regime_row()
+                    d = (row or {}).get("direction")
+                    assert d != "bull", (
+                        f"S7 sweep: direction='bull' leaked (regime={regime!r}, "
+                        f"scored={scored}, gate={gate})"
+                    )
+
     def test_scored_active_false_bear_still_passes(self, monkeypatch):
         """scored_active=False with risk-off → 'bear' is kept (tightening is always allowed)."""
         from portfolio import lenses
@@ -1073,22 +1102,16 @@ class TestS10DeployLagAndSchedulerWatchdog:
         )
 
     def test_scheduler_watchdog_writes_hard_stop_and_exits(self, tmp_path, monkeypatch):
-        """The watchdog function body writes HARD_STOP and calls os._exit when thread is dead.
+        """The PRODUCTION watchdog seam (app.main.watchdog_check_once) writes HARD_STOP
+        and calls the exit hook when the scheduler thread is dead.
 
-        Tests the watchdog function DIRECTLY with a stub scheduler whose thread is dead —
-        per the spec (test the watchdog function body directly with a stub scheduler whose
-        thread is dead — assert HARD_STOP event written and os._exit called via monkeypatch).
-        """
-        from control_plane import run_events
-
-        events_file = tmp_path / "data" / "governance" / "run_events.jsonl"
-        monkeypatch.setattr(run_events, "_ledger_path",
-                            lambda root=None: (events_file.parent.mkdir(parents=True, exist_ok=True)
-                                              or events_file))
+        This exercises the real function — a mutation to app/main.py's watchdog
+        (e.g. exit code, event severity) makes this test fail (the prior inline-copy
+        version was proven blind to production mutations)."""
+        import app.main as main_mod
 
         exit_calls = []
 
-        # Stub scheduler with a dead thread
         class _DeadThread:
             def is_alive(self):
                 return False
@@ -1096,40 +1119,27 @@ class TestS10DeployLagAndSchedulerWatchdog:
         class _StubScheduler:
             _thread = _DeadThread()
 
-        # Extract the watchdog function body from app.main by constructing it inline.
-        # The watchdog is defined as a closure in app.main._startup; we replicate its
-        # logic here to test it directly without importing the full FastAPI app.
-        import time as _time
+        class _AliveThread:
+            def is_alive(self):
+                return True
 
-        def _run_watchdog_once(sch):
-            """Single-iteration of the watchdog body (the while-True loop body)."""
-            th = getattr(sch, "_thread", None)
-            if th is not None and th.is_alive():
-                return "alive"
-            # Thread is dead — write HARD_STOP event
-            try:
-                run_events.append({
-                    "kind": "guardrail", "job": "scheduler", "book": "",
-                    "step": "watchdog", "status": "error", "severity": "HARD_STOP",
-                    "err": "APScheduler thread dead — exiting for supervisor restart",
-                    "actor": "system",
-                })
-            except Exception:
-                pass
-            import os as _os
-            _os._exit(70)  # monkeypatched below to capture the call
+        class _HealthyScheduler:
+            _thread = _AliveThread()
 
-        # Monkeypatch os._exit to capture the call
-        import os as _os_mod
-        monkeypatch.setattr(_os_mod, "_exit", lambda code: exit_calls.append(code))
+        # healthy scheduler: keep watching, no exit, no event
+        assert main_mod.watchdog_check_once(
+            _HealthyScheduler(), exit_fn=lambda c: exit_calls.append(c),
+            events_root=tmp_path) is True
+        assert exit_calls == []
 
-        # Run the watchdog body directly against the stub
-        try:
-            _run_watchdog_once(_StubScheduler())
-        except SystemExit:
-            pass
+        # dead scheduler: HARD_STOP event + exit(70) + returns False
+        result = main_mod.watchdog_check_once(
+            _StubScheduler(), exit_fn=lambda c: exit_calls.append(c),
+            events_root=tmp_path)
 
-        # (i) severity: HARD_STOP event written
+        assert result is False
+        # (i) severity: HARD_STOP event written by PRODUCTION code
+        events_file = tmp_path / "data" / "governance" / "run_events.jsonl"
         evs = _read_events(events_file)
         hard_stop_evs = [e for e in evs
                          if e.get("severity") == "HARD_STOP"
@@ -1137,12 +1147,9 @@ class TestS10DeployLagAndSchedulerWatchdog:
         assert hard_stop_evs, (
             f"S10: no HARD_STOP watchdog event found — events: {evs[:5]}"
         )
-        # (ii) os._exit was called (captured by monkeypatch)
-        assert exit_calls, "S10: watchdog must call os._exit when scheduler thread is dead"
-        # (iii) no risk increase: exit code 70 = fail-fast (supervisor restarts cleanly)
-        exit_code = exit_calls[0] if exit_calls else None
-        assert exit_code == 70, (
-            f"S10: watchdog must exit with code 70 for supervisor restart, got {exit_code}"
+        # (ii)+(iii) fail-fast exit code 70 for supervisor restart
+        assert exit_calls == [70], (
+            f"S10: watchdog must exit with code 70 for supervisor restart, got {exit_calls}"
         )
 
 
