@@ -308,6 +308,19 @@ flags:
     note: >
       Score threshold for RISK-OFF regime entry.  A3.
 
+  MASTERMIND_PACKET_GATE:
+    authority_level: A6
+    allowed_effect: [arm_packet_enforce, shadow_packet_gate, disable_packet_gate]
+    note: >
+      Controls the DecisionPacket boundary enforcement mode (ruling R6, Charter P2/P3/P8).
+      Three modes: "off" (no packets — zero behavior change); "shadow" (default — build,
+      validate, and ledger packets but NEVER reject; invalid packets are logged only);
+      "enforce" (reject invalid packets, falling back to the book's existing conservative
+      no-proposal path). DEFAULT = "shadow" (accrual first, teeth after review — Charter P8).
+      Flipping from shadow to enforce is a Fable decision that MUST be recorded in the
+      governance ledger BEFORE the flag is changed; hence A6 (book-lifecycle / Fable-human
+      boundary). "off" is A4 (disarm-only); "enforce" flip is A6.
+
   MASTERMIND_SELECTION_EXPLORE:
     authority_level: A4
     allowed_effect: [arm_exploration_selection, disarm_exploration_selection]

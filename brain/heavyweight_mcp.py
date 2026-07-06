@@ -137,7 +137,11 @@ async def get_my_book(args):
       "So submit a SHORT, high-conviction list. Weights are fractions of NAV (0–1); the remainder "
       "stays in cash (hold cash when conviction is thin). Provide a one-paragraph conviction "
       "rationale for EVERY holding (required) + an overall summary of how you are concentrating "
-      "the firm's best ideas. Call this ONCE, at the end, after your research.",
+      "the firm's best ideas. Call this ONCE, at the end, after your research. "
+      "OPTIONAL governance fields (provide when you can — they improve the shadow decision ledger): "
+      "falsifiers (list of strings — what would cause you to reverse this book within 5 days), "
+      "evidence_planes (list of strings — data sources you relied on), "
+      "expected_failure_mode (string — the most likely way this book loses money).",
       {"type": "object", "properties": {
           "holdings": {"type": "array", "items": {"type": "object", "properties": {
               "ticker": {"type": "string"},
@@ -146,7 +150,13 @@ async def get_my_book(args):
               "conviction": {"type": "string", "enum": ["high", "medium", "low"]}},
               "required": ["ticker", "weight", "rationale"]}},
           "summary": {"type": "string", "description": "how the book presses Flagship's best ideas today"},
-          "sold_note": {"type": "string", "description": "optional: what you exited or trimmed and why"}},
+          "sold_note": {"type": "string", "description": "optional: what you exited or trimmed and why"},
+          "falsifiers": {"type": "array", "items": {"type": "string"},
+                         "description": "what would cause you to reverse this book within 5 days"},
+          "evidence_planes": {"type": "array", "items": {"type": "string"},
+                              "description": "data sources / signal planes you relied on for this decision"},
+          "expected_failure_mode": {"type": "string",
+                                    "description": "the most likely way this book loses money"}},
        "required": ["holdings", "summary"]})
 async def submit_book(args):
     # Record the Brain's RAW decided book (dedup + basic validity only). The authoritative

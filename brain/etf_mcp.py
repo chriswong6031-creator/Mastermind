@@ -149,7 +149,11 @@ async def get_quote(args):
       "Trade US-listed ETFs ONLY (index / sector / factor / momentum / duration / cash) — any single "
       "name or off-list ticker is REJECTED. Confirm a name with get_quote first. Note the desk's "
       "guardrails: any single ETF over 35% is clamped, micro-changes under ~1.5% of NAV are not traded, "
-      "and in a stressed risk_state offensive (growth/cyclical) gross is capped. Call this ONCE, at the end.",
+      "and in a stressed risk_state offensive (growth/cyclical) gross is capped. Call this ONCE, at the end. "
+      "OPTIONAL governance fields (provide when you can — they improve the shadow decision ledger): "
+      "falsifiers (list of strings — what would cause you to reverse this book within 5 days), "
+      "evidence_planes (list of strings — data sources you relied on), "
+      "expected_failure_mode (string — the most likely way this book loses money).",
       {"type": "object", "properties": {
           "holdings": {"type": "array", "items": {"type": "object", "properties": {
               "ticker": {"type": "string", "description": "a US-listed ETF in the book's universe"},
@@ -158,7 +162,13 @@ async def get_quote(args):
               "conviction": {"type": "string", "enum": ["high", "medium", "low"]}},
               "required": ["ticker", "weight", "rationale"]}},
           "summary": {"type": "string", "description": "overall thesis / how the book is positioned today"},
-          "sold_note": {"type": "string", "description": "optional: what you exited or trimmed and why"}},
+          "sold_note": {"type": "string", "description": "optional: what you exited or trimmed and why"},
+          "falsifiers": {"type": "array", "items": {"type": "string"},
+                         "description": "what would cause you to reverse this book within 5 days"},
+          "evidence_planes": {"type": "array", "items": {"type": "string"},
+                              "description": "data sources / signal planes you relied on for this decision"},
+          "expected_failure_mode": {"type": "string",
+                                    "description": "the most likely way this book loses money"}},
        "required": ["holdings", "summary"]})
 async def submit_book(args):
     from portfolio import etf_universe

@@ -120,6 +120,45 @@ def run_autonomous(asof: str | None = None, *, force: bool = False, armed: bool 
     decided = bool(submission and submission.get("holdings"))
     out["decided"] = decided
 
+    # 2b. PACKET GATE (ruling R6, Charter P2/P3/P8) — wire the DecisionPacket boundary.
+    # Gate mode is controlled by MASTERMIND_PACKET_GATE (off | shadow[default] | enforce).
+    # Shadow: build+validate+ledger but never reject; enforce: reject invalid → carry-forward.
+    # The fallback on rejection is IDENTICAL to the Brain-errored path (decided=False → no
+    # trade, book unchanged) so a rejection can never increase exposure vs the error path (P2).
+    _pgr = None
+    if decided:
+        try:
+            from control_plane.packet_gate import process as _packet_process
+            _pgr = _packet_process(
+                PORTFOLIO_ID,
+                submission,
+                paper_account._load_account(PORTFOLIO_ID),
+                extras={
+                    "run_id":                brain.get("run_id") if isinstance(brain, dict) else "",
+                    "asof":                  asof,
+                    # Mandate, falsifiers, and expected_failure_mode come from the Brain's
+                    # submission narrative fields (shadow-mode accrual — Brains are prompted to
+                    # supply these via tool description enrichment below; sentinel in v1 is OK
+                    # for mandate/liquidity_notes but NOT for falsifiers once enforce is on).
+                    "mandate":               (submission.get("mandate") or
+                                              "Manage the autonomous paper book with full discretion."),
+                    "evidence_planes":       submission.get("evidence_planes") or [],
+                    "source_provenance":     submission.get("source_provenance") or [],
+                    "falsifiers":            submission.get("falsifiers") or [],
+                    "liquidity_notes":       submission.get("liquidity_notes") or "<not provided>",
+                    "expected_failure_mode": submission.get("expected_failure_mode") or "<not provided>",
+                },
+            )
+            out["packet_id"]   = _pgr.packet_id
+            out["packet_meta"] = _pgr.to_meta()
+            if not _pgr.ok:
+                # ENFORCE mode + invalid packet → fall back to no-proposal path (P2: no new risk)
+                decided = False
+                out["decided"] = decided
+                out["packet_rejected"] = True
+        except Exception as _pg_exc:   # noqa: BLE001 — gate must never block the book
+            out["packet_gate_error"] = repr(_pg_exc)[:200]
+
     # 3. price the universe we might trade (targets ∪ held ∪ SPY benchmark)
     held = list((paper_account._load_account(PORTFOLIO_ID).get("positions") or {}).keys())
     target = {h["ticker"]: float(h.get("weight") or 0.0)
@@ -220,7 +259,8 @@ def run_autonomous(asof: str | None = None, *, force: bool = False, armed: bool 
     except Exception as e:                           # noqa: BLE001
         out["write_error"] = repr(e)[:200]
     try:
-        _append_decision_log(asof, submission, executed, skipped, brain)
+        _append_decision_log(asof, submission, executed, skipped, brain,
+                             packet_id=(_pgr.packet_id if _pgr else None))
     except Exception:
         pass
 
@@ -392,7 +432,8 @@ def _build_payload(asof: str, submission: dict | None, prices: dict, executed: l
 
 
 def _append_decision_log(asof: str, submission: dict | None, executed: list,
-                         skipped: list, brain: dict) -> None:
+                         skipped: list, brain: dict,
+                         *, packet_id: str | None = None) -> None:
     from portfolio import registry
     p = registry.data_dir(PORTFOLIO_ID) / "decisions.jsonl"
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -414,6 +455,7 @@ def _append_decision_log(asof: str, submission: dict | None, executed: list,
         "cost_usd": brain.get("cost_usd") if isinstance(brain, dict) else None,
         "model": brain.get("model") if isinstance(brain, dict) else None,
         "error": brain.get("error") if isinstance(brain, dict) else None,
+        "packet_id": packet_id,
     }
     # idempotent per date: keep exactly one entry per asof (latest wins)
     rows = []

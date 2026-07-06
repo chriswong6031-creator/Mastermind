@@ -152,6 +152,39 @@ def run_etf(asof: str | None = None, *, force: bool = False, armed: bool = True,
     decided = bool(submission and submission.get("holdings"))
     out["decided"] = decided
 
+    # 2b. PACKET GATE (ruling R6, Charter P2/P3/P8). Boundary is AFTER the ETF-only
+    # allowlist filter (the universe filter is trusted-Python, not the packet scope) but
+    # BEFORE guardrails + execute. On enforce+invalid: fall back to decided=False (carry-forward),
+    # the same path the book takes when the Brain errors out — no new risk added (P2).
+    _pgr = None
+    if decided:
+        try:
+            from control_plane.packet_gate import process as _packet_process
+            _pgr = _packet_process(
+                PORTFOLIO_ID,
+                submission,
+                paper_account._load_account(PORTFOLIO_ID),
+                extras={
+                    "run_id":                brain.get("run_id") if isinstance(brain, dict) else "",
+                    "asof":                  asof,
+                    "mandate":               (submission.get("mandate") or
+                                              "Rotate the ETF book across US-listed ETFs using regime signals."),
+                    "evidence_planes":       submission.get("evidence_planes") or [],
+                    "source_provenance":     submission.get("source_provenance") or [],
+                    "falsifiers":            submission.get("falsifiers") or [],
+                    "liquidity_notes":       submission.get("liquidity_notes") or "<not provided>",
+                    "expected_failure_mode": submission.get("expected_failure_mode") or "<not provided>",
+                },
+            )
+            out["packet_id"]   = _pgr.packet_id
+            out["packet_meta"] = _pgr.to_meta()
+            if not _pgr.ok:
+                decided = False
+                out["decided"] = decided
+                out["packet_rejected"] = True
+        except Exception as _pg_exc:   # noqa: BLE001 — gate must never block the book
+            out["packet_gate_error"] = repr(_pg_exc)[:200]
+
     # 3. price the universe we might trade (targets ∪ held ∪ SPY benchmark) — ETF-aware (live Yahoo
     #    USD mark with the vendored snapshot / engine parquet as fallback), so off-cache ETFs price.
     held = list((paper_account._load_account(PORTFOLIO_ID).get("positions") or {}).keys())
@@ -237,7 +270,8 @@ def run_etf(asof: str | None = None, *, force: bool = False, armed: bool = True,
     #    7. run the accountability loop (record today + resolve matured forward grades vs SPY), then
     #    8. publish the book contract with the fresh scorecard attached.
     try:
-        _append_decision_log(asof, submission, executed, skipped, brain, risk, guardrail_notes)
+        _append_decision_log(asof, submission, executed, skipped, brain, risk, guardrail_notes,
+                             packet_id=(_pgr.packet_id if _pgr else None))
     except Exception:
         pass
     try:
@@ -595,7 +629,8 @@ def _build_payload(asof: str, submission: dict | None, prices: dict, executed: l
 
 
 def _append_decision_log(asof: str, submission: dict | None, executed: list,
-                         skipped: list, brain: dict, risk: dict, guardrails: list) -> None:
+                         skipped: list, brain: dict, risk: dict, guardrails: list,
+                         *, packet_id: str | None = None) -> None:
     from portfolio import etf_universe, registry
     p = registry.data_dir(PORTFOLIO_ID) / "decisions.jsonl"
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -619,6 +654,7 @@ def _append_decision_log(asof: str, submission: dict | None, executed: list,
         "cost_usd": brain.get("cost_usd") if isinstance(brain, dict) else None,
         "model": brain.get("model") if isinstance(brain, dict) else None,
         "error": brain.get("error") if isinstance(brain, dict) else None,
+        "packet_id": packet_id,
     }
     rows = []
     if p.exists():

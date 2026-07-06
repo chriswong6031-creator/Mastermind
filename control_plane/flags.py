@@ -71,6 +71,8 @@ KNOWN_FLAGS: list[str] = [
     "MASTERMIND_RISKOFF_GROSS",
     "MASTERMIND_RISKOFF_SCORE",
     "MASTERMIND_SELECTION_EXPLORE",
+    # Packet gate
+    "MASTERMIND_PACKET_GATE",
     # Version / program references (found in doc comments / grep, not runtime reads)
     "MASTERMIND_BRIDGE_PROGRAM",
     "MASTERMIND_CHARTER_V",

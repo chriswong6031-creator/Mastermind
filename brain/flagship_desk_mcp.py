@@ -87,7 +87,11 @@ async def get_my_book(args):
       "Weights are fractions of NAV (0-1) summing to <= 1.0 (remainder = cash). Give a one-paragraph "
       "rationale for EVERY holding (required) + an overall summary. Your champions are then checked by "
       "a blind adversary + hard risk caps before they enter the book, so size with that in mind. Call "
-      "this ONCE, at the end, after your research. Confirm pricability with get_quote before relying on a name.",
+      "this ONCE, at the end, after your research. Confirm pricability with get_quote before relying on a name. "
+      "OPTIONAL governance fields (provide when you can — they improve the shadow decision ledger): "
+      "falsifiers (list of strings — what would cause you to reverse this book within 5 days), "
+      "evidence_planes (list of strings — data sources you relied on), "
+      "expected_failure_mode (string — the most likely way this book loses money).",
       {"type": "object", "properties": {
           "holdings": {"type": "array", "items": {"type": "object", "properties": {
               "ticker": {"type": "string"},
@@ -97,6 +101,12 @@ async def get_my_book(args):
               "required": ["ticker", "weight", "rationale"]}},
           "summary": {"type": "string", "description": "overall thesis / how the book is positioned today"},
           "sold_note": {"type": "string", "description": "optional: what you exited or trimmed and why"},
+          "falsifiers": {"type": "array", "items": {"type": "string"},
+                         "description": "what would cause you to reverse this book within 5 days"},
+          "evidence_planes": {"type": "array", "items": {"type": "string"},
+                              "description": "data sources / signal planes you relied on for this decision"},
+          "expected_failure_mode": {"type": "string",
+                                    "description": "the most likely way this book loses money"},
           # W4 B1 — the three-questions duty. Additive (schema growth only): a submission that omits
           # these is still accepted; the judgment book logs 'three_questions_incomplete'. Each
           # not_holding_should row is graded 21 trading days forward as a rotation CALL even absent a trade.
