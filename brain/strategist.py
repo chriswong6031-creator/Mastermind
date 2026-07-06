@@ -156,13 +156,17 @@ def _strategist_input(regime: dict | None, asof: str) -> dict:
     except Exception:  # noqa: BLE001 — additive; never break the seat
         pass
 
-    # W-NW.1 — neural_web_context payload key (flag-gated; compact dict; no cap issue here).
+    # W-NW.1 — neural_web_context payload key (flag-gated; compact market_plane() distillation).
+    # Uses market_plane() — NOT context() — so the injected dict is ~7 scalar fields, not the
+    # full 60-120 KB artifact.  The full artifact would violate the <~6k-token payload budget
+    # (strategist.py:60-61) and could break the brace-extract JSON parse (documented live
+    # incident in the docstring at strategist.py:265).
     # {} when flag OFF or context absent — key always present so the payload schema is stable.
     neural_web_ctx: dict = {}
     try:
-        from brain.neural_web_context import context as _nw_ctx, nw_prompts_enabled as _nw_flag
+        from brain.neural_web_context import market_plane as _nw_market_plane, nw_prompts_enabled as _nw_flag
         if _nw_flag():
-            neural_web_ctx = _nw_ctx()
+            neural_web_ctx = _nw_market_plane()
     except Exception:  # noqa: BLE001 — additive; never break the seat
         pass
 

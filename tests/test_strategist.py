@@ -93,3 +93,67 @@ def test_assess_none_on_bad_json(monkeypatch):
 def test_assess_none_when_no_llm(monkeypatch):
     monkeypatch.setattr(client, "available", lambda: False)
     assert S.strategist_assess("2026-06-22", {"quad": 1}) is None
+
+
+# ---------------------------------------------------------------------------
+# W-NW.1 strategist — neural_web_context key must be compact (market_plane, not context())
+# ---------------------------------------------------------------------------
+
+def test_neural_web_context_key_is_market_plane_not_raw_artifact(monkeypatch):
+    """With MASTERMIND_NW_CONTEXT=1, neural_web_context in _strategist_input must come from
+    market_plane() — a compact ~7-field dict — NOT the full raw context() artifact.
+
+    Distinguishing invariant: market_plane() never contains 'candidate_context'; the full
+    context() artifact always does (it is the main body of the artifact).  We inject a fake
+    market_plane() that returns a known compact sentinel dict and a fake context() that returns
+    a dict with 'candidate_context' (the raw-artifact shape), then assert only the market_plane
+    shape reaches the payload.
+    """
+    import brain.neural_web_context as NWC
+
+    # Sentinel that market_plane() would return — compact, no candidate_context
+    _MARKET_PLANE_SENTINEL = {
+        "verdict": {"direction": "risk_on"},
+        "regime": {"quad": 1},
+        "vol": {},
+        "breadth": {},
+        "contradiction_count": 0,
+        "contradiction_summary": {},
+        "asof": "2026-07-05",
+        "stale": False,
+    }
+
+    # What the raw context() artifact looks like — has candidate_context
+    _RAW_CONTEXT_SENTINEL = {
+        "schema": "v1",
+        "is_context_only": True,
+        "as_of": "2026-07-05",
+        "candidate_context": {"AAPL": {"lobe_signals": {}}},
+        "lobes": {"market": {}, "contradictions": {}},
+    }
+
+    monkeypatch.setenv("MASTERMIND_NW_CONTEXT", "1")
+    monkeypatch.setattr(NWC, "market_plane", lambda: _MARKET_PLANE_SENTINEL)
+    monkeypatch.setattr(NWC, "context", lambda: _RAW_CONTEXT_SENTINEL)
+    monkeypatch.setattr(S, "_load", _fake_load)
+
+    payload = S._strategist_input({"quad": 1, "quad_name": "Goldilocks"}, "2026-07-05")
+    nw = payload["neural_web_context"]
+
+    # Must be the compact market_plane shape, not the raw artifact
+    assert "candidate_context" not in nw, (
+        "neural_web_context key must NOT contain candidate_context (raw artifact leak)"
+    )
+    assert nw.get("asof") == "2026-07-05", "market_plane sentinel asof should be present"
+    assert "stale" in nw, "market_plane shape must have stale key"
+
+
+def test_neural_web_context_key_empty_when_flag_off(monkeypatch):
+    """With MASTERMIND_NW_CONTEXT unset (OFF), neural_web_context key must be {}."""
+    monkeypatch.delenv("MASTERMIND_NW_CONTEXT", raising=False)
+    monkeypatch.setattr(S, "_load", _fake_load)
+
+    payload = S._strategist_input({"quad": 1, "quad_name": "Goldilocks"}, "2026-07-05")
+    assert payload["neural_web_context"] == {}, (
+        "neural_web_context must be {} when MASTERMIND_NW_CONTEXT is unset"
+    )
