@@ -25,6 +25,14 @@ _PATH = _ROOT / "data" / "brain" / "interim_marks.jsonl"
 _CHECKPOINTS = [5, 10]      # business-day trajectory checkpoints (well before the 21-bday final grade)
 _UNDERWATER = -0.03         # rel-return below this at a checkpoint → an early-warning (risk layer input)
 
+# WHY data/brain/interim_marks.jsonl MAY BE ABSENT: record() only appends when all_theses()
+# returns at least one OPEN thesis whose falsifier.check.kind == 'rel_return' AND whose
+# checkpoint window (5 or 10 business days from state_asof) has elapsed by the run date.
+# An absent file is not a bug — it means the conviction sleeve has no graduated open theses
+# yet (book is new, ledger is empty, or no thesis has aged past the first checkpoint).
+# There is no silent swallow on the write path: the outer try/except in record() only catches
+# exceptions from all_theses() or outcomes.label_thesis(), not an intentionally empty fresh list.
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()

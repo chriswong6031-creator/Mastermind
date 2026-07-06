@@ -573,7 +573,7 @@ def _portfolio_status(meta: dict) -> dict:
     if pid == "self_directed":
         try:
             from portfolio import self_directed
-            bk = self_directed.book()
+            bk = self_directed.book(read_only=True)  # GET must not settle pending orders
             alloc = bk.get("allocation") or {}
             status.update({
                 "nav": bk.get("nav"),
@@ -1057,7 +1057,7 @@ def api_self_directed() -> JSONResponse:
         held = list((self_directed._load_account().get("positions") or {}).keys())
         pend = [o.get("ticker") for o in self_directed._load_pending()]
         prices = _live_prices(sorted({*held, *[t for t in pend if t]}))
-        return JSONResponse(self_directed.book(prices=prices))
+        return JSONResponse(self_directed.book(prices=prices, read_only=True))
     except Exception as exc:  # noqa: BLE001 — never 500 the dashboard
         return JSONResponse({"nav": 1_000_000.0, "cash": 1_000_000.0, "invested": 0.0,
                              "positions": [], "pending": [],

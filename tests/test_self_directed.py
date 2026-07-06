@@ -340,3 +340,45 @@ def test_mark_prices_override_wins(sd_nav) -> None:
     sd_nav.place_order("AAPL", "buy", 1000, price=100.0, market_open=True)
     row = sd_nav.mark(prices={"AAPL": 150.0, "SPY": 500.0}, asof="2026-06-03")
     assert abs(row["nav"] - 1_050_000.0) < 1.0             # 900k + 1000*150
+
+
+# ---------------------------------------------------------------------------
+# GET /api/self_directed purity — book(read_only=True) must not write files
+# ---------------------------------------------------------------------------
+
+def test_book_read_only_does_not_settle_pending(sd, tmp_path) -> None:
+    """book(read_only=True) must not mutate any file under data/portfolio*/self_directed/.
+
+    Regression guard: GET /api/self_directed previously called book() which always ran
+    settle_pending(), mutating pending.json and account.json on every dashboard refresh.
+    With read_only=True the settle step is skipped; the pending order stays queued.
+    """
+    # queue a pending order (market is closed)
+    sd.place_order("AAPL", "buy", 100, price=120.0, market_open=False)
+    pending_before = sd._load_pending()
+    account_before = sd._load_account()
+
+    # book(read_only=True) — simulates what GET /api/self_directed now calls
+    result = sd.book(prices={"AAPL": 121.0}, market_open=True, read_only=True)
+
+    pending_after = sd._load_pending()
+    account_after = sd._load_account()
+
+    # the pending order must still be in the queue (not settled)
+    assert len(pending_after) == len(pending_before), (
+        "book(read_only=True) settled a pending order — GET route must not mutate state"
+    )
+    # cash and positions unchanged
+    assert account_after["cash"] == account_before["cash"]
+    assert account_after["positions"] == account_before["positions"]
+    # the read did return a non-empty book dict
+    assert isinstance(result, dict) and "nav" in result
+
+
+def test_book_default_still_settles(sd) -> None:
+    """book() without read_only (the scheduler / publish path) continues to settle orders."""
+    sd.place_order("AAPL", "buy", 50, price=100.0, market_open=False)
+    assert len(sd._load_pending()) == 1
+    # call book() with market open and no read_only flag — settlement must fire
+    sd.book(prices={"AAPL": 100.0}, market_open=True)
+    assert len(sd._load_pending()) == 0          # order consumed by settlement

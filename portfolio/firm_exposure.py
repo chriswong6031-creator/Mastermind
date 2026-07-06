@@ -1,18 +1,25 @@
-"""Firm-level cross-book exposure MONITOR — read-only concentration radar.
+"""Firm-level cross-book exposure — monitor AND binding cap (two layers, same module).
 
 Mastermind runs several independent paper books (flagship, autonomous/US Brain, heavyweight,
 china/CN Brain, hk/HK Brain, etf/ETF Brain). Each is sized in isolation by its own manager, so
-NOTHING in the system sees the FIRM-WIDE picture: when three different Brains independently pile
-into the same name — or the same sector — the firm is concentrated even though no single book
-breached its own mandate. This module computes that cross-book view and FLAGS the pile-ups.
+NOTHING in a single book sees the FIRM-WIDE picture: three Brains independently max-convicting
+the same name concentrates the firm even if every individual book is within its own mandate.
 
-It is deliberately TOOTHLESS — a MONITOR, alert, and dashboard surface only. It NEVER changes an
-allocation, queues an order, or touches a paper account; a hard "firm allocator" that overrides a
-book's sizing is explicitly OUT OF SCOPE for v1 (too risky per the failure register). This is
-ADDITIVE: it can only raise a flag, never a trade.
+TWO LAYERS:
+
+  1. summary() — read-only MONITOR. Aggregates cross-book exposure and flags pile-ups; never
+     changes an allocation, queues an order, or touches a paper account. Display and alert use.
+
+  2. headroom() / clamp_book() — BINDING firm cap (W3, Architecture Stage-6.3), DEFAULT ON.
+     Called by every US book's finalize path (flagship, autonomous, etf, heavyweight — four call
+     sites) BEFORE a book's target weights are committed. subtract-only invariant: headroom only
+     clamps a book's target DOWN toward cash; it never raises it.  Absent peer data may not
+     un-cap (returns +inf, leaving only per-book caps active), and a missing cluster config
+     falls back to hard-coded defaults so the cap can never be silently removed.
 
     from portfolio import firm_exposure
-    firm_exposure.summary()      # the full read-only firm-exposure dict
+    firm_exposure.summary()                   # read-only firm-exposure dict
+    firm_exposure.headroom("NVDA", "flagship")  # remaining weight the flagship may hold
 
 Honest about currency. NAVs are per-book base currency (USD for the US books, CNY for china, HKD
 for hk). Summing raw weights × NAV across books would silently add CNY to USD, so we aggregate

@@ -69,8 +69,9 @@ def _severity_cap(severity: int) -> float | None:
 
 
 def enabled() -> bool:
-    """The fast de-risk trigger runs only when explicitly armed. Default OFF → the scheduler hooks are
-    no-ops and every book is byte-identical to today."""
+    """The fast de-risk trigger runs only when explicitly armed. Code default is OFF; production
+    .env sets MASTERMIND_FAST_DERISK=1 (the trigger is armed in the live deployment). When unset
+    the scheduler hooks are no-ops and every book is byte-identical to a non-derisk run."""
     return os.environ.get("MASTERMIND_FAST_DERISK", "0").strip().lower() in ("1", "true", "yes", "on")
 
 

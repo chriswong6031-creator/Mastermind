@@ -2,8 +2,9 @@
 
 Importing anything under `bot.` first bootstraps the vendored macro
 dashboard onto sys.path so `engine.*` and `lib.*` import as a library.
-In production `vendor/macro` is a pinned git submodule; for local Phase 0
-it is a symlink to the working macro checkout (so `data/` is populated).
+`vendor/macro` is a SYMLINK to `vendor/macro_src` (a sparse checkout of
+the macro-dashboard repo), not a git submodule — `git submodule` commands
+do not apply here; update by advancing the sparse checkout instead.
 """
 import os
 import sys

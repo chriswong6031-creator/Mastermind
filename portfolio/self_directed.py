@@ -589,13 +589,18 @@ def quote_info(ticker: str) -> dict:
 
 
 def book(*, prices: dict[str, float] | None = None, now: datetime | None = None,
-         market_open: bool | None = None) -> dict:
+         market_open: bool | None = None, read_only: bool = False) -> dict:
     """The Self-Directed book contract for the dashboard.
 
     Settles pending orders first (if the market is open), then returns positions with live
     marks + weights, the allocation scorecard, the market state, and the pending queue.
-    `prices` (TICKER→px) overrides live marks (used by tests / a shared price fetch)."""
-    settle_pending(now=now, market_open=market_open, prices=prices)
+    `prices` (TICKER→px) overrides live marks (used by tests / a shared price fetch).
+
+    `read_only=True` skips the settle_pending() side-effect so a GET request does not
+    mutate state files.  The scheduled mark-sweep (app/scheduler.py settle_pending job and
+    the publish path) call book() without this flag so settlement still fires on schedule."""
+    if not read_only:
+        settle_pending(now=now, market_open=market_open, prices=prices)
     state = _load_account()
     theses = _load_theses()
     prices = dict(prices or {})
