@@ -166,32 +166,11 @@ if FastAPI is not None:
         # supervisor (launchd KeepAlive) restarts it clean. Never trades; strictly less risk
         # than a silent scheduler death (charter P2/P10).
         def _scheduler_watchdog(sch) -> None:
-            import os as _os
             import time as _time
             while True:
                 _time.sleep(60)
-                try:
-                    th = getattr(sch, "_thread", None)
-                    if th is not None and th.is_alive():
-                        continue
-                    try:
-                        from control_plane import run_events as _re
-                        _re.append({
-                            "kind": "guardrail", "job": "scheduler", "book": "",
-                            "step": "watchdog", "status": "error", "severity": "HARD_STOP",
-                            "err": "APScheduler thread dead — exiting for supervisor restart",
-                            "actor": "system",
-                        })
-                    except Exception:
-                        pass
-                    import logging as _logging
-                    _logging.getLogger("app.main").critical(
-                        "scheduler watchdog: APScheduler thread dead — exiting (supervisor restarts)")
-                    print("scheduler watchdog: APScheduler thread dead — exiting (supervisor restarts)",
-                          flush=True)
-                    _os._exit(70)
-                except Exception:  # noqa: BLE001 — the watchdog itself must never crash the app
-                    continue
+                if not watchdog_check_once(sch):
+                    return  # unreachable in production (exit_fn exits); reachable in tests
 
         if app.state.scheduler is not None:
             import threading as _threading
@@ -557,3 +536,40 @@ if FastAPI is not None:
                         "engine_score": p.get("engine_score"),
                         "viability": p.get("viability"), "key_risks": p.get("key_risks") or []}
         return {"error": "not found", "id": id}
+
+
+def watchdog_check_once(sch, exit_fn=None, events_root=None) -> bool:
+    """One scheduler-watchdog probe (MW1 incident hardening; extracted module-level
+    so the M7 drill tests the PRODUCTION logic, not an inline copy — S10).
+
+    Returns True when the APScheduler thread is alive (keep watching). On a dead
+    thread: writes a HARD_STOP run-event, logs critically, then calls ``exit_fn(70)``
+    (default ``os._exit`` — fail-fast for the supervisor to restart) and returns
+    False. NEVER raises.
+    """
+    import os as _os
+    if exit_fn is None:
+        exit_fn = _os._exit
+    try:
+        th = getattr(sch, "_thread", None)
+        if th is not None and th.is_alive():
+            return True
+        try:
+            from control_plane import run_events as _re
+            _re.append({
+                "kind": "guardrail", "job": "scheduler", "book": "",
+                "step": "watchdog", "status": "error", "severity": "HARD_STOP",
+                "err": "APScheduler thread dead — exiting for supervisor restart",
+                "actor": "system",
+            }, root=events_root)
+        except Exception:
+            pass
+        import logging as _logging
+        _logging.getLogger("app.main").critical(
+            "scheduler watchdog: APScheduler thread dead — exiting (supervisor restarts)")
+        print("scheduler watchdog: APScheduler thread dead — exiting (supervisor restarts)",
+              flush=True)
+        exit_fn(70)
+        return False
+    except Exception:  # noqa: BLE001 — the watchdog itself must never crash the app
+        return True
