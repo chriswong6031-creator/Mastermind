@@ -1082,7 +1082,10 @@ class TestIncidentReplays:
         monkeypatch.setitem(sys.modules, "brain.experiment_registry", stub)
         parent = sys.modules.get("brain")
         if parent:
-            setattr(parent, "experiment_registry", stub)
+            # monkeypatch (not raw setattr) — `import brain.experiment_registry as er`
+            # binds through THIS parent attribute, so an unrestored stub poisons
+            # every later test in the process (raising=False: attr may not exist yet).
+            monkeypatch.setattr(parent, "experiment_registry", stub, raising=False)
 
         sched._experiment_maturity_job()  # must not raise
 
