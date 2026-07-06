@@ -253,6 +253,40 @@ class TestRunLedger:
         # must not raise even if ledger is broken
         run_ledger.end_run(handle, "ok", root=tmp_path)
 
+    def test_end_never_raises_on_none_handle(self, tmp_path):
+        # The except handler itself must not dereference a bad handle —
+        # never-raise has to hold on the failure path, not just the write path.
+        from control_plane import run_ledger
+        run_ledger.end_run(None, "ok", root=tmp_path)  # type: ignore[arg-type]
+
+    def test_end_never_raises_on_broken_elapsed(self, tmp_path):
+        from control_plane import run_ledger
+
+        class _BrokenHandle:
+            job = "broken_job"
+            book = ""
+            run_id = "x"
+            trigger = "cron"
+
+            def elapsed(self):
+                raise RuntimeError("clock broke")
+
+        run_ledger.end_run(_BrokenHandle(), "ok", root=tmp_path)  # type: ignore[arg-type]
+
+    def test_acquire_or_log_writes_lock_conflict(self, tmp_path):
+        from control_plane import locks
+        first = locks.acquire_or_log("book:testbook", job="j", book="testbook",
+                                     root=tmp_path, events_root=tmp_path)
+        assert first is not None
+        second = locks.acquire_or_log("book:testbook", job="j", book="testbook",
+                                      root=tmp_path, events_root=tmp_path)
+        assert second is None
+        ledger = tmp_path / "data" / "governance" / "run_events.jsonl"
+        rows = [json.loads(l) for l in ledger.read_text().splitlines()]
+        conflicts = [r for r in rows if r.get("kind") == "lock_conflict"]
+        assert len(conflicts) == 1 and conflicts[0]["status"] == "lock_held"
+        first.release() if hasattr(first, "release") else first.__exit__(None, None, None)
+
     def test_severity_propagated(self, tmp_path):
         from control_plane import run_ledger
         handle = run_ledger.start_run("sev_job", root=tmp_path)

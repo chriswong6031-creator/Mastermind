@@ -147,3 +147,40 @@ def acquire(
     except Exception as exc:  # noqa: BLE001
         log.warning("control_plane.locks.acquire(%r) failed: %s", name, exc)
         return None
+
+
+def acquire_or_log(
+    name: str,
+    *,
+    job: str = "",
+    book: str = "",
+    root: str | Path | None = None,
+    events_root: str | Path | None = None,
+) -> Optional[Lock]:
+    """``acquire`` + the masterplan's "skip+log" overlap policy in one call.
+
+    On conflict (or unexpected acquire failure) appends a ``lock_conflict``
+    run-event so an overlapping run can never pass silently, then returns
+    None. Call sites still decide to skip. NEVER raises.
+    """
+    lock = acquire(name, root=root)
+    if lock is None:
+        try:
+            from control_plane import run_events
+
+            run_events.append(
+                {
+                    "kind": "lock_conflict",
+                    "job": job,
+                    "book": book,
+                    "step": "acquire",
+                    "status": "lock_held",
+                    "severity": "ADVISORY_ONLY",
+                    "actor": "system",
+                    "extra": {"lock": name},
+                },
+                root=events_root,
+            )
+        except Exception:  # noqa: BLE001 — logging must never block the skip
+            pass
+    return lock

@@ -172,6 +172,9 @@ def end_run(
 
     NEVER raises.
     """
+    # Captured OUTSIDE the try so the except handler cannot itself raise on a
+    # None/stub handle — the never-raise contract must hold on the failure path.
+    job = getattr(handle, "job", "?")
     try:
         from control_plane import run_events
 
@@ -196,4 +199,4 @@ def end_run(
         run_events.append(event, root=root)
 
     except Exception as exc:  # noqa: BLE001
-        log.warning("control_plane.run_ledger.end_run(%r) failed: %s", handle.job, exc)
+        log.warning("control_plane.run_ledger.end_run(%r) failed: %s", job, exc)

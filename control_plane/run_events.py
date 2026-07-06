@@ -14,7 +14,9 @@ EVENT-ID CONTRACT
 ``event_id`` is the first 16 hex digits of SHA-256 over the canonical-JSON
 representation of (ts, kind, job, book, step) — deterministic given those
 five fields.  The full payload is NOT included so callers can reconstruct
-the id without the full event dict.
+the id without the full event dict.  It is a CONTENT HASH, NOT a primary
+key: two same-second events with an identical key tuple collide.  Both rows
+are still written (append-only); consumers must never dedupe by event_id.
 
 Standard fields (all optional except ts and event_id):
     ts          (str)  UTC ISO-8601 isoformat(timespec="seconds") — set automatically
