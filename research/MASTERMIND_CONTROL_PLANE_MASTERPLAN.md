@@ -224,6 +224,31 @@ Routing: **Sonnet builds, Opus reviews, Fable adjudicates/merges.** Haiku only f
 
 ## 3. Status log
 
+- **2026-07-06 (Fable): MW6 SHIPPED + merged + DEPLOYED — THE BUILD PROGRAM IS COMPLETE**
+  (merges through e5fc30d; live: /health e5fc30d, operator POST w/o bearer → 401,
+  /api/provenance serving sha+snapshot+PAPER, 18 jobs scheduled). MW6 delivered: operator
+  route TIER (bearer token required on all mutating/LLM-triggering POSTs — cookie session
+  alone is read-only), in-memory rate limits (LLM 8/hr burst-2 → 429+Retry-After+run-event),
+  MASTERMIND_SERVE_ONLY mode (scheduler never starts, first-run threads skipped, operator
+  paths 403, /health flag — implemented fresh; reconcile note left for the stale WIP
+  worktrees), provenance surface, and the **M7 FAILURE-INJECTION DRILL as permanent CI**:
+  ten scenarios (stale artifact freeze, peer sentinel, corrupted mark, auth-off refusal,
+  overlapping run lock, invalid packet shadow/enforce, low-authority-signal asymmetric gate,
+  benchmark-unavailable degradation, no-auto-arm, deploy-lag + watchdog) each asserting
+  severity + ledger record + no unauthorized risk increase against PRODUCTION seams —
+  S10 was rewritten after review proved the first version blind to production mutations
+  (watchdog extracted to app.main.watchdog_check_once; mutation-tested), S2 asserts numeric
+  headroom==0.0, S7 sweeps every regime×tier×gate for never-bull. The strengthened serve-only
+  test caught a REAL NameError in the serve-only startup path pre-deploy. Final full suite
+  (vendor-symlinked worktree): only the 3 catalogued data-dependent reds.
+  **STANDING CLOCKS / OPEN DECISIONS:** (1) packet-gate ENFORCE flip — review shadow
+  packet_rejections ~2026-07-20; flip = governance event (R6/P8). (2) VPS mirror redeploy
+  with MASTERMIND_SERVE_ONLY=1 + current master (closes the public /health leak + unguarded
+  mirror). (3) launchd supervision blocked on user TCC/FDA grant (plist staged). (4) NW
+  governance-ledger export/sync (R2 phase 2) — future work. (5) W7 clocks continue
+  (07-17 posture arming, 07-24 heavyweight A/B, 07-31 CN funnel).
+
+
 - **2026-07-06 (Fable): MW5 SHIPPED + merged + DEPLOYED** (merge 6e24618; backfill EXECUTED in
   production: 60 labeled rows, 0 overwrites — R8 held). The firm ecology exists: per-book
   mandate-compliance packets (all 6 books emit post-build; breaches -> ADVISORY run-events;
