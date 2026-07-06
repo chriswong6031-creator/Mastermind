@@ -797,14 +797,19 @@ def _build_benchmark_ledger(asof: str, union_usd: dict) -> None:
     """Build the four-bogey benchmark ledger for `asof` from a rolling mark history of SPY + the
     defensive basket. We accumulate today's marks into data/benchmark/_series.json (a small
     {ticker:{date:px}} store) so the renorm has a real window; the ledger then renorms every bogey
-    to growth-of-$1 and ranks them. Best-effort; never raises. Regime read is the live risk frame
-    (degrades to plain-SPY if absent — never pins a state)."""
+    to growth-of-$1 and ranks them.  After the US build, build the two regional ledgers (china / hk)
+    with the same series store (FXI is the proxy for both).  Best-effort throughout; never raises.
+    Regime read is the live risk frame (degrades to plain-SPY / plain-proxy if absent)."""
     import json as _json
-    from pathlib import Path as _Path
     from brain import benchmark_ledger
-    root = _Path(__file__).resolve().parent.parent
-    series_path = root / "data" / "benchmark" / "_series.json"
-    want = [benchmark_ledger.SPY, *benchmark_ledger.DEFENSIVE_BASKET]
+    from control_plane import run_events as _re
+    # Use the benchmark_ledger module's _BENCH_DIR so monkeypatching in tests redirects writes
+    # to the sandbox (rather than the live data/benchmark/ tree).
+    series_path = benchmark_ledger._BENCH_DIR / "_series.json"
+    # US build: accumulate SPY + defensive basket + FXI (also needed by regional bogeys)
+    want = [benchmark_ledger.SPY, *benchmark_ledger.DEFENSIVE_BASKET,
+            *benchmark_ledger.CN_BOGEY, *benchmark_ledger.HK_BOGEY]
+    want = list(dict.fromkeys(want))  # deduplicate, preserve order
     try:
         series = _json.loads(series_path.read_text()) if series_path.exists() else {}
     except Exception:  # noqa: BLE001
@@ -825,6 +830,52 @@ def _build_benchmark_ledger(asof: str, union_usd: dict) -> None:
     except Exception:  # noqa: BLE001
         regime = None
     benchmark_ledger.build(series, asof=asof, regime=regime)
+
+    # Regional bogeys (china + hk) — best-effort; a miss MUST NOT abort the US build.
+    # Each bogey row carries bogey_is_proxy=True + proxy_reason so any lifecycle rec that cites
+    # this bogey is honest about the instrument (FXI ≠ CSI300 / Hang Seng).
+    for _book_id in benchmark_ledger.BOOK_BOGEY_OVERRIDES:
+        try:
+            result = benchmark_ledger.build_regional(series, _book_id, asof=asof)
+            # stamp proxy metadata onto the regional bogey row
+            _bogey = (result.get("bogeys") or {}).get("regional") or {}
+            _bogey["bogey_is_proxy"] = True
+            _proxy_reasons = {
+                "china": "FXI (iShares China Large-Cap) is a USD-listed proxy for CSI300/A-shares; "
+                         "000300.SS and MCHI/ASHR are not in the yahoo parquet store as of 2026-07-03.",
+                "hk":    "FXI is the only China-region ETF in the yahoo parquet store; "
+                         "2800.HK (Tracker Fund of HK) is the canonical HK proxy but is not yet priced.",
+            }
+            _bogey["proxy_reason"] = _proxy_reasons.get(
+                _book_id,
+                f"constituent list {benchmark_ledger.BOOK_BOGEY_OVERRIDES[_book_id]} is a proxy; "
+                "update BOOK_BOGEY_OVERRIDES when a canonical instrument is available.",
+            )
+            _re.append({
+                "kind": "build_regional_benchmark",
+                "job": "daily_mark",
+                "book": _book_id,
+                "step": "build_regional",
+                "status": "ok",
+                "bogey_is_proxy": True,
+                "proxy_reason": _bogey["proxy_reason"],
+                "n_points": _bogey.get("n_points"),
+                "actor": "system",
+            })
+        except Exception as _exc:  # noqa: BLE001 — regional miss never aborts US build
+            try:
+                _re.append({
+                    "kind": "step_failed",
+                    "job": "daily_mark",
+                    "book": _book_id,
+                    "step": "build_regional_benchmark",
+                    "status": "error",
+                    "severity": "ADVISORY_ONLY",
+                    "err": _exc,
+                    "actor": "system",
+                })
+            except Exception:  # noqa: BLE001
+                pass
 
 
 def _today_iso() -> str:
