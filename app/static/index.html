@@ -1317,8 +1317,7 @@ body.page-mm .mm-macro-tag.neu  { background: color-mix(in srgb, var(--muted) 16
 
 /* ── top nav (Dashboard / Research view switch) ──────────────────────────── */
 body.page-mm #mm-nav { position: sticky; top: 0; z-index: 60; display: flex; align-items: center; gap: 14px;
-  flex-wrap: wrap; padding: 9px 4px; margin-bottom: 4px;
-  border-bottom: 1px solid var(--line); }
+  flex-wrap: wrap; padding: 9px 4px; margin-bottom: 4px; }            /* opaque + same color as the page → seamless, no visible bar */
 /* top loading bar — immediate feedback during portfolio switches / data loads */
 #mm-loadbar { position: fixed; top: 0; left: 0; height: 3px; width: 0; z-index: 200;
   background: linear-gradient(90deg, var(--info, #3b82f6), #7c5cff);
@@ -1629,6 +1628,84 @@ body.page-mm.view-self #view-self .mm-section { display: block !important; }
 .mm-sd-pend-chip .x { cursor: pointer; color: var(--muted); font-weight: 800; padding: 0 2px; }
 .mm-sd-pend-chip .x:hover { color: var(--down); }
 .mm-sd-row-thesis td { padding: 0 !important; border-bottom: none; }
+
+/* ════════════════════════════════════════════════════════════════════════════
+   PREMIUM POLISH — depth, frosted chrome, and micro-detail finish layered on top
+   of the existing design system. Purely additive + theme-aware: every value
+   resolves from the same --bg/--panel/--line/--info/--muted tokens, so dark,
+   light, and the zh red/green swap all inherit it for free. Nothing here touches
+   layout or data wiring — it adds the elevation, glass and finish that separate a
+   competent dashboard from a production SaaS surface.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+/* elevation tokens — a soft ambient drop + a faint top "lip" highlight that
+   catches light: the two-layer recipe premium dashboards use for real depth. */
+body.page-mm {
+  --mm-elev: 0 1px 2px rgba(8,12,22,.20), 0 12px 30px -16px rgba(8,12,22,.55);
+  --mm-lip:  inset 0 1px 0 rgba(255,255,255,.045);
+}
+html[data-theme="light"] body.page-mm {
+  --mm-elev: 0 1px 2px rgba(28,40,66,.05), 0 14px 32px -18px rgba(28,40,66,.20);
+  --mm-lip:  inset 0 1px 0 rgba(255,255,255,.80);
+}
+
+/* lift every panel off the canvas — the single biggest jump in perceived quality,
+   and in light mode it also fixes the near-invisible hairline between white cards
+   and the soft-grey background. The transition only fires on theme toggle (props
+   don't animate on first paint), so the whole surface glides between modes. */
+body.page-mm .panel {
+  box-shadow: var(--mm-lip), var(--mm-elev);
+  /* glide only shadow + border on theme toggle — backgrounds snap in sync so the
+     hero's gradient and the plain panels never desync through a muddy mid-fade */
+  transition: border-color .28s ease, box-shadow .28s ease;
+}
+
+/* the command hero is the focal point — give it a touch more presence: a barely
+   -there accent wash from the top and a slightly deeper, faintly-tinted shadow. */
+body.page-mm #hero {
+  background: linear-gradient(177deg, color-mix(in srgb, var(--info) 5%, var(--panel)), var(--panel) 46%);
+  box-shadow: var(--mm-lip), 0 1px 2px rgba(8,12,22,.22),
+              0 20px 46px -22px color-mix(in srgb, var(--info) 20%, rgba(8,12,22,.62));
+}
+html[data-theme="light"] body.page-mm #hero {
+  box-shadow: var(--mm-lip), 0 1px 2px rgba(28,40,66,.06),
+              0 22px 48px -24px color-mix(in srgb, var(--info) 26%, rgba(28,40,66,.24));
+}
+
+/* sticky nav — NO border/shadow. Background intentionally removed (was var(--bg)),
+   so the bar is transparent and scrolled content shows through beneath it. */
+body.page-mm #mm-nav {
+  border: 0;
+  box-shadow: none;
+}
+
+/* thin, self-effacing scrollbars — they fade into the canvas and only firm up on
+   hover, the way every polished desktop-web app handles overflow now. */
+body.page-mm { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--muted) 38%, transparent) transparent; }
+body.page-mm ::-webkit-scrollbar { width: 12px; height: 12px; }
+body.page-mm ::-webkit-scrollbar-track { background: transparent; }
+body.page-mm ::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--muted) 34%, transparent);
+  border: 3px solid transparent; border-radius: 9px; background-clip: padding-box; }
+body.page-mm ::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--muted) 60%, transparent); background-clip: padding-box; }
+
+/* brand-tinted text selection */
+body.page-mm ::selection { background: color-mix(in srgb, var(--info) 30%, transparent); }
+
+/* loading / empty glyphs breathe gently instead of sitting dead on the panel */
+body.page-mm .mm-empty-icon { animation: mmEmptyBreathe 2.8s ease-in-out infinite; }
+@keyframes mmEmptyBreathe { 0%, 100% { opacity: .42; } 50% { opacity: .80; } }
+
+/* keyboard focus rings on page-local controls theme.css doesn't already cover */
+body.page-mm :is(.mm-nav-tab, .mm-pf-tab, .mm-rsub-tab, .mm-sd-btn, .mm-sd-qbtn,
+  .mm-pager-btn, .mm-auto-more, .mm-dec-toggle):focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--info) 65%, transparent); outline-offset: 2px; }
+
+@media (prefers-reduced-motion: reduce) {
+  body.page-mm .mm-empty-icon { animation: none; }
+  body.page-mm .panel, body.page-mm #mm-nav { transition: none; }
+}
 </style>
 </head>
 <body class="page-mm">
@@ -1648,7 +1725,7 @@ body.page-mm.view-self #view-self .mm-section { display: block !important; }
 .mm-pf-tab.active{color:var(--text,#e6e9ef);background:var(--bg,#0e1117);
   border-color:var(--border,rgba(127,127,127,.28));box-shadow:0 1px 3px rgba(0,0,0,.18)}
 .mm-pf-dot{width:7px;height:7px;border-radius:50%;flex:0 0 auto}
-.mm-pf-dot.gated{background:#3b82f6}.mm-pf-dot.autonomous{background:#a855f7}.mm-pf-dot.heavyweight{background:#f59e0b}.mm-pf-dot.china{background:#ef4444}.mm-pf-dot.hk{background:#10b981}
+.mm-pf-dot.gated{background:#3b82f6}.mm-pf-dot.autonomous{background:#a855f7}.mm-pf-dot.heavyweight{background:#f59e0b}.mm-pf-dot.china{background:#ef4444}.mm-pf-dot.hk{background:#10b981}.mm-pf-dot.etf{background:#06b6d4}
 .mm-pf-sub .up{color:var(--up,#16a34a)}.mm-pf-sub .down{color:var(--down,#dc2626)}
 @media(max-width:760px){.mm-pf-tab .mm-pf-sub{display:none}.mm-pf-tab{padding:6px 10px}}
 
@@ -1661,6 +1738,7 @@ body.page-mm.view-self #view-self .mm-section { display: block !important; }
 .mm-auto-badge.heavyweight{background:linear-gradient(135deg,#f59e0b,#d97706)}
 .mm-auto-badge.china{background:linear-gradient(135deg,#ef4444,#dc2626)}
 .mm-auto-badge.hk{background:linear-gradient(135deg,#10b981,#059669)}
+.mm-auto-badge.etf{background:linear-gradient(135deg,#06b6d4,#0891b2)}
 .mm-auto-title{font-weight:800;font-size:15px;line-height:1.2}
 .mm-auto-tag{font-size:12px;color:var(--muted)}
 .mm-auto-meta{color:var(--muted);font-size:12px;display:flex;gap:16px;flex-wrap:wrap;font-variant-numeric:tabular-nums}
@@ -1975,7 +2053,10 @@ body.page-mm.view-self #view-self .mm-section { display: block !important; }
       </span>
       <span class="mm-ec-leg-item">
         <span class="mm-ec-leg-line" style="background:var(--muted);opacity:.55;border-top:2px dashed var(--muted);height:0;margin-top:1px"></span>
-        <span class="l-en">S&amp;P 500 ($1M ref)</span><span class="l-zh">标普500（$1M参考）</span>
+        <!-- benchmark symbol is book-specific (SPY for US books, FXI for the China book, …) — set
+             dynamically by renderEquityCurve from /api/performance .benchmark. The text below is a
+             static fallback only, shown until the first data load. -->
+        <span id="ec-leg-bench">S&amp;P 500 ($1M ref)</span>
       </span>
       <span style="margin-left:auto;font-size:11px;color:var(--muted)" id="ec-range-label"></span>
     </div>
@@ -2042,6 +2123,14 @@ body.page-mm.view-self #view-self .mm-section { display: block !important; }
     </div>
     <div class="mm-dec-list" id="dec-list"></div>
   </div>
+</div>
+
+<!-- ── SIZING SCORECARD (Brain books with an accountability ledger: heavyweight, etf) ──
+     Forward-graded sizing skill: weight-IC (did bigger bets earn bigger relative returns?),
+     book edge, hit-rate, conviction breakdown. Rendered from the book payload's `accountability`
+     by renderSizingScorecard(); the section hides itself when the active book has no ledger. -->
+<div class="mm-section" id="sizing-sec" style="display:none">
+  <div class="panel span12" id="sizing-card"></div>
 </div>
 
 <div class="mm-section grid mm-feeds-row">
@@ -2111,6 +2200,16 @@ body.page-mm.view-self #view-self .mm-section { display: block !important; }
 <div class="mm-section">
   <div class="panel span12 mm-collapsible mm-collapsed" id="fundamentals" style="grid-column:span 12">
     <div class="mm-empty"><span class="mm-empty-icon">⊙</span><span class="l-en">Loading fundamental factors…</span><span class="l-zh">加载基本面因子中…</span></div>
+  </div>
+</div>
+
+<!-- ── LEARNING MODELS (CatBoost statistical student + Opus-mimic distillation) ──
+     The self-improving loop's tabular layer: a CatBoost regressor learns which names beat SPY over
+     the universe log (the student), and a classifier learns to mimic Opus's buy decisions (distill).
+     Read-only status + top predicted edges from /api/student + /api/distill (renderLearningModels). -->
+<div class="mm-section">
+  <div class="panel span12 mm-collapsible mm-collapsed" id="learning-models" style="grid-column:span 12">
+    <div class="mm-empty"><span class="mm-empty-icon">⊙</span><span class="l-en">Loading learning models…</span><span class="l-zh">加载学习模型中…</span></div>
   </div>
 </div>
 
@@ -2359,6 +2458,7 @@ body.page-mm.view-self #view-self .mm-section { display: block !important; }
 <!-- 4. Interactivity -->
 <script src="/theme.js" defer></script>
 <script src="/chat.js" defer></script>
+<script src="/account.js" defer></script>
 <script>
 'use strict';
 
@@ -2657,7 +2757,9 @@ var I18N = {
   'sd.thesis_ph':         { en: 'Why do you own this? What confirms it, what would prove you wrong, when do you reassess?', zh: '你为何持有？什么能确认它？什么会证明你错了？何时重新评估？' },
   'sd.thesis_save':       { en: 'Save thesis', zh: '保存论点' },
   'sd.thesis_saved':      { en: 'Saved', zh: '已保存' },
+  'sd.thesis_cleared':    { en: 'Thesis cleared', zh: '论点已清除' },
   'sd.thesis_none':       { en: 'No thesis yet.', zh: '尚无论点。' },
+  'sd.queued_fill':       { en: 'filled from a queued order', zh: '由排队订单成交' },
   'sd.has_thesis':        { en: 'thesis', zh: '有论点' },
   'sd.quick_buy':         { en: 'Buy', zh: '买入' },
   'sd.quick_sell':        { en: 'Sell', zh: '卖出' },
@@ -2737,9 +2839,9 @@ function helpIcon(key) {
 
 // colored P&L cell -> {txt, cls}. null pnl renders an honest dash.
 function pnlCell(pnl, pct) {
-  if (pnl == null) return { txt: '—', cls: '' };
+  if (pnl == null || isNaN(pnl)) return { txt: '—', cls: '' };
   var txt = (pnl >= 0 ? '+' : '-') + _ccySym() + Math.abs(Math.round(pnl)).toLocaleString()
-          + (pct != null ? ' <span style="opacity:.7">(' + (pct >= 0 ? '+' : '') + pct.toFixed(1) + '%)</span>' : '');
+          + (pct != null && !isNaN(pct) ? ' <span style="opacity:.7">(' + (pct >= 0 ? '+' : '') + pct.toFixed(1) + '%)</span>' : '');
   return { txt: txt, cls: pnl >= 0 ? 'mm-pnl-pos' : 'mm-pnl-neg' };
 }
 
@@ -2799,10 +2901,15 @@ function inlineRender(s) {
 // ── helpers ──────────────────────────────────────────────────────────────────
 var E = function(id) { return document.getElementById(id); };
 var esc = function(s) {
-  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  // escape quotes too (not just &<>): LLM/server text is interpolated into double-quoted
+  // title="…" attributes (Desk rationale, posture drivers, taglines), where a bare " would
+  // terminate the attribute and inject. &quot;/&#39; render as literal quotes in text content,
+  // so this is safe everywhere esc() is already used.
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+                      .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 };
-var pct = function(v) { return v == null ? '—' : (v * 100).toFixed(1) + '%'; };
-var pctInt = function(v) { return v == null ? '—' : (v * 100).toFixed(0) + '%'; };
+var pct = function(v) { return (v == null || isNaN(v)) ? '—' : (v * 100).toFixed(1) + '%'; };
+var pctInt = function(v) { return (v == null || isNaN(v)) ? '—' : (v * 100).toFixed(0) + '%'; };
 var fmtDate = function(s) { return s ? s.slice(0,10) : '—'; };
 // Parse a date string LOCALLY. A bare YYYY-MM-DD is otherwise read as UTC midnight, which
 // renders as the PREVIOUS day in any negative-offset (US) tz — e.g. a 2026-06-22 fill date
@@ -2847,6 +2954,8 @@ var _engineBacktest = null;       // historical engine-backtest verdict (/api/en
 var _factorZoo = null;            // advanced factor-alpha lab verdict (/api/factor_zoo)
 var _fundamentals = null;         // PIT fundamental (value/quality) factor verdict (/api/fundamentals)
 var _readiness = null;            // forward-proof readiness flags + alerts (/api/readiness)
+var _student = null;              // CatBoost return-predicting student (/api/student)
+var _distill = null;              // CatBoost Opus-mimic distillation model (/api/distill)
 // paged-feed state (Brain Log + Research Feed) — preserved across re-renders, clamped on reload
 var _brainPage = 0, _researchPage = 0;
 // brain rows are compact, research cards are tall — bias counts so the two columns end ~level
@@ -2971,11 +3080,11 @@ var fmtNav = function(n) {
   return _ccySym() + Math.round(n).toLocaleString('en-US');
 };
 var fmtPct1 = function(v) {
-  if (v == null) return '—';
+  if (v == null || isNaN(v)) return '—';
   return (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
 };
 var fmtPctSign = function(v) {
-  if (v == null) return { text: '—', cls: 'neu' };
+  if (v == null || isNaN(v)) return { text: '—', cls: 'neu' };
   return { text: (v >= 0 ? '+' : '') + v.toFixed(2) + '%', cls: v > 0.01 ? 'pos' : v < -0.01 ? 'neg' : 'neu' };
 };
 
@@ -3044,6 +3153,11 @@ function renderEquityCurve() {
   if (!wrap) return;
   var p = _perf;
   var series = (p && p.series) || [];
+  var isZhEc = document.documentElement.getAttribute('data-lang') === 'zh';
+  // benchmark symbol is book-specific (SPY for US books, FXI for the all-China book, …). The
+  // backend emits it as .benchmark; use it for the legend + tooltip instead of a hardcoded "SPY"
+  // so the China/HK books don't mislabel their comparison line as the S&P 500.
+  var bench = (p && p.benchmark) || 'SPY';
 
   // Note
   var noteEl = E('ec-note');
@@ -3053,8 +3167,10 @@ function renderEquityCurve() {
   var legPortEl = E('ec-leg-portfolio');
   if (legPortEl) {
     var rsDate = p && p.realized_since ? p.realized_since.slice(0,10) : '—';
-    legPortEl.textContent = t('ec.portfolio_live') + ' ' + rsDate + (document.documentElement.getAttribute('data-lang') === 'zh' ? '）' : ')');
+    legPortEl.textContent = t('ec.portfolio_live') + ' ' + rsDate + (isZhEc ? '）' : ')');
   }
+  var legBenchEl = E('ec-leg-bench');
+  if (legBenchEl) legBenchEl.textContent = bench + (isZhEc ? '（$1M参考）' : ' ($1M ref)');
 
   // Range label
   var rangeEl = E('ec-range-label');
@@ -3102,7 +3218,10 @@ function renderEquityCurve() {
 
   // data extents — use actual (not clamped) nav vals for range, then overlay flat
   var realNavVals = series.map(function(s) { return s.nav; });
-  var allVals = realNavVals.concat(spyVals);
+  // drop null / NaN points before computing the extent — a single missing nav or
+  // spy_nav would otherwise poison Math.min/max into NaN and blank the whole chart
+  var allVals = realNavVals.concat(spyVals).filter(function(v) { return v != null && !isNaN(v); });
+  if (!allVals.length) allVals = [1e6];
   var minV = Math.min.apply(null, allVals);
   var maxV = Math.max.apply(null, allVals);
   var pad = (maxV - minV) * 0.06 || 5000;
@@ -3113,9 +3232,15 @@ function renderEquityCurve() {
   function yOf(v) { return PAD.t + IH - ((v - minV) / (maxV - minV)) * IH; }
 
   function pathStr(vals, fromIdx, toIdx) {
-    var d = '';
+    // null/NaN-safe: a missing point (e.g. a day with no SPY mark -> spy_nav: null) lifts the
+    // pen and the next valid point starts a fresh subpath, so the line breaks across the gap
+    // instead of plunging to y(0) (null coerces to 0 in arithmetic) or emitting "L NaN NaN".
+    var d = '', pen = false;
     for (var k = fromIdx; k <= toIdx; k++) {
-      d += (k === fromIdx ? 'M' : 'L') + xOf(k).toFixed(1) + ' ' + yOf(vals[k]).toFixed(1) + ' ';
+      var v = vals[k];
+      if (v == null || isNaN(v)) { pen = false; continue; }
+      d += (pen ? 'L' : 'M') + xOf(k).toFixed(1) + ' ' + yOf(v).toFixed(1) + ' ';
+      pen = true;
     }
     return d.trim();
   }
@@ -3246,14 +3371,17 @@ function renderEquityCurve() {
       var pt = series[fi];
       // tooltip NAV = flat $1M for pre_inception, actual nav for realized
       var displayNav = (pt.kind === 'pre_inception' || pt.kind === 'hypothetical') ? startNav : pt.nav;
-      var navDiff = displayNav - pt.spy_nav;
+      // a point can carry spy_nav: null (a day with no SPY mark) — don't let null coerce to 0,
+      // which would render a bogus "+$1,000,000" vs-SPY line. Show a dash for both instead.
+      var spyNav = (pt.spy_nav == null || isNaN(pt.spy_nav)) ? null : pt.spy_nav;
+      var navDiff = (spyNav == null || displayNav == null || isNaN(displayNav)) ? null : (displayNav - spyNav);
       var isPre = (pt.kind === 'pre_inception' || pt.kind === 'hypothetical');
       var kindTxt = isPre ? ' ' + t('ec.tooltip_pre') : ' ' + t('ec.tooltip_realized');
       tooltipEl.innerHTML =
-        '<strong>' + pt.date + '</strong>' + kindTxt + '<br>' +
+        '<strong>' + esc(pt.date) + '</strong>' + kindTxt + '<br>' +
         t('ec.nav') + ' <strong style="color:var(--up)">' + fmtNav(displayNav) + '</strong><br>' +
-        t('ec.spy_lbl') + ' ' + fmtNav(pt.spy_nav) + '<br>' +
-        t('ec.vs_spy') + ' <strong style="color:' + (navDiff >= 0 ? 'var(--up)' : 'var(--down)') + '">' + (navDiff >= 0 ? '+' : '') + fmtNav(navDiff) + '</strong>';
+        esc(bench) + (isZhEc ? ' 参考: ' : ' ref: ') + fmtNav(spyNav) + '<br>' +
+        (isZhEc ? '相对 ' + esc(bench) + ': ' : 'vs ' + esc(bench) + ': ') + '<strong style="color:' + (navDiff == null ? 'var(--muted)' : (navDiff >= 0 ? 'var(--up)' : 'var(--down)')) + '">' + (navDiff == null ? '—' : ((navDiff >= 0 ? '+' : '') + fmtNav(navDiff))) + '</strong>';
 
       // position tooltip
       var ttW = 200, ttH = 90;
@@ -3617,7 +3745,7 @@ function renderHero() {
 
   if (tr.status) {
     var n = tr.n || 0;
-    E('v-tr').textContent = n > 0 ? ((tr.hit_rate * 100).toFixed(0) + '% · n=' + n) : t('hero.building') + ' · n=' + n;
+    E('v-tr').textContent = (n > 0 && tr.hit_rate != null) ? ((tr.hit_rate * 100).toFixed(0) + '% · n=' + n) : t('hero.building') + ' · n=' + n;
     E('v-tr').className = 'mm-v-chip tone-' + (n >= 5 ? (tr.hit_rate >= 0.6 ? 'up' : 'warn') : 'muted');
   }
 
@@ -4045,10 +4173,9 @@ function _pendingOrdersHtml() {
     var shares = o.shares != null ? Number(o.shares).toLocaleString(undefined, { maximumFractionDigits: 1 }) : '—';
     var estPx = o.est_price != null ? _ccySym() + Number(o.est_price).toFixed(2) : '—';
     var estVal = o.est_value != null ? _ccySym() + Math.round(o.est_value).toLocaleString() : '—';
-    var _isSell = (o.side === 'sell');
     rows += '<tr>' +
       '<td><span class="pos-ticker">' + esc(o.ticker || '—') + '</span>' + (o.name ? '<span class="pos-name" style="display:block;font-size:11px;color:var(--muted);font-weight:500;line-height:1.2">' + esc(o.name) + '</span>' : '') + '</td>' +
-      '<td><span class="mm-side-chip ' + (_isSell ? 'sell' : 'buy') + '">' + (_isSell ? t('trades.sell') : t('trades.buy')) + '</span></td>' +
+      '<td><span class="mm-side-chip buy">' + t('trades.buy') + '</span></td>' +
       '<td class="mm-hide-sm" style="font-variant-numeric:tabular-nums">' + shares + '</td>' +
       '<td style="font-variant-numeric:tabular-nums">' + estPx + '</td>' +
       '<td class="mm-hide-sm" style="font-variant-numeric:tabular-nums">' + estVal + '</td>' +
@@ -4494,7 +4621,11 @@ function renderDeskStrategist() {
   var d = _deskData.strategist;
   var asofEl = E('desk-asof');
   if (asofEl) asofEl.innerHTML = (d && d.asof) ? (t('desk.asof') + ' ' + esc(d.asof)) : '';
-  if (!d || d.status === 'building' || !(d.confirmed_themes || []).length) {
+  // The backend returns status 'building' only when there is NO verdict; once a verdict exists it
+  // is 'scoring' and carries backdrop/crowding/rationale even on a risk-off day that confirmed zero
+  // themes. Don't gate on themes alone, or that whole verdict is wrongly hidden as "building".
+  if (!d || d.status === 'building' ||
+      (!(d.confirmed_themes || []).length && !d.backdrop_stance && !d.rationale && !(d.crowding_flags || []).length)) {
     host.innerHTML = _deskBuilding('desk.strat_building'); return;
   }
   var html = '';
@@ -4783,7 +4914,7 @@ function renderDeskFirm() {
         '<td class="l"><span class="mm-rp-ticker" style="font-size:12px">' + esc(e.ticker) + '</span></td>' +
         '<td>' + (e.n_books != null ? e.n_books : '—') + '</td>' +
         '<td><span' + fwCls + '>' + (e.firm_weight_pct != null ? Number(e.firm_weight_pct).toFixed(1) + '%' : '—') + '</span></td>' +
-        (hasUsd ? '<td>' + (e.firm_usd != null ? fmtNav(e.firm_usd) : '—') + '</td>' : '') +
+        (hasUsd ? '<td>' + (e.firm_usd != null ? '$' + Math.round(e.firm_usd).toLocaleString('en-US') : '—') + '</td>' : '') +   // firm_usd is always USD — don't use the book-scoped fmtNav (mislabels ¥/HK$ after viewing an Asia book)
         '<td class="l" style="font-size:11px;color:var(--muted)">' + esc(e.sector || '—') + '</td>' +
       '</tr>';
     });
@@ -5123,7 +5254,7 @@ function renderSelfHistory() {
   var rows = '';
   hist.forEach(function(r) {
     var isBuy = r.action === 'buy', rr = pnlCell(r.realized_pnl, r.realized_pct);
-    var queuedTag = r.queued ? ' <span class="mm-sd-thesis-flag" title="filled from a queued order">⧖</span>' : '';
+    var queuedTag = r.queued ? ' <span class="mm-sd-thesis-flag" title="' + esc(t('sd.queued_fill')) + '">⧖</span>' : '';
     rows += '<tr>' +
       '<td class="l" style="font-variant-numeric:tabular-nums;color:var(--muted)">' + fmtDate(r.date) + '</td>' +
       '<td><span class="pos-ticker">' + esc(r.ticker || '—') + '</span>' + queuedTag + '</td>' +
@@ -5264,7 +5395,7 @@ window.placeSelfOrder = function(side, tickerOverride) {
       if (!d || !d.ok) { _selfMsg('err', t('sd.order_failed') + (d && d.error ? ': ' + esc(d.error) : '')); return; }
       if (d.status === 'filled') {
         var f = d.fill || {};
-        _selfMsg('ok', t('sd.filled') + ': ' + (side === 'buy' ? t('sd.buy') : t('sd.sell')) + ' ' + fmtShares(f.shares) + ' ' + esc(ticker) + ' ' + t('sd.at') + ' $' + Number(f.price).toFixed(2));
+        _selfMsg('ok', t('sd.filled') + ': ' + (side === 'buy' ? t('sd.buy') : t('sd.sell')) + ' ' + fmtShares(f.shares) + ' ' + esc(ticker) + ' ' + t('sd.at') + ' ' + (f.price != null && !isNaN(f.price) ? '$' + Number(f.price).toFixed(2) : '—'));
       } else if (d.status === 'pending') { _selfMsg('pend', t('sd.queued')); }
       if (!tickerOverride) { var sh = E('sd-shares'); if (sh) sh.value = ''; }
       else { var q = E('sd-qty-' + ticker); if (q) q.value = ''; }   // clear the quick-trade qty
@@ -5283,7 +5414,10 @@ window.saveSelfThesis = function(ticker) {
     .then(function(r){ return r.json(); })
     .then(function(d) {
       if (d && d.ok) {
-        if (noteEl) noteEl.textContent = t('sd.thesis_saved') + (d.thesis && d.thesis.updated_at ? ' ' + fmtTs(d.thesis.updated_at) : '');
+        // an empty textarea clears the note (backend returns thesis:null) — say "cleared", not "Saved"
+        if (noteEl) noteEl.textContent = d.thesis
+          ? (t('sd.thesis_saved') + (d.thesis.updated_at ? ' ' + fmtTs(d.thesis.updated_at) : ''))
+          : t('sd.thesis_cleared');
         refreshSelf();   // refresh the ◆ flag; the row stays open (_selfExpanded preserved)
       } else if (noteEl) { noteEl.textContent = t('sd.order_failed'); }
     })
@@ -5326,7 +5460,7 @@ window.showView = function(view) {
 // Gated-only sections (hidden when the free-form autonomous book is active). 'research' (the feed)
 // shares the feeds-row section with 'brainlog', so hiding brainlog's section hides both.
 var PF_GATED_ONLY = ['hero', 'alloc', 'brainlog', 'runs', 'rejected', 'competitors',
-                     'shadow-books', 'xsec', 'engine-bt', 'factor-zoo', 'fundamentals'];
+                     'shadow-books', 'xsec', 'engine-bt', 'factor-zoo', 'fundamentals', 'learning-models'];
 var PF_AUTO_ONLY  = ['auto-banner', 'decisions'];
 
 function _fmtPctSigned(v) {
@@ -5350,13 +5484,14 @@ function renderPortfolioSwitch() {
     var sub = navStr + ' · <span class="' + cls + '">' + _fmtPctSigned(ret) + '</span>';
     return '<button class="mm-pf-tab' + (p.id === _portfolio ? ' active' : '') + '" type="button" ' +
       'data-pf="' + esc(p.id) + '" onclick="setPortfolio(\'' + esc(p.id) + '\')" title="' + esc(p.tagline || '') + '">' +
-      '<span class="mm-pf-name"><span class="mm-pf-dot ' + (p.kind === 'autonomous' ? 'autonomous' : (p.kind === 'heavyweight' ? 'heavyweight' : (p.kind === 'china_brain' ? 'china' : (p.kind === 'hk_brain' ? 'hk' : 'gated')))) + '"></span>' + esc(_pfLabel(p)) + '</span>' +
+      '<span class="mm-pf-name"><span class="mm-pf-dot ' + (p.kind === 'autonomous' ? 'autonomous' : (p.kind === 'heavyweight' ? 'heavyweight' : (p.kind === 'china_brain' ? 'china' : (p.kind === 'hk_brain' ? 'hk' : (p.kind === 'etf_brain' ? 'etf' : 'gated'))))) + '"></span>' + esc(_pfLabel(p)) + '</span>' +
       '<span class="mm-pf-sub">' + sub + '</span></button>';
   }).join('');
 }
 
-// A "Brain book" (autonomous OR heavyweight) is the decision-log style: no engine panels,
-// shows the daily decision log. Keyed off the registry kind so new Brain books work automatically.
+// A "Brain book" (autonomous / heavyweight / china / hk / etf) is the decision-log style: no
+// engine panels, shows the daily decision log. Keyed off the registry kind so new Brain books
+// work automatically — every free-form Opus book that journals via /api/decisions belongs here.
 function _pfKind(id) {
   var m = (_portfolios || []).find(function(p) { return p.id === id; });
   return m ? m.kind : (id === 'autonomous' ? 'autonomous'
@@ -5365,7 +5500,7 @@ function _pfKind(id) {
 }
 function _isBrainBook(id) {
   var k = _pfKind(id);
-  return k === 'autonomous' || k === 'heavyweight' || k === 'china_brain' || k === 'hk_brain';
+  return k === 'autonomous' || k === 'heavyweight' || k === 'china_brain' || k === 'hk_brain' || k === 'etf_brain';
 }
 
 function applyPortfolioScope() {
@@ -5422,7 +5557,8 @@ function renderAutoBanner() {
   var badgeEl = E('auto-badge'), titleEl = E('auto-title'), tagEl = E('auto-tag');
   var badgeKind = kind === 'heavyweight' ? 'heavyweight'
                 : kind === 'china_brain' ? 'china'
-                : kind === 'hk_brain' ? 'hk' : 'autonomous';
+                : kind === 'hk_brain' ? 'hk'
+                : kind === 'etf_brain' ? 'etf' : 'autonomous';
   if (badgeEl) { badgeEl.className = 'mm-auto-badge ' + badgeKind; badgeEl.textContent = isZh ? 'Opus 大脑' : 'Opus Brain'; }
   var bookName = _pfLabel(pf) || b.manager || (isZh ? '大脑账本' : 'Brain book');
   var bookTag  = pf.tagline || '';
@@ -6140,6 +6276,134 @@ function renderFooter() {
   E('footer-disc').textContent = disc;
 }
 
+// ── SIZING SCORECARD (Brain books with an accountability ledger: heavyweight, etf) ────────────
+// The book's forward-graded sizing skill, the metric that matters for a concentration overlay:
+// weight-IC (did bigger bets earn bigger relative returns?), the weight-weighted book edge, the
+// hit-rate, and the per-conviction breakdown. Reads _book.accountability (the scorecard the bot
+// attaches to its published contract); hides itself for books that ship no ledger.
+function _szSigned(v, d) { return (v == null || isNaN(v)) ? '—' : (v >= 0 ? '+' : '') + (v * 100).toFixed(d == null ? 1 : d) + '%'; }
+function renderSizingScorecard() {
+  var sec = E('sizing-sec'), host = E('sizing-card');
+  if (!sec || !host) return;
+  var acc = (_book && _book.accountability) || null;
+  if (!_isBrainBook(_portfolio) || _currentView !== 'dashboard' || !acc || acc.n_resolved == null) {
+    sec.style.display = 'none'; return;
+  }
+  sec.style.display = '';
+  var isZh = document.documentElement.getAttribute('data-lang') === 'zh';
+  var bench = (_perf && _perf.benchmark) || 'SPY';
+  var h2 = '<h2><span class="l-en">Sizing Scorecard</span><span class="l-zh">仓位评分卡</span>' +
+    ' <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px">' +
+    (isZh ? ('是否把赢家仓位放大？ — 相对 ' + esc(bench) + ' 前瞻评分') :
+            ('did it size winners bigger? — forward-graded vs ' + esc(bench))) + '</span></h2>';
+  if (!acc.n_resolved) {
+    host.innerHTML = h2 + '<div class="mm-empty"><span class="mm-empty-icon">○</span>' +
+      (isZh ? ('尚无已评分仓位 — ' + (acc.n_open || 0) + ' 个累积中，' + (acc.horizon_d || 21) + ' 日窗口成熟后评分。') :
+              ('No graded picks yet — ' + (acc.n_open || 0) + ' accruing, grades resolve on the ' + (acc.horizon_d || 21) + '-day horizon.')) +
+      '</div>';
+    return;
+  }
+  var wic = acc.weight_ic;
+  var wicColor = wic == null ? 'var(--muted)' : (wic > 0.02 ? 'var(--up)' : wic < -0.02 ? 'var(--down)' : 'var(--text)');
+  var be = acc.book_edge_mean;
+  var beColor = be == null ? 'var(--muted)' : (be > 0 ? 'var(--up)' : be < 0 ? 'var(--down)' : 'var(--text)');
+  function card(lbl, val, color, sub) {
+    return '<div class="mm-cal-card" style="text-align:center">' +
+      '<div class="lbl">' + esc(lbl) + '</div>' +
+      '<div class="val" style="color:' + color + '">' + esc(val) + '</div>' +
+      (sub ? '<div style="font-size:9px;color:var(--muted);margin-top:4px;line-height:1.3">' + esc(sub) + '</div>' : '') + '</div>';
+  }
+  var cards =
+    card(isZh ? '权重 IC' : 'Weight-IC', (wic == null ? '—' : (wic >= 0 ? '+' : '') + Number(wic).toFixed(2)), wicColor,
+         isZh ? '仓位与相对收益的秩相关 · >0 = 赢家放大' : 'rank-corr(weight, rel-return) · >0 = winners sized bigger') +
+    card(isZh ? '组合边际' : 'Book edge', _szSigned(be) + (acc.book_edge_significant ? ' *' : ''), beColor,
+         isZh ? '加权相对收益 / 决策日' : 'weight-weighted rel-return per date') +
+    card(isZh ? '命中率' : 'Hit-rate', (acc.hit_rate == null ? '—' : Math.round(acc.hit_rate * 100) + '%'), 'var(--text)',
+         isZh ? ('跑赢 ' + bench + ' 的比例') : ('beat ' + bench)) +
+    card(isZh ? '已评分' : 'Graded', String(acc.n_resolved), 'var(--text)',
+         (acc.n_open || 0) + (isZh ? ' 个累积中' : ' open')) +
+    card(isZh ? '前瞻窗口' : 'Horizon', (acc.horizon_d || 21) + (isZh ? ' 日' : 'd'), 'var(--muted)',
+         isZh ? '业务日' : 'business days');
+  var byc = acc.by_conviction || {};
+  var convRows = '';
+  ['high', 'medium', 'low'].forEach(function(b) {
+    var r = byc[b]; if (!r) return;
+    var ac = r.avg_rel > 0 ? 'var(--up)' : r.avg_rel < 0 ? 'var(--down)' : 'var(--muted)';
+    var lbl = isZh ? ({ high: '高', medium: '中', low: '低' })[b] : b;
+    convRows += '<tr><td class="l" style="text-transform:capitalize">' + lbl + '</td><td>' + r.n + '</td><td>' +
+      (r.hit_rate == null ? '—' : Math.round(r.hit_rate * 100) + '%') + '</td>' +
+      '<td style="color:' + ac + '">' + _szSigned(r.avg_rel) + '</td></tr>';
+  });
+  var convTable = convRows ? (
+    '<div class="mm-cal-sec-h" style="margin:16px 0 6px">' + (isZh ? '按信念分档' : 'By conviction') + '</div>' +
+    '<div class="mm-rp-wrap"><table class="mm-rp-table"><thead><tr>' +
+    '<th class="l">' + (isZh ? '信念' : 'Conviction') + '</th><th>n</th><th>' + (isZh ? '命中率' : 'Hit-rate') +
+    '</th><th>' + (isZh ? '平均相对' : 'Avg rel') + '</th></tr></thead><tbody>' + convRows + '</tbody></table></div>') : '';
+  var note = acc.book_edge_significant ?
+    ('<div class="mm-th-note">' + (isZh ? '* 组合边际在独立窗口上具统计显著性（Newey-West）。' :
+      '* book edge is statistically significant across independent windows (Newey-West).') + '</div>') : '';
+  host.innerHTML = h2 + '<div class="mm-cal-cards">' + cards + '</div>' + convTable + note;
+}
+
+// ── LEARNING MODELS (CatBoost statistical student + Opus-mimic distillation) ──────────────────
+// The self-improving loop's tabular layer, surfaced read-only from /api/student + /api/distill.
+// Both accrue in "building" until the universe log / Opus decisions mature, so this is honest about
+// state (status chip + what unblocks it) and shows the top predicted edges once a model trains.
+function _lmCard(title, sub, d, isZh, kind) {
+  d = d || {};
+  var status = d.status || 'building';
+  var lbl = status === 'scoring' || status === 'ok' ? (isZh ? '已训练' : 'trained')
+          : status === 'unavailable' ? (isZh ? '不可用' : 'unavailable') : (isZh ? '累积中' : 'building');
+  var chipCls = (status === 'scoring' || status === 'ok') ? 'confirmed' : 'evaluated';
+  function m(k, v) { return '<div class="mm-comp-metric"><div class="mk">' + k + '</div><div class="mv">' + v + '</div></div>'; }
+  var n3 = function(v) { return (v == null || isNaN(v)) ? '—' : Number(v).toFixed(3); };
+  var metrics = (kind === 'student')
+    ? (m(isZh ? '样本外 IC' : 'OOS rank-IC', n3(d.oos_rank_ic)) +
+       m(isZh ? '命中率' : 'OOS hit', d.oos_hit_rate == null ? '—' : Math.round(d.oos_hit_rate * 100) + '%') +
+       m(isZh ? '训练样本' : 'train n', d.n_train != null ? d.n_train : (d.n != null ? d.n : '—')) +
+       m(isZh ? '已解析' : 'resolved', d.n != null ? d.n : '—'))
+    : (m(isZh ? '样本外 AUC' : 'OOS AUC', n3(d.oos_auc)) +
+       m(isZh ? '买入样本' : 'buy examples', d.n_pos != null ? d.n_pos : '—') +
+       m(isZh ? '决策样本' : 'rows', d.n != null ? d.n : '—') +
+       m(isZh ? '更新于' : 'trained', d.trained_at ? esc(String(d.trained_at)) : '—'));
+  var preds = (d.top_predicted || []).slice(0, 12).map(function(p) {
+    if (typeof p === 'string') return '<span class="mm-ticker-chip">' + esc(p) + '</span>';
+    var tk = p.ticker || p.symbol || p.name || '?';
+    var ev = p.pred != null ? p.pred : (p.edge != null ? p.edge : (p.predicted_edge != null ? p.predicted_edge : (p.prob != null ? p.prob : null)));
+    var evs = ev == null ? '' : ' <span style="opacity:.7">' + (Number(ev) >= 0 ? '+' : '') + Number(ev).toFixed(3) + '</span>';
+    return '<span class="mm-ticker-chip">' + esc(tk) + evs + '</span>';
+  }).join('');
+  var predBlock = preds
+    ? ('<div class="mm-comp-holdings-h" style="margin-top:10px">' + (isZh ? '当前最高预测' : 'Top predicted now') + '</div>' +
+       '<div style="display:flex;flex-wrap:wrap;gap:4px">' + preds + '</div>')
+    : ('<div style="font-size:11px;color:var(--muted);margin-top:10px;font-style:italic">' + esc(sub) + '</div>');
+  return '<div class="mm-comp-card m-claude">' +
+    '<div class="mm-comp-name">' + esc(title) + ' <span class="mm-chip ' + chipCls + '" style="margin-left:4px">' + lbl + '</span></div>' +
+    '<div class="mm-comp-metrics">' + metrics + '</div>' + predBlock + '</div>';
+}
+function renderLearningModels() {
+  var el = E('learning-models');
+  if (!el) return;
+  var isZh = document.documentElement.getAttribute('data-lang') === 'zh';
+  var head = collH2('learning-models', 'Learning Models — CatBoost', '学习模型 — CatBoost',
+    isZh ? '自我改进回路的统计层 · 学生 + 蒸馏 · 只读' : 'the self-improving loop’s tabular layer · student + distillation · read-only');
+  var st = _student, ds = _distill;
+  if (!st && !ds) {
+    el.innerHTML = head + '<div class="mm-empty"><span class="mm-empty-icon">○</span>' +
+      '<span class="l-en">Learning models unavailable.</span><span class="l-zh">学习模型暂不可用。</span></div>';
+    return;
+  }
+  var intro = isZh
+    ? 'CatBoost 在“宇宙日志”上学习哪些标的将跑赢 SPY（学生），并学习模仿 Opus 的买入决策（蒸馏）。两者在数据成熟前处于累积中——这是诚实的状态读数，而非已上线的信号。'
+    : 'CatBoost learns which names will beat SPY over the universe log (the student), and learns to mimic Opus’s buy decisions (distillation). Both accrue until the data matures — this is an honest state read, not a live signal yet.';
+  var cards =
+    _lmCard(isZh ? '学生 — 收益预测' : 'Student — return predictor', isZh ? '宇宙日志解析约150条后训练（约3–4周）。' : 'Trains once ~150 resolved universe-log rows accrue (~3–4 weeks).', st, isZh, 'student') +
+    _lmCard(isZh ? '蒸馏 — 模仿 Opus' : 'Distillation — Opus mimic', isZh ? 'Opus 积累足够买入决策后训练（约2–3个月）。' : 'Trains once Opus accrues enough buy decisions (~2–3 months).', ds, isZh, 'distill');
+  el.innerHTML = head +
+    '<div style="font-size:12px;color:var(--muted);margin:2px 0 12px;line-height:1.55">' + esc(intro) + '</div>' +
+    '<div class="mm-comp-grid">' + cards + '</div>';
+}
+
 // ── LIVE THESIS OUTCOMES (track record) ───────────────────────────────────────
 // Decoupled, non-blocking: grades realized thesis outcomes (triple-barrier + rel-return vs
 // SPY) and lights up the hero Track Record vital as positions mature. Honest at n=0.
@@ -6206,7 +6470,9 @@ function _renderAll() {
     ['runs', renderRuns], ['rejected', renderRejected], ['competitors', renderCompetitors],
     ['shadowBooks', renderShadowBooks], ['xsec', renderXsec], ['engineBacktest', renderEngineBacktest],
     ['factorZoo', renderFactorZoo], ['fundamentals', renderFundamentals], ['readiness', renderReadiness],
+    ['learningModels', renderLearningModels],
     ['autoBanner', renderAutoBanner], ['decisions', renderDecisions], ['posture', renderPosture],
+    ['sizingScorecard', renderSizingScorecard],
     ['researchPapers', renderResearchPapers], ['calibration', renderCalibrationPage], ['footer', renderFooter],
     ['self', renderSelf],
   ];
@@ -6272,6 +6538,8 @@ async function fetchAll(opts) {
       fetch('/api/factor_zoo').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
       fetch('/api/fundamentals').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
       fetch('/api/readiness').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
+      fetch('/api/student').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
+      fetch('/api/distill').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
     ]);
 
     // portfolio-scoped fetches — always refreshed (these are what actually change on a switch)
@@ -6290,9 +6558,14 @@ async function fetchAll(opts) {
 
     if (!scopedOnly) {
       var s = await sharedPromise;
+      // Re-check supersession AFTER the shared await too: the guard above only covers the scoped
+      // fetch; a switch that fires while the (slower) shared bundle is still in flight would
+      // otherwise fall through and clobber the now-active tab with this stale load's data.
+      if (mySeq !== _pfFetchSeq) return;
       var actRes = s[0], researchRes = s[1], compRes = s[2], regimeRes = s[3], runsRes = s[4],
           macroRes = s[5], papersRes = s[6], calibRes = s[7], shadowRes = s[8], predRes = s[9],
-          ebtRes = s[10], fzRes = s[11], fundRes = s[12], readyRes = s[13];
+          ebtRes = s[10], fzRes = s[11], fundRes = s[12], readyRes = s[13],
+          studentRes = s[14], distillRes = s[15];
       _activity    = (actRes.status    === 'fulfilled' ? actRes.value     : null) || [];
       _research    = (researchRes.status === 'fulfilled' ? researchRes.value : null) || [];
       _competitors = compRes.status    === 'fulfilled' ? compRes.value    : null;
@@ -6309,6 +6582,8 @@ async function fetchAll(opts) {
       _factorZoo      = fzRes.status     === 'fulfilled' ? fzRes.value     : null;
       _fundamentals   = fundRes.status   === 'fulfilled' ? fundRes.value   : null;
       _readiness      = readyRes.status  === 'fulfilled' ? readyRes.value  : null;
+      _student        = studentRes.status === 'fulfilled' ? studentRes.value : null;
+      _distill        = distillRes.status === 'fulfilled' ? distillRes.value : null;
       _sharedLoaded   = true;
     }
 
