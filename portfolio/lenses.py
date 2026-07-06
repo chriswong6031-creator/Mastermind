@@ -819,23 +819,45 @@ def _vol_regime_row() -> dict:
     it can never manufacture a bullish vote to size UP. It sits in the de-correlated _MACRO_BLOC
     (it reads the same risk-on/off surface as macro_risk / cross_asset), so it never sizes alone;
     it only sharpens the one net macro vote toward caution when market vol stress is rising.
-    Drawdown / capital-efficiency, not alpha. Absent file -> 'missing' (shown, never imputed)."""
+    Drawdown / capital-efficiency, not alpha. Absent file -> 'missing' (shown, never imputed).
+
+    scored_active enforcement (docket F7 / R7):
+    When scored_active=False the vol_regime reading is DISPLAY-ONLY — it must not tighten or
+    loosen sizing. The direction is forced to 'neutral' so this lens contributes zero net vote
+    to _MACRO_BLOC. The value dict retains the raw reading for display; only the sizing path
+    is suppressed. Kill-switch: MASTERMIND_VOL_REGIME_SCORED_GATE=0 bypasses the enforcement
+    (log-only / emergency ops; scored_active=False still suppresses the note).
+    """
+    import os
     v = _load("site/vol/mastermind.json") or _load("data/vol/mastermind.json")
     if not v:
         return _row("vol_regime", None, "missing", None)
     regime = v.get("regime")
     risk_off = regime in ("warning", "backwardation-stress")
+    scored_active = bool(v.get("scored_active"))
+    gate_enabled = os.environ.get("MASTERMIND_VOL_REGIME_SCORED_GATE", "1").strip().lower() \
+        not in ("0", "false", "no", "off", "")
+
+    # scored_active enforcement: non-scored data informs display but must not tighten/loosen sizing.
+    # When the gate is active and scored_active=False, force direction to neutral (no-vol-signal).
+    if gate_enabled and not scored_active:
+        effective_direction = "neutral"
+        note = "vol_regime display-only (scored_active=False) — suppressed from sizing"
+    else:
+        effective_direction = "bear" if risk_off else "neutral"
+        note = ("index vol-regime risk-off — trim gross (context caution, not a size driver)"
+                if risk_off else "")
+
     return _row("vol_regime", {
         "regime": regime,
         "kill_switch": bool(v.get("kill_switch")),
         "vol_target_scalar": v.get("vol_target_scalar"),
-        "scored_active": bool(v.get("scored_active")),     # gate state — display vs validated
+        "scored_active": scored_active,                     # gate state — display vs validated
         "scored_score": v.get("scored_score"),
         "ts_slope_state": v.get("ts_slope_state"),
         "fragility": v.get("fragility_confluence"),
-    }, "context", "bear" if risk_off else "neutral",
-        note=("index vol-regime risk-off — trim gross (context caution, not a size driver)"
-              if risk_off else ""))
+        "tier_enforced": True,                              # R7: scored_active gate is active
+    }, "context", effective_direction, note=note)
 
 
 def _macro_rows() -> list[dict]:

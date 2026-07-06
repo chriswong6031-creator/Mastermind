@@ -116,8 +116,11 @@ def build() -> dict:
 def write(dest_site_dir: Path | str | None = None) -> Path:
     """Build the snapshot and write it to ``<dest>/mastermind/mastermind_snapshot.json``.
 
+    Also writes ``<dest>/mastermind/nw_feedback.json`` best-effort (never-raise) as a
+    sibling artifact for NW integration (bridge/nw_feedback.py, schema mastermind_nw_feedback.v1).
+
     ``dest_site_dir`` defaults to the macro repo's ``site/`` via the vendor symlink.
-    Returns the written path.
+    Returns the written path (snapshot only; feedback path is a side-effect).
     """
     dest = Path(dest_site_dir) if dest_site_dir else _default_dest()
     out_dir = dest / "mastermind"
@@ -125,4 +128,12 @@ def write(dest_site_dir: Path | str | None = None) -> Path:
     out = out_dir / "mastermind_snapshot.json"
     payload = build()
     out.write_text(json.dumps(payload, indent=2, default=str, ensure_ascii=False))
+
+    # NW feedback artifact — best-effort, never allowed to fail the snapshot write.
+    try:
+        from bridge import nw_feedback as _nwf
+        _nwf.write(dest)
+    except Exception as _exc:  # noqa: BLE001
+        pass  # feedback write failure is non-fatal; snapshot already written above
+
     return out

@@ -229,18 +229,35 @@ def _vol_mm(regime="backwardation-stress", **extra):
 
 
 def test_vol_regime_lens_present_and_subtract_only(monkeypatch):
-    """The vol-regime lens votes BEAR in a risk-off state and NEUTRAL when calm — it can never
-    vote BULL (it is a subtract-only gross caution, not a size driver). It rides in _macro_rows
-    so every name/theme matrix with macro context carries it."""
+    """The vol-regime lens votes BEAR in a risk-off state (when scored_active=True) and NEUTRAL
+    when calm or when scored_active=False — it can never vote BULL (subtract-only gross caution).
+    It rides in _macro_rows so every name/theme matrix with macro context carries it.
+
+    docket F7 / R7 enforcement: when scored_active=False the direction is forced to 'neutral'
+    regardless of the regime — unvalidated vol data must not tighten/loosen sizing.
+    """
+    # scored_active=True, risk-off => bear (validated data may affect sizing)
     monkeypatch.setattr(lenses, "_load",
-                        lambda rel: _vol_mm() if "vol/mastermind" in rel else None)
+                        lambda rel: {**_vol_mm(), "scored_active": True} if "vol/mastermind" in rel else None)
+    monkeypatch.delenv("MASTERMIND_VOL_REGIME_SCORED_GATE", raising=False)
     r = lenses._vol_regime_row()
     assert r["lens"] == "vol_regime" and r["status"] == "context" and r["direction"] == "bear"
     assert r["value"]["regime"] == "backwardation-stress" and r["value"]["vol_target_scalar"] == 0.7
     assert "vol_regime" in {row["lens"] for row in lenses._macro_rows()}   # wired into the macro rows
 
+    # scored_active=False, risk-off => neutral (docket F7: display-only, must not affect sizing)
     monkeypatch.setattr(lenses, "_load",
-                        lambda rel: _vol_mm(regime="normalizing", kill_switch=False) if "vol/mastermind" in rel else None)
+                        lambda rel: _vol_mm() if "vol/mastermind" in rel else None)  # _vol_mm has scored_active=False
+    r_unscored = lenses._vol_regime_row()
+    assert r_unscored["direction"] == "neutral", (
+        "scored_active=False must force direction to neutral — docket F7 / R7 enforcement"
+    )
+    assert r_unscored["value"]["tier_enforced"] is True
+
+    # calm (scored_active=True) => neutral (never bull)
+    monkeypatch.setattr(lenses, "_load",
+                        lambda rel: {**_vol_mm(regime="normalizing", kill_switch=False), "scored_active": True}
+                        if "vol/mastermind" in rel else None)
     assert lenses._vol_regime_row()["direction"] == "neutral"             # calm => no vote (never bull)
 
 
