@@ -41,7 +41,7 @@ constants and cross-checked here (cite per-field).
 
   etf           — Opus Brain, US-listed ETFs only; ETF allowlist enforced in trusted
                   layer (portfolio.etf_universe); single-ETF max weight from
-                  config/etf_strategy.yml (default 0.40).
+                  config/etf_strategy.yml (default 0.35).
                   Sourced: bot/etf.py _guardrails() / portfolio.etf_universe.
 
   china         — Opus Brain, mainland A-shares (*.SS / *.SZ) only, marked CNY.
@@ -85,7 +85,7 @@ _MANDATES: dict[str, str] = {
     ),
     "etf": (
         "Opus Brain; US-listed ETFs only (ETF allowlist enforced); "
-        "single-ETF max ~40%; crisis-ladder doctrine (bot/etf.py)."
+        "single-ETF max ~35% (config/etf_strategy.yml); crisis-ladder doctrine (bot/etf.py)."
     ),
     "china": (
         "Opus Brain; mainland A-shares (*.SS / *.SZ) only; "
@@ -114,9 +114,17 @@ def _sizing_rails(book_id: str) -> dict[str, Any]:
         return {"min_w": 0.05, "max_w": 0.50, "max_names": 8,
                 "note": "bot/heavyweight.py MIN_W/MAX_W/MAX_NAMES"}
     if book_id == "etf":
-        # bot/etf.py: single-ETF max from config/etf_strategy.yml; default 0.40
-        return {"min_w": None, "max_w": 0.40, "max_names": None,
-                "note": "portfolio.etf_universe guardrails max_single_weight default 0.40"}
+        # Read the live guardrail from config/etf_strategy.yml via etf_universe.guardrails()
+        # so the packet stays in sync when the spec is tuned.  Fall back to 0.35 (the
+        # _DEFAULT_GUARDRAILS constant in portfolio/etf_universe.py) if the read fails.
+        _etf_max_w = 0.35
+        try:
+            from portfolio import etf_universe as _eu
+            _etf_max_w = float(_eu.guardrails().get("max_single_weight", 0.35))
+        except Exception:  # noqa: BLE001
+            pass
+        return {"min_w": None, "max_w": _etf_max_w, "max_names": None,
+                "note": f"portfolio.etf_universe guardrails max_single_weight={_etf_max_w:.2f}"}
     # flagship / autonomous / china / hk / self_directed: no hard per-name cap declared
     return {"min_w": None, "max_w": 1.0, "max_names": None,
             "note": "gross <= 1.0 (no hard per-name cap beyond firm clamp)"}
@@ -188,11 +196,13 @@ def _universe_check(book_id: str, positions: list[dict]) -> dict[str, Any]:
     if book_id == "etf":
         try:
             from portfolio import etf_universe as eu
-            allowed_set = set(eu.universe())
-            if not allowed_set:
-                return {"ok": None, "detail": "ETF universe unavailable (degraded)",
+            # is_etf() is the trusted-layer membership gate — the same check the book
+            # enforces in bot/etf.py step 2.  eu.universe() does NOT exist; eu.ALL is
+            # the frozenset but is_etf() is the canonical API (bot/etf.py:147-148).
+            bad = [t for t in tickers if not eu.is_etf(t)]
+            if not tickers:
+                return {"ok": True, "detail": "no positions — universe trivially clean",
                         "violating": []}
-            bad = [t for t in tickers if t not in allowed_set]
             return {
                 "ok": len(bad) == 0,
                 "detail": (f"all {len(tickers)} names within ETF allowlist"

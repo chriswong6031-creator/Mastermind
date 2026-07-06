@@ -119,7 +119,8 @@ def run_etf(asof: str | None = None, *, force: bool = False, armed: bool = True,
 
     asof = asof or date.today().isoformat()
     out: dict = {"portfolio_id": PORTFOLIO_ID, "asof": asof,
-                 "ran_at": datetime.now(timezone.utc).isoformat()}
+                 "ran_at": datetime.now(timezone.utc).isoformat(),
+                 "currency": "USD"}  # ETF book is USD — stamp affirmatively so mandate_packet.currency_ok is True
     today = _safe_date(asof)
     out["trading_day"] = market_calendar.is_trading_day(today) if today else None
 

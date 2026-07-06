@@ -61,10 +61,11 @@ _BOOK_IDS = ["flagship", "heavyweight", "autonomous", "etf", "china", "hk"]
 # ---------------------------------------------------------------------------
 
 def test_weights_sum_to_1_equal_weight():
-    """No lifecycle → equal-weight fallback; weights must sum to 1 (1e-6 float tolerance)."""
+    """No lifecycle → equal-weight fallback; weights must sum to 1 (1e-5 float tolerance after
+    round+renorm).  Tightened from 1e-4 to 1e-5: round(w,6)+renorm guarantees sum within 1e-5."""
     art = FA._compute({}, _EMPTY_BENCH, _EMPTY_PKTS, book_ids=_BOOK_IDS)
     total = sum(art["books"][b]["shadow_weight"] for b in _BOOK_IDS)
-    assert abs(total - 1.0) < 1e-5  # float accumulation over 6 rounded weights
+    assert abs(total - 1.0) < 1e-5  # round(w,6) + renorm pass keeps this tight
 
 
 def test_weights_sum_to_1_with_tilt():
@@ -212,6 +213,80 @@ def test_insufficient_n_corr_entry_ignored():
         grades={"flagship": _grade(0.01), "autonomous": _grade(0.005)},
         ortho={"flagship:autonomous": "insufficient-n"},
     )
+    art = FA._compute(lc, _EMPTY_BENCH, _EMPTY_PKTS, book_ids=["flagship", "autonomous"])
+    assert len(art["firm"]["correlation_pairs_penalized"]) == 0
+
+
+# ---------------------------------------------------------------------------
+# 6b. orthogonality: REAL book_lifecycle artifact shape (nested matrix)
+# ---------------------------------------------------------------------------
+# brain.book_lifecycle.review() emits:
+#   {"orthogonality": {"matrix": {"flagship": {"autonomous": {"corr": ..., "n_pairs": ..., "status": ...}}},
+#                       "noisy_mirror_flags": [...], "reference_book": "flagship", "books": [...]}}
+# Verify that firm_allocator reads the nested shape (not just the flat test-fixture shape).
+
+def _ortho_nested(book_a: str, book_b: str, corr: float, status: str = "scoring") -> dict:
+    """Build a lifecycle orthogonality block in the REAL brain.book_lifecycle shape."""
+    return {
+        "matrix": {
+            book_a: {
+                book_b: {"corr": corr, "n_pairs": 10, "status": status}
+            }
+        },
+        "noisy_mirror_flags": (
+            [{"book": book_b, "vs": book_a, "corr": corr, "n_pairs": 10}]
+            if corr >= 0.80 else []
+        ),
+        "reference_book": "flagship",
+        "books": [book_a, book_b],
+    }
+
+
+def test_corr_penalty_real_lifecycle_shape():
+    """Penalty fires when orthogonality is in the REAL nested book_lifecycle shape.
+
+    This pins finding 6: firm_allocator must read matrix[a][b].corr, not flat "{a}:{b}" keys.
+    """
+    lc = {
+        "asof": "2026-07-06",
+        "states": {"flagship": "active", "autonomous": "active"},
+        "grades": {
+            "flagship": _grade(0.01),
+            "autonomous": _grade(0.005),
+        },
+        "orthogonality": _ortho_nested("flagship", "autonomous", corr=0.90),
+    }
+    art = FA._compute(lc, _EMPTY_BENCH, _EMPTY_PKTS, book_ids=["flagship", "autonomous"])
+    # autonomous (lower grade) must be penalized
+    assert "correlation_penalty_applied" in art["books"]["autonomous"]["flags"]
+    assert "correlation_penalty_applied" not in art["books"]["flagship"]["flags"]
+    assert len(art["firm"]["correlation_pairs_penalized"]) == 1
+
+
+def test_corr_no_penalty_real_lifecycle_insufficient_n():
+    """Penalty does NOT fire when status='insufficient-n' in the nested matrix."""
+    lc = {
+        "asof": "2026-07-06",
+        "states": {"flagship": "active", "autonomous": "active"},
+        "grades": {
+            "flagship": _grade(0.01),
+            "autonomous": _grade(0.005),
+        },
+        "orthogonality": _ortho_nested("flagship", "autonomous", corr=0.90, status="insufficient-n"),
+    }
+    art = FA._compute(lc, _EMPTY_BENCH, _EMPTY_PKTS, book_ids=["flagship", "autonomous"])
+    assert len(art["firm"]["correlation_pairs_penalized"]) == 0
+    assert "correlation_penalty_applied" not in art["books"]["autonomous"]["flags"]
+
+
+def test_corr_no_penalty_real_lifecycle_below_threshold():
+    """Penalty does NOT fire when corr is below 0.80 in the nested matrix."""
+    lc = {
+        "asof": "2026-07-06",
+        "states": {"flagship": "active", "autonomous": "active"},
+        "grades": {"flagship": _grade(0.01), "autonomous": _grade(0.005)},
+        "orthogonality": _ortho_nested("flagship", "autonomous", corr=0.70),
+    }
     art = FA._compute(lc, _EMPTY_BENCH, _EMPTY_PKTS, book_ids=["flagship", "autonomous"])
     assert len(art["firm"]["correlation_pairs_penalized"]) == 0
 

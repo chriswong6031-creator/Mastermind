@@ -298,21 +298,45 @@ def _compute(
         tilt[bid] = max(0.0, tf)
 
     # ── Step 4: correlation penalty ────────────────────────────────────────
-    # Read the orthogonality matrix from the lifecycle artifact
-    ortho = lifecycle.get("orthogonality") or {}
+    # Read the orthogonality matrix from the lifecycle artifact.
+    # brain.book_lifecycle emits:
+    #   orthogonality: {matrix: {book_a: {book_b: {corr, n_pairs, status}}}, noisy_mirror_flags, ...}
+    # We support BOTH the real nested shape (production) AND a flat {"{a}:{b}": float} shape
+    # (used by the test fixture for compactness) so legacy fixtures remain valid.
+    ortho_raw = lifecycle.get("orthogonality") or {}
+    # Resolve the matrix: prefer the nested "matrix" key (real artifact shape)
+    _ortho_matrix = ortho_raw.get("matrix") if isinstance(ortho_raw.get("matrix"), dict) else None
+
+    def _ortho_corr(a: str, b: str) -> float | None:
+        """Return the pairwise Pearson correlation or None if absent/insufficient."""
+        if _ortho_matrix is not None:
+            # Real artifact shape: matrix[a][b] = {corr, n_pairs, status}
+            cell = (_ortho_matrix.get(a) or {}).get(b) or (_ortho_matrix.get(b) or {}).get(a)
+            if isinstance(cell, dict):
+                if cell.get("status") not in ("scoring",):
+                    return None
+                v = cell.get("corr")
+                return float(v) if v is not None else None
+            # Flat numeric cell (shouldn't appear but tolerate)
+            if isinstance(cell, (int, float)):
+                return float(cell)
+            return None
+        # Flat dict shape: {"{a}:{b}": float | "insufficient-n"} — test-fixture compat
+        v = ortho_raw.get(f"{a}:{b}") or ortho_raw.get(f"{b}:{a}")
+        if v is None or v == "insufficient-n":
+            return None
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+
     pairs_penalized: list[list[str]] = []
     corr_penalized_books: set[str] = set()  # track which specific books were penalized
 
     for i, bid_a in enumerate(eligible):
         for bid_b in eligible[i + 1:]:
-            key = f"{bid_a}:{bid_b}"
-            alt_key = f"{bid_b}:{bid_a}"
-            corr = ortho.get(key) or ortho.get(alt_key)
-            if corr is None or corr == "insufficient-n":
-                continue
-            try:
-                corr_f = float(corr)
-            except (TypeError, ValueError):
+            corr_f = _ortho_corr(bid_a, bid_b)
+            if corr_f is None:
                 continue
             if corr_f > _NOISY_MIRROR_CORR:
                 # Penalise the lower-graded book
@@ -343,14 +367,15 @@ def _compute(
         if bid not in eligible or total_tilt == 0:
             shadow_weights[bid] = 0.0
         else:
-            shadow_weights[bid] = tilt[bid] / total_tilt
+            shadow_weights[bid] = round(tilt[bid] / total_tilt, 6)
 
-    # Verify sum-to-1 invariant (floating-point safe)
+    # Renormalize after rounding so persisted shadow_weights sum to exactly 1.0.
+    # Rounding 6 decimal places can leave a residual of at most N*5e-7 over N books;
+    # the corrective pass keeps the sum pinned without changing any weight meaningfully.
     weight_sum = sum(shadow_weights[bid] for bid in eligible)
     if weight_sum > 0 and abs(weight_sum - 1.0) > 1e-9:
-        # renormalize for float safety
         for bid in eligible:
-            shadow_weights[bid] /= weight_sum
+            shadow_weights[bid] = round(shadow_weights[bid] / weight_sum, 6)
 
     # ── Step 8: risk budget ────────────────────────────────────────────────
     risk_budgets = {bid: shadow_weights[bid] for bid in book_ids}

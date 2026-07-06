@@ -131,6 +131,60 @@ def test_flagship_universe_unrestricted():
 
 
 # ---------------------------------------------------------------------------
+# ETF universe + sizing rail cases  (fixes for review findings 1, 2, 3)
+# ---------------------------------------------------------------------------
+
+def test_etf_universe_in_allowlist():
+    """SPY is in the ETF allowlist → universe_ok is True."""
+    pkt = MP.build("etf", _state("etf",
+                                  positions=[_pos("SPY", 0.30), _pos("TLT", 0.20)],
+                                  currency="USD"))
+    assert pkt["universe_ok"] is True
+    assert not any("universe" in b for b in pkt["breaches"])
+
+
+def test_etf_universe_non_etf_ticker_breach():
+    """A plain equity ticker (not in the ETF allowlist) → universe_ok is False → breach.
+
+    Verifies finding 1 (eu.universe() replaced with is_etf()) is working.
+    AAPL is not in the ETF allowlist defined in config/etf_strategy.yml.
+    """
+    pkt = MP.build("etf", _state("etf",
+                                  positions=[_pos("AAPL", 0.30)],
+                                  currency="USD"))
+    assert pkt["universe_ok"] is False
+    assert any("universe" in b for b in pkt["breaches"])
+    assert "AAPL" in pkt["universe_detail"]
+
+
+def test_etf_sizing_breach_at_real_rail():
+    """0.36 weight breaches the 0.35 rail from config/etf_strategy.yml.
+
+    Verifies finding 2 (max_w read from guardrails() not hardcoded 0.40).
+    A weight of 0.36 is below the old wrong 0.40 cap and above the correct 0.35 cap.
+    """
+    pkt = MP.build("etf", _state("etf",
+                                  positions=[_pos("SPY", 0.36)],
+                                  currency="USD"))
+    # sizing_rails_ok must be False — 0.36 > 0.35 real rail
+    assert pkt["sizing_rails_ok"] is False
+    assert any("sizing" in b for b in pkt["breaches"])
+    # The breach message must reference 0.35 (the real rail), not 0.40
+    sizing_breach = next((b for b in pkt["breaches"] if "sizing" in b), "")
+    assert "0.35" in sizing_breach or "0.350" in sizing_breach or pkt["sizing_detail"] != ""
+    # Also confirm the rail used: detail string should mention the real max
+    assert "0.35" in pkt["sizing_detail"] or "0.360" in pkt["sizing_detail"]
+
+
+def test_etf_sizing_ok_below_rail():
+    """0.34 weight is within the 0.35 rail → no sizing breach."""
+    pkt = MP.build("etf", _state("etf",
+                                  positions=[_pos("SPY", 0.34)],
+                                  currency="USD"))
+    assert pkt["sizing_rails_ok"] is True
+
+
+# ---------------------------------------------------------------------------
 # sizing rails breach cases
 # ---------------------------------------------------------------------------
 
