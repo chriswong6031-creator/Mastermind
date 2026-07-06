@@ -224,6 +224,29 @@ Routing: **Sonnet builds, Opus reviews, Fable adjudicates/merges.** Haiku only f
 
 ## 3. Status log
 
+- **2026-07-06 (Fable): MW4 SHIPPED + merged + DEPLOYED** (merges 807c565/7461064 + fixes
+  3802f9c/447e520/22fbc01; live PID on version 22fbc01). The DecisionPacket boundary (R6)
+  exists at every Brain submission point: `control_plane/decision_packet.py` (schema v1,
+  MECHANICAL validator — substance floor kills '.'/'n/a' gaming; risk_direction FORCE-CORRECTED
+  from the computed delta, never trusted from the Brain; weights derived from the REAL account
+  shape shares×px/NAV; rejection ledger `packet_rejections.jsonl` with depth-capped LLM prose)
+  + `control_plane/packet_gate.py` wired into all 5 Brain books (autonomous/heavyweight/etf/
+  china/hk at their submission boundaries) and the flagship judgment path (brain/pm_conviction —
+  the correct P3 bound, not phase2). Gate modes: off / shadow / enforce via
+  MASTERMIND_PACKET_GATE, **DEFAULT SHADOW** (build+validate+ledger, never reject) — P8:
+  the enforce flip is a Fable decision recorded in the governance ledger after shadow data
+  review (queue it with the W7 clocks: review packets ~2026-07-20). Brain prompts/tool
+  descriptions enriched so falsifiers/evidence-planes/failure-mode accrue with real content.
+  Review gates caught: substrate adapter mapping an IMAGINED account shape (weight key that
+  never exists — the MW3 lesson repeating; would have stamped every submission 'increase' and
+  blinded the delta ledger to all exits) + junk-prose validator gaming; wire nits (untruncated
+  LLM list-prose in the rejection ledger; missing non-mutation regression test) — all fixed +
+  verified against the LIVE account.json (gross_before=0.101183 == hand-computed). Also: D4
+  spy test made seam-aware (bare worktrees abort phase2 pre-seam — env flap, not regression).
+  Shadow-mode zero-behavior-change PROVEN (submission/prior dicts unmutated, targets
+  byte-identical; opus-verified per book). First live packets accrue at tonight's 22:40–23:25
+  UTC builds.
+
 - **2026-07-06 (Fable): MW3 SHIPPED + merged + DEPLOYED** (merges b2a6422/a3b2425 + ops fixes
   4c263a5/d22d587/186ebbb; uvicorn PID cycles to memory-jobstore build). Contract bridge live:
   `config/contracts.yml` (41 artifacts: 16 synapse-declared mastermind consumers baked in + 25
