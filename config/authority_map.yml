@@ -64,6 +64,14 @@ flags:
       When set, uvicorn refuses to start without MASTERMIND_PASSWORD being set
       (startup refusal gate, R4).  Unset = auth optional (development).
 
+  MASTERMIND_JOBSTORE:
+    authority_level: A0
+    allowed_effect: [select_scheduler_jobstore]
+    note: >
+      Ops infrastructure only — sqlite (default, cross-restart misfire catch-up)
+      vs memory (production since the 2026-07-06 readonly-sqlite scheduler-thread
+      deaths).  No decision/sizing effect; jobs re-register identically at boot.
+
   MASTERMIND_SESSION_DAYS:
     authority_level: A1
     allowed_effect: [adjust_session_expiry]
