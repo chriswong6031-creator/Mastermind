@@ -84,6 +84,12 @@ KNOWN_FLAGS: list[str] = [
 # public API
 # ---------------------------------------------------------------------------
 
+# Flags whose VALUES are secrets. enumerate_flags() output lands in
+# data/governance/run_events.jsonl (every run record) and the census —
+# credential values must never reach a ledger, only the fact they are set.
+_SECRET_MARKERS = ("PASSWORD", "TOKEN", "SECRET", "KEY", "PASS")
+
+
 def enumerate_flags() -> dict[str, str]:
     """Return every MASTERMIND_* env var currently set.
 
@@ -91,11 +97,13 @@ def enumerate_flags() -> dict[str, str]:
     -------
     dict[str, str]
         ``{flag_name: value}`` for all ``MASTERMIND_*`` keys in ``os.environ``.
+        Secret-bearing flags (name contains PASSWORD/TOKEN/SECRET/KEY/PASS)
+        report the literal string ``"<set>"`` instead of their value.
         Flags in ``KNOWN_FLAGS`` that are absent from the environment are NOT
         included (absence is informational, not an error at enumeration time).
     """
     return {
-        k: v
+        k: ("<set>" if any(m in k for m in _SECRET_MARKERS) else v)
         for k, v in os.environ.items()
         if k.startswith("MASTERMIND_")
     }

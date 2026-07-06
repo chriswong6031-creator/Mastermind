@@ -321,6 +321,18 @@ class TestFlags:
         result = flags.enumerate_flags()
         assert "SOME_OTHER_VAR" not in result
 
+    def test_secret_flag_values_masked(self, monkeypatch):
+        # Credential VALUES must never reach the run ledger — only "<set>".
+        monkeypatch.setenv("MASTERMIND_PASSWORD", "supersecret1")
+        monkeypatch.setenv("MASTERMIND_AUTH_TOKEN", "tok123")
+        monkeypatch.setenv("MASTERMIND_FAST_DERISK", "1")
+        from control_plane import flags
+        result = flags.enumerate_flags()
+        assert result["MASTERMIND_PASSWORD"] == "<set>"
+        assert result["MASTERMIND_AUTH_TOKEN"] == "<set>"
+        assert result["MASTERMIND_FAST_DERISK"] == "1"
+        assert "supersecret1" not in str(result) and "tok123" not in str(result)
+
     def test_known_flags_is_nonempty_list(self):
         from control_plane import flags
         assert isinstance(flags.KNOWN_FLAGS, list)
