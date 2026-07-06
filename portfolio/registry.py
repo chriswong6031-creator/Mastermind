@@ -39,8 +39,9 @@ PORTFOLIOS: list[dict] = [
         "id": "heavyweight",
         "name": "Heavyweight",
         "tagline": "Concentrated · presses Flagship's best",
-        "kind": "heavyweight",    # an Opus Brain that may ONLY hold names Flagship currently holds and
-                                  # concentrates them into high-conviction 5–50% bets (bot/heavyweight.py)
+        "kind": "heavyweight",    # an Opus Brain concentrating the firm's best ideas: universe =
+                                  # union of published books (flagship, autonomous, etf; self_directed
+                                  # excluded per ruling R1), one-per-cluster, 5–50% rails (bot/heavyweight.py)
         "manager": "brain",
         "starting_nav": 1_000_000.0,
         "benchmark": "SPY",

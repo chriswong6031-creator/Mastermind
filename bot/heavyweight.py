@@ -74,11 +74,17 @@ def _flagship_universe() -> set[str]:
 
 # ── W6 T1 — the firm best-ideas UNION (universe = every published book, not a Flagship mirror) ──
 # The published US books whose latest.json positions[] ∪ pending_orders[] form Heavyweight's universe.
-# self_directed joins ONLY once it publishes a latest.json (T3 makes it a first-class published book;
-# read it if present, ignore it silently otherwise). china/hk are non-USD disjoint venues — excluded
-# (a CNY A-share is never a Heavyweight US concentration). heavyweight excludes ITSELF (it may not
-# bootstrap its own universe). Mirror of firm_exposure._FIRM_US_BOOKS minus heavyweight + self_directed.
-_FIRM_UNION_BOOKS = ("flagship", "autonomous", "etf", "self_directed")
+# china/hk are non-USD disjoint venues — excluded (a CNY A-share is never a Heavyweight US
+# concentration). heavyweight excludes ITSELF (it may not bootstrap its own universe).
+#
+# R1 ruling (2026-07-05, research/MASTERMIND_CONTROL_PLANE_MASTERPLAN.md §1): self_directed is
+# EXCLUDED. Its latest.json mirrors the DEFENSIVE_BASKET (brain/benchmark_ledger.py) — seeding HW
+# from that bogey would contaminate the yardstick Heavyweight is measured against. Heavyweight may
+# still hold XLU/XLV/XLP/XLF if another published book (flagship, autonomous, etf) expresses them;
+# the ban is on sourcing, not on tickers.
+# Deliberate asymmetry: firm_exposure._FIRM_US_BOOKS excludes self_directed for pile-up math; here we
+# exclude it for universe-seeding. Both exclusions are intentional and for different reasons.
+_FIRM_UNION_BOOKS = ("flagship", "autonomous", "etf")
 
 
 def _firm_universe_enabled() -> bool:
@@ -441,7 +447,18 @@ def run_heavyweight(asof: str | None = None, *, force: bool = False, armed: bool
     except Exception as e:                           # noqa: BLE001
         out["mark_error"] = repr(e)[:200]
 
-    # 7. publish the book contract + 8. append the daily decision log
+    # 7. append the daily decision log FIRST (so the accountability loop records today's picks),
+    #    8. run the accountability loop (record today + resolve matured forward grades vs SPY), then
+    #    9. publish the book contract.
+    try:
+        _append_decision_log(asof, submission, kept, notes, executed, skipped, brain, held_prior)
+    except Exception:
+        pass
+    try:
+        from portfolio import heavyweight_outcomes
+        out["accountability"] = heavyweight_outcomes.grade(asof)
+    except Exception:
+        pass
     payload = _build_payload(asof, submission, kept, notes, prices, executed, skipped, brain, held_prior,
                              uni_meta)
     try:
@@ -449,10 +466,6 @@ def run_heavyweight(asof: str | None = None, *, force: bool = False, armed: bool
         out["paths"] = build_portfolio.write(payload, portfolio_id=PORTFOLIO_ID)
     except Exception as e:                           # noqa: BLE001
         out["write_error"] = repr(e)[:200]
-    try:
-        _append_decision_log(asof, submission, kept, notes, executed, skipped, brain, held_prior)
-    except Exception:
-        pass
 
     try:
         out["nav"] = round(paper_account.nav(prices, PORTFOLIO_ID), 2)
@@ -546,6 +559,17 @@ def _build_prompt(asof: str, inaugural: bool, directive: str | None = None) -> s
     brief = risk_lens.briefing("heavyweight", regime=_regime_dict(), asof=asof, held=sorted(positions))
     if brief:
         lines += [brief, ""]
+    # the perception-to-outcome loop: show the Brain its OWN realized sizing track record so it
+    # self-corrects — especially weight-IC (did it size the winners bigger?).
+    try:
+        from portfolio import heavyweight_outcomes
+        track = heavyweight_outcomes.prompt_line()
+        if track:
+            lines += [track, "Use this to calibrate: if your sizing skill (weight-IC) is negative, "
+                      "you are sizing LOSERS bigger than winners — invert your conviction sizing. "
+                      "If book edge is negative, lean harder on the firm's highest-rated names.", ""]
+    except Exception:  # noqa: BLE001 — additive; never block the book
+        pass
     if uni_meta.get("source") == "firm_union" and not uni_meta.get("mirror_fallback"):
         pb = uni_meta.get("per_book") or {}
         breakdown = ", ".join(f"{k}:{v}" for k, v in pb.items() if v)

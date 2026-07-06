@@ -171,11 +171,11 @@
       "portfolio/heavyweight_shadow.py"
     ],
     "comeback_date": "2026-07-24",
-    "notes": "The falsifiable claim: re-pointing Heavyweight from Flagship-amplifier to firm-concentrator should make it MORE orthogonal to Flagship. compare()/window_verdict() in portfolio.heavyweight_shadow read the A/B."
+    "notes": "The falsifiable claim: re-pointing Heavyweight from Flagship-amplifier to firm-concentrator should make it MORE orthogonal to Flagship. compare()/window_verdict() in portfolio.heavyweight_shadow read the A/B.\n[2026-07-05] Sourcing universe amended: self_directed removed per ruling R1 (research/MASTERMIND_CONTROL_PLANE_MASTERPLAN.md \u00a71). self_directed.latest.json mirrors DEFENSIVE_BASKET \u2014 seeding HW from it contaminates the yardstick. A/B readers: the universe condition changed mid-window; readings from before 2026-07-05 used flagship+autonomous+etf+self_directed; from 2026-07-05 onward the arm is flagship+autonomous+etf only."
   },
   {
     "id": "cn-funnel-edge-led",
-    "what": "CN book CHINA_FUNNEL_PROFILE=edge-led vs default funnel — arms the dashboard-validated China reversal/low-vol edge in the live intake funnel",
+    "what": "CN book CHINA_FUNNEL_PROFILE=edge-led vs default funnel \u2014 arms the dashboard-validated China reversal/low-vol edge in the live intake funnel",
     "gate": "CN book vs CSI300-proxy bogey (FXI) over 4wk with CHINA_FUNNEL_PROFILE=edge-led vs the prior 4wk on default; edge-led arm must show better rolling 4wk return vs the FXI bogey (or smaller underperformance) AND not increase turnover by >25% vs default",
     "maturity_condition": "CN book vs FXI bogey over 4wk with edge-led mode active vs the prior 4wk default; compare rolling_4wk_ret_vs_bogey for both windows",
     "status": "open",
@@ -185,6 +185,6 @@
       "data/benchmark/china/"
     ],
     "comeback_date": "2026-07-31",
-    "notes": "Arm via env: CHINA_FUNNEL_PROFILE=edge-led (add to systemd/process env and restart the China Brain). Default is 'default' (byte-identical to pre-W6). P8: behaviour-changing, no validated basis on THIS codebase yet; ships flag-off. The dashboard-side validation (CN Reversal Sleeve, china_reversal/low-vol IC) is the external prior — it justifies shipping the flag but not hard-flipping the default."
+    "notes": "Arm via env: CHINA_FUNNEL_PROFILE=edge-led (add to systemd/process env and restart the China Brain). Default is 'default' (byte-identical to pre-W6). P8: behaviour-changing, no validated basis on THIS codebase yet; ships flag-off. The dashboard-side validation (CN Reversal Sleeve, china_reversal/low-vol IC) is the external prior \u2014 it justifies shipping the flag but not hard-flipping the default."
   }
 ]
