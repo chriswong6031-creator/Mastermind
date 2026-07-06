@@ -1,0 +1,839 @@
+{
+  "_meta": {
+    "generated_at": "2026-07-06T08:29:04.426114+00:00",
+    "git_sha": "0ef769f",
+    "notice": "GENERATED \u2014 do not hand-edit; architecture docs must cite this file.",
+    "ruling": "R10"
+  },
+  "jobs": [
+    {
+      "id": "macro_refresh",
+      "cron_spec": "30 */3 * * *",
+      "hour": "*/3",
+      "minute": "30",
+      "day_of_week": null,
+      "timezone": "UTC"
+    },
+    {
+      "id": "daily_mark",
+      "cron_spec": "35 22 * * mon-fri",
+      "hour": "22",
+      "minute": "35",
+      "day_of_week": "mon-fri",
+      "timezone": "UTC"
+    },
+    {
+      "id": "daily_loop",
+      "cron_spec": "40 22 * * *",
+      "hour": "22",
+      "minute": "40",
+      "day_of_week": null,
+      "timezone": "UTC"
+    },
+    {
+      "id": "autonomous_daily",
+      "cron_spec": "10 23 * * mon-fri",
+      "hour": "23",
+      "minute": "10",
+      "day_of_week": "mon-fri",
+      "timezone": "UTC"
+    },
+    {
+      "id": "heavyweight_daily",
+      "cron_spec": "25 23 * * mon-fri",
+      "hour": "23",
+      "minute": "25",
+      "day_of_week": "mon-fri",
+      "timezone": "UTC"
+    },
+    {
+      "id": "china_daily",
+      "cron_spec": "0 8 * * mon-fri",
+      "hour": "8",
+      "minute": "0",
+      "day_of_week": "mon-fri",
+      "timezone": "UTC"
+    },
+    {
+      "id": "hk_daily",
+      "cron_spec": "0 9 * * mon-fri",
+      "hour": "9",
+      "minute": "0",
+      "day_of_week": "mon-fri",
+      "timezone": "UTC"
+    },
+    {
+      "id": "etf_daily",
+      "cron_spec": "15 23 * * mon-fri",
+      "hour": "23",
+      "minute": "15",
+      "day_of_week": "mon-fri",
+      "timezone": "UTC"
+    },
+    {
+      "id": "settle_pending",
+      "cron_spec": "0 15 * * mon-fri",
+      "hour": "15",
+      "minute": "0",
+      "day_of_week": "mon-fri",
+      "timezone": "UTC"
+    },
+    {
+      "id": "settle_brain_asia",
+      "cron_spec": "35 1 * * mon-fri",
+      "hour": "1",
+      "minute": "35",
+      "day_of_week": "mon-fri",
+      "timezone": "UTC"
+    },
+    {
+      "id": "watch_us_overnight",
+      "cron_spec": "20 2,6,11 * * mon-fri",
+      "hour": "2,6,11",
+      "minute": "20",
+      "day_of_week": "mon-fri",
+      "timezone": "UTC"
+    },
+    {
+      "id": "watch_asia_overnight",
+      "cron_spec": "20 14,20,0 * * mon-fri",
+      "hour": "14,20,0",
+      "minute": "20",
+      "day_of_week": "mon-fri",
+      "timezone": "UTC"
+    },
+    {
+      "id": "derisk_us_intraday",
+      "cron_spec": "0 14-20 * * mon-fri",
+      "hour": "14-20",
+      "minute": "0",
+      "day_of_week": "mon-fri",
+      "timezone": "UTC"
+    },
+    {
+      "id": "publish_macro_snapshot",
+      "cron_spec": "25 12,22 * * *",
+      "hour": "12,22",
+      "minute": "25",
+      "day_of_week": null,
+      "timezone": "UTC"
+    },
+    {
+      "id": "cio_weekly",
+      "cron_spec": "0 10 * * sun",
+      "hour": "10",
+      "minute": "0",
+      "day_of_week": "sun",
+      "timezone": "UTC"
+    },
+    {
+      "id": "improvement_agenda_weekly",
+      "cron_spec": "30 agenda_hour * * sun",
+      "hour": "agenda_hour",
+      "minute": "30",
+      "day_of_week": "sun",
+      "timezone": "UTC"
+    },
+    {
+      "id": "loop_maintenance",
+      "cron_spec": "45 23 * * mon-fri",
+      "hour": "23",
+      "minute": "45",
+      "day_of_week": "mon-fri",
+      "timezone": "UTC"
+    },
+    {
+      "id": "experiment_maturity",
+      "cron_spec": "50 23 * * mon-fri",
+      "hour": "23",
+      "minute": "50",
+      "day_of_week": "mon-fri",
+      "timezone": "UTC"
+    }
+  ],
+  "books": [
+    {
+      "id": "flagship",
+      "name": "Flagship",
+      "kind": "gated",
+      "manager": "engine",
+      "benchmark": "SPY",
+      "currency": "USD",
+      "venues": [],
+      "legacy": true
+    },
+    {
+      "id": "heavyweight",
+      "name": "Heavyweight",
+      "kind": "heavyweight",
+      "manager": "brain",
+      "benchmark": "SPY",
+      "currency": "USD",
+      "venues": [],
+      "legacy": false
+    },
+    {
+      "id": "autonomous",
+      "name": "US Brain",
+      "kind": "autonomous",
+      "manager": "brain",
+      "benchmark": "SPY",
+      "currency": "USD",
+      "venues": [],
+      "legacy": false
+    },
+    {
+      "id": "etf",
+      "name": "ETF Brain",
+      "kind": "etf_brain",
+      "manager": "brain",
+      "benchmark": "SPY",
+      "currency": "USD",
+      "venues": [],
+      "legacy": false
+    },
+    {
+      "id": "china",
+      "name": "CN Brain",
+      "kind": "china_brain",
+      "manager": "brain",
+      "benchmark": "FXI",
+      "currency": "CNY",
+      "venues": [
+        "A-share"
+      ],
+      "legacy": false
+    },
+    {
+      "id": "hk",
+      "name": "HK Brain",
+      "kind": "hk_brain",
+      "manager": "brain",
+      "benchmark": "FXI",
+      "currency": "HKD",
+      "venues": [
+        "HK"
+      ],
+      "legacy": false
+    },
+    {
+      "id": "self_directed",
+      "name": "Self-Directed",
+      "kind": "self_directed",
+      "manager": "you",
+      "benchmark": "SPY",
+      "currency": "USD",
+      "venues": [],
+      "legacy": false
+    }
+  ],
+  "flags": {
+    "set": {},
+    "known_not_set": [
+      "MASTERMIND_ALLOW_FRACTIONAL",
+      "MASTERMIND_AUTH_TOKEN",
+      "MASTERMIND_BRIDGE_PROGRAM",
+      "MASTERMIND_CAUTION_GROSS",
+      "MASTERMIND_CAUTION_SCORE",
+      "MASTERMIND_CHAIN_CAP",
+      "MASTERMIND_CHARTER_V",
+      "MASTERMIND_COMMITTEE",
+      "MASTERMIND_CONTROL_PLANE_MASTERPLAN",
+      "MASTERMIND_COOKIE_SECURE",
+      "MASTERMIND_DERISK_THEME_DROP",
+      "MASTERMIND_DWELL",
+      "MASTERMIND_EXPLORE_EPS",
+      "MASTERMIND_EXPLORE_WEIGHT",
+      "MASTERMIND_FAST_DERISK",
+      "MASTERMIND_FIRM_CAPS",
+      "MASTERMIND_FIRM_CLUSTER_CAP",
+      "MASTERMIND_FIRM_NAME_CAP",
+      "MASTERMIND_FIX_MASTERPLAN",
+      "MASTERMIND_FLAGSHIP_JUDGMENT",
+      "MASTERMIND_GATE_OFFICER",
+      "MASTERMIND_HW_FIRM_UNIVERSE",
+      "MASTERMIND_HW_MIN_FUNDABLE",
+      "MASTERMIND_LEARNING_DESIGN",
+      "MASTERMIND_MACRO_RISK",
+      "MASTERMIND_MIN_POSITION_FRAC",
+      "MASTERMIND_MIN_TRADE_FRAC",
+      "MASTERMIND_NIGHTLY_USD_CAP",
+      "MASTERMIND_NO_TRADE_BAND_FRAC",
+      "MASTERMIND_NW_CONTEXT",
+      "MASTERMIND_PASSWORD",
+      "MASTERMIND_POSTURE_ADAPT",
+      "MASTERMIND_POSTURE_DECIDER",
+      "MASTERMIND_REPUTATION_WEIGHTING",
+      "MASTERMIND_REQUIRE_AUTH",
+      "MASTERMIND_RESEARCH_LLM",
+      "MASTERMIND_RISKOFF_GROSS",
+      "MASTERMIND_RISKOFF_SCORE",
+      "MASTERMIND_RISK_GOVERNOR",
+      "MASTERMIND_RISK_OFFICER",
+      "MASTERMIND_SELECTION_EXPLORE",
+      "MASTERMIND_SELF_MIRROR",
+      "MASTERMIND_SELF_TUNE",
+      "MASTERMIND_SESSION_DAYS",
+      "MASTERMIND_STUDENT",
+      "MASTERMIND_TIMING_GATE",
+      "MASTERMIND_V"
+    ]
+  },
+  "endpoints": [
+    {
+      "method": "GET",
+      "path": "/health",
+      "open": true,
+      "llm_triggering": false,
+      "source": "main.py"
+    },
+    {
+      "method": "GET",
+      "path": "/regime",
+      "open": false,
+      "llm_triggering": false,
+      "source": "main.py"
+    },
+    {
+      "method": "POST",
+      "path": "/reason",
+      "open": false,
+      "llm_triggering": true,
+      "source": "main.py"
+    },
+    {
+      "method": "POST",
+      "path": "/daily",
+      "open": false,
+      "llm_triggering": true,
+      "source": "main.py"
+    },
+    {
+      "method": "POST",
+      "path": "/api/autonomous/run",
+      "open": false,
+      "llm_triggering": true,
+      "source": "main.py"
+    },
+    {
+      "method": "POST",
+      "path": "/api/heavyweight/run",
+      "open": false,
+      "llm_triggering": true,
+      "source": "main.py"
+    },
+    {
+      "method": "POST",
+      "path": "/api/china/run",
+      "open": false,
+      "llm_triggering": true,
+      "source": "main.py"
+    },
+    {
+      "method": "POST",
+      "path": "/api/hk/run",
+      "open": false,
+      "llm_triggering": true,
+      "source": "main.py"
+    },
+    {
+      "method": "POST",
+      "path": "/api/etf/run",
+      "open": false,
+      "llm_triggering": true,
+      "source": "main.py"
+    },
+    {
+      "method": "POST",
+      "path": "/research",
+      "open": false,
+      "llm_triggering": true,
+      "source": "main.py"
+    },
+    {
+      "method": "POST",
+      "path": "/chat",
+      "open": false,
+      "llm_triggering": true,
+      "source": "main.py"
+    },
+    {
+      "method": "GET",
+      "path": "/chat/history",
+      "open": false,
+      "llm_triggering": false,
+      "source": "main.py"
+    },
+    {
+      "method": "GET",
+      "path": "/chat/paper",
+      "open": false,
+      "llm_triggering": false,
+      "source": "main.py"
+    },
+    {
+      "method": "GET",
+      "path": "/",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/research",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/self",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/desk",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/market_view",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/agenda",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/theme.css",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/theme.js",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/chat.js",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/research_paper.pdf",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/performance",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/risk",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/portfolio",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/portfolios",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/decisions",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/posture",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/market_view",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/agenda",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/etf/outcomes",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/overnight-tape",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/research",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/research_papers",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/outcome_ledger",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/trades",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/self_directed",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/self_directed/history",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/self_directed/search",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/self_directed/quote",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "POST",
+      "path": "/api/self_directed/order",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "POST",
+      "path": "/api/self_directed/thesis",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "POST",
+      "path": "/api/self_directed/cancel",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/outcomes",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/shadow_books",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/predictions",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/rejections",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/shadow_bandit",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/student",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/distill",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/interim_marks",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/engine_backtest",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/factor_zoo",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/fundamentals",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/readiness",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/macro",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/activity",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/runs",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/runlog",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/competitors",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/desk/strategist",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/desk/decisions",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/desk/watchlist",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/desk/scorecard",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/desk/macro-risk",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/desk/firm-exposure",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/desk/experiments",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    }
+  ],
+  "artifacts": [
+    {
+      "module": "portfolio.lenses",
+      "artifact_paths": [
+        "data/altdata/by_ticker.json",
+        "data/altdata/mastermind.json",
+        "data/flow/mastermind.json",
+        "data/intelligence/by_ticker.json",
+        "data/news/by_ticker.json",
+        "data/policy/intel.json",
+        "data/regime/latest.json",
+        "data/vol/mastermind.json",
+        "site/allocationdata/allocation.json",
+        "site/altdata/by_ticker.json",
+        "site/altdata/mastermind.json",
+        "site/basketdata/baskets.json",
+        "site/flow/mastermind.json",
+        "site/intelligence/by_ticker.json",
+        "site/news/by_ticker.json",
+        "site/stockdata/fund_flows.json",
+        "site/vol/mastermind.json"
+      ]
+    },
+    {
+      "module": "brain.intake",
+      "artifact_paths": [
+        "altdata/mastermind.json",
+        "basketdata/radar_ticker.json",
+        "factordata/us_standouts.json",
+        "intelligence/briefing.json",
+        "news/by_ticker.json"
+      ]
+    },
+    {
+      "module": "brain.china_intake",
+      "artifact_paths": [
+        "china_regime/latest.json",
+        "factordata/china_alpha.json",
+        "factordata/china_reversal.json",
+        "factordata/china_setups.json",
+        "factordata/china_standouts.json",
+        "factordata/hk_standouts.json"
+      ]
+    },
+    {
+      "module": "brain.etf_board",
+      "artifact_paths": [
+        "data/regime/latest.json",
+        "data/transmission/latest.json"
+      ]
+    },
+    {
+      "module": "brain.gate_officer",
+      "artifact_paths": []
+    },
+    {
+      "module": "brain.regime_frame",
+      "artifact_paths": [
+        "data/china_regime/latest.json",
+        "data/regime/latest.json",
+        "data/risk_radar/forward_log.jsonl",
+        "site/sectordata/sector_cycles.json"
+      ]
+    },
+    {
+      "module": "data_layer.macro_refresh",
+      "artifact_paths": [
+        "data/regime/latest.json",
+        "site/factordata/us_standouts.json",
+        "site/sectordata/sector_cycles.json",
+        "site/stockdata/SPY.json"
+      ]
+    },
+    {
+      "module": "brain.neural_web_context",
+      "artifact_paths": []
+    }
+  ],
+  "guardrails": []
+}
