@@ -573,7 +573,7 @@ def _portfolio_status(meta: dict) -> dict:
     if pid == "self_directed":
         try:
             from portfolio import self_directed
-            bk = self_directed.book()
+            bk = self_directed.book(read_only=True)  # GET must not settle pending orders
             alloc = bk.get("allocation") or {}
             status.update({
                 "nav": bk.get("nav"),
