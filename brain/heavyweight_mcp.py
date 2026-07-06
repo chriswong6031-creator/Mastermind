@@ -1,20 +1,27 @@
-"""The Heavyweight desk's MCP surface — the CONCENTRATED book that presses Flagship's best.
+"""The Heavyweight desk's MCP surface — the CONCENTRATED book that presses the firm's best ideas.
 
 Heavyweight is the sibling of the autonomous desk (brain/autonomous_mcp.py), but with two
 defining differences:
 
-  1. Its tradable UNIVERSE is Flagship's current holdings — the deterministic builder
-     (``bot/heavyweight.py``) DROPS anything the Brain submits that Flagship does not hold, so
-     the rule is enforced in trusted Python, never on the LLM's good behaviour.
+  1. Its tradable UNIVERSE is the UNION of every published book's latest.json (flagship,
+     autonomous, etf) — NOT a Flagship-only mirror. The deterministic builder (``bot/heavyweight.py``)
+     DROPS anything the Brain submits that no published book holds. self_directed is EXCLUDED from
+     the sourcing union (ruling R1: its book mirrors the defensive yardstick and must not seed HW).
+     The rule is enforced in trusted Python, never on the LLM's good behaviour. One-name-per-
+     fragility-chain cluster is also enforced (the Brain picks the BEST expression of each theme).
   2. It is given EXPLICIT, read-only visibility into Flagship — ``get_flagship_book`` /
      ``get_flagship_trades`` / ``get_flagship_research`` / ``get_flagship_thinking`` — so the
      Brain can see exactly what Flagship is doing (holdings, blotter, per-name research papers,
-     the reasoning trace) and concentrate into the highest-conviction, most asymmetric subset.
+     the reasoning trace) and concentrate the firm's highest-conviction, most asymmetric names.
+
+Sizing rails (enforced in Python): each name 5%–50% of NAV, sub-5% nibbles DROPPED, top ~8 names
+kept. A name held by ANY published book (flagship, autonomous, or etf) is eligible even if Flagship
+does not currently hold it.
 
 Like the autonomous desk, ``submit_book`` only RECORDS the decided book to a per-portfolio file
 (``_pending_decision.json``); the trusted layer reads it after the session, enforces the
-universe + the 5–50% sizing rails, and rebalances. The Brain never trades. Everything is scoped
-to ``portfolio_id="heavyweight"`` so Flagship/Autonomous are only ever READ, never written.
+universe + one-per-cluster + 5–50% sizing rails, and rebalances. The Brain never trades.
+Everything is scoped to ``portfolio_id="heavyweight"`` so peer books are only ever READ.
 
 NOTE on visibility vs the autonomous fix: the autonomous Brain had raw Read/Grep/Glob stripped
 and read_signal firewalled off the portfolio dirs (it must NOT see other books). Heavyweight is
@@ -122,13 +129,15 @@ async def get_my_book(args):
 @tool("submit_book",
       "Submit your FINAL concentrated book for today as a COMPLETE target book — this is how you "
       "trade. The desk rebalances to exactly these weights (a name you OMIT but currently hold is "
-      "SOLD). RULES enforced by the desk after you submit: (1) you may ONLY hold names FLAGSHIP "
-      "currently holds — anything else is dropped; (2) each weight is clamped to 5%–50% of NAV and "
-      "names you size below 5% are DROPPED (no nibbles); (3) at most ~8 names are kept (the top by "
-      "weight). So submit a SHORT, high-conviction list. Weights are fractions of NAV (0–1); the "
-      "remainder stays in cash (hold cash when conviction is thin). Provide a one-paragraph "
-      "conviction rationale for EVERY holding (required) + an overall summary of how you are "
-      "pressing Flagship's best ideas. Call this ONCE, at the end, after your research.",
+      "SOLD). RULES enforced by the desk after you submit: (1) you may ONLY hold names that appear "
+      "in the firm's published books (flagship, autonomous, or etf) — anything else is dropped; "
+      "(2) AT MOST ONE name per correlated cluster — submit the highest-conviction expression per "
+      "theme, others are dropped; (3) each weight is clamped to 5%–50% of NAV and names you size "
+      "below 5% are DROPPED (no nibbles); (4) at most ~8 names are kept (the top by weight). "
+      "So submit a SHORT, high-conviction list. Weights are fractions of NAV (0–1); the remainder "
+      "stays in cash (hold cash when conviction is thin). Provide a one-paragraph conviction "
+      "rationale for EVERY holding (required) + an overall summary of how you are concentrating "
+      "the firm's best ideas. Call this ONCE, at the end, after your research.",
       {"type": "object", "properties": {
           "holdings": {"type": "array", "items": {"type": "object", "properties": {
               "ticker": {"type": "string"},

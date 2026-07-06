@@ -299,15 +299,24 @@ def test_firm_universe_is_union_of_published_books(iso):
     allowed, meta = hw._firm_universe()
     assert allowed == {"NVDA", "AVGO", "XLE", "TSLA", "SPY", "GLD"}
     assert meta["source"] == "firm_union" and meta["mirror_fallback"] is False
-    assert meta["per_book"] == {"flagship": 2, "autonomous": 2, "etf": 2, "self_directed": 0}
+    # post-R1: self_directed is NOT in _FIRM_UNION_BOOKS → no per_book key for it
+    assert meta["per_book"] == {"flagship": 2, "autonomous": 2, "etf": 2}
+    assert "self_directed" not in meta["per_book"]
 
 
-def test_firm_universe_includes_self_directed_when_published(iso):
+def test_self_directed_unique_tickers_excluded_from_firm_universe(iso):
+    """R1 ruling: a ticker that appears ONLY in self_directed must never enter _firm_universe().
+    A ticker held by another published book remains eligible (the ban is on sourcing, not tickers)."""
     _seed_flagship(["NVDA", "AVGO", "MSFT"])
-    _seed_book("self_directed", ["XLU", "XLP"])
+    _seed_book("autonomous", ["XLE"])
+    # XLU/XLV are ONLY in self_directed — they must be absent from the universe.
+    # XLE is also in autonomous — it must remain eligible.
+    _seed_book("self_directed", ["XLU", "XLV", "XLE"])
     allowed, meta = hw._firm_universe()
-    assert {"XLU", "XLP"} <= allowed                    # self_directed joins once it publishes
-    assert meta["per_book"]["self_directed"] == 2
+    assert "XLU" not in allowed, "XLU appears only in self_directed — must not seed Heavyweight (R1)"
+    assert "XLV" not in allowed, "XLV appears only in self_directed — must not seed Heavyweight (R1)"
+    assert "XLE" in allowed, "XLE is also in autonomous — remains eligible after R1"
+    assert "self_directed" not in meta.get("per_book", {})
 
 
 def test_firm_universe_ignores_china_hk(iso):
