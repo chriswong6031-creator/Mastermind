@@ -50,6 +50,24 @@ The `asof()` function returns the MINIMUM (oldest) date across all resolvable an
 the engine is only as fresh as its stalest critical input.  `anchors_report()` exposes per-anchor
 resolution for debugging.
 
+--- MW3 EXTENSIONS (2026-07-06) ---
+
+R2 AVAILABILITY ANCHOR (item b in task 2): beyond SPY.json, `check_and_warn()` now probes a
+sample of N=5 liquid tickers' stockdata JSONs to detect partial R2 outages.  A partial outage
+(some tickers missing/stale) is emitted as an ADVISORY event and surfaces a `stockdata_degraded`
+flag in the result.  Failures on the probe are ADVISORY-only (not FREEZE) because a per-ticker
+miss may be legitimate (no stockdata for an unlisted name).
+
+FREEZE SEMANTICS (R3): when a FREEZE-class anchor (degradation_class=FREEZE in contracts.yml)
+is stale beyond its freshness_budget_sessions, `check_and_warn()` sets `freeze=True` and
+`freeze_reasons` in the returned info dict.  The caller (bot/daily.py) applies
+portfolio.freeze.freeze_to_prior so the flagship build runs but its final targets are frozen
+(no new adds, no increases — de-risk still allowed).  Logged as GuardrailResult(FREEZE,
+guard='stale_anchor') in run_events.
+
+Kill-switch: MASTERMIND_STALE_FREEZE=0 suppresses the freeze application (still logs).
+Default ON.  MACRO_STALE_BLOCK (hard refuse) remains as the stricter opt-in above this.
+
 `site/stockdata/` is always checked and reported in `data_gaps` — so the runlog surfaces an
 R2-sync failure loudly on every build, even when everything else is fresh.
 """
@@ -88,6 +106,39 @@ _R2_EXTRAS = ("index.json", "fund_flows.json")   # non-ticker files (manifest-fa
 _R2_META = ".r2_sync.json"                       # per-dir sync state (manifest ETag)
 _R2_TIMEOUT = 30                                 # seconds, per HTTP request
 _R2_WORKERS = 16
+
+# MW3: R2 availability probe — sample of N=5 liquid US tickers to test R2 health beyond SPY.
+# A partial outage (some names missing) is ADVISORY; this does not gate the build.
+_R2_PROBE_TICKERS = ("SPY", "QQQ", "NVDA", "AAPL", "MSFT")
+
+# MW3: per-contract freshness budget driven by contracts.yml (degradation_class=FREEZE).
+# Loaded lazily below; the existing 4-anchor hardcoded list is the fallback when contracts
+# are unavailable.  Budget is expressed in sessions (1 session ≈ _MAX_AGE_DAYS).
+_FREEZE_CONTRACTS_LOADED: bool = False
+_FREEZE_BUDGET_OVERRIDE: dict[str, int] = {}  # anchor rel -> freshness_budget_sessions
+
+
+def _load_freeze_budgets() -> dict[str, int]:
+    """Load per-anchor freshness budgets from contracts.yml.  Never raises; returns {} on error.
+    Result is an override map rel_path -> max_age_sessions for FREEZE-class artifacts only."""
+    global _FREEZE_CONTRACTS_LOADED, _FREEZE_BUDGET_OVERRIDE
+    if _FREEZE_CONTRACTS_LOADED:
+        return _FREEZE_BUDGET_OVERRIDE
+    result: dict[str, int] = {}
+    try:
+        from control_plane.contracts import all_contracts
+        for _key, c in all_contracts().items():
+            if c.get("degradation_class") == "FREEZE":
+                p = str(c.get("path") or "")
+                b = c.get("freshness_budget_sessions")
+                if p and isinstance(b, int) and b > 0:
+                    result[p] = b
+    except Exception:  # noqa: BLE001
+        pass
+    _FREEZE_CONTRACTS_LOADED = True
+    _FREEZE_BUDGET_OVERRIDE = result
+    return result
+
 
 # ---------------------------------------------------------------------------
 # Anchor contracts
@@ -373,21 +424,115 @@ def _collect_data_gaps() -> list[str]:
     return gaps
 
 
+def _probe_r2_availability(log=print) -> tuple[bool, list[str]]:
+    """MW3 (item b): probe a sample of liquid tickers to detect partial R2 outages.
+
+    Checks whether each ticker in _R2_PROBE_TICKERS has a stockdata JSON present under
+    the vendored path AND that its 'asof' date is within the FREEZE budget.
+
+    Returns (degraded: bool, missing_tickers: list[str]).
+    degraded=True means >=1 probe ticker is absent or stale — ADVISORY event.
+    Never raises; a probe error counts as a single advisory miss.
+    """
+    missing: list[str] = []
+    budget_sessions = 1
+    try:
+        budgets = _load_freeze_budgets()
+        budget_sessions = budgets.get("site/stockdata/SPY.json", 1)
+    except Exception:  # noqa: BLE001
+        pass
+    for ticker in _R2_PROBE_TICKERS:
+        try:
+            p = _SRC / "site" / "stockdata" / f"{ticker}.json"
+            if not p.exists():
+                missing.append(ticker)
+                continue
+            d = json.loads(p.read_text())
+            raw = _read_stockdata_date(d)
+            if raw:
+                date_val = datetime.strptime(str(raw)[:10], "%Y-%m-%d").date()
+                age_days = (date.today() - date_val).days
+                if age_days > budget_sessions * _MAX_AGE_DAYS:
+                    missing.append(ticker)
+        except Exception:  # noqa: BLE001
+            missing.append(ticker)
+    return (len(missing) > 0), missing
+
+
+def _freeze_enabled() -> bool:
+    """MW3 R3: MASTERMIND_STALE_FREEZE kill-switch. Default ON.
+    Set MASTERMIND_STALE_FREEZE=0 to suppress freeze application (still logs)."""
+    return os.environ.get("MASTERMIND_STALE_FREEZE", "1").strip().lower() not in ("0", "false", "no", "off", "")
+
+
+def _compute_freeze(report: dict, log=print) -> tuple[bool, list[str]]:
+    """MW3 R3: determine whether any FREEZE-class anchor is stale beyond its budget.
+
+    Returns (freeze: bool, reasons: list[str]).
+    freeze=True means at least one FREEZE-class anchor is stale beyond its contract budget.
+    Never raises.
+
+    Sessions-to-calendar-days conversion (documented here, single source of truth):
+      - ``freshness_budget_sessions`` from contracts.yml expresses the budget in SESSIONS,
+        where 1 session corresponds to 1 market cycle ≈ _MAX_AGE_DAYS calendar days.
+      - ``max_days = budget_sessions * _MAX_AGE_DAYS`` converts to calendar days ONCE.
+      - An anchor ABSENT from the contracts map defaults to 1 session (= _MAX_AGE_DAYS days).
+        The previous code defaulted to ``_MAX_AGE_DAYS`` sessions, giving 4 days — a
+        double-multiplication bug that made the implicit default twice as permissive as the
+        1-session explicit contract budget.
+    """
+    freeze_reasons: list[str] = []
+    try:
+        budgets = _load_freeze_budgets()
+        # Match anchors to contract budgets.  The 4 hardcoded anchor labels map to contract paths.
+        anchor_path_map = {a.label: a.rel for a in _ANCHOR_DEFS}
+        for label, date_str in report.items():
+            if date_str is None:
+                continue
+            rel = anchor_path_map.get(label)
+            if rel is None:
+                continue
+            # Default: 1 session = _MAX_AGE_DAYS calendar days (NOT _MAX_AGE_DAYS sessions).
+            # A missing contract entry must not silently double the budget vs an explicit 1-session
+            # contract — both should allow exactly _MAX_AGE_DAYS calendar days.
+            budget_sessions = budgets.get(rel, 1)
+            max_days = budget_sessions * _MAX_AGE_DAYS
+            try:
+                age = (date.today() - datetime.strptime(date_str[:10], "%Y-%m-%d").date()).days
+                if age > max_days:
+                    freeze_reasons.append(
+                        f"{label}={date_str} is {age}d old (budget={max_days}d)")
+            except Exception:  # noqa: BLE001
+                pass
+    except Exception:  # noqa: BLE001
+        pass
+    return (len(freeze_reasons) > 0), freeze_reasons
+
+
 def check_and_warn(*, block: bool = False, log=print) -> dict:
     """Staleness tripwire. Logs a loud warning when the vendored macro data is stale; if `block`,
     raises RuntimeError so a build refuses to trade on stale reads (the NVDA-Constructive-vs-avoid
     class of bug). Returns an info dict either way.
 
     The returned dict always includes:
-      asof          — minimum date across resolvable anchors (YYYY-MM-DD or None)
-      stale         — bool (False when unknown, matching original behaviour)
-      max_age_days  — the threshold applied
-      data_gaps     — list of expected-but-missing paths; non-empty = loud surface needed
+      asof               — minimum date across resolvable anchors (YYYY-MM-DD or None)
+      stale              — bool (False when unknown, matching original behaviour)
+      max_age_days       — the threshold applied
+      data_gaps          — list of expected-but-missing paths; non-empty = loud surface needed
+      freeze             — bool (MW3 R3): True when a FREEZE-class anchor is stale beyond budget
+      freeze_reasons     — list[str]: per-anchor staleness reasons when freeze=True
+      stockdata_degraded — bool (MW3 item b): True when >=1 R2 probe ticker is absent/stale
     """
     a = asof()
     stale = is_stale()
     gaps = _collect_data_gaps()
     report = anchors_report()
+
+    # MW3 (a): per-contract freshness budgets from contracts.yml
+    freeze, freeze_reasons = _compute_freeze(report, log=log)
+
+    # MW3 (b): R2 availability probe
+    stockdata_degraded, _missing_tickers = _probe_r2_availability(log=log)
 
     info: dict = {
         "asof": a,
@@ -395,6 +540,10 @@ def check_and_warn(*, block: bool = False, log=print) -> dict:
         "max_age_days": _MAX_AGE_DAYS,
         "data_gaps": gaps,
         "anchors": report,
+        # MW3 additions
+        "freeze": freeze,
+        "freeze_reasons": freeze_reasons,
+        "stockdata_degraded": stockdata_degraded,
     }
 
     if stale:
@@ -404,6 +553,28 @@ def check_and_warn(*, block: bool = False, log=print) -> dict:
         log(msg)
         if block:
             raise RuntimeError(msg)
+
+    if freeze and _freeze_enabled():
+        log(f"[macro_refresh] FREEZE-CLASS anchor(s) stale: {freeze_reasons}. "
+            f"freeze_to_prior will apply (set MASTERMIND_STALE_FREEZE=0 to suppress).")
+    elif freeze:
+        log(f"[macro_refresh] FREEZE-CLASS anchor(s) stale (MASTERMIND_STALE_FREEZE=0 — warn only): "
+            f"{freeze_reasons}.")
+
+    if stockdata_degraded:
+        log(f"[macro_refresh] ADVISORY: R2 stockdata probe detected missing/stale tickers: "
+            f"{_missing_tickers}. Downstream per-name reads may be degraded.")
+        # Emit ADVISORY guardrail event
+        try:
+            from control_plane.guardrail import GuardrailResult, Severity
+            GuardrailResult.failed(
+                "r2_availability",
+                Severity.ADVISORY_ONLY,
+                detail=f"R2 probe: absent/stale tickers {_missing_tickers}",
+                action_taken="advisory only — execution continues with last-good mirror",
+            ).log(job="macro_refresh")
+        except Exception:  # noqa: BLE001
+            pass
 
     if gaps:
         # Emit a distinct loud warning for every missing contract so it surfaces in the runlog

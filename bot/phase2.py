@@ -66,53 +66,22 @@ def _conv_theme_id(t: str) -> str:
     return f"name:{t.upper()}"
 
 
-def _firm_clamp_freeze_flagship(book: list[dict], exc: Exception,
-                                run_id: object = None) -> list[dict]:
-    """Exception-arm for the flagship firm-clamp block (Charter P2).
+def _freeze_book_list_to_prior(book: list[dict], prior: dict[str, float]) -> list[dict]:
+    """Shared shape-handling: freeze a list-of-dicts book to prior weights.
 
-    Called when ``firm_exposure.clamp_book`` raises inside ``run_flagship``.  Returns the
-    book frozen to the prior published state: no new adds, no increases vs. the prior book,
-    held names retained at ``min(target, prior)`` weight.
+    Used by both ``_firm_clamp_freeze_flagship`` (exception arm) and
+    ``_stale_freeze_flagship`` (stale-anchor arm) so the 40-line list→map→freeze→rebuild
+    logic lives in exactly one place.  Never raises (guardrail helpers must be safe).
 
-    Prior weights come from two sources (in priority order):
-      1. ``firm_exposure.published_weights("flagship")`` — the last-published latest.json
-         (exact weights, best source).
-      2. ``position_log.open_positions()`` — the position ledger (``current_weight`` field),
-         used as a cross-check / fallback when the published file is absent.
-
-    The downstream consumer (phase2 rebalance) treats absent names as liquidate-to-zero, so
-    prior-only names are RETAINED in the output (freeze = do-not-trade, not liquidate).
-
-    Never raises (guardrail helpers must be unconditionally safe).
+    Returns a list-of-dicts book where every weight satisfies Charter P2 invariants:
+      frozen[name] <= prior[name]; no new names; gross never increases.
     """
     from portfolio.freeze import freeze_to_prior as _ftp
-    # Build target map from the list-shaped book
     try:
         target_map = {str(p.get("ticker") or "").upper().strip(): float(p.get("weight") or 0.0)
                       for p in book if p.get("ticker")}
     except Exception:  # noqa: BLE001
         target_map = {}
-    # Prior weights from published latest.json
-    prior: dict[str, float] = {}
-    try:
-        from portfolio import firm_exposure as _firm_exp
-        prior = _firm_exp.published_weights("flagship")
-    except Exception:  # noqa: BLE001
-        pass
-    # Fallback: position_log.open_positions
-    if not prior:
-        try:
-            from portfolio import position_log as _pl
-            for hp in (_pl.open_positions() or []):
-                tk = str(hp.get("ticker") or "").upper().strip()
-                if tk:
-                    w = hp.get("current_weight") or 0.0
-                    try:
-                        prior[tk] = float(w)
-                    except (TypeError, ValueError):
-                        prior[tk] = 0.0
-        except Exception:  # noqa: BLE001
-            pass
     frozen_map = _ftp(target_map, prior)
     # Rebuild a list-of-dicts book preserving all non-weight fields from original rows
     tk_to_rows: dict[str, list[dict]] = {}
@@ -139,6 +108,50 @@ def _firm_clamp_freeze_flagship(book: list[dict], exc: Exception,
             # prior-only name: no built row exists; inject a minimal hold row
             out_rows.append({"ticker": fk, "weight": round(fw, 4),
                              "sleeve": "prior", "_sentinel_hold": True})
+    return out_rows
+
+
+def _firm_clamp_freeze_flagship(book: list[dict], exc: Exception,
+                                run_id: object = None) -> list[dict]:
+    """Exception-arm for the flagship firm-clamp block (Charter P2).
+
+    Called when ``firm_exposure.clamp_book`` raises inside ``run_flagship``.  Returns the
+    book frozen to the prior published state: no new adds, no increases vs. the prior book,
+    held names retained at ``min(target, prior)`` weight.
+
+    Prior weights come from two sources (in priority order):
+      1. ``firm_exposure.published_weights("flagship")`` — the last-published latest.json
+         (exact weights, best source).
+      2. ``position_log.open_positions()`` — the position ledger (``current_weight`` field),
+         used as a cross-check / fallback when the published file is absent.
+
+    The downstream consumer (phase2 rebalance) treats absent names as liquidate-to-zero, so
+    prior-only names are RETAINED in the output (freeze = do-not-trade, not liquidate).
+
+    Never raises (guardrail helpers must be unconditionally safe).
+    """
+    # Prior weights from published latest.json
+    prior: dict[str, float] = {}
+    try:
+        from portfolio import firm_exposure as _firm_exp
+        prior = _firm_exp.published_weights("flagship")
+    except Exception:  # noqa: BLE001
+        pass
+    # Fallback: position_log.open_positions
+    if not prior:
+        try:
+            from portfolio import position_log as _pl
+            for hp in (_pl.open_positions() or []):
+                tk = str(hp.get("ticker") or "").upper().strip()
+                if tk:
+                    w = hp.get("current_weight") or 0.0
+                    try:
+                        prior[tk] = float(w)
+                    except (TypeError, ValueError):
+                        prior[tk] = 0.0
+        except Exception:  # noqa: BLE001
+            pass
+    out_rows = _freeze_book_list_to_prior(book, prior)
     # Log + emit guardrail event
     try:
         _rl_log(run_id, "decision", "firm cap clamp error", f"{exc!r}"[:160])
@@ -151,6 +164,65 @@ def _firm_clamp_freeze_flagship(book: list[dict], exc: Exception,
             Severity.FREEZE,
             detail=f"clamp_book raised: {exc!r}"[:200],
             action_taken="frozen to prior book (no new adds, no weight increases)",
+        ).log(job="phase2_flagship", book="flagship")
+    except Exception:  # noqa: BLE001
+        pass
+    return out_rows
+
+
+def _stale_freeze_flagship(book: list[dict], reasons: list[str],
+                            run_id: object = None) -> list[dict]:
+    """Stale-anchor arm for the flagship book (Charter P2, MW3 R3).
+
+    Called BEFORE ledger/store/rebalance/publish when the macro_refresh result signals
+    that a FREEZE-class anchor is stale beyond its contract budget.  Returns the book
+    frozen to the prior published state: no new adds, no weight increases vs. the prior
+    book.  De-risk (target < prior) passes through (min semantics).
+
+    Prior weights come from ``firm_exposure.published_weights("flagship")``, with a
+    fallback to ``position_log.open_positions()`` (same priority as the firm-clamp arm).
+
+    FLAGSHIP-ONLY: autonomous / etf / heavyweight books read the same macro artifacts but
+    their anchor-freeze wiring is a separate reviewed change.  This function must NEVER be
+    called for those books.
+
+    Never raises (guardrail helpers must be unconditionally safe).
+    """
+    # Prior weights from published latest.json
+    prior: dict[str, float] = {}
+    try:
+        from portfolio import firm_exposure as _firm_exp
+        prior = _firm_exp.published_weights("flagship")
+    except Exception:  # noqa: BLE001
+        pass
+    if not prior:
+        try:
+            from portfolio import position_log as _pl
+            for hp in (_pl.open_positions() or []):
+                tk = str(hp.get("ticker") or "").upper().strip()
+                if tk:
+                    w = hp.get("current_weight") or 0.0
+                    try:
+                        prior[tk] = float(w)
+                    except (TypeError, ValueError):
+                        prior[tk] = 0.0
+        except Exception:  # noqa: BLE001
+            pass
+    out_rows = _freeze_book_list_to_prior(book, prior)
+    # Log + emit guardrail event
+    try:
+        _rl_log(run_id, "decision", "stale anchor FREEZE applied",
+                f"reasons={reasons}"[:200])
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from control_plane.guardrail import GuardrailResult, Severity
+        GuardrailResult.failed(
+            "stale_anchor",
+            Severity.FREEZE,
+            detail=f"Stale FREEZE-class anchor(s): {reasons}"[:200],
+            action_taken="frozen to prior book (no new adds, no weight increases)",
+            extra={"freeze_reasons": reasons},
         ).log(job="phase2_flagship", book="flagship")
     except Exception:  # noqa: BLE001
         pass
@@ -324,7 +396,8 @@ def _build_d5_lots(open_positions: list[dict], prices: dict, sector_pctile: dict
 
 
 def run(asof: str | None = None, force: bool = False, research: bool = False,
-        *, directive: str | None = None) -> dict:
+        *, directive: str | None = None,
+        stale_freeze: dict | None = None) -> dict:
     """Run one Flagship build.
 
     ``directive`` is an optional overnight reconsideration instruction (e.g. from the
@@ -334,7 +407,18 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
     context.  ``directive=None`` is byte-identical to today — the flag-off invariant
     is preserved: if ``MASTERMIND_FLAGSHIP_JUDGMENT`` is off the directive has no
     effect on the book (the deterministic engine path rebuilds with fresh regime /
-    severity inputs, which is itself valuable)."""
+    severity inputs, which is itself valuable).
+
+    ``stale_freeze`` is an optional dict from the caller (``bot/daily.py``) carrying
+    the result of ``macro_refresh.refresh_and_check()``.  When ``stale_freeze['freeze']``
+    is True AND ``MASTERMIND_STALE_FREEZE`` is enabled, the book is frozen to the prior
+    published state (no new adds, no weight increases) BEFORE ledger/store/rebalance/
+    publish — i.e. at the correct seam.  ``stale_freeze=None`` is a byte-identical no-op
+    (the default; preserves backward compatibility for all non-daily callers).
+
+    FLAGSHIP-ONLY: the autonomous/etf/heavyweight books read the same macro artifacts but
+    their stale-anchor-freeze wiring is a separate reviewed change.  ``stale_freeze`` must
+    NEVER be passed for those books from this function."""
     # —— open run log ——
     _run_id: str | None = None
     try:
@@ -1329,6 +1413,34 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
     _dropped_conv = _held_conv - _final_conv
     _close_reasons: dict[str, str] = {t: _rebuild_reason(t) for t in _dropped_conv}
 
+    # ———— MW3 R3 STALE-ANCHOR FREEZE — applied BEFORE ledger/store/rebalance/publish ————
+    # When a FREEZE-class anchor is stale beyond its contract budget, freeze the flagship
+    # targets to the prior published book: no new adds, no weight increases (de-risk allowed).
+    # The seam mirrors the firm-clamp freeze (_firm_clamp_freeze_flagship, ~:1067) so both
+    # arms gate the same downstream writes.  Kill-switch: MASTERMIND_STALE_FREEZE=0 → log only.
+    _stale_freeze_summary: dict | None = None
+    if (isinstance(stale_freeze, dict) and stale_freeze.get("freeze")):
+        from data_layer.macro_refresh import _freeze_enabled
+        _sf_reasons: list = stale_freeze.get("freeze_reasons") or []
+        if _freeze_enabled():
+            book = _stale_freeze_flagship(book, _sf_reasons, run_id=_run_id)
+            _stale_freeze_summary = {
+                "applied": True,
+                "reasons": _sf_reasons,
+                "asof": stale_freeze.get("asof"),
+            }
+            _rl_log(_run_id, "decision", "STALE-ANCHOR FREEZE applied",
+                    f"flagship frozen to prior: {_sf_reasons}"[:200])
+        else:
+            # Kill-switch active: log but do not apply
+            _stale_freeze_summary = {
+                "applied": False,
+                "kill_switch": True,
+                "reasons": _sf_reasons,
+            }
+            _rl_log(_run_id, "decision", "STALE-ANCHOR FREEZE suppressed (kill-switch)",
+                    f"MASTERMIND_STALE_FREEZE=0; reasons={_sf_reasons}"[:200])
+
     # ———— update positions ledger ————
     position_log.update(book, asof, close_reasons=_close_reasons)
 
@@ -1626,7 +1738,8 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
     return {"ran": True, "triggers": decision["triggers"], "book": book, "sleeves": payload["sleeves"],
             "detectors": fired, "track_record": tr, "paths": paths, "llm_used": payload["llm_used"],
             "safety": _safety, "safety_overlay": _safety_overlay,
-            "research": research_out, "research_held": research_held, "run_id": _run_id}
+            "research": research_out, "research_held": research_held, "run_id": _run_id,
+            "stale_freeze": _stale_freeze_summary}
 
 
 def run_flagship(asof: str | None = None, *, directive: str | None = None) -> dict:

@@ -47,12 +47,23 @@ def run_daily(asof: str | None = None, *, force: bool = False, armed: bool = Tru
     except Exception as e:  # noqa: BLE001 — freshness must never kill the build
         out["macro_data"] = {"error": str(e)[:200]}
 
-    # 1. the gated paper book (deterministic; always runs)
+    # 1. the gated paper book (deterministic; always runs).
+    #    MW3 R3: pass the macro_data refresh result so phase2 can apply the stale-anchor
+    #    freeze BEFORE ledger/store/rebalance/publish (the correct seam).  The freeze logic
+    #    lives in phase2._stale_freeze_flagship — daily.py is just the plumbing.
     try:
         from bot import phase2
-        out["book"] = phase2.run(asof=asof, force=force)
+        _macro_data = out.get("macro_data") or {}
+        out["book"] = phase2.run(asof=asof, force=force,
+                                 stale_freeze=_macro_data if isinstance(_macro_data, dict) else None)
     except Exception as e:
         out["book"] = {"error": str(e)[:200]}
+
+    # Surface the stale_freeze summary from the book result for the daily out dict
+    # (callers / runlog readers expect out["stale_freeze"]).
+    _book_result = out.get("book") or {}
+    if isinstance(_book_result, dict) and _book_result.get("stale_freeze") is not None:
+        out["stale_freeze"] = _book_result["stale_freeze"]
 
     # NOTE: the flagship book's safety scorecard is computed + CONSUMED inside phase2 (it
     # de-grosses a fragile book before sizing cash) and persisted to data/portfolio/safety.json.

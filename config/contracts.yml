@@ -1,0 +1,574 @@
+# Mastermind artifact contracts — MW3 Lane A (2026-07-06)
+#
+# Source of truth for every external artifact Mastermind consumes from the macro
+# analyzer's vendored checkout (vendor/macro/site/ + vendor/macro/data/).
+#
+# Two provenance sections:
+#   synapse   — artifacts declared in macro's config/synapse.yml as
+#               mastermind:anchor or mastermind:vendored external_consumers.
+#               These 16 entries are BAKED here at build time; never runtime-read
+#               across repos. Synapse key preserved in comments for traceability.
+#   census    — artifacts the Mastermind codebase reads that synapse does NOT
+#               declare (section E in data/census/CENSUS.md). declared_by=census.
+#
+# Per-artifact fields
+# -------------------
+#   path               path under vendor/macro (the vendored checkout root)
+#   owner              always "macro_engine" for vendored artifacts
+#   schema_hint        informal type hint (e.g. "json", "jsonl", "json_dir")
+#   freshness_budget_sessions
+#                      how many nightly sessions old before considered stale.
+#                      1 session = ~36h (nightly boundary slack included).
+#                      Derived from synapse freshness_sla_hours / 36.
+#   tier               from synapse tier vocabulary: infrastructure | display |
+#                      shadow | confirmer | scored
+#   allowed_effect     sizing-input | context-only | display-only
+#                      sizing-input: may directly influence position sizes
+#                      context-only: read as context/enrichment; no direct sizing
+#                      display-only: rendered but no execution path
+#   degradation_class  what happens when the artifact is stale or absent (R3):
+#                      FREEZE   — stale beyond budget -> freeze_to_prior (R3/R9)
+#                      SHRINK   — stale -> shrink-only degradation
+#                      ADVISORY — stale -> log advisory event; execution unchanged
+#   consumer_modules   Mastermind modules that read this artifact
+#   declared_by        synapse | census
+
+meta:
+  schema_version: 1
+  description: >
+    Mastermind artifact contracts — MW3. Baked from synapse.yml (16 entries) +
+    census section E (additional reads). Never runtime-read across repos.
+  generated: "2026-07-06"
+  synapse_source: "config/synapse.yml (macro repo)"
+
+# ============================================================
+# SECTION 1: synapse-declared artifacts (mastermind:anchor /
+#            mastermind:vendored external_consumers)
+# ============================================================
+
+artifacts:
+
+  # synapse key: regime-latest | consumer_type: mastermind:anchor
+  regime-latest:
+    path: data/regime/latest.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 1        # 30h SLA / 36h session = ~1 session
+    tier: infrastructure
+    allowed_effect: sizing-input        # quad + sector_rs drive leadership sleeve sizing
+    degradation_class: FREEZE
+    consumer_modules:
+      - bot/phase2.py                   # regime["sector_rs"], regime["quad"]
+      - brain/regime_frame.py           # frame(), budget()
+      - brain/etf_board.py              # regime read
+    declared_by: synapse
+
+  # synapse key: site-us-standouts | consumer_type: mastermind:anchor
+  site-us-standouts:
+    path: site/factordata/us_standouts.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 1
+    tier: display
+    allowed_effect: sizing-input        # standout buy rows drive conviction candidates
+    degradation_class: FREEZE
+    consumer_modules:
+      - bot/phase2.py                   # _published_entry_signal()
+      - portfolio/conviction.py         # standout candidates
+      - brain/intake.py                 # factordata/us_standouts.json read
+    declared_by: synapse
+
+  # synapse key: site-baskets-json | consumer_type: mastermind:vendored
+  site-baskets-json:
+    path: site/basketdata/baskets.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 1
+    tier: display
+    allowed_effect: context-only
+    degradation_class: ADVISORY
+    consumer_modules:
+      - portfolio/lenses.py             # site/basketdata/baskets.json
+    declared_by: synapse
+
+  # synapse key: site-altdata-mastermind | consumer_type: mastermind:vendored
+  site-altdata-mastermind:
+    path: site/altdata/mastermind.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 1
+    tier: display
+    allowed_effect: context-only
+    degradation_class: ADVISORY
+    consumer_modules:
+      - portfolio/lenses.py             # site/altdata/mastermind.json
+      - brain/intake.py                 # altdata/mastermind.json
+    declared_by: synapse
+
+  # synapse key: site-signals-per-ticker | consumer_type: mastermind:vendored
+  # Wildcard path: per-ticker signal files
+  site-signals-per-ticker:
+    path: "site/signals/<SYM>.json"
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 1
+    tier: display
+    allowed_effect: context-only
+    degradation_class: ADVISORY
+    consumer_modules: []
+    declared_by: synapse
+
+  # synapse key: site-regime-timeline | consumer_type: mastermind:vendored
+  site-regime-timeline:
+    path: site/regime_timeline.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 1
+    tier: display
+    allowed_effect: context-only
+    degradation_class: ADVISORY
+    consumer_modules: []
+    declared_by: synapse
+
+  # synapse key: site-sector-pulse | consumer_type: mastermind:vendored
+  site-sector-pulse:
+    path: site/basketdata/sector_pulse.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 1
+    tier: display
+    allowed_effect: context-only
+    degradation_class: ADVISORY
+    consumer_modules:
+      - portfolio/lenses.py             # site/basketdata/sector_pulse.json (indirect via baskets)
+    declared_by: synapse
+
+  # synapse key: site-china-standouts | consumer_type: mastermind:vendored
+  site-china-standouts:
+    path: site/factordata/china_standouts.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 1
+    tier: display
+    allowed_effect: context-only
+    degradation_class: ADVISORY
+    consumer_modules:
+      - brain/china_intake.py           # factordata/china_standouts.json
+    declared_by: synapse
+
+  # synapse key: site-basket-flow | consumer_type: mastermind:vendored
+  site-basket-flow:
+    path: site/basketdata/flow.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 1
+    tier: display
+    allowed_effect: context-only
+    degradation_class: ADVISORY
+    consumer_modules:
+      - portfolio/lenses.py             # site/flow/mastermind.json (via lenses)
+    declared_by: synapse
+
+  # synapse key: site-allocation | consumer_type: mastermind:vendored
+  site-allocation:
+    path: site/allocationdata/allocation.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 1
+    tier: display
+    allowed_effect: context-only
+    degradation_class: ADVISORY
+    consumer_modules:
+      - portfolio/lenses.py             # site/allocationdata/allocation.json
+    declared_by: synapse
+
+  # synapse key: site-ai-desk-us | consumer_type: mastermind:vendored
+  site-ai-desk-us:
+    path: site/allocationdata/ai_desk_us.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 1
+    tier: display
+    allowed_effect: display-only
+    degradation_class: ADVISORY
+    consumer_modules: []
+    declared_by: synapse
+
+  # synapse key: site-china-intel-briefing | consumer_type: mastermind:vendored
+  site-china-intel-briefing:
+    path: site/china_intel/briefing.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 1
+    tier: display
+    allowed_effect: context-only
+    degradation_class: ADVISORY
+    consumer_modules:
+      - brain/china_intake.py           # intelligence/briefing.json (via intake)
+    declared_by: synapse
+
+  # synapse key: site-artifact-manifest | consumer_type: mastermind:vendored
+  site-artifact-manifest:
+    path: site/factordata/contracts/artifact_manifest.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 2
+    tier: infrastructure
+    allowed_effect: display-only
+    degradation_class: ADVISORY
+    consumer_modules: []
+    declared_by: synapse
+
+  # synapse key: site-golden-signals | consumer_type: mastermind:vendored
+  site-golden-signals:
+    path: site/factordata/contracts/golden_signals.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 2
+    tier: infrastructure
+    allowed_effect: display-only
+    degradation_class: ADVISORY
+    consumer_modules: []
+    declared_by: synapse
+
+  # synapse key: site-foresight-cascade | consumer_type: mastermind:vendored
+  site-foresight-cascade:
+    path: site/basketdata/foresight_cascade.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 1
+    tier: display
+    allowed_effect: context-only
+    degradation_class: ADVISORY
+    consumer_modules: []
+    declared_by: synapse
+
+  # synapse key: feeds-plane | consumer_type: mastermind:vendored
+  # Directory artifact (multiple files under site/feeds/)
+  feeds-plane:
+    path: site/feeds/
+    owner: macro_engine
+    schema_hint: json_dir
+    freshness_budget_sessions: 1
+    tier: infrastructure
+    allowed_effect: display-only
+    degradation_class: ADVISORY
+    consumer_modules: []
+    declared_by: synapse
+
+# ============================================================
+# SECTION 2: census-declared artifacts (section E, CENSUS.md)
+# Artifacts Mastermind reads that synapse does NOT declare.
+# declared_by: census
+# ============================================================
+
+  # From data_layer.macro_refresh (4 paths) — these four are also the FREEZE anchors
+  # already in section 1 (regime-latest, site-us-standouts) plus two additional:
+
+  # macro_refresh anchor 3 — sector_cycles is not in synapse as mastermind consumer
+  site-sector-cycles:
+    path: site/sectordata/sector_cycles.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 1
+    tier: display
+    allowed_effect: sizing-input        # cycle-phase used in leadership caps
+    degradation_class: FREEZE
+    consumer_modules:
+      - data_layer/macro_refresh.py     # anchor 3
+      - brain/regime_frame.py           # site/sectordata/sector_cycles.json
+    declared_by: census
+
+  # macro_refresh anchor 4 (R2 leg) — SPY stockdata
+  site-stockdata-spy:
+    path: site/stockdata/SPY.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 1
+    tier: infrastructure
+    allowed_effect: sizing-input        # R2 availability anchor; stockdata used in lenses
+    degradation_class: FREEZE
+    consumer_modules:
+      - data_layer/macro_refresh.py     # anchor 4 (R2 leg)
+    declared_by: census
+
+  # From portfolio.lenses (17 paths) — non-synapse paths
+  data-altdata-by-ticker:
+    path: data/altdata/by_ticker.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 2
+    tier: display
+    allowed_effect: context-only
+    degradation_class: ADVISORY
+    consumer_modules:
+      - portfolio/lenses.py
+    declared_by: census
+
+  data-altdata-mastermind:
+    path: data/altdata/mastermind.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 2
+    tier: display
+    allowed_effect: context-only
+    degradation_class: ADVISORY
+    consumer_modules:
+      - portfolio/lenses.py
+    declared_by: census
+
+  data-flow-mastermind:
+    path: data/flow/mastermind.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 2
+    tier: display
+    allowed_effect: context-only
+    degradation_class: ADVISORY
+    consumer_modules:
+      - portfolio/lenses.py
+    declared_by: census
+
+  data-intelligence-by-ticker:
+    path: data/intelligence/by_ticker.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 2
+    tier: display
+    allowed_effect: context-only
+    degradation_class: ADVISORY
+    consumer_modules:
+      - portfolio/lenses.py
+    declared_by: census
+
+  data-news-by-ticker:
+    path: data/news/by_ticker.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 2
+    tier: display
+    allowed_effect: context-only
+    degradation_class: ADVISORY
+    consumer_modules:
+      - portfolio/lenses.py
+    declared_by: census
+
+  data-policy-intel:
+    path: data/policy/intel.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 2
+    tier: display
+    allowed_effect: context-only
+    degradation_class: ADVISORY
+    consumer_modules:
+      - portfolio/lenses.py
+    declared_by: census
+
+  data-vol-mastermind:
+    path: data/vol/mastermind.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 2
+    tier: display
+    allowed_effect: context-only
+    degradation_class: ADVISORY
+    consumer_modules:
+      - portfolio/lenses.py
+    declared_by: census
+
+  site-altdata-by-ticker:
+    path: site/altdata/by_ticker.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 1
+    tier: display
+    allowed_effect: context-only
+    degradation_class: ADVISORY
+    consumer_modules:
+      - portfolio/lenses.py
+    declared_by: census
+
+  site-flow-mastermind:
+    path: site/flow/mastermind.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 1
+    tier: display
+    allowed_effect: context-only
+    degradation_class: ADVISORY
+    consumer_modules:
+      - portfolio/lenses.py
+    declared_by: census
+
+  site-intelligence-by-ticker:
+    path: site/intelligence/by_ticker.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 1
+    tier: display
+    allowed_effect: context-only
+    degradation_class: ADVISORY
+    consumer_modules:
+      - portfolio/lenses.py
+    declared_by: census
+
+  site-news-by-ticker:
+    path: site/news/by_ticker.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 1
+    tier: display
+    allowed_effect: context-only
+    degradation_class: ADVISORY
+    consumer_modules:
+      - portfolio/lenses.py
+    declared_by: census
+
+  site-stockdata-fund-flows:
+    path: site/stockdata/fund_flows.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 1
+    tier: display
+    allowed_effect: context-only
+    degradation_class: ADVISORY
+    consumer_modules:
+      - portfolio/lenses.py
+    declared_by: census
+
+  site-vol-mastermind:
+    path: site/vol/mastermind.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 1
+    tier: display
+    allowed_effect: context-only
+    degradation_class: ADVISORY
+    consumer_modules:
+      - portfolio/lenses.py
+    declared_by: census
+
+  # From brain.china_intake (6 paths)
+  china-regime-latest:
+    path: china_regime/latest.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 1
+    tier: infrastructure
+    allowed_effect: context-only
+    degradation_class: ADVISORY
+    consumer_modules:
+      - brain/china_intake.py
+    declared_by: census
+
+  site-china-alpha:
+    path: site/factordata/china_alpha.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 1
+    tier: display
+    allowed_effect: context-only
+    degradation_class: ADVISORY
+    consumer_modules:
+      - brain/china_intake.py
+    declared_by: census
+
+  site-china-reversal:
+    path: site/factordata/china_reversal.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 1
+    tier: display
+    allowed_effect: context-only
+    degradation_class: ADVISORY
+    consumer_modules:
+      - brain/china_intake.py
+    declared_by: census
+
+  site-china-setups:
+    path: site/factordata/china_setups.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 1
+    tier: display
+    allowed_effect: context-only
+    degradation_class: ADVISORY
+    consumer_modules:
+      - brain/china_intake.py
+    declared_by: census
+
+  site-hk-standouts:
+    path: site/factordata/hk_standouts.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 1
+    tier: display
+    allowed_effect: context-only
+    degradation_class: ADVISORY
+    consumer_modules:
+      - brain/china_intake.py
+    declared_by: census
+
+  # From brain.etf_board (2 paths — regime-latest already in synapse section)
+  data-transmission-latest:
+    path: data/transmission/latest.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 2
+    tier: display
+    allowed_effect: context-only
+    degradation_class: ADVISORY
+    consumer_modules:
+      - brain/etf_board.py
+    declared_by: census
+
+  # From brain.regime_frame (4 paths — regime-latest in synapse, sector_cycles above)
+  data-china-regime-latest:
+    path: data/china_regime/latest.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 1
+    tier: infrastructure
+    allowed_effect: context-only
+    degradation_class: ADVISORY
+    consumer_modules:
+      - brain/regime_frame.py
+    declared_by: census
+
+  data-risk-radar-forward-log:
+    path: data/risk_radar/forward_log.jsonl
+    owner: macro_engine
+    schema_hint: jsonl
+    freshness_budget_sessions: 2
+    tier: shadow
+    allowed_effect: context-only
+    degradation_class: ADVISORY
+    consumer_modules:
+      - brain/regime_frame.py
+    declared_by: census
+
+  # brain.intake additional paths (non-synapse)
+  site-basketdata-radar-ticker:
+    path: site/basketdata/radar_ticker.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 1
+    tier: display
+    allowed_effect: context-only
+    degradation_class: ADVISORY
+    consumer_modules:
+      - brain/intake.py
+    declared_by: census
+
+  site-intelligence-briefing:
+    path: site/intelligence/briefing.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 1
+    tier: display
+    allowed_effect: context-only
+    degradation_class: ADVISORY
+    consumer_modules:
+      - brain/intake.py
+    declared_by: census
