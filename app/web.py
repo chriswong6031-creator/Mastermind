@@ -2115,3 +2115,11 @@ def api_provenance() -> JSONResponse:
         "paper_trading": True,
         "label": "PAPER TRADING",
     })
+
+
+@router.get("/portfolio_desk", include_in_schema=False)
+def portfolio_desk_page() -> FileResponse:
+    """The Portfolio Risk Desk — operator's held-position ledger with live quotes and
+    evidence-lane risk context (W1 base; risk grid added by W2). Standalone static page;
+    session-auth-gated by the same middleware as the rest of the app."""
+    return FileResponse(_STATIC / "portfolio.html", media_type="text/html", headers=_NOCACHE)

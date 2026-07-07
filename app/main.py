@@ -42,10 +42,15 @@ if FastAPI is not None:
         max_turns: int | None = None
 
     from app import web
+    from app import pfolio
 
     app = FastAPI(title="Mastermind", version="0.0.1")
 
     app.include_router(web.router)
+    # Portfolio Risk Desk CRUD proxy (W1). PRD-R8: these endpoints mutate Supabase
+    # only — no local state, no LLM — and are exempt from MASTERMIND_SERVE_ONLY
+    # blocking (see app/auth.py _PFOLIO_PATHS). Session-auth still required.
+    app.include_router(pfolio.router)
 
     # App-level auth gate — protects the UI + every /api route + the SSE stream.
     # Opt-in via MASTERMIND_PASSWORD; a no-op (auth disabled) when it's unset, so
