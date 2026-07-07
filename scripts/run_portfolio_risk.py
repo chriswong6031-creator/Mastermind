@@ -73,9 +73,9 @@ def _resolve_operator_uuid(base_url: str, key: str, email: str) -> str | None:
             log.warning("auth admin lookup returned %s", resp.status_code)
             return None
         data = resp.json()
-        users = data.get("users") or data if isinstance(data, list) else []
+        users = data if isinstance(data, list) else (data.get("users") or [])
         for u in users:
-            if isinstance(u, dict) and u.get("email") == email:
+            if isinstance(u, dict) and (u.get("email") or "").lower() == email.lower():
                 return u.get("id")
     except Exception as exc:
         log.warning("operator UUID resolution failed: %s", exc)
