@@ -115,6 +115,14 @@ _NON_LLM_OPERATOR_PATHS: frozenset[str] = frozenset({
 _OPERATOR_PATHS: frozenset[str] = _LLM_OPERATOR_PATHS | _NON_LLM_OPERATOR_PATHS
 
 # ---------------------------------------------------------------------------
+# PRD-R8: portfolio CRUD carve-out from the serve-only POST block.
+# These endpoints mutate Supabase only — no local state, no LLM, no scheduler.
+# They are NOT in _OPERATOR_PATHS (cookie is sufficient; no bearer required),
+# and they are NOT blocked by MASTERMIND_SERVE_ONLY=1. Normal session-auth applies.
+# ---------------------------------------------------------------------------
+_PFOLIO_PATH_PREFIX = "/api/pfolio/"
+
+# ---------------------------------------------------------------------------
 # serve-only mode
 # ---------------------------------------------------------------------------
 
@@ -353,7 +361,11 @@ def install(app) -> None:
             return await call_next(request)
 
         # --- serve-only mode: block all operator mutations ---
-        if serve_only() and method == "POST" and path in _OPERATOR_PATHS:
+        # PRD-R8 carve-out: /api/pfolio/* paths are allowed through even in serve-only
+        # mode because they only mutate Supabase (no local state, no LLM, no scheduler).
+        # They remain session-auth-gated (NOT exempted from the auth check below).
+        _is_pfolio = path.startswith(_PFOLIO_PATH_PREFIX)
+        if serve_only() and method == "POST" and path in _OPERATOR_PATHS and not _is_pfolio:
             return JSONResponse(
                 {"error": "serve_only", "detail": (
                     "This instance is running in serve-only (read-only mirror) mode. "

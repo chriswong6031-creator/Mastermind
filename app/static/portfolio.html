@@ -1,0 +1,690 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MASTERMIND — Portfolio Desk</title>
+
+<!-- No-flash theme init — MUST be first, before stylesheets. -->
+<script>
+try {
+  document.documentElement.setAttribute('data-theme', localStorage.getItem('theme') || 'dark');
+  document.documentElement.setAttribute('data-lang', localStorage.getItem('lang') || 'en');
+} catch(e) {}
+</script>
+
+<link rel="stylesheet" href="/theme.css">
+
+<style>
+* { box-sizing: border-box; }
+
+body.page-pf {
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 Inter, -apple-system, "Segoe UI", Roboto, Helvetica, sans-serif;
+  margin: 0;
+  padding: 18px;
+}
+@media (min-width: 1100px) {
+  body.page-pf { padding: 26px max(40px, calc((100vw - 1280px) / 2)); }
+}
+body.page-pf a { text-decoration: none; color: var(--link); }
+
+/* header */
+.pf-head { display: flex; align-items: baseline; justify-content: space-between;
+  gap: 14px; flex-wrap: wrap; margin: 0 0 18px; }
+.pf-head h1 { font-size: 19px; margin: 0; letter-spacing: .01em; }
+.pf-head .sub { color: var(--muted); font-size: 12px; }
+
+body.page-pf h2 {
+  font-size: 11px; margin: 0 0 12px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .08em; font-weight: 700;
+  padding-bottom: 8px; border-bottom: 1px solid var(--line);
+}
+
+.panel {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 14px; padding: 16px 18px; margin: 0 0 16px;
+}
+
+/* ── header strip ─────────────────────────────────────────────────────────── */
+.pf-strip {
+  display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start;
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 14px; padding: 16px 20px; margin: 0 0 16px;
+}
+.pf-strip-kv { min-width: 120px; }
+.pf-strip-kv .label { font-size: 10px; color: var(--muted); text-transform: uppercase;
+  letter-spacing: .07em; margin-bottom: 3px; }
+.pf-strip-kv .val { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.pf-strip-kv .val.pos { color: var(--up); }
+.pf-strip-kv .val.neg { color: var(--dn); }
+.pf-strip-kv .val.muted { color: var(--muted); font-size: 13px; font-weight: 400; }
+.pf-strip-sep { width: 1px; background: var(--line); align-self: stretch; }
+
+/* ── market context strip ─────────────────────────────────────────────────── */
+.mkt-strip {
+  background: var(--panel2); border: 1px solid var(--line);
+  border-radius: 10px; padding: 10px 16px;
+  margin: 0 0 16px; display: flex; gap: 16px; flex-wrap: wrap; align-items: center;
+  font-size: 12px; color: var(--muted);
+}
+.mkt-strip.hidden { display: none; }
+.mkt-chip { display: inline-flex; align-items: center; gap: 6px; }
+.mkt-chip .chip-label { color: var(--muted); }
+.mkt-chip .chip-val { font-weight: 600; color: var(--text); }
+
+/* ── positions table ──────────────────────────────────────────────────────── */
+.pos-table-wrap { overflow-x: auto; }
+table.pos-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.pos-table th {
+  font-size: 10px; font-weight: 700; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .07em;
+  padding: 0 10px 8px; text-align: right; white-space: nowrap;
+}
+table.pos-table th:first-child { text-align: left; }
+table.pos-table td {
+  padding: 10px; border-top: 1px solid var(--line);
+  font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap;
+}
+table.pos-table td:first-child { text-align: left; }
+table.pos-table tbody tr { cursor: pointer; transition: background .12s; }
+table.pos-table tbody tr:hover { background: var(--panel2); }
+.ticker-cell { font-weight: 700; font-size: 14px; }
+.pos-pct.pos { color: var(--up); }
+.pos-pct.neg { color: var(--dn); }
+.dash { color: var(--muted); }
+.role-badge {
+  display: inline-block; padding: 2px 8px; border-radius: 999px;
+  font-size: 10px; font-weight: 700; letter-spacing: .03em;
+  border: 1px solid var(--line); background: var(--panel2); color: var(--muted);
+}
+.role-badge.exit_review  { background: color-mix(in srgb, var(--act) 15%, var(--panel)); color: var(--act); border-color: color-mix(in srgb, var(--act) 40%, var(--line)); }
+.role-badge.trim_review  { background: color-mix(in srgb, var(--warn) 12%, var(--panel)); color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, var(--line)); }
+.role-badge.tighten      { background: color-mix(in srgb, var(--warn) 8%, var(--panel)); color: var(--warn); border-color: color-mix(in srgb, var(--warn) 25%, var(--line)); }
+.role-badge.review       { background: color-mix(in srgb, var(--info) 12%, var(--panel)); color: var(--info); border-color: color-mix(in srgb, var(--info) 30%, var(--line)); }
+.role-badge.monitor      { background: color-mix(in srgb, var(--muted) 8%, var(--panel)); color: var(--muted); }
+.role-badge.ok, .role-badge.info { background: var(--panel2); color: var(--muted); }
+
+/* ── row detail expander ──────────────────────────────────────────────────── */
+.pos-detail {
+  display: none; background: var(--panel2);
+  border-top: 1px solid var(--line);
+}
+.pos-detail.open { display: table-row; }
+.pos-detail td { padding: 12px 10px; text-align: left; }
+.pos-detail-inner { display: flex; gap: 16px; flex-wrap: wrap; }
+.pos-detail-section { min-width: 160px; }
+.pos-detail-section h4 { font-size: 10px; color: var(--muted); text-transform: uppercase;
+  letter-spacing: .06em; margin: 0 0 6px; }
+.lane-chip {
+  display: inline-block; margin: 2px 3px 2px 0; padding: 2px 8px;
+  border-radius: 999px; font-size: 10px; font-weight: 600;
+  border: 1px solid var(--line); background: var(--panel2); color: var(--muted);
+}
+.lane-chip.elevated { background: color-mix(in srgb, var(--act) 15%, var(--panel)); color: var(--act); border-color: color-mix(in srgb, var(--act) 35%, var(--line)); }
+.lane-chip.watch    { background: color-mix(in srgb, var(--warn) 10%, var(--panel)); color: var(--warn); border-color: color-mix(in srgb, var(--warn) 30%, var(--line)); }
+.lane-chip.ok       { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 25%, var(--line)); }
+
+/* ── add-position form ────────────────────────────────────────────────────── */
+.add-form { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+.add-form .field { display: flex; flex-direction: column; gap: 4px; }
+.add-form .field label { font-size: 10px; color: var(--muted); text-transform: uppercase;
+  letter-spacing: .07em; }
+.add-form input, .add-form select {
+  background: var(--panel2); border: 1px solid var(--line);
+  border-radius: 8px; color: var(--text); font-size: 13px; padding: 7px 10px;
+  outline: none; transition: border-color .12s; min-width: 80px;
+}
+.add-form input:focus, .add-form select:focus { border-color: var(--info); }
+.add-form input[required]:invalid { border-color: color-mix(in srgb, var(--act) 50%, var(--line)); }
+.btn {
+  padding: 7px 18px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--panel2); color: var(--text); font-size: 13px; font-weight: 600;
+  cursor: pointer; transition: background .12s, border-color .12s;
+}
+.btn:hover { background: var(--panel); border-color: var(--muted); }
+.btn.primary { background: var(--info); color: #fff; border-color: var(--info); }
+.btn.primary:hover { opacity: .88; }
+.btn.danger { color: var(--act); }
+.btn.sm { padding: 4px 11px; font-size: 11px; }
+
+/* ── error / empty states ─────────────────────────────────────────────────── */
+.msg { color: var(--muted); font-size: 13px; padding: 20px 0; }
+.setup-card { background: color-mix(in srgb, var(--warn) 8%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--warn) 30%, var(--line));
+  border-radius: 10px; padding: 14px 16px; margin: 0 0 16px; font-size: 13px; }
+.setup-card strong { color: var(--warn); }
+.warn-card { background: color-mix(in srgb, var(--muted) 6%, var(--panel));
+  border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px;
+  margin: 0 0 12px; font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body class="page-pf">
+
+<div class="pf-head">
+  <div>
+    <h1>Portfolio Desk</h1>
+    <div class="sub" id="pf-sub">loading…</div>
+  </div>
+  <div class="sub">
+    <a href="/">&larr; dashboard</a>
+    &nbsp;&middot;&nbsp;
+    <a href="/market_view">Market View</a>
+    &nbsp;&middot;&nbsp;
+    <a href="/agenda">Agenda</a>
+  </div>
+</div>
+
+<!-- ── header value strip ─────────────────────────────────────────────────── -->
+<div id="pf-strip" class="pf-strip" style="display:none">
+  <div class="pf-strip-kv">
+    <div class="label">Portfolio Value</div>
+    <div class="val" id="strip-value">—</div>
+  </div>
+  <div class="pf-strip-sep"></div>
+  <div class="pf-strip-kv">
+    <div class="label">Day P&amp;L</div>
+    <div class="val" id="strip-day-pnl">—</div>
+    <div style="font-size:11px;color:var(--muted)" id="strip-day-pct"></div>
+  </div>
+  <div class="pf-strip-sep"></div>
+  <div class="pf-strip-kv">
+    <div class="label">Total P&amp;L</div>
+    <div class="val" id="strip-total-pnl">—</div>
+  </div>
+</div>
+<div id="pf-strip-novalue" class="warn-card" style="display:none">
+  Value tracking is off — add shares to positions to see portfolio value.
+</div>
+
+<!-- ── market context strip ───────────────────────────────────────────────── -->
+<div id="mkt-strip" class="mkt-strip hidden">
+  <div class="mkt-chip"><span class="chip-label">Market</span><span class="chip-val" id="mkt-state">—</span></div>
+  <div class="mkt-chip"><span class="chip-label">Regime</span><span class="chip-val" id="mkt-quad">—</span></div>
+  <div class="mkt-chip"><span class="chip-label">Risk Radar</span><span class="chip-val" id="mkt-radar">—</span></div>
+</div>
+
+<!-- ── main panel ─────────────────────────────────────────────────────────── -->
+<div id="pf-main">
+  <div id="pf-loading" class="msg">Loading positions…</div>
+  <div id="pf-error"   class="msg" style="display:none"></div>
+
+  <!-- setup required card -->
+  <div id="pf-setup-card" class="setup-card" style="display:none">
+    <strong>One-time setup required.</strong>
+    The position ledger table does not exist yet.
+    Run <code>sql/0002_portfolio_positions.sql</code> against the Supabase project to create it.
+  </div>
+
+  <!-- unavailable soft-warn -->
+  <div id="pf-unavailable-card" class="warn-card" style="display:none">
+    Supabase is currently unreachable. Positions could not be loaded. Live quotes are unavailable.
+  </div>
+
+  <!-- positions panel -->
+  <div id="pf-positions-panel" class="panel" style="display:none">
+    <h2>Positions</h2>
+    <div class="pos-table-wrap">
+      <table class="pos-table">
+        <thead>
+          <tr>
+            <th>Ticker</th>
+            <th>Shares</th>
+            <th>Entry</th>
+            <th>Last</th>
+            <th>Day %</th>
+            <th>P&amp;L $</th>
+            <th>P&amp;L %</th>
+            <th>Value</th>
+            <th>Risk</th>
+            <th style="text-align:left">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="pos-tbody"></tbody>
+      </table>
+    </div>
+    <div id="pos-empty" class="msg" style="display:none; padding:12px 0">No open positions. Add one below.</div>
+  </div>
+
+  <!-- edit modal -->
+  <div id="edit-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:200; align-items:center; justify-content:center;">
+    <div class="panel" style="width:400px; max-width:96vw; position:relative">
+      <h2 id="edit-modal-title">Edit Position</h2>
+      <div class="add-form" style="flex-direction:column">
+        <input type="hidden" id="edit-id">
+        <div class="field">
+          <label>Ticker</label>
+          <input type="text" id="edit-ticker" disabled style="opacity:.5">
+        </div>
+        <div class="field">
+          <label>Shares (optional)</label>
+          <input type="number" id="edit-shares" min="0.0001" step="any" placeholder="e.g. 100">
+        </div>
+        <div class="field">
+          <label>Entry price (optional)</label>
+          <input type="number" id="edit-entry-price" min="0.0001" step="any" placeholder="e.g. 150.00">
+        </div>
+        <div class="field">
+          <label>Entry date (optional)</label>
+          <input type="date" id="edit-entry-date">
+        </div>
+        <div class="field">
+          <label>Notes (optional)</label>
+          <input type="text" id="edit-notes" placeholder="thesis, context…">
+        </div>
+        <div style="display:flex; gap:8px; margin-top:8px">
+          <button class="btn primary" onclick="submitEdit()">Save</button>
+          <button class="btn" onclick="closeEditModal()">Cancel</button>
+          <button class="btn sm danger" onclick="closePosition()" style="margin-left:auto">Close position</button>
+        </div>
+      </div>
+      <div id="edit-error" style="color:var(--act); font-size:12px; margin-top:8px; display:none"></div>
+    </div>
+  </div>
+
+  <!-- add position panel -->
+  <div id="pf-add-panel" class="panel" style="display:none">
+    <h2>Add Position</h2>
+    <div class="add-form">
+      <div class="field">
+        <label>Ticker <span style="color:var(--act)">*</span></label>
+        <input type="text" id="add-ticker" required placeholder="AAPL, 0700.HK…" style="width:120px">
+      </div>
+      <div class="field">
+        <label>Shares</label>
+        <input type="number" id="add-shares" min="0.0001" step="any" placeholder="optional" style="width:100px">
+      </div>
+      <div class="field">
+        <label>Entry price</label>
+        <input type="number" id="add-entry-price" min="0.0001" step="any" placeholder="optional" style="width:110px">
+      </div>
+      <div class="field">
+        <label>Entry date</label>
+        <input type="date" id="add-entry-date" style="width:140px">
+      </div>
+      <div class="field">
+        <label>Notes</label>
+        <input type="text" id="add-notes" placeholder="optional" style="width:200px">
+      </div>
+      <div class="field" style="justify-content:flex-end">
+        <button class="btn primary" onclick="addPosition()">Add</button>
+      </div>
+    </div>
+    <div id="add-error" style="color:var(--act); font-size:12px; margin-top:8px; display:none"></div>
+  </div>
+</div>
+
+<script>
+(function () {
+"use strict";
+
+var REFRESH_MS = 60000;
+var _timer = null;
+var _openDetailId = null;
+
+/* ── helpers ─────────────────────────────────────────────────────────────── */
+function esc(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function fmt$(v) {
+  if (v === null || v === undefined) return '<span class="dash">—</span>';
+  var n = parseFloat(v);
+  if (!isFinite(n)) return '<span class="dash">—</span>';
+  return (n >= 0 ? "+" : "") + "$" + Math.abs(n).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+
+function fmtAbs$(v) {
+  if (v === null || v === undefined) return '—';
+  var n = parseFloat(v);
+  if (!isFinite(n)) return '—';
+  return "$" + n.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+}
+
+function fmtPct(v) {
+  if (v === null || v === undefined) return '<span class="dash">—</span>';
+  var n = parseFloat(v);
+  if (!isFinite(n)) return '<span class="dash">—</span>';
+  var cls = n >= 0 ? "pos" : "neg";
+  return '<span class="pos-pct ' + cls + '">' + (n >= 0 ? "+" : "") + n.toFixed(2) + "%</span>";
+}
+
+function fmtNum(v, dp) {
+  if (v === null || v === undefined) return '<span class="dash">—</span>';
+  var n = parseFloat(v);
+  if (!isFinite(n)) return '<span class="dash">—</span>';
+  return n.toLocaleString(undefined, {minimumFractionDigits: dp || 2, maximumFractionDigits: dp || 2});
+}
+
+function roleBadge(risk) {
+  if (!risk || !risk.role) return '<span class="dash">—</span>';
+  var r = risk.role;
+  var label = r;
+  if (r === "exit_review") label = "Exit review";
+  else if (r === "trim_review") label = "Take-profit review";
+  else if (r === "tighten") label = "Tighten";
+  else if (r === "review") label = "Review";
+  else if (r === "monitor") label = "Monitor";
+  else if (r === "ok" || r === "info") label = "OK";
+  var n = risk.elevated_lanes;
+  var t = risk.lane_total;
+  var count = (n !== null && t !== null && n !== undefined && t !== undefined)
+    ? ' <small style="font-weight:400">' + n + "/" + t + " lanes</small>" : "";
+  return '<span class="role-badge ' + esc(r) + '">' + esc(label) + count + "</span>";
+}
+
+function laneChips(lanes) {
+  if (!lanes || !lanes.length) return '<span class="dash">—</span>';
+  return lanes.slice(0, 5).map(function(l) {
+    var state = l.state || "ok";
+    return '<span class="lane-chip ' + esc(state) + '">' + esc(l.name || l.lane || "") + "</span>";
+  }).join(" ");
+}
+
+function show(id) { var e = document.getElementById(id); if (e) e.style.display = ""; }
+function hide(id) { var e = document.getElementById(id); if (e) e.style.display = "none"; }
+function showBlock(id) { var e = document.getElementById(id); if (e) e.style.display = "block"; }
+function showFlex(id) { var e = document.getElementById(id); if (e) e.style.display = "flex"; }
+
+/* ── fetch & render ──────────────────────────────────────────────────────── */
+function load() {
+  fetch("/api/pfolio/positions", { headers: { Accept: "application/json" }, credentials: "same-origin" })
+    .then(function(r) { return r.json(); })
+    .then(function(d) { render(d); })
+    .catch(function(err) {
+      hide("pf-loading");
+      showBlock("pf-error");
+      document.getElementById("pf-error").textContent = "Failed to load: " + err;
+    });
+}
+
+function render(d) {
+  hide("pf-loading");
+  hide("pf-error");
+  hide("pf-setup-card");
+  hide("pf-unavailable-card");
+
+  if (d.error === "table_missing") {
+    showBlock("pf-setup-card");
+    return;
+  }
+  if (d.error === "supabase_unavailable") {
+    showBlock("pf-unavailable-card");
+    return;
+  }
+
+  // Market context strip
+  if (d.market) {
+    var ms = document.getElementById("mkt-strip");
+    ms.classList.remove("hidden");
+    document.getElementById("mkt-state").textContent = d.market.market_state || "—";
+    document.getElementById("mkt-quad").textContent  = d.market.quad_name   || d.market.quad || "—";
+    document.getElementById("mkt-radar").textContent = d.market.risk_radar  || "—";
+  }
+
+  // Header strip
+  var tv = d.total_value;
+  if (tv !== null && tv !== undefined) {
+    showFlex("pf-strip");
+    hide("pf-strip-novalue");
+    document.getElementById("strip-value").textContent = fmtAbs$(tv);
+    // day P&L
+    var dp = d.day_pnl;
+    var dpEl = document.getElementById("strip-day-pnl");
+    dpEl.innerHTML = fmt$(dp);
+    dpEl.className = "val " + (parseFloat(dp) >= 0 ? "pos" : "neg");
+    // total P&L
+    var tp = d.total_pnl_usd;
+    var tpEl = document.getElementById("strip-total-pnl");
+    tpEl.innerHTML = fmt$(tp);
+    tpEl.className = "val " + (parseFloat(tp) >= 0 ? "pos" : "neg");
+  } else {
+    hide("pf-strip");
+    showBlock("pf-strip-novalue");
+  }
+
+  // Positions table
+  showBlock("pf-positions-panel");
+  showBlock("pf-add-panel");
+  var positions = d.positions || [];
+  var tbody = document.getElementById("pos-tbody");
+  tbody.innerHTML = "";
+
+  if (!positions.length) {
+    showBlock("pos-empty");
+  } else {
+    hide("pos-empty");
+    positions.forEach(function(p) {
+      var id = p.id || "";
+      var risk = p.risk || null;
+
+      // Main row
+      var tr = document.createElement("tr");
+      tr.dataset.id = id;
+      tr.onclick = function() { toggleDetail(id); };
+      tr.innerHTML =
+        '<td class="ticker-cell">' + esc(p.ticker) + "</td>" +
+        "<td>" + (p.shares !== null && p.shares !== undefined ? fmtNum(p.shares, 4).replace(/\.?0+$/, "") : '<span class="dash">—</span>') + "</td>" +
+        "<td>" + (p.entry_price !== null && p.entry_price !== undefined ? "$" + parseFloat(p.entry_price).toFixed(2) : '<span class="dash">—</span>') + "</td>" +
+        "<td>" + (p.last !== null && p.last !== undefined ? "$" + parseFloat(p.last).toFixed(2) : '<span class="dash">—</span>') + "</td>" +
+        "<td>" + fmtPct(p.day_change_pct) + "</td>" +
+        "<td>" + fmt$(p.pnl_usd) + "</td>" +
+        "<td>" + fmtPct(p.pnl_pct) + "</td>" +
+        "<td>" + (p.market_value !== null && p.market_value !== undefined ? fmtAbs$(p.market_value) : '<span class="dash">—</span>') + "</td>" +
+        "<td>" + roleBadge(risk) + "</td>" +
+        '<td style="text-align:left">' +
+          '<button class="btn sm" onclick="event.stopPropagation(); openEditModal(\'' + id + '\')" title="Edit">Edit</button>' +
+          ' <button class="btn sm danger" onclick="event.stopPropagation(); deletePosition(\'' + id + '\', \'' + esc(p.ticker) + '\')" title="Delete">Del</button>' +
+        "</td>";
+      tbody.appendChild(tr);
+
+      // Detail row (placeholder for W3 lane grid; renders lanes if present)
+      var det = document.createElement("tr");
+      det.className = "pos-detail";
+      det.id = "det-" + id;
+      det.innerHTML = '<td colspan="10"><div class="pos-detail-inner">' +
+        '<div class="pos-detail-section" data-ticker-detail="' + esc(p.ticker) + '">' +
+        '</div></div></td>';
+      tbody.appendChild(det);
+
+      // Fill detail
+      var inner = det.querySelector(".pos-detail-section");
+      var detHtml = "";
+      if (p.entry_date) detHtml += "<div><small style='color:var(--muted)'>Entry date:</small> " + esc(p.entry_date) + "</div>";
+      if (p.notes) detHtml += "<div><small style='color:var(--muted)'>Notes:</small> " + esc(p.notes) + "</div>";
+      if (risk && risk.lanes && risk.lanes.length) {
+        detHtml += "<h4>Evidence lanes</h4>" + laneChips(risk.lanes);
+        if (risk.lanes[0] && risk.lanes[0].reason) {
+          detHtml += "<div style='font-size:11px;color:var(--muted);margin-top:4px'>" + esc(risk.lanes[0].reason) + "</div>";
+        }
+      }
+      inner.innerHTML = detHtml || "<span style='color:var(--muted);font-size:12px'>No additional detail. Risk lanes arrive after W2 lane composer runs.</span>";
+    });
+
+    // Restore open detail if any
+    if (_openDetailId) {
+      var det = document.getElementById("det-" + _openDetailId);
+      if (det) det.classList.add("open");
+    }
+  }
+
+  // Update sub-title timestamp
+  document.getElementById("pf-sub").textContent = positions.length + " position" + (positions.length !== 1 ? "s" : "") + " · refreshed " + new Date().toLocaleTimeString();
+}
+
+function toggleDetail(id) {
+  var det = document.getElementById("det-" + id);
+  if (!det) return;
+  var isOpen = det.classList.contains("open");
+  // close any open
+  document.querySelectorAll(".pos-detail.open").forEach(function(el) { el.classList.remove("open"); });
+  _openDetailId = null;
+  if (!isOpen) {
+    det.classList.add("open");
+    _openDetailId = id;
+  }
+}
+
+/* ── add position ──────────────────────────────────────────────────────────── */
+function addPosition() {
+  var ticker = document.getElementById("add-ticker").value.trim().toUpperCase();
+  if (!ticker) { showError("add-error", "Ticker is required."); return; }
+  var body = { ticker: ticker };
+  var sh = document.getElementById("add-shares").value;
+  var ep = document.getElementById("add-entry-price").value;
+  var ed = document.getElementById("add-entry-date").value;
+  var nt = document.getElementById("add-notes").value;
+  if (sh) body.shares = parseFloat(sh);
+  if (ep) body.entry_price = parseFloat(ep);
+  if (ed) body.entry_date = ed;
+  if (nt) body.notes = nt;
+
+  fetch("/api/pfolio/positions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    credentials: "same-origin",
+    body: JSON.stringify(body),
+  }).then(function(r) { return r.json(); }).then(function(d) {
+    if (!d.ok) { showError("add-error", d.error || "Unknown error"); return; }
+    hideError("add-error");
+    ["add-ticker","add-shares","add-entry-price","add-entry-date","add-notes"].forEach(function(id) {
+      document.getElementById(id).value = "";
+    });
+    load();
+  }).catch(function(err) { showError("add-error", String(err)); });
+}
+
+/* ── edit position ─────────────────────────────────────────────────────────── */
+var _positions = {};
+function openEditModal(id) {
+  var row = _findPosition(id);
+  if (!row) return;
+  document.getElementById("edit-id").value = id;
+  document.getElementById("edit-ticker").value = row.ticker || "";
+  document.getElementById("edit-shares").value = row.shares !== null && row.shares !== undefined ? row.shares : "";
+  document.getElementById("edit-entry-price").value = row.entry_price !== null && row.entry_price !== undefined ? row.entry_price : "";
+  document.getElementById("edit-entry-date").value = row.entry_date || "";
+  document.getElementById("edit-notes").value = row.notes || "";
+  hideError("edit-error");
+  var modal = document.getElementById("edit-modal");
+  modal.style.display = "flex";
+}
+function closeEditModal() {
+  document.getElementById("edit-modal").style.display = "none";
+}
+function submitEdit() {
+  var id = document.getElementById("edit-id").value;
+  var body = {};
+  var sh = document.getElementById("edit-shares").value;
+  var ep = document.getElementById("edit-entry-price").value;
+  var ed = document.getElementById("edit-entry-date").value;
+  var nt = document.getElementById("edit-notes").value;
+  if (sh !== "") body.shares = parseFloat(sh);
+  if (ep !== "") body.entry_price = parseFloat(ep);
+  if (ed !== "") body.entry_date = ed;
+  body.notes = nt;  // allow clearing notes
+
+  fetch("/api/pfolio/positions/" + encodeURIComponent(id), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    credentials: "same-origin",
+    body: JSON.stringify(body),
+  }).then(function(r) { return r.json(); }).then(function(d) {
+    if (!d.ok) { showError("edit-error", d.error || "Unknown error"); return; }
+    closeEditModal();
+    load();
+  }).catch(function(err) { showError("edit-error", String(err)); });
+}
+function closePosition() {
+  var id = document.getElementById("edit-id").value;
+  if (!id) return;
+  fetch("/api/pfolio/positions/" + encodeURIComponent(id), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    credentials: "same-origin",
+    body: JSON.stringify({ status: "closed" }),
+  }).then(function(r) { return r.json(); }).then(function(d) {
+    if (!d.ok) { showError("edit-error", d.error || "Unknown error"); return; }
+    closeEditModal();
+    load();
+  }).catch(function(err) { showError("edit-error", String(err)); });
+}
+
+/* ── delete position ──────────────────────────────────────────────────────── */
+function deletePosition(id, ticker) {
+  if (!confirm("Delete " + ticker + "? This cannot be undone.")) return;
+  fetch("/api/pfolio/positions/" + encodeURIComponent(id), {
+    method: "DELETE",
+    headers: { Accept: "application/json" },
+    credentials: "same-origin",
+  }).then(function(r) { return r.json(); }).then(function(d) {
+    if (!d.ok) { alert("Delete failed: " + (d.error || "unknown error")); return; }
+    load();
+  }).catch(function(err) { alert("Delete error: " + err); });
+}
+
+/* ── helpers ──────────────────────────────────────────────────────────────── */
+function _findPosition(id) {
+  var rows = document.querySelectorAll("#pos-tbody tr[data-id]");
+  var ticker = null;
+  rows.forEach(function(r) { if (r.dataset.id === id) ticker = r; });
+  // Walk the raw positions from last fetch via data attribute
+  var tbody = document.getElementById("pos-tbody");
+  var cells = tbody.querySelectorAll('tr[data-id="' + id + '"] td');
+  if (!cells.length) return null;
+  return { ticker: cells[0].textContent.trim() };
+}
+
+function showError(id, msg) {
+  var el = document.getElementById(id);
+  if (el) { el.textContent = msg; el.style.display = "block"; }
+}
+function hideError(id) {
+  var el = document.getElementById(id);
+  if (el) { el.style.display = "none"; }
+}
+
+// Store last positions for edit modal
+var _lastPositions = [];
+var _origFindPosition = _findPosition;
+window._findPosition = function(id) {
+  for (var i = 0; i < _lastPositions.length; i++) {
+    if (_lastPositions[i].id === id) return _lastPositions[i];
+  }
+  return null;
+};
+// Override render to capture positions
+var _origRender = render;
+render = function(d) {
+  _lastPositions = (d && d.positions) || [];
+  _origRender(d);
+};
+// Expose to onclick handlers
+window.addPosition = addPosition;
+window.openEditModal = function(id) {
+  var row = window._findPosition(id);
+  if (!row) return;
+  document.getElementById("edit-id").value = id;
+  document.getElementById("edit-ticker").value = row.ticker || "";
+  document.getElementById("edit-shares").value = row.shares !== null && row.shares !== undefined ? row.shares : "";
+  document.getElementById("edit-entry-price").value = row.entry_price !== null && row.entry_price !== undefined ? row.entry_price : "";
+  document.getElementById("edit-entry-date").value = row.entry_date || "";
+  document.getElementById("edit-notes").value = row.notes || "";
+  hideError("edit-error");
+  document.getElementById("edit-modal").style.display = "flex";
+};
+window.closeEditModal = closeEditModal;
+window.submitEdit = submitEdit;
+window.closePosition = closePosition;
+window.deletePosition = deletePosition;
+
+/* ── auto-refresh ─────────────────────────────────────────────────────────── */
+load();
+_timer = setInterval(load, REFRESH_MS);
+
+})();
+</script>
+</body>
+</html>
