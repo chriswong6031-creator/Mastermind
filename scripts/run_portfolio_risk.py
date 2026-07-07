@@ -1,10 +1,20 @@
-"""CLI runner for the portfolio held-risk lane composer.
+"""CLI runner for the portfolio held-risk lane composer (W3).
 
 Fetches operator positions from Supabase PostgREST (using service-role key),
 then calls portfolio.held_risk.compose() and optionally writes the result.
 
+Full W3 sequence:
+  (a) best-effort macro_refresh
+  (b) fetch positions from Supabase (or --positions-json)
+  (c) compose lanes + roles
+  (d) alert governor (transition-based, per-role cooldowns)
+  (e) write_state atomically
+  (f) outcome-ledger append (best-effort)
+  (g) VPS state push (best-effort)
+
 Usage:
     python -m scripts.run_portfolio_risk [--dry-run] [--positions-json PATH] [--out PATH]
+    python -m scripts.run_portfolio_risk --skip-refresh --skip-alerts --dry-run
 
 Env vars consumed (names only — values never printed):
     SUPABASE_URL               e.g. https://fsldfzlxyavsuwqbceod.supabase.co
@@ -121,7 +131,7 @@ def _load_positions_from_supabase() -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run portfolio held-risk composer")
+    parser = argparse.ArgumentParser(description="Run portfolio held-risk composer (W3)")
     parser.add_argument(
         "--dry-run", action="store_true",
         help="Print composed state to stdout; do not write to disk",
@@ -134,9 +144,26 @@ def main() -> None:
         "--out", metavar="PATH", default=str(_DEFAULT_OUT),
         help=f"Output path for risk_state.json (default: {_DEFAULT_OUT})",
     )
+    parser.add_argument(
+        "--skip-alerts", action="store_true",
+        help="Skip alert governor (for testing / intraday runs that should not re-fire)",
+    )
+    parser.add_argument(
+        "--skip-refresh", action="store_true",
+        help="Skip macro_refresh (for intraday runs; daily run includes refresh)",
+    )
     args = parser.parse_args()
 
-    # Load positions
+    # (a) Best-effort macro refresh
+    if not args.skip_refresh:
+        try:
+            from data_layer.macro_refresh import refresh_and_check
+            info = refresh_and_check(log=log.info)
+            log.info("macro_refresh: asof=%s freeze=%s", info.get("asof"), info.get("freeze"))
+        except Exception as exc:
+            log.info("macro_refresh skipped/failed (best-effort): %s", exc)
+
+    # (b) Load positions
     if args.positions_json:
         try:
             with open(args.positions_json) as f:
@@ -154,10 +181,8 @@ def main() -> None:
             log.info("no positions to compose — exiting (exit 0)")
             sys.exit(0)
 
-    # Import composer
+    # (c) Compose
     from portfolio.held_risk import VENDOR_DEFAULT, DATA_DEFAULT, compose, write_state
-
-    # Determine vendor_root
     vendor_root = VENDOR_DEFAULT
 
     try:
@@ -174,10 +199,49 @@ def main() -> None:
     if args.dry_run:
         print(json.dumps(state, indent=2, default=str))
         log.info("dry-run: %d positions composed, not written", len(state.get("positions", [])))
-    else:
-        out_path = Path(args.out)
-        write_state(state, out_path)
-        log.info("wrote risk_state.json to %s (%d positions)", out_path, len(state.get("positions", [])))
+        return
+
+    out_path = Path(args.out)
+
+    # (d) Load previous state → run alert governor
+    if not args.skip_alerts:
+        prev_state = None
+        try:
+            if out_path.exists():
+                prev_state = json.loads(out_path.read_text())
+        except Exception:
+            pass
+        try:
+            from portfolio.held_risk_alerts import run_alerts
+            fired = run_alerts(prev_state, state)
+            if fired:
+                log.info("alerts fired: %d", len(fired))
+        except Exception as exc:
+            log.warning("alert governor failed (best-effort): %s", exc)
+
+    # (e) Write state atomically
+    write_state(state, out_path)
+    log.info("wrote risk_state.json (%d positions)", len(state.get("positions", [])))
+
+    # (f) Outcome ledger (best-effort)
+    try:
+        from portfolio.held_risk_outcomes import append_outcomes
+        append_outcomes()
+    except Exception as exc:
+        log.warning("outcome ledger failed (best-effort): %s", exc)
+
+    # (g) VPS state push (best-effort, timeout 60s)
+    try:
+        import subprocess as _sp
+        push_script = _REPO_ROOT / "scripts" / "push_portfolio_watch_to_vps.sh"
+        if push_script.exists():
+            _sp.run(
+                ["bash", str(push_script)],
+                timeout=60,
+                capture_output=True,
+            )
+    except Exception as exc:
+        log.info("VPS push skipped/failed (best-effort): %s", exc)
 
 
 if __name__ == "__main__":

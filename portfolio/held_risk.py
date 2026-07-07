@@ -47,7 +47,9 @@ import pandas as pd
 # Defaults
 # ---------------------------------------------------------------------------
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-VENDOR_DEFAULT = _REPO_ROOT / "vendor" / "macro_src"
+_VENDOR_MACRO = _REPO_ROOT / "vendor" / "macro"
+_VENDOR_MACRO_SRC = _REPO_ROOT / "vendor" / "macro_src"
+VENDOR_DEFAULT = _VENDOR_MACRO if _VENDOR_MACRO.exists() else _VENDOR_MACRO_SRC
 DATA_DEFAULT = _REPO_ROOT / "data"
 _OUT_DEFAULT = DATA_DEFAULT / "portfolio_watch" / "risk_state.json"
 
@@ -179,33 +181,71 @@ def _load_stockdata(ticker: str, vendor_root: Path) -> dict | None:
         return None
 
 
-def _load_ohlcv(ticker: str, vendor_root: Path, price_loader=None) -> pd.DataFrame | None:
+def _load_ohlcv(
+    ticker: str,
+    vendor_root: Path,
+    price_loader=None,
+    data_root: Path | None = None,
+) -> pd.DataFrame | None:
     """Load OHLCV DataFrame with DatetimeIndex and 'close' column.
 
-    Tries vendor parquet first; falls back to yfinance (or injected price_loader for tests).
-    price_loader signature: (ticker, period='2y') -> pd.DataFrame | None
+    Three-tier loader:
+      Tier 1: vendor data/stocks/<T>.parquet
+      Tier 2: vendor data/yahoo/<T>.parquet
+      Tier 3: yfinance fetch (~420d), cached at data/portfolio_watch/ohlcv/<T>.parquet
+               (refresh when >1 session old, ~28h)
+
+    price_loader signature: (ticker) -> pd.DataFrame | None (used in tests to skip network).
     """
     if price_loader is not None:
         return price_loader(ticker)
 
-    parquet_path = vendor_root / "data" / "yahoo" / f"{ticker}.parquet"
-    if parquet_path.exists():
+    # Tier 1 + 2: vendor parquets
+    for parquet_path in [
+        vendor_root / "data" / "stocks" / f"{ticker}.parquet",
+        vendor_root / "data" / "yahoo" / f"{ticker}.parquet",
+    ]:
+        if parquet_path.exists():
+            try:
+                df = pd.read_parquet(parquet_path)
+                close_col = "close" if "close" in df.columns else (
+                    "close_price" if "close_price" in df.columns else None
+                )
+                if close_col:
+                    df = df[[close_col]].rename(columns={close_col: "close"})
+                    return df
+            except Exception:
+                pass
+
+    # Tier 3: yfinance with local cache
+    cache_dir = (data_root / "portfolio_watch" / "ohlcv") if data_root else None
+    cache_path = (cache_dir / f"{ticker}.parquet") if cache_dir else None
+
+    if cache_path and cache_path.exists():
         try:
-            df = pd.read_parquet(parquet_path)
-            if "close" in df.columns:
-                return df
+            from datetime import datetime as _dt
+            age_hours = (_dt.now().timestamp() - cache_path.stat().st_mtime) / 3600
+            if age_hours < 28:  # < 28h = fresh enough (1 session)
+                df = pd.read_parquet(cache_path)
+                if "close" in df.columns:
+                    return df
         except Exception:
             pass
 
-    # yfinance fallback
     try:
         import yfinance as yf  # type: ignore[import]
         tk = yf.Ticker(ticker)
-        raw = tk.history(period="2y", auto_adjust=True)
+        raw = tk.history(period="420d", auto_adjust=True)
         if raw.empty:
             return None
         df = raw[["Close"]].rename(columns={"Close": "close"})
         df.index = pd.to_datetime(df.index).tz_localize(None)
+        if cache_path:
+            try:
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                df.to_parquet(cache_path)
+            except Exception:
+                pass
         return df
     except Exception:
         return None
@@ -444,11 +484,16 @@ def _lane_extension_giveback(
     metrics: dict,
     sd: dict | None,
     position: dict,
+    *,
+    ohlcv_df: pd.DataFrame | None = None,
 ) -> tuple[dict, dict]:
     """Returns (lane_dict, path_dict).
 
     Elevated: ext grade parabolic OR (mfe >= 20% AND giveback >= 35% of mfe).
     Critical flag: giveback >= 60% of mfe >= 25%.
+
+    When position["post_entry_high"] is absent, derives it from ohlcv_df
+    between entry_date and now.
     """
     close = metrics.get("close")
     close_date = metrics.get("close_date")
@@ -478,16 +523,26 @@ def _lane_extension_giveback(
 
     if entry_price and close:
         entry_price = float(entry_price)
-        # We don't have intraday data; use available close as reference
-        # MFE/MAE require historical data from entry — approximated via position metadata
-        # (W3 integration can enrich from the entry snapshot; for now, if caller provides
-        # post_entry_high in the position dict, we use it)
         if "post_entry_high" in position and position["post_entry_high"]:
             post_entry_high = float(position["post_entry_high"])
             mfe_pct = (post_entry_high - entry_price) / entry_price if entry_price > 0 else None
-            mae_pct = None  # not tracked here
+            mae_pct = None
             if mfe_pct and mfe_pct > 0:
                 giveback_pct = (post_entry_high - close) / (post_entry_high - entry_price)
+        elif ohlcv_df is not None and entry_date_str:
+            # Derive from price history since entry_date
+            try:
+                ed = pd.Timestamp(str(entry_date_str)[:10])
+                window = ohlcv_df[ohlcv_df.index >= ed]["close"].dropna()
+                if len(window) > 0:
+                    post_entry_high = float(window.max())
+                    mae_low = float(window.min())
+                    mfe_pct = (post_entry_high - entry_price) / entry_price if entry_price > 0 else None
+                    mae_pct = (mae_low - entry_price) / entry_price if entry_price > 0 else None
+                    if mfe_pct and mfe_pct > 0 and post_entry_high > entry_price:
+                        giveback_pct = (post_entry_high - close) / (post_entry_high - entry_price)
+            except Exception:
+                pass
 
     flags: list[str] = []
     reasons: list[str] = []
@@ -570,20 +625,55 @@ def _lane_event_window(
     flags: list[str] = []
     reasons: list[str] = []
 
-    # Earnings countdown
+    # Earnings countdown — prefer fresh R2 schema event_windows.earnings.tdays
     earnings_tdays = None
     earnings_date_str = None
+    fomc_tdays = None
+
+    # Fresh R2 schema: event_windows block
     try:
-        next_date_str = sd["earnings"]["next_date"]
-        if next_date_str:
-            earnings_date_str = next_date_str
-            next_date = date.fromisoformat(next_date_str[:10])
-            if next_date >= run_date:
-                earnings_tdays = _trading_days_between(run_date, next_date)
-            else:
-                earnings_tdays = None  # in the past
+        ew_block = sd.get("event_windows") or {}
+        earn_block = ew_block.get("earnings") or {}
+        if earn_block.get("tdays") is not None:
+            earnings_tdays = int(earn_block["tdays"])
+            earnings_date_str = earn_block.get("date")
+        # fomc_within
+        fomc_block = ew_block.get("fomc_within") or {}
+        fomc_tdays_val = fomc_block.get("tdays")
+        if fomc_tdays_val is not None:
+            fomc_tdays = int(fomc_tdays_val)
+            if fomc_tdays <= _FOMC_WATCH_TDAYS:
+                flags.append("fomc_within_2d")
+                reasons.append(f"FOMC within {fomc_tdays} trading session(s)")
+        # debt pressure from fresh schema (current_debt > cash)
+        debt_block = ew_block.get("debt") or {}
+        cd_val = debt_block.get("current_debt")
+        cash_val = debt_block.get("cash")
+        if cd_val is not None and cash_val is not None:
+            try:
+                if float(cd_val) > float(cash_val):
+                    flags.append("debt_pressure")
+                    reasons.append(
+                        f"current_debt {float(cd_val)/1e9:.1f}B > cash {float(cash_val)/1e9:.1f}B"
+                    )
+            except (TypeError, ValueError):
+                pass
     except (KeyError, TypeError, ValueError):
         pass
+
+    # Fallback: legacy schema earnings.next_date
+    if earnings_tdays is None:
+        try:
+            next_date_str = sd["earnings"]["next_date"]
+            if next_date_str:
+                earnings_date_str = next_date_str
+                next_date = date.fromisoformat(next_date_str[:10])
+                if next_date >= run_date:
+                    earnings_tdays = _trading_days_between(run_date, next_date)
+                else:
+                    earnings_tdays = None  # in the past
+        except (KeyError, TypeError, ValueError):
+            pass
 
     if earnings_tdays is not None:
         if earnings_tdays <= _EARNINGS_ELEVATED_TDAYS:
@@ -593,22 +683,19 @@ def _lane_event_window(
             flags.append(f"earnings_t{earnings_tdays}")
             reasons.append(f"earnings {earnings_tdays} trading sessions away ({earnings_date_str})")
 
-    # Debt pressure: current_debt > cash — use financials.raw proxy
-    # No current_debt/cash directly; use debt_lt vs cfo as proxy
-    try:
-        raw = sd["financials"]["raw"]
-        debt_lt = raw.get("debt_lt")
-        cfo = raw.get("cfo")
-        if debt_lt and cfo and debt_lt > 0 and cfo < debt_lt * 0.15:
-            flags.append("debt_pressure")
-            reasons.append(
-                f"long-term debt {debt_lt/1e9:.1f}B > CFO-coverage threshold ({cfo/1e9:.1f}B CFO)"
-            )
-    except (KeyError, TypeError):
-        pass
-
-    # FOMC: no calendar available — skip
-    fomc_tdays = None
+    # Debt pressure fallback: use financials.raw proxy (when event_windows.debt absent)
+    if "debt_pressure" not in flags:
+        try:
+            raw = sd["financials"]["raw"]
+            debt_lt = raw.get("debt_lt")
+            cfo = raw.get("cfo")
+            if debt_lt and cfo and debt_lt > 0 and cfo < debt_lt * 0.15:
+                flags.append("debt_pressure")
+                reasons.append(
+                    f"long-term debt {debt_lt/1e9:.1f}B > CFO-coverage threshold ({cfo/1e9:.1f}B CFO)"
+                )
+        except (KeyError, TypeError):
+            pass
 
     # State
     if earnings_tdays is not None and earnings_tdays <= _EARNINGS_ELEVATED_TDAYS:
@@ -653,23 +740,44 @@ def _lane_earnings_expectation(sd: dict | None, run_date: date) -> dict:
 
     sue_z = None
     sue_streak = None  # consecutive miss count (negative = misses)
+
+    # Fresh R2 schema: expectation_state block
     try:
-        sue_z = sd["earnings"].get("sue_z")
-        summ = sd["earnings"].get("summary", {})
-        # streak = consecutive beats; miss_streak = -streak when beats run out
-        beat_streak = summ.get("streak", 0)
-        total = summ.get("total", 0)
-        beats = summ.get("beats", 0)
-        # Approximate consecutive miss streak: if last N quarters are all misses
-        misses = total - beats if total else 0
-        # We approximate sue_streak as negative of beat_streak when beat_streak == 0
-        # and there are recent misses; best we can do without per-quarter sign data
-        if beat_streak == 0 and misses >= 2:
-            sue_streak = -misses  # consecutive misses proxy
-        elif beat_streak > 0:
-            sue_streak = beat_streak  # positive = good
-    except (KeyError, TypeError):
+        es = sd.get("expectation_state") or {}
+        if es:
+            sue_streak_fresh = es.get("sue_streak")
+            sue_latest = es.get("sue_latest")
+            pead_drift = es.get("pead_drift_20d")
+            if sue_streak_fresh is not None:
+                sue_streak = int(sue_streak_fresh)
+            if sue_latest is not None:
+                sue_z = float(sue_latest)
+            # Direct PEAD miss flag from fresh schema
+            if (sue_latest is not None and pead_drift is not None
+                    and float(sue_latest) < 0 and float(pead_drift) <= _PEAD_DRIFT_ELEVATED):
+                flags.append("sue_miss_pead_drift")
+                reasons.append(
+                    f"sue_latest {float(sue_latest):.2f} < 0 AND pead_drift_20d "
+                    f"{float(pead_drift)*100:.1f}% <= -3%"
+                )
+    except (KeyError, TypeError, ValueError):
         pass
+
+    # Fallback: legacy earnings block
+    if sue_streak is None and sue_z is None:
+        try:
+            sue_z = sd["earnings"].get("sue_z")
+            summ = sd["earnings"].get("summary", {})
+            beat_streak = summ.get("streak", 0)
+            total = summ.get("total", 0)
+            beats = summ.get("beats", 0)
+            misses = total - beats if total else 0
+            if beat_streak == 0 and misses >= 2:
+                sue_streak = -misses
+            elif beat_streak > 0:
+                sue_streak = beat_streak
+        except (KeyError, TypeError):
+            pass
 
     # Revisions direction
     rev_down = False
@@ -690,8 +798,12 @@ def _lane_earnings_expectation(sd: dict | None, run_date: date) -> dict:
 
     elevated = False
 
+    # Elevated: fresh schema pead_drift already set the flag above
+    if "sue_miss_pead_drift" in flags:
+        elevated = True
+
     # Elevated: sue_streak <= -2 (consecutive misses >= 2)
-    if sue_streak is not None and sue_streak <= _SUE_STREAK_ELEVATED:
+    elif sue_streak is not None and sue_streak <= _SUE_STREAK_ELEVATED:
         flags.append(f"sue_streak_{sue_streak}")
         reasons.append(f"earnings miss streak: {abs(sue_streak)} consecutive misses")
         elevated = True
@@ -750,40 +862,85 @@ def _lane_solvency_dilution(sd: dict | None, run_date: date) -> dict:
     except (KeyError, TypeError):
         pass
 
-    # Altman Z (skip for Financials)
+    # Altman Z (skip for Financials) — prefer fresh R2 accounting_quality.altman_z
     altman_z = None
     altman_below = False
     try:
-        altman_z = sd["financials"]["multiyear"]["altman"]["z"]
-        if sector != "Financials" and altman_z is not None and altman_z < _ALTMAN_Z_THRESHOLD:
+        aq = sd.get("accounting_quality") or {}
+        altman_z_fresh = aq.get("altman_z")
+        if altman_z_fresh is not None and sector != "Financials" and float(altman_z_fresh) < _ALTMAN_Z_THRESHOLD:
+            altman_z = float(altman_z_fresh)
+            altman_below = True
             flags.append(f"altman_z_{altman_z:.1f}")
             reasons.append(f"Altman Z {altman_z:.1f} < {_ALTMAN_Z_THRESHOLD} (distress zone)")
             flag_count += 1
-            altman_below = True
-    except (KeyError, TypeError):
+    except (KeyError, TypeError, ValueError):
         pass
 
-    # Piotroski F
+    # Altman Z fallback: financials.multiyear.altman.z
+    if not altman_below:
+        try:
+            altman_z = sd["financials"]["multiyear"]["altman"]["z"]
+            if sector != "Financials" and altman_z is not None and altman_z < _ALTMAN_Z_THRESHOLD:
+                flags.append(f"altman_z_{altman_z:.1f}")
+                reasons.append(f"Altman Z {altman_z:.1f} < {_ALTMAN_Z_THRESHOLD} (distress zone)")
+                flag_count += 1
+                altman_below = True
+        except (KeyError, TypeError):
+            pass
+
+    # Piotroski F — prefer fresh R2 accounting_quality.piotroski
     piotroski = None
     try:
-        piotroski = sd["financials"]["multiyear"]["piotroski"]["score"]
-        if piotroski is not None and piotroski <= _PIOTROSKI_FLAG:
+        aq = sd.get("accounting_quality") or {}
+        piotroski_fresh = aq.get("piotroski")
+        if piotroski_fresh is not None and int(piotroski_fresh) <= _PIOTROSKI_FLAG:
+            piotroski = int(piotroski_fresh)
             flags.append(f"piotroski_{piotroski}")
             reasons.append(f"Piotroski F-score {piotroski} <= {_PIOTROSKI_FLAG} (weak fundamentals)")
             flag_count += 1
-    except (KeyError, TypeError):
+    except (KeyError, TypeError, ValueError):
         pass
 
-    # Interest coverage proxy: ni / (debt_lt * assumed_rate)
-    # Real interest expense not available; use ni / debt_lt as crude coverage proxy
-    # If debt_lt is small relative to ni, this is safe; if large, flag
+    # Piotroski F fallback: financials.multiyear.piotroski.score
+    if piotroski is None:
+        try:
+            piotroski = sd["financials"]["multiyear"]["piotroski"]["score"]
+            if piotroski is not None and piotroski <= _PIOTROSKI_FLAG:
+                flags.append(f"piotroski_{piotroski}")
+                reasons.append(f"Piotroski F-score {piotroski} <= {_PIOTROSKI_FLAG} (weak fundamentals)")
+                flag_count += 1
+        except (KeyError, TypeError):
+            pass
+
+    # Fresh R2: leverage_ratios.net_debt_to_ebitda and current_ratio
+    try:
+        lr = sd.get("leverage_ratios") or {}
+        if lr:
+            net_debt_ebitda_fresh = lr.get("net_debt_to_ebitda")
+            current_ratio_fresh = lr.get("current_ratio")
+            if net_debt_ebitda_fresh is not None and float(net_debt_ebitda_fresh) > _NET_DEBT_EBITDA_FLAG:
+                nde = float(net_debt_ebitda_fresh)
+                flags.append(f"net_debt_ebitda_{nde:.1f}")
+                reasons.append(f"net_debt/EBITDA {nde:.1f} > {_NET_DEBT_EBITDA_FLAG}")
+                flag_count += 1
+                if nde > 6.0:
+                    flags.append("net_debt_ebitda_critical")
+            if current_ratio_fresh is not None and float(current_ratio_fresh) < 1.0:
+                cr = float(current_ratio_fresh)
+                flags.append(f"current_ratio_{cr:.2f}")
+                reasons.append(f"current_ratio {cr:.2f} < 1.0 (liquidity concern)")
+                flag_count += 1
+    except (KeyError, TypeError, ValueError):
+        pass
+
+    # Interest coverage proxy (fallback when leverage_ratios not present)
     interest_coverage = None
     try:
         raw = sd["financials"]["raw"]
         debt_lt = raw.get("debt_lt") or 0
         ni = raw.get("ni") or 0
         cfo = raw.get("cfo") or 0
-        # Proxy: coverage = CFO / (debt_lt * 0.05)  — assumes ~5% interest rate
         if debt_lt and debt_lt > 0:
             assumed_interest = debt_lt * 0.05
             if assumed_interest > 0:
@@ -804,23 +961,43 @@ def _lane_solvency_dilution(sd: dict | None, run_date: date) -> dict:
     except (KeyError, TypeError):
         pass
 
-    # Capital allocation: debt-funded buybacks proxy
-    # If debt_lt is large and repurchases > ni, flag as potentially dilutive
+    # Capital allocation: prefer fresh R2 capital_allocation.delta
     dilutive = False
     try:
-        raw = sd["financials"]["raw"]
-        debt_lt = raw.get("debt_lt") or 0
-        repurchases = raw.get("repurchases") or 0
-        ni = raw.get("ni") or 0
-        shares = raw.get("shares") or 0
-        equity = raw.get("equity") or 0
-        # Dilutive proxy: negative equity (buybacks > total equity) with high debt
-        if equity < 0 or (debt_lt > 0 and repurchases > (ni * 1.5) and debt_lt > ni * 2):
+        ca = sd.get("capital_allocation") or {}
+        if ca.get("delta") == "dilutive":
             dilutive = True
             flags.append("dilutive_allocation")
-            reasons.append(
-                f"debt-funded buybacks proxy: repurchases {repurchases/1e9:.1f}B vs NI {ni/1e9:.1f}B, debt {debt_lt/1e9:.1f}B"
-            )
+            reasons.append("capital_allocation.delta = dilutive")
+            flag_count += 1
+    except (KeyError, TypeError):
+        pass
+
+    # Capital allocation fallback: debt-funded buybacks proxy
+    if not dilutive:
+        try:
+            raw = sd["financials"]["raw"]
+            debt_lt = raw.get("debt_lt") or 0
+            repurchases = raw.get("repurchases") or 0
+            ni = raw.get("ni") or 0
+            equity = raw.get("equity") or 0
+            if equity < 0 or (debt_lt > 0 and repurchases > (ni * 1.5) and debt_lt > ni * 2):
+                dilutive = True
+                flags.append("dilutive_allocation")
+                reasons.append(
+                    f"debt-funded buybacks proxy: repurchases {repurchases/1e9:.1f}B vs NI {ni/1e9:.1f}B, debt {debt_lt/1e9:.1f}B"
+                )
+                flag_count += 1
+        except (KeyError, TypeError):
+            pass
+
+    # Fresh R2: moat_falsifiers (list of {firing: bool, ...})
+    try:
+        mf = sd.get("moat_falsifiers") or []
+        firing = [m for m in mf if isinstance(m, dict) and m.get("firing")]
+        if len(firing) >= 2:
+            flags.append(f"moat_falsifiers_{len(firing)}")
+            reasons.append(f"{len(firing)} moat falsifiers firing")
             flag_count += 1
     except (KeyError, TypeError):
         pass
@@ -831,30 +1008,33 @@ def _lane_solvency_dilution(sd: dict | None, run_date: date) -> dict:
         flags.append("critical_altman_dilutive")
         reasons.append("critical: Altman Z distressed AND dilutive capital allocation")
 
+    # Critical: net_debt_ebitda > 6 AND dilutive
+    if any("net_debt_ebitda_critical" in f for f in flags) and dilutive:
+        critical = True
+        flags.append("critical_high_leverage_dilutive")
+        reasons.append("critical: net_debt/EBITDA > 6 AND dilutive capital allocation")
+
     # Dilution filings: parquet not found → note as coverage gap
     flags.append("dilution_filing_coverage_missing")
     reasons.append("dilution_events.parquet not available (coverage gap — no S-1/S-3 check)")
 
-    # Moat falsifiers: not in data
-    # (skipped, counted as 0)
-
-    # Net debt / EBITDA proxy: debt_lt / cfo * 1.2 (crude EBITDA proxy)
-    try:
-        raw = sd["financials"]["raw"]
-        debt_lt = raw.get("debt_lt") or 0
-        cfo = raw.get("cfo") or 0
-        ni = raw.get("ni") or 0
-        if debt_lt > 0 and cfo > 0:
-            ebitda_proxy = cfo * 1.2
-            net_debt_ebitda = debt_lt / ebitda_proxy
-            if net_debt_ebitda > _NET_DEBT_EBITDA_FLAG:
-                flags.append(f"net_debt_ebitda_{net_debt_ebitda:.1f}")
-                reasons.append(
-                    f"net-debt/EBITDA proxy {net_debt_ebitda:.1f} > {_NET_DEBT_EBITDA_FLAG}"
-                )
-                flag_count += 1
-    except (KeyError, TypeError):
-        pass
+    # Net debt / EBITDA proxy from financials.raw (fallback when leverage_ratios absent)
+    if not any("net_debt_ebitda" in f for f in flags):
+        try:
+            raw = sd["financials"]["raw"]
+            debt_lt = raw.get("debt_lt") or 0
+            cfo = raw.get("cfo") or 0
+            if debt_lt > 0 and cfo > 0:
+                ebitda_proxy = cfo * 1.2
+                net_debt_ebitda = debt_lt / ebitda_proxy
+                if net_debt_ebitda > _NET_DEBT_EBITDA_FLAG:
+                    flags.append(f"net_debt_ebitda_{net_debt_ebitda:.1f}")
+                    reasons.append(
+                        f"net-debt/EBITDA proxy {net_debt_ebitda:.1f} > {_NET_DEBT_EBITDA_FLAG}"
+                    )
+                    flag_count += 1
+        except (KeyError, TypeError):
+            pass
 
     state = "elevated" if (flag_count >= 2 or critical) else ("watch" if flag_count >= 1 else "ok")
     return _lane(state, flags, reasons, asof=sd_asof)
@@ -1290,17 +1470,18 @@ def _compose_position(
     run_date: date,
     price_loader=None,
     spy_df: pd.DataFrame | None = None,
+    data_root: Path | None = None,
 ) -> dict:
     ticker = position.get("ticker", "UNKNOWN").upper()
     position_id = str(position.get("id", ticker))
 
     sd = _load_stockdata(ticker, vendor_root)
-    ohlcv = _load_ohlcv(ticker, vendor_root, price_loader=price_loader)
+    ohlcv = _load_ohlcv(ticker, vendor_root, price_loader=price_loader, data_root=data_root)
     metrics = _compute_price_metrics(ohlcv, spy_df=spy_df) if ohlcv is not None else {}
 
     # Build lanes
     l_price = _lane_price_trend(metrics, sd, run_date)
-    l_ext, path = _lane_extension_giveback(metrics, sd, position)
+    l_ext, path = _lane_extension_giveback(metrics, sd, position, ohlcv_df=ohlcv)
     l_event, events = _lane_event_window(sd, run_date)
     l_earn = _lane_earnings_expectation(sd, run_date)
     l_solv = _lane_solvency_dilution(sd, run_date)
@@ -1338,20 +1519,35 @@ def _compose_position(
     # Coverage
     coverage = _coverage_class(sd, all_lanes)
 
-    # Personality
+    # Personality — prefer fresh R2 personality block
     archetype = None
     dna_class = None
+    current_mode = None
     chart_labels: list[str] = []
     if sd:
+        # Fresh R2: personality.base.archetype / dna_class / current_mode
         try:
-            archetype = sd["profile"]["archetype"]["key"]
+            personality_block = sd.get("personality") or {}
+            if personality_block:
+                base = personality_block.get("base") or {}
+                archetype = base.get("archetype") or archetype
+                dna_class = base.get("dna_class") or dna_class
+                current_mode = personality_block.get("current_mode")
         except (KeyError, TypeError):
             pass
-        # dna_class: not directly in this data; use mktcap_tier as proxy
-        try:
-            dna_class = sd["profile"]["mktcap_tier"]["key"]
-        except (KeyError, TypeError):
-            pass
+
+        # Fallback: profile.archetype.key
+        if archetype is None:
+            try:
+                archetype = sd["profile"]["archetype"]["key"]
+            except (KeyError, TypeError):
+                pass
+        # Fallback: mktcap_tier as dna_class proxy
+        if dna_class is None:
+            try:
+                dna_class = sd["profile"]["mktcap_tier"]["key"]
+            except (KeyError, TypeError):
+                pass
         # chart labels from conviction.drivers (descriptive)
         try:
             for d in sd["conviction"].get("drivers", []):
@@ -1374,6 +1570,7 @@ def _compose_position(
         "personality": {
             "archetype": archetype,
             "dna_class": dna_class,
+            "current_mode": current_mode,
             "chart_labels": chart_labels,
         },
         "events": events,
@@ -1454,7 +1651,7 @@ def compose(
     if price_loader is not None:
         spy_df = price_loader("SPY")
     else:
-        spy_df = _load_ohlcv("SPY", vendor_root)
+        spy_df = _load_ohlcv("SPY", vendor_root, data_root=data_root)
 
     # Market regime is shared across all positions
     market_regime_lane = _lane_market_regime(regime, run_date)
@@ -1476,6 +1673,7 @@ def compose(
                 run_date=run_date,
                 price_loader=price_loader,
                 spy_df=spy_df,
+                data_root=data_root,
             )
         except Exception as exc:
             # Fail-soft: per-ticker failure → coverage_missing lanes
@@ -1511,7 +1709,7 @@ def compose(
                     "rs20_spy_z": None,
                     "ext_grade": None,
                 },
-                "personality": {"archetype": None, "dna_class": None, "chart_labels": []},
+                "personality": {"archetype": None, "dna_class": None, "current_mode": None, "chart_labels": []},
                 "events": {"earnings_tdays": None, "earnings_date": None, "fomc_tdays": None},
             }
         composed_positions.append(result)

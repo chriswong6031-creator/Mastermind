@@ -1371,3 +1371,369 @@ def test_compose_fail_soft_bad_ticker(tmp_path, run_date):
     assert all(
         pos["lanes"][k]["state"] == "coverage_missing" for k in pos["lanes"]
     ), f"expected all coverage_missing: { {k:v['state'] for k,v in pos['lanes'].items()} }"
+
+
+# ===========================================================================
+# W3: Fresh R2 schema paths
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# VENDOR_DEFAULT symlink resolution
+# ---------------------------------------------------------------------------
+
+def test_vendor_default_resolves_without_crash():
+    """VENDOR_DEFAULT must be a Path (may not exist — just needs not to crash)."""
+    from portfolio.held_risk import VENDOR_DEFAULT
+    from pathlib import Path
+    assert isinstance(VENDOR_DEFAULT, Path)
+
+
+# ---------------------------------------------------------------------------
+# event_windows fresh R2 schema
+# ---------------------------------------------------------------------------
+
+def test_event_window_fresh_r2_tdays(run_date):
+    """event_windows.earnings.tdays < 3 → elevated (fresh R2 schema path)."""
+    from portfolio.held_risk import _lane_event_window
+
+    sd = _make_stockdata({
+        "event_windows": {
+            "earnings": {"tdays": 2, "date": "2026-07-09"},
+            "fomc_within": {},
+            "debt": {},
+        },
+        # Remove legacy earnings so fallback is NOT triggered
+        "earnings": {"next_date": None, "next_time": None, "eps_forecast": 2.0,
+                     "sue_z": 1.0, "summary": {"avg_surprise": 5.0, "beats": 4, "streak": 4, "total": 4},
+                     "surprises": []},
+    })
+    lane, events = _lane_event_window(sd, run_date)
+    assert lane["state"] == "elevated", f"got {lane['state']}: {lane['reasons']}"
+    assert events["earnings_tdays"] == 2
+
+
+def test_event_window_fresh_r2_fomc_watch(run_date):
+    """event_windows.fomc_within.tdays <= 2 → fomc_within_2d flag (watch or elevated)."""
+    from portfolio.held_risk import _lane_event_window
+
+    sd = _make_stockdata({
+        "event_windows": {
+            "earnings": {"tdays": 20, "date": "2026-08-01"},
+            "fomc_within": {"tdays": 1},
+            "debt": {},
+        },
+    })
+    lane, events = _lane_event_window(sd, run_date)
+    assert any("fomc_within" in f for f in lane["flags"]), f"flags: {lane['flags']}"
+    assert events["fomc_tdays"] == 1
+
+
+def test_event_window_fresh_r2_debt_pressure(run_date):
+    """event_windows.debt.current_debt > cash → debt_pressure flag."""
+    from portfolio.held_risk import _lane_event_window
+
+    sd = _make_stockdata({
+        "event_windows": {
+            "earnings": {"tdays": 30, "date": "2026-08-15"},
+            "fomc_within": {},
+            "debt": {"current_debt": 5e9, "cash": 1e9},
+        },
+    })
+    lane, events = _lane_event_window(sd, run_date)
+    assert "debt_pressure" in lane["flags"], f"flags: {lane['flags']}"
+
+
+# ---------------------------------------------------------------------------
+# expectation_state fresh R2 schema
+# ---------------------------------------------------------------------------
+
+def test_earnings_expectation_fresh_r2_sue_miss_pead(run_date):
+    """expectation_state.sue_latest < 0 AND pead_drift_20d <= -0.03 → elevated."""
+    from portfolio.held_risk import _lane_earnings_expectation
+
+    sd = _make_stockdata({
+        "expectation_state": {
+            "sue_streak": -1,
+            "sue_latest": -0.5,
+            "pead_drift_20d": -0.04,
+        },
+    })
+    lane = _lane_earnings_expectation(sd, run_date)
+    assert lane["state"] == "elevated", f"got {lane['state']}: {lane['reasons']}"
+    # sue_miss_pead_drift or similar flag must be present
+    assert any("sue" in f or "pead" in f for f in lane["flags"]), f"flags: {lane['flags']}"
+
+
+def test_earnings_expectation_fresh_r2_sue_streak_elevated(run_date):
+    """expectation_state.sue_streak <= -2 → elevated."""
+    from portfolio.held_risk import _lane_earnings_expectation
+
+    sd = _make_stockdata({
+        "expectation_state": {
+            "sue_streak": -2,
+            "sue_latest": -0.3,
+            "pead_drift_20d": 0.01,  # not negative enough for PEAD flag alone
+        },
+    })
+    lane = _lane_earnings_expectation(sd, run_date)
+    assert lane["state"] == "elevated", f"got {lane['state']}: {lane['reasons']}"
+
+
+# ---------------------------------------------------------------------------
+# leverage_ratios fresh R2 schema
+# ---------------------------------------------------------------------------
+
+def test_solvency_fresh_r2_leverage_ratios_high_leverage(run_date):
+    """leverage_ratios.net_debt_to_ebitda > 4 → flag fires."""
+    from portfolio.held_risk import _lane_solvency_dilution
+
+    sd = _make_stockdata({
+        "leverage_ratios": {
+            "net_debt_to_ebitda": 5.5,
+            "current_ratio": 0.8,
+        },
+    })
+    lane = _lane_solvency_dilution(sd, run_date)
+    # At minimum a watch or elevated state with leverage flag
+    assert lane["state"] in ("watch", "elevated"), f"got {lane['state']}: {lane['reasons']}"
+    assert any("leverage" in f or "net_debt" in f for f in lane["flags"]), f"flags: {lane['flags']}"
+
+
+def test_solvency_fresh_r2_critical_high_leverage_dilutive(run_date):
+    """net_debt_to_ebitda > 6 AND capital_allocation.delta == dilutive → critical flag."""
+    from portfolio.held_risk import _lane_solvency_dilution
+
+    sd = _make_stockdata({
+        "leverage_ratios": {
+            "net_debt_to_ebitda": 7.0,
+            "current_ratio": 0.7,
+        },
+        "capital_allocation": {"delta": "dilutive"},
+    })
+    lane = _lane_solvency_dilution(sd, run_date)
+    assert lane["state"] == "elevated", f"got {lane['state']}: {lane['reasons']}"
+    assert any("critical" in f for f in lane["flags"]), f"flags: {lane['flags']}"
+
+
+# ---------------------------------------------------------------------------
+# accounting_quality fresh R2 schema
+# ---------------------------------------------------------------------------
+
+def test_solvency_fresh_r2_accounting_quality_altman(run_date):
+    """accounting_quality.altman_z (float) < 1.8 → altman flag fires.
+
+    The code reads aq.get('altman_z') and calls float() on it directly,
+    so this must be a number, not a nested dict.
+    """
+    from portfolio.held_risk import _lane_solvency_dilution
+
+    sd = _make_stockdata({
+        "accounting_quality": {
+            "verdict": "weak",
+            "altman_z": 1.2,   # plain float — what the code expects
+            "piotroski": 6,    # plain int
+            "n_caution": 2,
+            "reads": [],
+        },
+        # Override the financials.multiyear.altman so the fallback doesn't mask the test
+        "financials": {
+            "multiyear": {
+                "altman": {"z": 8.0, "zone": "safe", "approx": False},
+                "piotroski": {"score": 7, "of": 9},
+            },
+            "raw": {
+                "assets": 100e9, "cfo": 20e9, "debt_lt": 10e9,
+                "equity": 30e9, "gross_profit": 40e9, "ni": 15e9,
+                "repurchases": 5e9, "revenue": 100e9, "shares": 1e9, "dividends": None,
+            },
+            "gross_margin": 40.0, "net_margin": 15.0, "fcf_margin": 20.0,
+            "ni_growth": 10.0, "rev_growth": 8.0, "asset_growth": 5.0,
+            "roe": 50.0, "roa": 15.0, "debt_to_assets": 10.0, "accruals": 0.0,
+        },
+    })
+    lane = _lane_solvency_dilution(sd, run_date)
+    # Altman flag should fire from fresh R2 path (altman_z=1.2 < 1.8)
+    assert any("altman" in f for f in lane["flags"]), f"flags: {lane['flags']}"
+
+
+def test_solvency_fresh_r2_accounting_quality_piotroski(run_date):
+    """accounting_quality.piotroski (int) <= 3 → piotroski flag fires.
+
+    The code reads aq.get('piotroski') and calls int() on it directly.
+    """
+    from portfolio.held_risk import _lane_solvency_dilution
+
+    sd = _make_stockdata({
+        "accounting_quality": {
+            "verdict": "weak",
+            "altman_z": 3.0,   # above threshold — won't fire altman
+            "piotroski": 2,    # plain int <= 3 → fires
+            "n_caution": 1,
+            "reads": [],
+        },
+        # Keep financials.multiyear.piotroski healthy so fallback doesn't confuse the test
+        "financials": {
+            "multiyear": {
+                "altman": {"z": 8.0, "zone": "safe", "approx": False},
+                "piotroski": {"score": 7, "of": 9},
+            },
+            "raw": {
+                "assets": 100e9, "cfo": 20e9, "debt_lt": 10e9,
+                "equity": 30e9, "gross_profit": 40e9, "ni": 15e9,
+                "repurchases": 5e9, "revenue": 100e9, "shares": 1e9, "dividends": None,
+            },
+            "gross_margin": 40.0, "net_margin": 15.0, "fcf_margin": 20.0,
+            "ni_growth": 10.0, "rev_growth": 8.0, "asset_growth": 5.0,
+            "roe": 50.0, "roa": 15.0, "debt_to_assets": 10.0, "accruals": 0.0,
+        },
+    })
+    lane = _lane_solvency_dilution(sd, run_date)
+    assert any("piotroski" in f for f in lane["flags"]), f"flags: {lane['flags']}"
+
+
+# ---------------------------------------------------------------------------
+# capital_allocation fresh R2 schema
+# ---------------------------------------------------------------------------
+
+def test_solvency_fresh_r2_capital_allocation_dilutive(run_date):
+    """capital_allocation.delta == dilutive → dilution flag fires."""
+    from portfolio.held_risk import _lane_solvency_dilution
+
+    sd = _make_stockdata({
+        "capital_allocation": {"delta": "dilutive"},
+        # Keep other metrics healthy so only the CA flag fires
+        "financials": {
+            "multiyear": {
+                "altman": {"z": 5.0, "zone": "safe", "approx": False},
+                "piotroski": {"score": 7, "of": 9},
+            },
+            "raw": {
+                "assets": 100e9, "cfo": 20e9, "debt_lt": 10e9,
+                "equity": 30e9, "gross_profit": 40e9, "ni": 15e9,
+                "repurchases": -3e9,  # net issuance
+                "revenue": 100e9, "shares": 1e9, "dividends": None,
+            },
+        },
+    })
+    lane = _lane_solvency_dilution(sd, run_date)
+    # Dilution flag should be present
+    dilution_flag = any("dilut" in f for f in lane["flags"])
+    assert dilution_flag, f"no dilution flag in: {lane['flags']}"
+
+
+# ---------------------------------------------------------------------------
+# moat_falsifiers fresh R2 schema
+# ---------------------------------------------------------------------------
+
+def test_solvency_fresh_r2_moat_falsifiers(run_date):
+    """moat_falsifiers with >= 2 firing items → moat_falsifiers flag."""
+    from portfolio.held_risk import _lane_solvency_dilution
+
+    sd = _make_stockdata({
+        "moat_falsifiers": [
+            {"key": "margin_erosion", "firing": True, "label": "Margin erosion"},
+            {"key": "rev_decel", "firing": True, "label": "Rev decel"},
+            {"key": "comp_threat", "firing": False, "label": "Competitive threat"},
+        ],
+    })
+    lane = _lane_solvency_dilution(sd, run_date)
+    assert any("moat_falsifiers" in f for f in lane["flags"]), f"flags: {lane['flags']}"
+
+
+# ---------------------------------------------------------------------------
+# personality fresh R2 schema + _compose_position return
+# ---------------------------------------------------------------------------
+
+def test_personality_fresh_r2_block(tmp_path, run_date):
+    """personality.base.{archetype,dna_class} + personality.current_mode → in pos output."""
+    from portfolio.held_risk import compose
+
+    sd = _make_stockdata({
+        "personality": {
+            "base": {"archetype": "compounder", "dna_class": "large_quality"},
+            "current_mode": "momentum_phase",
+        },
+    })
+    (tmp_path / "site" / "stockdata").mkdir(parents=True)
+    (tmp_path / "site" / "stockdata" / "TST.json").write_text(json.dumps(sd))
+    (tmp_path / "data" / "regime").mkdir(parents=True)
+    (tmp_path / "data" / "regime" / "latest.json").write_text(json.dumps(_make_regime()))
+    (tmp_path / "site" / "factordata").mkdir(parents=True)
+    (tmp_path / "site" / "factordata" / "insider_signals.json").write_text("{}")
+
+    positions = [{"id": "pp1", "ticker": "TST", "shares": 10, "entry_price": None,
+                  "entry_date": None, "status": "active"}]
+    state = compose(
+        positions,
+        vendor_root=tmp_path,
+        data_root=tmp_path / "out",
+        now=run_date,
+        price_loader=_price_loader_factory({"SPY": _make_ohlcv(_spy_closes(300)),
+                                             "TST": _make_ohlcv(_stock_closes(300))}),
+    )
+    pers = state["positions"][0]["personality"]
+    assert pers["archetype"] == "compounder", f"archetype: {pers['archetype']}"
+    assert pers["dna_class"] == "large_quality", f"dna_class: {pers['dna_class']}"
+    assert pers["current_mode"] == "momentum_phase", f"current_mode: {pers['current_mode']}"
+
+
+def test_personality_falls_back_to_profile(tmp_path, run_date):
+    """No personality block → falls back to profile.archetype.key."""
+    from portfolio.held_risk import compose
+
+    sd = _make_stockdata()  # no personality block; profile.archetype.key = "growth"
+    (tmp_path / "site" / "stockdata").mkdir(parents=True)
+    (tmp_path / "site" / "stockdata" / "TST.json").write_text(json.dumps(sd))
+    (tmp_path / "data" / "regime").mkdir(parents=True)
+    (tmp_path / "data" / "regime" / "latest.json").write_text(json.dumps(_make_regime()))
+    (tmp_path / "site" / "factordata").mkdir(parents=True)
+    (tmp_path / "site" / "factordata" / "insider_signals.json").write_text("{}")
+
+    positions = [{"id": "pp2", "ticker": "TST", "shares": 10, "entry_price": None,
+                  "entry_date": None, "status": "active"}]
+    state = compose(
+        positions,
+        vendor_root=tmp_path,
+        data_root=tmp_path / "out",
+        now=run_date,
+        price_loader=_price_loader_factory({"SPY": _make_ohlcv(_spy_closes(300)),
+                                             "TST": _make_ohlcv(_stock_closes(300))}),
+    )
+    pers = state["positions"][0]["personality"]
+    assert pers["archetype"] == "growth", f"archetype: {pers['archetype']}"
+    assert pers["current_mode"] is None
+
+
+# ---------------------------------------------------------------------------
+# post_entry_high derived from price history (W3 giveback path)
+# ---------------------------------------------------------------------------
+
+def test_extension_post_entry_high_from_ohlcv(run_date):
+    """When position has entry_date but no post_entry_high, derive from ohlcv_df passed in."""
+    from portfolio.held_risk import _lane_extension_giveback
+
+    sd = _make_stockdata()
+    # entry 2025-07-01, closes go 100 → 130 peak → 115 (giveback)
+    n = 252
+    entry_date = "2025-07-01"
+    closes_vals = [100.0 + i * 0.3 for i in range(n // 2)] + \
+                  [100.0 + (n//2) * 0.3 - (i * 0.5) for i in range(n // 2)]
+    idx = pd.date_range(start="2025-01-02", periods=n, freq="B")
+    ohlcv_df = pd.DataFrame({"close": closes_vals}, index=idx)
+
+    position = {"entry_price": 100.0, "entry_date": entry_date}
+    metrics = {
+        "close": closes_vals[-1],
+        "ma20": closes_vals[-1] + 5,
+        "ma50": closes_vals[-1] + 10,
+        "ma200": 90.0,
+        "atr14": 3.0,
+        "high_52w": max(closes_vals),
+        "rs20_spy_z": -0.5,
+        "ext_z": 0.2,
+        "close_date": "2026-07-07",
+    }
+
+    lane, path = _lane_extension_giveback(metrics, sd, position, ohlcv_df=ohlcv_df)
+    # Should compute mfe_pct > 0 since high is above entry
+    assert path["mfe_pct"] is not None and path["mfe_pct"] > 0, f"mfe_pct: {path['mfe_pct']}"

@@ -203,6 +203,8 @@ table.pos-table tbody tr:hover { background: var(--panel2); }
   <div class="mkt-chip"><span class="chip-label">Market</span><span class="chip-val" id="mkt-state">—</span></div>
   <div class="mkt-chip"><span class="chip-label">Regime</span><span class="chip-val" id="mkt-quad">—</span></div>
   <div class="mkt-chip"><span class="chip-label">Risk Radar</span><span class="chip-val" id="mkt-radar">—</span></div>
+  <div class="mkt-chip"><span class="chip-label">Vol</span><span class="chip-val" id="mkt-vol">—</span></div>
+  <div class="mkt-chip" style="margin-left:auto"><span class="chip-label" id="mkt-asof" style="font-size:10px"></span></div>
 </div>
 
 <!-- ── main panel ─────────────────────────────────────────────────────────── -->
@@ -283,6 +285,12 @@ table.pos-table tbody tr:hover { background: var(--panel2); }
     </div>
   </div>
 
+  <!-- alerts feed panel (W3) -->
+  <div id="pf-alerts-panel" class="panel" style="display:none; margin-top:8px">
+    <h2>Recent Alerts</h2>
+    <div id="alerts-list" style="font-size:12px; color:var(--muted)">Loading…</div>
+  </div>
+
   <!-- add position panel -->
   <div id="pf-add-panel" class="panel" style="display:none">
     <h2>Add Position</h2>
@@ -359,15 +367,18 @@ function fmtNum(v, dp) {
 }
 
 function roleBadge(risk) {
-  if (!risk || !risk.role) return '<span class="dash">—</span>';
-  var r = risk.role;
-  var label = r;
-  if (r === "exit_review") label = "Exit review";
-  else if (r === "trim_review") label = "Take-profit review";
-  else if (r === "tighten") label = "Tighten";
-  else if (r === "review") label = "Review";
-  else if (r === "monitor") label = "Monitor";
-  else if (r === "ok" || r === "info") label = "OK";
+  if (!risk || (!risk.role && !risk.role_label)) return '<span class="dash">—</span>';
+  var r = risk.role || "";
+  // W3: prefer role_label from API when present
+  var label = risk.role_label || r;
+  if (!label) {
+    if (r === "exit_review") label = "Exit review";
+    else if (r === "trim_review") label = "Take-profit review";
+    else if (r === "tighten") label = "Tighten";
+    else if (r === "review") label = "Review";
+    else if (r === "monitor") label = "Monitor";
+    else label = "OK";
+  }
   var n = risk.elevated_lanes;
   var t = risk.lane_total;
   var count = (n !== null && t !== null && n !== undefined && t !== undefined)
@@ -375,12 +386,50 @@ function roleBadge(risk) {
   return '<span class="role-badge ' + esc(r) + '">' + esc(label) + count + "</span>";
 }
 
+/* W3: lanes is now a dict-of-dicts {lane_name: {state, flags, reasons, asof}} */
 function laneChips(lanes) {
-  if (!lanes || !lanes.length) return '<span class="dash">—</span>';
-  return lanes.slice(0, 5).map(function(l) {
-    var state = l.state || "ok";
-    return '<span class="lane-chip ' + esc(state) + '">' + esc(l.name || l.lane || "") + "</span>";
+  if (!lanes) return '<span class="dash">—</span>';
+  var entries;
+  if (Array.isArray(lanes)) {
+    // legacy list format
+    entries = lanes.map(function(l) { return [l.name || l.lane || "", l]; });
+  } else if (typeof lanes === "object") {
+    entries = Object.keys(lanes).map(function(k) { return [k, lanes[k]]; });
+  } else {
+    return '<span class="dash">—</span>';
+  }
+  if (!entries.length) return '<span class="dash">—</span>';
+  return entries.slice(0, 6).map(function(pair) {
+    var name = pair[0], obj = pair[1];
+    var state = (obj && obj.state) || "ok";
+    return '<span class="lane-chip ' + esc(state) + '" title="' + esc(name) + '">' + esc(name.replace(/_/g, " ")) + "</span>";
   }).join(" ");
+}
+
+/* W3: render full lane detail grid from dict-of-dicts */
+function laneDetailGrid(lanes) {
+  if (!lanes || typeof lanes !== "object" || Array.isArray(lanes)) return "";
+  var keys = Object.keys(lanes);
+  if (!keys.length) return "";
+  var rows = keys.map(function(k) {
+    var l = lanes[k] || {};
+    var state = l.state || "ok";
+    var reasons = (l.reasons || []).join("; ") || "—";
+    var flags = l.flags ? Object.keys(l.flags).filter(function(f) { return l.flags[f]; }).join(", ") : "";
+    return "<tr>" +
+      '<td><span class="lane-chip ' + esc(state) + '">' + esc(k.replace(/_/g, " ")) + "</span></td>" +
+      "<td>" + esc(state) + "</td>" +
+      "<td style='font-size:11px;color:var(--muted)'>" + esc(reasons.slice(0, 120)) + "</td>" +
+      "<td style='font-size:10px;color:var(--muted)'>" + esc(flags) + "</td>" +
+      "</tr>";
+  }).join("");
+  return '<table style="width:100%;font-size:12px;border-collapse:collapse;margin-top:6px">' +
+    '<thead><tr>' +
+    '<th style="text-align:left;padding:2px 4px;color:var(--muted)">Lane</th>' +
+    '<th style="text-align:left;padding:2px 4px;color:var(--muted)">State</th>' +
+    '<th style="text-align:left;padding:2px 4px;color:var(--muted)">Reason</th>' +
+    '<th style="text-align:left;padding:2px 4px;color:var(--muted)">Flags</th>' +
+    '</tr></thead><tbody>' + rows + "</tbody></table>";
 }
 
 function show(id) { var e = document.getElementById(id); if (e) e.style.display = ""; }
@@ -415,13 +464,35 @@ function render(d) {
     return;
   }
 
-  // Market context strip
+  // Market context strip (W3: add vol_regime + asof)
   if (d.market) {
     var ms = document.getElementById("mkt-strip");
     ms.classList.remove("hidden");
     document.getElementById("mkt-state").textContent = d.market.market_state || "—";
     document.getElementById("mkt-quad").textContent  = d.market.quad_name   || d.market.quad || "—";
-    document.getElementById("mkt-radar").textContent = d.market.risk_radar  || "—";
+    var radarEl = document.getElementById("mkt-radar");
+    var radarVal = d.market.risk_radar || "—";
+    radarEl.textContent = radarVal;
+    // Color-code verdict
+    var radarLower = (radarVal || "").toLowerCase();
+    if (radarLower.indexOf("risk-off") !== -1 || radarLower.indexOf("caution") !== -1) {
+      radarEl.style.color = "var(--warn, #f59e0b)";
+    } else if (radarLower.indexOf("danger") !== -1 || radarLower.indexOf("red") !== -1) {
+      radarEl.style.color = "var(--neg, #ef4444)";
+    } else if (radarLower.indexOf("risk-on") !== -1 || radarLower.indexOf("green") !== -1) {
+      radarEl.style.color = "var(--pos, #22c55e)";
+    } else {
+      radarEl.style.color = "";
+    }
+    // Vol regime (W3)
+    var volEl = document.getElementById("mkt-vol");
+    if (volEl) volEl.textContent = d.market.vol_regime || "—";
+    // Asof (W3)
+    var asofEl = document.getElementById("mkt-asof");
+    if (asofEl) {
+      var asofVal = d.market.state_asof || d.market.asof || "";
+      asofEl.textContent = asofVal ? "as of " + asofVal.slice(0, 10) : "";
+    }
   }
 
   // Header strip
@@ -489,18 +560,59 @@ function render(d) {
         '</div></div></td>';
       tbody.appendChild(det);
 
-      // Fill detail
+      // Fill detail (W3: dict-of-dicts lanes, personality, events)
       var inner = det.querySelector(".pos-detail-section");
       var detHtml = "";
-      if (p.entry_date) detHtml += "<div><small style='color:var(--muted)'>Entry date:</small> " + esc(p.entry_date) + "</div>";
-      if (p.notes) detHtml += "<div><small style='color:var(--muted)'>Notes:</small> " + esc(p.notes) + "</div>";
-      if (risk && risk.lanes && risk.lanes.length) {
-        detHtml += "<h4>Evidence lanes</h4>" + laneChips(risk.lanes);
-        if (risk.lanes[0] && risk.lanes[0].reason) {
-          detHtml += "<div style='font-size:11px;color:var(--muted);margin-top:4px'>" + esc(risk.lanes[0].reason) + "</div>";
+      if (p.notes) detHtml += "<div style='margin-bottom:6px'><small style='color:var(--muted)'>Notes:</small> " + esc(p.notes) + "</div>";
+
+      if (risk) {
+        // Personality block (W3)
+        var pers = risk.personality;
+        if (pers) {
+          var persChips = [];
+          if (pers.archetype) persChips.push('<span class="lane-chip ok" style="font-size:10px">' + esc(pers.archetype) + "</span>");
+          if (pers.dna_class) persChips.push('<span class="lane-chip ok" style="font-size:10px">' + esc(pers.dna_class) + "</span>");
+          if (pers.current_mode) persChips.push('<span class="lane-chip monitor" style="font-size:10px">mode: ' + esc(pers.current_mode) + "</span>");
+          if (persChips.length) {
+            detHtml += "<div style='margin-bottom:6px'><small style='color:var(--muted)'>Personality: </small>" + persChips.join(" ") + "</div>";
+          }
+        }
+
+        // Events block (W3)
+        var evts = risk.events;
+        if (evts && typeof evts === "object") {
+          var evtChips = [];
+          if (evts.earnings_within_sessions !== null && evts.earnings_within_sessions !== undefined) {
+            evtChips.push("Earnings in " + evts.earnings_within_sessions + "d");
+          }
+          if (evts.fomc_within_sessions !== null && evts.fomc_within_sessions !== undefined) {
+            evtChips.push("FOMC in " + evts.fomc_within_sessions + "d");
+          }
+          if (evts.debt_event) evtChips.push("Debt event");
+          if (evtChips.length) {
+            detHtml += "<div style='margin-bottom:6px'><small style='color:var(--muted)'>Events: </small><span style='font-size:12px'>" + esc(evtChips.join(" · ")) + "</span></div>";
+          }
+        }
+
+        // Lane grid (W3: dict-of-dicts)
+        var lanesData = risk.lanes;
+        if (lanesData && typeof lanesData === "object" && !Array.isArray(lanesData) && Object.keys(lanesData).length) {
+          detHtml += "<div style='margin-top:4px'><small style='color:var(--muted)'>Evidence lanes</small>" + laneDetailGrid(lanesData) + "</div>";
+        } else if (Array.isArray(lanesData) && lanesData.length) {
+          // legacy list fallback
+          detHtml += "<div style='margin-top:4px'><small style='color:var(--muted)'>Evidence lanes</small><br>" + laneChips(lanesData) + "</div>";
+        }
+
+        // Path (W3)
+        var pathData = risk.path;
+        if (pathData && pathData.current_role) {
+          detHtml += "<div style='margin-top:6px;font-size:11px;color:var(--muted)'>Role path: <span style='color:var(--fg)'>" + esc(pathData.current_role) + "</span>";
+          if (pathData.sessions_at_role) detHtml += " · " + pathData.sessions_at_role + " session(s)";
+          detHtml += "</div>";
         }
       }
-      inner.innerHTML = detHtml || "<span style='color:var(--muted);font-size:12px'>No additional detail. Risk lanes arrive after W2 lane composer runs.</span>";
+
+      inner.innerHTML = detHtml || "<span style='color:var(--muted);font-size:12px'>No additional detail. Risk lanes arrive after the lane composer runs.</span>";
     });
 
     // Restore open detail if any
@@ -525,6 +637,40 @@ function toggleDetail(id) {
     det.classList.add("open");
     _openDetailId = id;
   }
+}
+
+/* ── alerts feed (W3) ─────────────────────────────────────────────────────── */
+function loadAlerts() {
+  var panel = document.getElementById("pf-alerts-panel");
+  var list  = document.getElementById("alerts-list");
+  if (!panel || !list) return;
+  panel.style.display = "block";
+  list.textContent = "Loading…";
+  fetch("/api/pfolio/alerts", { headers: { Accept: "application/json" }, credentials: "same-origin" })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      var alerts = (d && d.alerts) || [];
+      if (!alerts.length) {
+        list.innerHTML = "<span style='color:var(--muted)'>No alerts yet.</span>";
+        return;
+      }
+      list.innerHTML = alerts.map(function(a) {
+        var ts = (a.ts || a.alert_date || "").slice(0, 16).replace("T", " ");
+        var role = a.type || a.role || "";
+        var badgeCls = role || "ok";
+        var headline = esc(a.headline || a.message || "");
+        var ticker = esc((a.ticker || "").toUpperCase());
+        return '<div style="padding:6px 0;border-bottom:1px solid var(--border,#333)">' +
+          '<span class="role-badge ' + esc(badgeCls) + '" style="font-size:10px">' + esc(role) + "</span> " +
+          "<strong>" + ticker + "</strong> " +
+          "<span>" + headline + "</span>" +
+          "<span style='float:right;color:var(--muted);font-size:10px'>" + esc(ts) + "</span>" +
+          "</div>";
+      }).join("");
+    })
+    .catch(function() {
+      list.innerHTML = "<span style='color:var(--muted)'>Alerts unavailable.</span>";
+    });
 }
 
 /* ── add position ──────────────────────────────────────────────────────────── */
@@ -682,7 +828,10 @@ window.deletePosition = deletePosition;
 
 /* ── auto-refresh ─────────────────────────────────────────────────────────── */
 load();
+loadAlerts();
 _timer = setInterval(load, REFRESH_MS);
+// Refresh alerts every 5 minutes
+setInterval(loadAlerts, 300000);
 
 })();
 </script>

@@ -917,6 +917,67 @@ def _today_iso() -> str:
     return date.today().isoformat()
 
 
+def _portfolio_risk_compose_job():
+    """Portfolio held-risk RTH intraday compose (Mon-Fri, every 30 min, 13:00-20:30 UTC).
+
+    Sequence: (b) fetch positions, (c) compose lanes + roles, (d) alert governor,
+    (e) write_state, (g) VPS push (best-effort). Skips macro_refresh (--skip-refresh)
+    on intraday runs; daily job at 15:05 UTC handles the full refresh.
+
+    NOTE: absent on the VPS (MASTERMIND_SERVE_ONLY=1 disables the scheduler entirely).
+    VPS reads data/portfolio_watch/ from rsync'd state. Never raises into the scheduler.
+    """
+    handle = _ledger_start("portfolio_risk_compose", trigger="cron")
+    try:
+        import subprocess as _sp
+        import sys as _sys
+        from pathlib import Path as _Path
+        _script = _Path(__file__).resolve().parent.parent / "scripts" / "run_portfolio_risk.py"
+        result = _sp.run(
+            [_sys.executable, str(_script), "--skip-refresh"],
+            capture_output=True, text=True, timeout=300,
+        )
+        if result.returncode != 0:
+            log.warning("portfolio_risk_compose failed (rc=%s): %s",
+                        result.returncode, result.stderr[:500])
+            _ledger_end(handle, "error")
+        else:
+            _ledger_end(handle, "ok")
+    except Exception as exc:  # noqa: BLE001
+        _ledger_end(handle, "error")
+        log.warning("portfolio_risk_compose failed: %s", exc)
+
+
+def _portfolio_risk_daily_job():
+    """Portfolio held-risk daily compose with macro refresh (Mon-Fri, 15:05 UTC = 07:05 PT).
+
+    Runs once daily after the nightly macro data is fresh. Includes macro_refresh,
+    compose, alerts, outcome-ledger append, and VPS push. The --skip-alerts flag is
+    NOT passed here so the daily run fires transition alerts.
+
+    NOTE: absent on VPS (serve-only disables scheduler). Never raises.
+    """
+    handle = _ledger_start("portfolio_risk_daily", trigger="cron")
+    try:
+        import subprocess as _sp
+        import sys as _sys
+        from pathlib import Path as _Path
+        _script = _Path(__file__).resolve().parent.parent / "scripts" / "run_portfolio_risk.py"
+        result = _sp.run(
+            [_sys.executable, str(_script)],  # full sequence: macro_refresh + outcomes + vps
+            capture_output=True, text=True, timeout=600,
+        )
+        if result.returncode != 0:
+            log.warning("portfolio_risk_daily failed (rc=%s): %s",
+                        result.returncode, result.stderr[:500])
+            _ledger_end(handle, "error")
+        else:
+            _ledger_end(handle, "ok")
+    except Exception as exc:  # noqa: BLE001
+        _ledger_end(handle, "error")
+        log.warning("portfolio_risk_daily failed: %s", exc)
+
+
 def start():
     """Start the daily-loop scheduler (idempotent). Returns the scheduler or None."""
     global _scheduler
@@ -1075,6 +1136,21 @@ def start():
     sch.add_job(_experiment_maturity_job,
                 CronTrigger(day_of_week="mon-fri", hour=lm_hour, minute=50, timezone="UTC"),
                 id="experiment_maturity", replace_existing=True,
+                misfire_grace_time=3600, coalesce=True)
+    # PORTFOLIO RISK DESK — RTH intraday compose (Mon-Fri, every 30 min during US session).
+    # UTC 13:00-20:30 = roughly 06:00-13:30 PT (RTH 06:30-13:00 PT); job runs at :00 and :30.
+    # NOTE: absent on the VPS (MASTERMIND_SERVE_ONLY=1 disables the scheduler entirely).
+    # VPS reads data/portfolio_watch/ from the rsync'd state pushed by scripts/push_portfolio_watch_to_vps.sh.
+    sch.add_job(_portfolio_risk_compose_job,
+                CronTrigger(day_of_week="mon-fri", hour="13-20", minute="0,30", timezone="UTC"),
+                id="portfolio_risk_compose", replace_existing=True,
+                misfire_grace_time=1800, coalesce=True)
+    # PORTFOLIO RISK DESK — once-daily post-nightly compose (Mon-Fri, 15:05 UTC = 07:05 PT).
+    # Includes macro_refresh + outcome-ledger append + VPS push.
+    # NOTE: absent on VPS (serve-only disables scheduler).
+    sch.add_job(_portfolio_risk_daily_job,
+                CronTrigger(day_of_week="mon-fri", hour=15, minute=5, timezone="UTC"),
+                id="portfolio_risk_daily", replace_existing=True,
                 misfire_grace_time=3600, coalesce=True)
     sch.start()
     _scheduler = sch

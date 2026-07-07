@@ -147,23 +147,33 @@ def _normalize_ticker(raw: str) -> str | None:
 def _risk_for_position(pos_id: str, ticker: str) -> dict | None:
     """Read risk_state.json for this position/ticker. Returns None when absent.
 
-    The file is produced by the W2 lane composer — absent in W1 (return null per spec).
+    The file is produced by the W2/W3 lane composer.
     PRD-R2: risk field is raw lane states, never a fused score.
+    PRD-R7: entry_price/entry_date stripped from path block before returning.
     """
     try:
         path = Path(__file__).resolve().parent.parent / "data" / "portfolio_watch" / "risk_state.json"
         if not path.exists():
             return None
         data = json.loads(path.read_text())
-        # Try matching by position_id first, then ticker
         positions = data.get("positions") or []
         for p in positions:
             if p.get("position_id") == pos_id or (p.get("ticker") or "").upper() == ticker.upper():
+                # PRD-R7: strip entry_price, entry_date, ref_close from path
+                raw_path = p.get("path") or {}
+                safe_path = {
+                    k: v for k, v in raw_path.items()
+                    if k not in ("entry_date", "entry_price", "ref_close")
+                }
                 return {
                     "role": p.get("role"),
+                    "role_label": p.get("role_label"),
                     "elevated_lanes": p.get("elevated_lanes"),
                     "lane_total": p.get("lane_total"),
                     "lanes": p.get("lanes"),
+                    "personality": p.get("personality"),
+                    "events": p.get("events"),
+                    "path": safe_path,
                 }
         return None
     except Exception:
@@ -177,7 +187,13 @@ def _market_block() -> dict | None:
         if not path.exists():
             return None
         data = json.loads(path.read_text())
-        return data.get("market") or None
+        market = data.get("market") or None
+        if market:
+            asof = data.get("asof") or market.get("asof")
+            market = dict(market)
+            market["asof"] = asof
+            market["state_asof"] = asof
+        return market
     except Exception:
         return None
 
@@ -537,3 +553,26 @@ def delete_position(position_id: str) -> JSONResponse:
     except Exception as exc:
         log.warning("pfolio: position delete error: %s", exc)
         return _unavailable()
+
+
+@router.get("/alerts")
+def get_alerts() -> JSONResponse:
+    """Return last 50 alerts from alerts.jsonl (reverse chrono). Fail-soft [].
+
+    PRD-R7: alert records contain no entry_price, shares, or notional values.
+    """
+    try:
+        path = Path(__file__).resolve().parent.parent / "data" / "portfolio_watch" / "alerts.jsonl"
+        if not path.exists():
+            return JSONResponse({"ok": True, "alerts": []})
+        lines = [ln.strip() for ln in path.read_text().splitlines() if ln.strip()]
+        records = []
+        for line in reversed(lines[-100:]):  # last 100, reversed → newest first
+            try:
+                records.append(json.loads(line))
+            except Exception:
+                pass
+        return JSONResponse({"ok": True, "alerts": records[:50]})
+    except Exception as exc:
+        log.warning("pfolio: alerts read failed: %s", exc)
+        return JSONResponse({"ok": True, "alerts": []})
