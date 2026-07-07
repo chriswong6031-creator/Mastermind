@@ -334,7 +334,8 @@ var _openDetailId = null;
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 function esc(s) {
   return String(s == null ? "" : s)
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 
 function fmt$(v) {
@@ -546,8 +547,8 @@ function render(d) {
         "<td>" + (p.market_value !== null && p.market_value !== undefined ? fmtAbs$(p.market_value) : '<span class="dash">—</span>') + "</td>" +
         "<td>" + roleBadge(risk) + "</td>" +
         '<td style="text-align:left">' +
-          '<button class="btn sm" onclick="event.stopPropagation(); openEditModal(\'' + id + '\')" title="Edit">Edit</button>' +
-          ' <button class="btn sm danger" onclick="event.stopPropagation(); deletePosition(\'' + id + '\', \'' + esc(p.ticker) + '\')" title="Delete">Del</button>' +
+          '<button class="btn sm pf-edit-btn" data-id="' + esc(id) + '" title="Edit">Edit</button>' +
+          ' <button class="btn sm danger pf-del-btn" data-id="' + esc(id) + '" data-ticker="' + esc(p.ticker) + '" title="Delete">Del</button>' +
         "</td>";
       tbody.appendChild(tr);
 
@@ -825,6 +826,22 @@ window.closeEditModal = closeEditModal;
 window.submitEdit = submitEdit;
 window.closePosition = closePosition;
 window.deletePosition = deletePosition;
+
+/* ── delegated event listener for Edit / Delete buttons ─────────────────── */
+// Buttons in the positions table carry data-id / data-ticker attributes and NO
+// inline onclick, so ticker values with quotes or special chars are safe.
+document.getElementById("pos-tbody").addEventListener("click", function(evt) {
+  var btn = evt.target.closest("button");
+  if (!btn) return;
+  evt.stopPropagation();
+  var id = btn.dataset.id || "";
+  if (btn.classList.contains("pf-edit-btn")) {
+    window.openEditModal(id);
+  } else if (btn.classList.contains("pf-del-btn")) {
+    var ticker = btn.dataset.ticker || "";
+    deletePosition(id, ticker);
+  }
+});
 
 /* ── auto-refresh ─────────────────────────────────────────────────────────── */
 load();

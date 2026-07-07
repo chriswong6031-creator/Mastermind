@@ -365,7 +365,7 @@ def install(app) -> None:
         # mode because they only mutate Supabase (no local state, no LLM, no scheduler).
         # They remain session-auth-gated (NOT exempted from the auth check below).
         _is_pfolio = path.startswith(_PFOLIO_PATH_PREFIX)
-        if serve_only() and method == "POST" and path in _OPERATOR_PATHS and not _is_pfolio:
+        if serve_only() and method in {"POST", "PATCH", "PUT", "DELETE"} and path in _OPERATOR_PATHS and not _is_pfolio:
             return JSONResponse(
                 {"error": "serve_only", "detail": (
                     "This instance is running in serve-only (read-only mirror) mode. "

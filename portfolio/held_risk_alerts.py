@@ -181,9 +181,14 @@ def run_alerts(prev_state: dict | None, new_state: dict, *, today: date | None =
     alert_state = _load_alert_state()
     fired: list[dict] = []
 
-    # Increment sessions_since for all tickers in cooldown
-    for ticker, cd in list(alert_state.get("cooldown", {}).items()):
-        cd["sessions_since"] = cd.get("sessions_since", 0) + 1
+    # Advance sessions_since ONLY when the stored as_of date differs from today
+    # (cooldowns are per trading SESSION, not per scheduler run).
+    # Cooldown CHECKS still happen every run so intraday transitions can fire.
+    last_as_of = alert_state.get("as_of")
+    new_session = (last_as_of != today_str)
+    if new_session:
+        for ticker, cd in list(alert_state.get("cooldown", {}).items()):
+            cd["sessions_since"] = cd.get("sessions_since", 0) + 1
 
     prev_positions: dict[str, dict] = {}
     if prev_state:

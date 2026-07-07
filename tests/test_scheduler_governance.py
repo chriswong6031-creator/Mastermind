@@ -705,3 +705,80 @@ class TestCioWeeklyCallsWriteRegional:
         finally:
             bl_mod.write_regional = original_write_regional
         # reaching here = the exception was swallowed correctly
+
+
+# ---------------------------------------------------------------------------
+# MAJOR-1: cross-process lock for run_portfolio_risk.py
+# ---------------------------------------------------------------------------
+
+class TestPortfolioRiskLock:
+    """run_portfolio_risk uses control_plane.locks (fcntl.flock) for cross-process
+    mutual exclusion between the intraday and daily scheduler jobs.
+
+    These tests verify the lock-held path exits 0 without touching any state.
+    """
+
+    def test_lock_held_skips_run(self, tmp_path, monkeypatch):
+        """When global:portfolio_risk lock is held, runner exits 0 and touches no state files."""
+        import importlib
+        import importlib.util
+        import sys
+
+        # Load the runner module without executing main()
+        script_path = Path(__file__).resolve().parent.parent / "scripts" / "run_portfolio_risk.py"
+        spec = importlib.util.spec_from_file_location("_rpr_test", str(script_path))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+
+        # Acquire the lock in this process FIRST so the runner will see it as held
+        from control_plane.locks import acquire
+        lock = acquire("global:portfolio_risk", root=tmp_path)
+        assert lock is not None, "lock should be acquirable in test process"
+
+        state_file = tmp_path / "data" / "portfolio_watch" / "risk_state.json"
+        state_file.parent.mkdir(parents=True, exist_ok=True)
+
+        exit_code = [None]
+
+        def fake_exit(code=0):
+            exit_code[0] = code
+            raise SystemExit(code)
+
+        monkeypatch.setattr("sys.exit", fake_exit)
+
+        # Redirect lock root to tmp_path so runner tries same lock directory
+        original_acquire = None
+        import control_plane.locks as locks_mod
+
+        def patched_acquire_or_log(name, **kwargs):
+            # Redirect root to tmp_path so it sees the same lock file
+            return locks_mod.acquire(name, root=tmp_path)
+
+        monkeypatch.setattr(mod, "_LOCK_NAME", "global:portfolio_risk")
+
+        try:
+            with pytest.raises(SystemExit) as exc_info:
+                # Simulate: lock is already held (we hold it above)
+                # Call _run indirectly via the lock-check path in main()
+                # We mock acquire_or_log to return None (lock held)
+                from unittest.mock import patch as _patch
+                with _patch("control_plane.locks.acquire_or_log", return_value=None):
+                    # Re-exec main logic: parse [] args and hit the lock-held branch
+                    import sys as _sys
+                    old_argv = _sys.argv
+                    _sys.argv = ["run_portfolio_risk.py"]
+                    try:
+                        mod.main()
+                    finally:
+                        _sys.argv = old_argv
+        except SystemExit:
+            pass
+        finally:
+            lock.release()
+
+        # Runner must exit 0 (skip, not error) when lock is held
+        assert exc_info.value.code == 0, (
+            f"expected exit 0 on lock-held, got {exc_info.value.code}"
+        )
+        # Must NOT have written state
+        assert not state_file.exists(), "state file should not be written when lock is held"

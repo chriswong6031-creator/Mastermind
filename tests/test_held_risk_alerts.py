@@ -397,3 +397,70 @@ def test_role_cooldowns_exist_for_elevated_roles():
     for role in ("monitor", "review", "tighten", "trim_review", "exit_review"):
         assert role in _COOLDOWNS, f"missing cooldown for {role}"
         assert isinstance(_COOLDOWNS[role], int) and _COOLDOWNS[role] >= 1
+
+
+# ---------------------------------------------------------------------------
+# BLOCKING-1: Session-gated cooldown counter
+# ---------------------------------------------------------------------------
+
+def test_same_date_run_does_not_double_increment_sessions_since(tmp_path):
+    """Two runs on the same date must advance sessions_since at most once.
+
+    The second same-date run should NOT increment sessions_since again,
+    because cooldown units are trading SESSIONS, not scheduler invocations.
+    """
+    import portfolio.held_risk_alerts as hra
+
+    with patch.object(hra, "_ALERTS_LOG_PATH", tmp_path / "alerts.jsonl"), \
+         patch.object(hra, "_ALERT_STATE_PATH", tmp_path / "alert_state.json"), \
+         patch.object(hra, "_send_discord", return_value=None):
+
+        # First run: ok → monitor → alert fires, sessions_since resets to 0
+        prev = _state([_pos("B1", "ok")])
+        new  = _state([_pos("B1", "monitor", {"macro_sensitivity": _lane("elevated")})])
+        fired1 = hra.run_alerts(prev, new, today=date(2026, 7, 7))
+        assert len(fired1) == 1, "first run should fire an alert"
+
+        # Read sessions_since after the first run
+        state_data1 = json.loads((tmp_path / "alert_state.json").read_text())
+        ss_after_run1 = state_data1["cooldown"]["B1"]["sessions_since"]
+
+        # Second run SAME date (simulates intraday scheduler firing again):
+        # role unchanged + no new elevated lanes → no alert; but crucially
+        # sessions_since must not increment (same date = same session)
+        hra.run_alerts(new, new, today=date(2026, 7, 7))
+        state_data2 = json.loads((tmp_path / "alert_state.json").read_text())
+        ss_after_run2 = state_data2["cooldown"]["B1"]["sessions_since"]
+
+        assert ss_after_run2 == ss_after_run1, (
+            f"sessions_since incremented on same-date re-run: "
+            f"{ss_after_run1} → {ss_after_run2}"
+        )
+
+
+def test_next_date_run_increments_sessions_since(tmp_path):
+    """A run on a new date (different session) must advance sessions_since by 1."""
+    import portfolio.held_risk_alerts as hra
+
+    with patch.object(hra, "_ALERTS_LOG_PATH", tmp_path / "alerts.jsonl"), \
+         patch.object(hra, "_ALERT_STATE_PATH", tmp_path / "alert_state.json"), \
+         patch.object(hra, "_send_discord", return_value=None):
+
+        # Run 1: fire an alert
+        prev = _state([_pos("B2", "ok")])
+        new  = _state([_pos("B2", "monitor", {"macro_sensitivity": _lane("elevated")})])
+        hra.run_alerts(prev, new, today=date(2026, 7, 7))
+
+        state_before = json.loads((tmp_path / "alert_state.json").read_text())
+        ss_before = state_before["cooldown"]["B2"]["sessions_since"]
+
+        # Run 2: next calendar date — should increment sessions_since
+        hra.run_alerts(new, new, today=date(2026, 7, 8))
+
+        state_after = json.loads((tmp_path / "alert_state.json").read_text())
+        ss_after = state_after["cooldown"]["B2"]["sessions_since"]
+
+        assert ss_after == ss_before + 1, (
+            f"sessions_since should have incremented by 1 on new date: "
+            f"{ss_before} → {ss_after}"
+        )

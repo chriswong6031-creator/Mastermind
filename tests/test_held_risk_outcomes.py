@@ -299,3 +299,140 @@ def test_append_outcomes_row_schema(tmp_path):
         assert row["ticker"] == "AAPL"
         assert row["horizon"] in (5, 21)
         assert isinstance(row["fwd_return_pct"], float)
+
+
+# ---------------------------------------------------------------------------
+# MAJOR-3: Bar-count outcome grading (not calendar-date approximation)
+# ---------------------------------------------------------------------------
+
+class TestBarCountGrading:
+    """_grade_outcome must use bar-index semantics (ref_idx + horizon), never
+    calendar-date arithmetic.  Key invariants:
+      1. Forward bar is exactly index[ref_idx + horizon], not a calendar estimate.
+      2. Insufficient history (fwd bar not yet in index) → deferred=True, no row.
+      3. Gaps/holidays in the series do not fabricate prices (no at-or-before fallback
+         for the forward leg).
+    """
+
+    def _make_series(self, n: int, start: str = "2024-01-02") -> tuple[list[str], list[float]]:
+        """Build (idx_strs, values) with n business-day bars starting at start."""
+        import pandas as pd
+        idx = pd.date_range(start=start, periods=n, freq="B")
+        idx_strs = [str(d.date()) for d in idx]
+        values = [100.0 + i * 0.5 for i in range(n)]
+        return idx_strs, values
+
+    def _patch_series(self, monkeypatch, ticker: str, idx_strs, values):
+        import portfolio.held_risk_outcomes as hro
+        monkeypatch.setattr(
+            hro, "_get_ohlcv_series",
+            lambda t, vendor_root=None: (idx_strs, values) if t == ticker else (None, None),
+        )
+
+    def test_forward_bar_is_exact_index_offset(self, monkeypatch):
+        """fwd_close must be values[ref_idx + horizon], not a calendar approximation."""
+        from portfolio.held_risk_outcomes import _grade_outcome
+
+        horizon = 5
+        # 30 bars: ref bar is at index 0 (first bar), forward at index 5
+        idx_strs, values = self._make_series(30)
+        alert_date = date.fromisoformat(idx_strs[0])
+
+        self._patch_series(monkeypatch, "TST", idx_strs, values)
+
+        ref_close, fwd_close, deferred = _grade_outcome("TST", alert_date, horizon)
+
+        assert not deferred, "should not be deferred — enough bars exist"
+        assert ref_close is not None and fwd_close is not None
+        # ref_idx = 0 (alert_date == first bar), fwd_idx = 5
+        assert abs(ref_close - values[0]) < 1e-9, f"ref_close mismatch: {ref_close} vs {values[0]}"
+        assert abs(fwd_close - values[5]) < 1e-9, f"fwd_close mismatch: {fwd_close} vs {values[5]}"
+
+    def test_insufficient_history_defers(self, monkeypatch):
+        """When fwd_idx >= len(index), _grade_outcome must return deferred=True.
+
+        No row should be written; grading resumes on a future run when the bar
+        appears in the OHLCV index.
+        """
+        from portfolio.held_risk_outcomes import _grade_outcome
+
+        horizon = 5
+        # Only 3 bars total; ref=index[0], fwd would be index[5] → out of bounds
+        idx_strs, values = self._make_series(3)
+        alert_date = date.fromisoformat(idx_strs[0])
+
+        self._patch_series(monkeypatch, "TST2", idx_strs, values)
+
+        ref_close, fwd_close, deferred = _grade_outcome("TST2", alert_date, horizon)
+
+        assert deferred is True, (
+            f"expected deferred=True when only {len(idx_strs)} bars exist "
+            f"for horizon={horizon}, got deferred={deferred}"
+        )
+        assert ref_close is None and fwd_close is None
+
+    def test_gap_day_uses_correct_bar_not_calendar_approx(self, monkeypatch):
+        """A gap/holiday in the index must not shift the forward bar.
+
+        Scenario: 30 bars with a deliberate gap between bar 5 and bar 6
+        (simulating a holiday).  The forward bar for horizon=5 starting at
+        bar 0 must still be bar 5 (index[0+5]), regardless of calendar dates.
+        """
+        from portfolio.held_risk_outcomes import _grade_outcome
+        import pandas as pd
+
+        # Build 30 consecutive business-day bars, then manually inject a gap
+        idx_full = list(pd.date_range(start="2024-01-02", periods=31, freq="B"))
+        # Skip the 6th element (index 5) — simulate a holiday
+        idx_with_gap = idx_full[:5] + idx_full[6:]  # 30 bars, gap between [4] and [5]
+        idx_strs = [str(d.date()) for d in idx_with_gap]
+        values = [100.0 + i * 0.5 for i in range(len(idx_strs))]
+
+        alert_date = date.fromisoformat(idx_strs[0])
+        horizon = 5
+
+        self._patch_series(monkeypatch, "TST3", idx_strs, values)
+
+        ref_close, fwd_close, deferred = _grade_outcome("TST3", alert_date, horizon)
+
+        assert not deferred
+        # Forward bar is index[0 + 5] = idx_strs[5] (after the gap)
+        expected_fwd = values[5]
+        assert abs(fwd_close - expected_fwd) < 1e-9, (
+            f"fwd_close should be values[5]={expected_fwd}, got {fwd_close}"
+        )
+
+    def test_append_outcomes_defers_when_fwd_bar_missing(self, tmp_path, monkeypatch):
+        """append_outcomes must not write a row when _grade_outcome returns deferred=True."""
+        import portfolio.held_risk_outcomes as hro
+
+        alerts_path = tmp_path / "alerts.jsonl"
+        outcomes_path = tmp_path / "outcomes.jsonl"
+
+        # Alert from 8 calendar days ago → calendar says "matured for horizon=5"
+        # but OHLCV only has 3 bars → bar-count check defers it
+        alert_date = date(2026, 7, 7) - timedelta(days=8)
+        _write_alerts(alerts_path, [_alert("AAPL", "alert-defer-1", str(alert_date))])
+
+        # Only 3 bars in the index — fwd bar for horizon=5 does not exist yet
+        import pandas as pd
+        idx = pd.date_range(start=str(alert_date), periods=3, freq="B")
+        idx_strs = [str(d.date()) for d in idx]
+        values = [100.0, 101.0, 102.0]
+
+        monkeypatch.setattr(
+            hro, "_get_ohlcv_series",
+            lambda t, vendor_root=None: (idx_strs, values) if t == "AAPL" else (None, None),
+        )
+
+        with patch.object(hro, "_ALERTS_PATH", alerts_path), \
+             patch.object(hro, "_OUTCOMES_PATH", outcomes_path):
+            n = hro.append_outcomes(today=date(2026, 7, 7))
+
+        assert n == 0, (
+            f"expected 0 rows when forward bar missing (deferred), got {n}"
+        )
+        # outcomes file either doesn't exist or is empty
+        if outcomes_path.exists():
+            lines = [l for l in outcomes_path.read_text().splitlines() if l.strip()]
+            assert len(lines) == 0, f"expected no rows, got {len(lines)}"

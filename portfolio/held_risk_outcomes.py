@@ -49,30 +49,88 @@ def _load_jsonl(path: Path) -> list[dict]:
     return out
 
 
-def _get_price_at(ticker: str, as_of: date, vendor_root: Path | None = None) -> float | None:
-    """Get close price for ticker on or before as_of date from available sources."""
+def _get_ohlcv_series(ticker: str, vendor_root: Path | None = None):
+    """Return (idx_strs, closes_values) tuple from OHLCV, or (None, None) on failure.
+
+    idx_strs: list of date strings 'YYYY-MM-DD' in index order
+    closes_values: list of float close prices in matching order
+    """
     try:
         from portfolio.held_risk import _load_ohlcv, VENDOR_DEFAULT
         vr = vendor_root or VENDOR_DEFAULT
         df = _load_ohlcv(ticker, vr)
         if df is None or df.empty:
-            return None
+            return None, None
         closes = df["close"].dropna()
         if closes.empty:
-            return None
-        # Normalize index to date strings for comparison
+            return None, None
         try:
             idx_strs = [str(i.date()) if hasattr(i, "date") else str(i)[:10] for i in closes.index]
         except Exception:
             idx_strs = [str(i)[:10] for i in closes.index]
-        as_of_str = str(as_of)
-        # Find the last close on or before as_of
-        valid_pairs = [(s, v) for s, v in zip(idx_strs, closes.values) if s <= as_of_str]
-        if not valid_pairs:
-            return None
-        return float(valid_pairs[-1][1])
+        return idx_strs, list(closes.values)
     except Exception:
+        return None, None
+
+
+def _get_price_at(ticker: str, as_of: date, vendor_root: Path | None = None) -> float | None:
+    """Get close price for ticker on or before as_of date (for ref_close lookups only).
+
+    Used only for the reference bar lookup. Forward prices are computed by
+    bar-index offset via _grade_outcome() to avoid calendar-date approximation.
+    """
+    idx_strs, values = _get_ohlcv_series(ticker, vendor_root)
+    if idx_strs is None:
         return None
+    as_of_str = str(as_of)
+    valid_pairs = [(s, v) for s, v in zip(idx_strs, values) if s <= as_of_str]
+    if not valid_pairs:
+        return None
+    return float(valid_pairs[-1][1])
+
+
+def _grade_outcome(
+    ticker: str,
+    alert_date: date,
+    horizon: int,
+    vendor_root: Path | None = None,
+) -> tuple[float | None, float | None, bool]:
+    """Compute (ref_close, fwd_close, deferred) using bar-count semantics.
+
+    Steps:
+      1. Find ref_idx = last bar index at-or-before alert_date
+      2. fwd_idx = ref_idx + horizon (exact bar count, no calendar arithmetic)
+      3. If fwd_idx >= len(series) → deferred=True (bar not yet available; never skip by back-filling)
+      4. Return (ref_close, fwd_close, False) if both bars exist; (None, None, True) if deferred
+
+    Returns:
+        (ref_close, fwd_close, deferred) where deferred=True means the forward bar
+        does not yet exist and this outcome should be skipped until a later run.
+    """
+    idx_strs, values = _get_ohlcv_series(ticker, vendor_root)
+    if idx_strs is None or not values:
+        return None, None, False  # missing data, not a deferral
+
+    as_of_str = str(alert_date)
+    # Find the last bar at-or-before alert_date
+    ref_idx = None
+    for i, s in enumerate(idx_strs):
+        if s <= as_of_str:
+            ref_idx = i
+        else:
+            break
+
+    if ref_idx is None:
+        return None, None, False  # no ref bar available
+
+    fwd_idx = ref_idx + horizon
+    if fwd_idx >= len(idx_strs):
+        # Forward bar does not yet exist → defer (do not back-fill)
+        return None, None, True
+
+    ref_close = float(values[ref_idx])
+    fwd_close = float(values[fwd_idx])
+    return ref_close, fwd_close, False
 
 
 def append_outcomes(today: date | None = None, vendor_root: Path | None = None) -> int:
@@ -113,23 +171,18 @@ def append_outcomes(today: date | None = None, vendor_root: Path | None = None) 
 
             sessions_elapsed = _trading_days_between(alert_date, today_d)
             if sessions_elapsed < horizon:
-                continue  # not yet matured
+                continue  # not yet matured per calendar approximation
 
-            ref_close = _get_price_at(ticker, alert_date, vendor_root)
-            if ref_close is None or ref_close <= 0:
-                continue
-
-            # Estimate forward date: horizon * ~1.4 calendar days per session
-            fwd_date = alert_date + timedelta(days=int(horizon * 1.4) + 1)
-            # Advance to a trading day
-            while fwd_date.weekday() >= 5:
-                fwd_date += timedelta(days=1)
-            # Don't go past today
-            if fwd_date > today_d:
-                fwd_date = today_d
-
-            fwd_close = _get_price_at(ticker, fwd_date, vendor_root)
-            if fwd_close is None or fwd_close <= 0:
+            # Bar-count grading: forward close is the bar EXACTLY `horizon` positions
+            # after the ref bar in the OHLCV index.  If that bar doesn't exist yet,
+            # deferred=True → skip this run; it will grade on the next nightly run
+            # once the bar is present.  Never back-fill the forward leg.
+            ref_close, fwd_close, deferred = _grade_outcome(ticker, alert_date, horizon, vendor_root)
+            if deferred:
+                continue  # forward bar not yet in index; will grade later
+            if ref_close is None or fwd_close is None:
+                continue  # missing data; skip without writing a fabricated row
+            if ref_close <= 0:
                 continue
 
             fwd_return_pct = (fwd_close - ref_close) / ref_close * 100

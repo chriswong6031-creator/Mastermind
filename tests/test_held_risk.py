@@ -839,13 +839,18 @@ def test_market_regime_ok_calm(run_date):
     assert lane["state"] == "ok", f"got {lane['state']}: {lane['reasons']}"
 
 
-def test_market_regime_watch_caution(run_date):
-    """Caution radar → watch."""
+def test_market_regime_elevated_caution(run_date):
+    """risk_radar 'caution' (ORANGE in site banner) → elevated.
+
+    MAJOR-2 fix: 'caution' was previously mapped to 'watch' which prevented
+    the role-ladder tighten/trim triggers from firing on ORANGE regime.
+    The correct mapping is caution → elevated (matching §7 "ORANGE/EXTREME").
+    """
     from portfolio.held_risk import _lane_market_regime
 
     regime = _make_regime({"risk_radar": {"state": "caution", "top_score": 80.0, "dominant_scare": "growth"}})
     lane = _lane_market_regime(regime, run_date)
-    assert lane["state"] == "watch", f"got {lane['state']}: {lane['reasons']}"
+    assert lane["state"] == "elevated", f"got {lane['state']}: {lane['reasons']}"
 
 
 def test_market_regime_elevated_risk_off(run_date):
@@ -1737,3 +1742,107 @@ def test_extension_post_entry_high_from_ohlcv(run_date):
     lane, path = _lane_extension_giveback(metrics, sd, position, ohlcv_df=ohlcv_df)
     # Should compute mfe_pct > 0 since high is above entry
     assert path["mfe_pct"] is not None and path["mfe_pct"] > 0, f"mfe_pct: {path['mfe_pct']}"
+
+
+# ---------------------------------------------------------------------------
+# MAJOR-2: ORANGE / caution market regime escalates to elevated
+# ---------------------------------------------------------------------------
+
+class TestLaneMarketRegimeOrange:
+    """_lane_market_regime must map risk_radar.state='caution' (ORANGE in site banner)
+    to lane state 'elevated', not 'watch', so the role-ladder tighten/trim triggers fire.
+
+    Vocabulary:
+      risk_radar.state 'caution'  → ORANGE → elevated
+      risk_radar.state 'risk-off' → EXTREME → elevated
+      risk_state.state 'caution'  → YELLOW → watch (only when radar is calm)
+      risk_radar.state 'calm'     → GREEN  → ok
+    """
+
+    def _regime(self, radar_state: str, rs_state: str = "risk-on") -> dict:
+        return {
+            "risk_radar": {"state": radar_state, "dominant_scare": "test"},
+            "risk_state": {"state": rs_state},
+            "asof": "2026-07-07",
+        }
+
+    def test_caution_radar_is_elevated(self):
+        """risk_radar='caution' (ORANGE) must produce lane state 'elevated'."""
+        from portfolio.held_risk import _lane_market_regime
+        lane = _lane_market_regime(self._regime("caution"), date(2026, 7, 7))
+        assert lane["state"] == "elevated", (
+            f"expected 'elevated' for caution (ORANGE), got {lane['state']!r}"
+        )
+
+    def test_risk_off_radar_is_elevated(self):
+        """risk_radar='risk-off' (EXTREME) must produce lane state 'elevated'."""
+        from portfolio.held_risk import _lane_market_regime
+        lane = _lane_market_regime(self._regime("risk-off"), date(2026, 7, 7))
+        assert lane["state"] == "elevated", (
+            f"expected 'elevated' for risk-off, got {lane['state']!r}"
+        )
+
+    def test_calm_radar_is_ok(self):
+        """risk_radar='calm' (GREEN) must produce lane state 'ok'."""
+        from portfolio.held_risk import _lane_market_regime
+        lane = _lane_market_regime(self._regime("calm"), date(2026, 7, 7))
+        assert lane["state"] == "ok", (
+            f"expected 'ok' for calm, got {lane['state']!r}"
+        )
+
+    def test_risk_state_caution_only_is_watch(self):
+        """risk_state='caution' with calm radar → YELLOW → watch (not elevated)."""
+        from portfolio.held_risk import _lane_market_regime
+        regime = {
+            "risk_radar": {"state": "calm", "dominant_scare": None},
+            "risk_state": {"state": "caution"},
+            "asof": "2026-07-07",
+        }
+        lane = _lane_market_regime(regime, date(2026, 7, 7))
+        assert lane["state"] == "watch", (
+            f"expected 'watch' for risk_state=caution+calm radar, got {lane['state']!r}"
+        )
+
+    def test_orange_regime_plus_price_trend_triggers_tighten(self):
+        """ORANGE market regime (caution) + elevated price_trend → role tighten."""
+        from portfolio.held_risk import _assign_role
+
+        def _el(st): return {"state": st, "flags": [], "reasons": [], "asof": "2026-07-07"}
+
+        lanes = {
+            "price_trend": _el("elevated"),
+            "extension_giveback": _el("ok"),
+            "event_window": _el("ok"),
+            "earnings_expectation": _el("ok"),
+            "solvency_dilution": _el("ok"),
+            "ownership_flow": _el("ok"),
+            "macro_sensitivity": _el("ok"),
+            "sector_rotation": _el("ok"),
+            "market_regime": _el("elevated"),  # ORANGE → elevated
+        }
+        role, reasons = _assign_role(lanes, {}, {})
+        assert role == "tighten", (
+            f"expected 'tighten' with ORANGE + price_trend elevated, got {role!r}"
+        )
+
+    def test_orange_regime_plus_extension_triggers_trim_review(self):
+        """ORANGE market regime + extension_giveback elevated → role trim_review."""
+        from portfolio.held_risk import _assign_role
+
+        def _el(st): return {"state": st, "flags": [], "reasons": [], "asof": "2026-07-07"}
+
+        lanes = {
+            "price_trend": _el("ok"),
+            "extension_giveback": _el("elevated"),
+            "event_window": _el("ok"),
+            "earnings_expectation": _el("ok"),
+            "solvency_dilution": _el("ok"),
+            "ownership_flow": _el("ok"),
+            "macro_sensitivity": _el("ok"),
+            "sector_rotation": _el("ok"),
+            "market_regime": _el("elevated"),  # ORANGE → elevated
+        }
+        role, reasons = _assign_role(lanes, {}, {})
+        assert role == "trim_review", (
+            f"expected 'trim_review' with ORANGE + extension elevated, got {role!r}"
+        )

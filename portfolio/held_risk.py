@@ -1265,10 +1265,21 @@ def _lane_sector_rotation(sd: dict | None, regime: dict, run_date: date) -> dict
 # ===========================================================================
 
 def _lane_market_regime(regime: dict, run_date: date) -> dict:
-    """Elevated: risk_radar.state in {caution→ORANGE/EXTREME proxy} or risk_state RED.
-    Watch: YELLOW/caution.
+    """Elevated: risk_radar.state in {caution, risk-off} (ORANGE/EXTREME in site banner).
+    Watch: risk_state.state 'caution' (YELLOW proxy — lower-severity composite).
 
-    Real data: risk_radar.state ('caution'/'risk-off'/'calm') and risk_state.state ('risk-on'/'caution').
+    Vocabulary in actual data (vendor/macro_src/data/regime/latest.json):
+      risk_radar.state: 'caution' | 'risk-off' | 'calm'
+      risk_state.state: 'risk-on' | 'caution'
+
+    Site-banner color mapping:
+      risk_radar 'caution'  → ORANGE (§7 "market_regime ORANGE" triggers tighten/trim)
+      risk_radar 'risk-off' → EXTREME
+      risk_state 'caution'  → YELLOW (watch only)
+      risk_radar 'calm'     → GREEN
+
+    The role-ladder tighten/trim checks use elevated(market_regime); 'caution' must
+    produce elevated so ORANGE regime triggers those roles.
     """
     flags: list[str] = []
     reasons: list[str] = []
@@ -1282,16 +1293,17 @@ def _lane_market_regime(regime: dict, run_date: date) -> dict:
 
     regime_asof = regime.get("asof")
 
-    # Map: risk-off / EXTREME → elevated; caution / ORANGE → watch; calm → ok
-    elevated = radar_state in ("risk-off",) or risk_state_val in ("risk-off",)
-    watch = radar_state in ("caution",) or risk_state_val in ("caution",)
+    # risk_radar 'caution' (ORANGE) or 'risk-off' (EXTREME) → elevated
+    # risk_state 'caution' alone (YELLOW, lower-confidence composite) → watch
+    elevated = radar_state in ("caution", "risk-off")
+    watch = not elevated and risk_state_val in ("caution",)
 
     if elevated:
         flags.append(f"radar_{radar_state}")
         reasons.append(f"risk radar: {radar_state} (dominant: {dominant_scare})")
     elif watch:
-        flags.append(f"radar_{radar_state}")
-        reasons.append(f"risk radar: {radar_state} (dominant: {dominant_scare})")
+        flags.append(f"risk_state_{risk_state_val}")
+        reasons.append(f"risk state: {risk_state_val} (composite caution)")
 
     state = "elevated" if elevated else ("watch" if watch else "ok")
     return _lane(state, flags, reasons, asof=regime_asof)

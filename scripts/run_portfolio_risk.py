@@ -95,7 +95,7 @@ def _fetch_positions(base_url: str, key: str, operator_uuid: str) -> list[dict]:
             },
             params={
                 "user_id": f"eq.{operator_uuid}",
-                "status": "eq.active",
+                "status": "eq.open",
                 "select": "id,ticker,shares,entry_price,entry_date,status,notes",
             },
             timeout=15,
@@ -130,6 +130,9 @@ def _load_positions_from_supabase() -> list[dict]:
 # Entry point
 # ---------------------------------------------------------------------------
 
+_LOCK_NAME = "global:portfolio_risk"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run portfolio held-risk composer (W3)")
     parser.add_argument(
@@ -154,6 +157,28 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    # Cross-process lock: control_plane.locks uses fcntl.flock (LOCK_EX|LOCK_NB),
+    # which is held at the OS file-descriptor level → survives across subprocesses.
+    # Both the intraday (every 30 min) and daily (15:05 UTC) scheduler jobs invoke
+    # this runner as a subprocess; the lock prevents them overlapping on shared state
+    # files (alert_state.json, alerts.jsonl).
+    try:
+        from control_plane.locks import acquire_or_log
+        _lock = acquire_or_log(_LOCK_NAME, job="run_portfolio_risk", book="portfolio")
+    except Exception as exc:
+        log.warning("lock import failed — continuing without lock: %s", exc)
+        _lock = None
+
+    if _lock is None:
+        log.info("portfolio_risk lock held by another process — skipping run (exit 0)")
+        sys.exit(0)
+
+    with _lock:
+        _run(args)
+
+
+def _run(args) -> None:
+    """Inner runner body — called only when the cross-process lock is held."""
     # (a) Best-effort macro refresh
     if not args.skip_refresh:
         try:
@@ -219,8 +244,12 @@ def main() -> None:
         except Exception as exc:
             log.warning("alert governor failed (best-effort): %s", exc)
 
-    # (e) Write state atomically
-    write_state(state, out_path)
+    # (e) Write state atomically — on failure: log ERROR and skip downstream steps
+    try:
+        write_state(state, out_path)
+    except Exception as exc:
+        log.error("write_state failed — skipping outcome ledger and VPS push: %s", exc)
+        sys.exit(1)
     log.info("wrote risk_state.json (%d positions)", len(state.get("positions", [])))
 
     # (f) Outcome ledger (best-effort)

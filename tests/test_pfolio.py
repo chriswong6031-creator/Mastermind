@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 from unittest.mock import MagicMock, patch, PropertyMock
 
 import pytest
@@ -452,6 +453,52 @@ def test_enrich_quotes_graceful_on_import_error():
     assert enriched[0]["pnl_usd"] is None
 
 
+# ---------------------------------------------------------------------------
+# BLOCKING-2: position fetch uses eq.open (not eq.active)
+# ---------------------------------------------------------------------------
+
+def test_fetch_positions_uses_eq_open(monkeypatch):
+    """_fetch_positions must send status=eq.open (not eq.active) to PostgREST.
+
+    The schema (sql/0002_portfolio_positions.sql) and CRUD inserts use 'open';
+    querying 'active' returns zero rows.
+    """
+    import sys
+    import importlib
+    # Import the runner module directly (it's a script, so use importlib)
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "run_portfolio_risk",
+        str(Path(__file__).resolve().parent.parent / "scripts" / "run_portfolio_risk.py"),
+    )
+    mod = importlib.util.module_from_spec(spec)
+    # We only need the _fetch_positions function; avoid running main()
+    captured = {}
+
+    class _MockResp:
+        status_code = 200
+        def json(self):
+            return []
+
+    def mock_get(url, headers=None, params=None, timeout=None):
+        captured["url"] = url
+        captured["params"] = dict(params or {})
+        return _MockResp()
+
+    with patch("httpx.get", mock_get):
+        spec.loader.exec_module(mod)
+        mod._fetch_positions("http://sb.test", "svc-key", "uid-123")
+
+    assert "status" in captured["params"], "status filter param missing"
+    assert captured["params"]["status"] == "eq.open", (
+        f"expected status=eq.open, got {captured['params']['status']!r}"
+    )
+    assert "user_id" in captured["params"], "user_id filter param missing"
+    assert captured["params"]["user_id"] == "eq.uid-123", (
+        f"expected user_id=eq.uid-123, got {captured['params']['user_id']!r}"
+    )
+
+
 def test_enrich_quotes_computes_market_value():
     """_enrich_quotes computes market_value = shares * last when quote available.
 
@@ -796,3 +843,146 @@ def test_market_block_returns_asof_fields(tmp_path):
     assert result["asof"] == "2026-07-07"
     assert result["state_asof"] == "2026-07-07"
     assert result["vol_regime"] == "normalizing"
+
+
+# ---------------------------------------------------------------------------
+# MINOR-1: serve-only gate covers PATCH, PUT, DELETE (not only POST)
+# ---------------------------------------------------------------------------
+
+def test_serve_only_blocks_patch_on_operator_paths(monkeypatch):
+    """PATCH to an operator path must be blocked in serve-only mode (not just POST)."""
+    monkeypatch.setenv("MASTERMIND_SERVE_ONLY", "1")
+    monkeypatch.setenv("MASTERMIND_PASSWORD", "pw")
+    monkeypatch.setenv("MASTERMIND_AUTH_TOKEN", "tok")
+    monkeypatch.delenv("MASTERMIND_REQUIRE_AUTH", raising=False)
+
+    from app import auth
+    auth.reset_rate_buckets()
+
+    mini_app = FastAPI()
+    auth.install(mini_app)
+
+    @mini_app.patch("/daily")
+    def _daily():
+        return {"ran": True}
+
+    client = TestClient(mini_app)
+    r = client.patch("/daily", headers={"Authorization": "Bearer tok"})
+    assert r.status_code == 403
+    assert r.json()["error"] == "serve_only"
+
+
+def test_serve_only_blocks_delete_on_operator_paths(monkeypatch):
+    """DELETE to an operator path must be blocked in serve-only mode."""
+    monkeypatch.setenv("MASTERMIND_SERVE_ONLY", "1")
+    monkeypatch.setenv("MASTERMIND_PASSWORD", "pw")
+    monkeypatch.setenv("MASTERMIND_AUTH_TOKEN", "tok")
+    monkeypatch.delenv("MASTERMIND_REQUIRE_AUTH", raising=False)
+
+    from app import auth
+    auth.reset_rate_buckets()
+
+    mini_app = FastAPI()
+    auth.install(mini_app)
+
+    @mini_app.delete("/daily")
+    def _daily():
+        return {"ran": True}
+
+    client = TestClient(mini_app)
+    r = client.delete("/daily", headers={"Authorization": "Bearer tok"})
+    assert r.status_code == 403
+    assert r.json()["error"] == "serve_only"
+
+
+def test_serve_only_allows_pfolio_patch(monkeypatch):
+    """PATCH /api/pfolio/* must NOT be blocked even in serve-only mode."""
+    uid = "op-uid-so-patch"
+    monkeypatch.setenv("MASTERMIND_SERVE_ONLY", "1")
+    app, _ = _make_app(monkeypatch, uid=uid)
+    monkeypatch.setenv("MASTERMIND_SERVE_ONLY", "1")
+    _mock_uid_resolve(monkeypatch, uid)
+
+    def mock_patch(url, json=None, params=None, headers=None, timeout=None):
+        return _httpx_resp(200, [{"id": "pos-so-1", "shares": 20.0}])
+
+    with patch("httpx.patch", mock_patch):
+        client = TestClient(app)
+        r = client.patch("/api/pfolio/positions/pos-so-1", json={"shares": 20.0})
+
+    # Must NOT be 403 serve_only block
+    assert r.status_code == 200
+    body = r.json()
+    assert body.get("error") != "serve_only"
+
+
+# ---------------------------------------------------------------------------
+# MINOR-3: prev_close TTL cache
+# ---------------------------------------------------------------------------
+
+def test_prev_close_ttl_cache_set_and_get():
+    """_set_prev_close_cached / _get_prev_close_cached must round-trip within TTL."""
+    import time
+    from app.pfolio import _set_prev_close_cached, _get_prev_close_cached, _PREV_CLOSE_CACHE
+
+    _PREV_CLOSE_CACHE.clear()
+    _set_prev_close_cached("CACHE_TST", 123.45)
+    result = _get_prev_close_cached("CACHE_TST")
+    assert result is not None
+    assert abs(result - 123.45) < 1e-9
+
+
+def test_prev_close_ttl_cache_expires():
+    """After the TTL expires, _get_prev_close_cached must return None."""
+    import time
+    from app import pfolio as pf
+
+    pf._PREV_CLOSE_CACHE.clear()
+    original_ttl = pf._PREV_CLOSE_TTL
+    pf._PREV_CLOSE_TTL = 0  # expire immediately
+    try:
+        pf._set_prev_close_cached("EXPIRE_TST", 99.0)
+        # With TTL=0, expiry is monotonic() + 0; the next call is guaranteed past expiry
+        result = pf._get_prev_close_cached("EXPIRE_TST")
+        assert result is None, f"expected None after TTL=0 expiry, got {result}"
+    finally:
+        pf._PREV_CLOSE_TTL = original_ttl
+
+
+def test_prev_close_cache_avoids_redundant_yf_download(monkeypatch):
+    """Once a prev_close is cached, a second _enrich_quotes call must not invoke yf.download."""
+    import sys
+    import types
+    from app import pfolio as pf
+
+    pf._PREV_CLOSE_CACHE.clear()
+    pf._set_prev_close_cached("CACHED_TICK", 150.0)
+
+    download_call_count = [0]
+
+    # Create a fake yfinance module and inject it so the `import yfinance as yf`
+    # inside _enrich_quotes picks up our stub.
+    fake_yf = types.ModuleType("yfinance")
+
+    def _fake_download(*args, **kwargs):
+        download_call_count[0] += 1
+        import pandas as pd
+        return pd.DataFrame()
+
+    fake_yf.download = _fake_download
+    monkeypatch.setitem(sys.modules, "yfinance", fake_yf)
+
+    def _fake_warm(tickers):
+        pass
+
+    def _fake_price_local(t):
+        return 155.0
+
+    positions = [{"id": "c1", "ticker": "CACHED_TICK", "shares": 10.0, "entry_price": 140.0}]
+    with patch("data_layer.yahoo_feed.warm", _fake_warm), \
+         patch("data_layer.yahoo_feed.price_local", _fake_price_local):
+        pf._enrich_quotes(positions)
+
+    assert download_call_count[0] == 0, (
+        f"yf.download was called {download_call_count[0]} time(s) despite cached prev_close"
+    )

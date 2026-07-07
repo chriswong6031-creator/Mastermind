@@ -198,6 +198,28 @@ def _market_block() -> dict | None:
         return None
 
 
+# ---------------------------------------------------------------------------
+# Module-level TTL cache for prev_close (avoids per-request yf.download)
+# ---------------------------------------------------------------------------
+
+_PREV_CLOSE_CACHE: dict[str, tuple[float, float]] = {}  # ticker -> (prev_close, expiry_ts)
+_PREV_CLOSE_TTL = 600  # seconds (~10 min; intraday refresh cadence)
+
+
+def _get_prev_close_cached(ticker: str) -> float | None:
+    """Return cached prev_close for ticker, or None if expired / unavailable."""
+    entry = _PREV_CLOSE_CACHE.get(ticker)
+    if entry is not None:
+        val, expiry = entry
+        if time.monotonic() < expiry:
+            return val
+    return None
+
+
+def _set_prev_close_cached(ticker: str, val: float) -> None:
+    _PREV_CLOSE_CACHE[ticker] = (val, time.monotonic() + _PREV_CLOSE_TTL)
+
+
 def _enrich_quotes(positions: list[dict]) -> list[dict]:
     """Attach live quote data to positions. Best-effort; leaves fields null on failure.
 
@@ -223,23 +245,33 @@ def _enrich_quotes(positions: list[dict]) -> list[dict]:
     except Exception:
         pass
 
-    # Try to get prev close from the 7d download's penultimate row for day_change_pct
-    try:
-        import yfinance as yf
-        if tickers:
-            df = yf.download(tickers, period="5d", progress=False, auto_adjust=False, threads=False)
+    # prev_close: serve from TTL cache where available; batch-fetch only uncached tickers
+    uncached = [t for t in tickers if _get_prev_close_cached(t) is None]
+    for t in tickers:
+        cached = _get_prev_close_cached(t)
+        if cached is not None:
+            prev_map[t] = cached
+
+    if uncached:
+        try:
+            import yfinance as yf
+            df = yf.download(uncached, period="5d", progress=False, auto_adjust=False, threads=False)
             close = df.get("Close") if hasattr(df, "get") else df["Close"]
             if hasattr(close, "columns"):
                 for sym in close.columns:
                     s = close[sym].dropna()
                     if len(s) >= 2:
-                        prev_map[str(sym).upper()] = float(s.iloc[-2])
-            elif len(tickers) == 1:
+                        val = float(s.iloc[-2])
+                        prev_map[str(sym).upper()] = val
+                        _set_prev_close_cached(str(sym).upper(), val)
+            elif len(uncached) == 1:
                 s = close.dropna() if close is not None else None
                 if s is not None and len(s) >= 2:
-                    prev_map[tickers[0]] = float(s.iloc[-2])
-    except Exception:
-        pass
+                    val = float(s.iloc[-2])
+                    prev_map[uncached[0]] = val
+                    _set_prev_close_cached(uncached[0], val)
+        except Exception:
+            pass
 
     out = []
     for p in positions:
