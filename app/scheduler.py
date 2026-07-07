@@ -261,6 +261,44 @@ def _snapshot_job():
         log.warning("publish_macro_snapshot failed: %s", exc)
 
 
+def _vps_state_sync_job():
+    """Push the live paper-trading state (data/) to the serve-only VPS mirror so the public
+    dashboard (bot.mastermind-x.com, /opt/mastermind/data/) tracks the Mac — the SINGLE canonical
+    writer — within one cron tick.
+
+    WHY THIS LIVES IN THE SCHEDULER (not a launchd job): the box reads the data/ the Brain writes
+    under ~/Documents, and launchd agents on this Mac are TCC-denied from reading ~/Documents (every
+    other lane runs from a ~/…-ops-wt worktree for exactly this reason). The scheduler runs inside
+    the always-on Brain process, which HAS ~/Documents access and is the sole writer — so the push
+    fires from the one context that can read the data, right where it is produced. History: the
+    com.mastermind.vpssync LaunchAgent (every 15 min) could never work and was disabled 2026-06-28;
+    the box then only refreshed on manual deploys and silently froze for ~5 days (last push
+    2026-07-02) until this job replaced it. NEVER runs on the box: MASTERMIND_SERVE_ONLY=1 disables
+    the scheduler entirely (app.main), and the sync script itself no-ops under that flag.
+
+    Best-effort: a push miss is recorded in the run ledger (queryable via /api/scheduler) so a
+    stalled sync is surfaced, not silent — and can never kill the scheduler. Cheap no-op when
+    nothing changed (rsync is additive)."""
+    handle = _ledger_start("vps_state_sync", trigger="cron")
+    try:
+        import subprocess
+        script = Path(__file__).resolve().parent.parent / "scripts" / "sync_state_to_vps.sh"
+        if not script.exists():
+            _step_failed_event("vps_state_sync", "", "missing_script", FileNotFoundError(str(script)))
+            _ledger_end(handle, "error")
+            return
+        proc = subprocess.run(["/bin/bash", str(script)], capture_output=True, text=True, timeout=180)
+        if proc.returncode == 0:
+            _ledger_end(handle, "ok")
+        else:
+            _step_failed_event("vps_state_sync", "", "rsync",
+                               RuntimeError((proc.stderr or proc.stdout or "rsync failed").strip()[:300]))
+            _ledger_end(handle, "error")
+    except Exception as exc:  # noqa: BLE001 — a sync miss must never kill the scheduler
+        _ledger_end(handle, "error")
+        log.warning("vps_state_sync failed: %s", exc)
+
+
 def _settle_pending_job():
     """Settle the US books' queued orders at the OPEN, during market hours.
 
@@ -1099,6 +1137,16 @@ def start():
                 CronTrigger(day_of_week="mon-fri", hour=snap_hours, minute=25, timezone="UTC"),
                 id="publish_macro_snapshot", replace_existing=True,
                 misfire_grace_time=3600, coalesce=True)
+    # VPS STATE SYNC — push data/ to the serve-only box (bot.mastermind-x.com) every 15 min so the
+    # public dashboard tracks the Mac. REPLACES the disabled com.mastermind.vpssync LaunchAgent,
+    # which could never work: launchd is TCC-blocked from reading the data under ~/Documents on this
+    # Mac (fund/liveflow/optionshub all run from ~/…-ops-wt for the same reason). Runs 24/7 from the
+    # always-on Brain process (the sole ~/Documents-capable writer) so every write — builds, settles,
+    # marks, snapshots — reaches the box within a tick; a cheap no-op when nothing changed. Never
+    # runs on the box (MASTERMIND_SERVE_ONLY disables the scheduler). Cadence via VPS_STATE_SYNC_MINUTE.
+    vps_sync_minute = (os.environ.get("VPS_STATE_SYNC_MINUTE", "*/15").strip() or "*/15")
+    sch.add_job(_vps_state_sync_job, CronTrigger(minute=vps_sync_minute, timezone="UTC"),
+                id="vps_state_sync", replace_existing=True, misfire_grace_time=3600, coalesce=True)
 
     # CIO / Meta-PM weekly accountability review (additive, read-only — recommends, never trades).
     # Default Sunday 10:00 UTC; configurable via CIO_WEEKLY_DAY / CIO_WEEKLY_UTC_HOUR.
@@ -1213,6 +1261,7 @@ def scheduler_health() -> list[dict]:
         "cio_weekly", "improvement_agenda_weekly",
         "loop_maintenance", "experiment_maturity",
         "portfolio_risk_compose", "portfolio_risk_daily",
+        "vps_state_sync",
     ]
 
     # ── next_run_time from APScheduler ──
