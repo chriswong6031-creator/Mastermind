@@ -1212,6 +1212,7 @@ def scheduler_health() -> list[dict]:
         "publish_macro_snapshot",
         "cio_weekly", "improvement_agenda_weekly",
         "loop_maintenance", "experiment_maturity",
+        "portfolio_risk_compose", "portfolio_risk_daily",
     ]
 
     # ── next_run_time from APScheduler ──
