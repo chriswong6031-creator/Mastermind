@@ -14,9 +14,9 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DATA_DIR="$REPO_ROOT/data/portfolio_watch"
 
-VPS_HOST="${VPS_HOST:-}"
-VPS_KEY="${VPS_KEY:-$HOME/.ssh/id_rsa}"
-VPS_DEST="${VPS_DEST:-~/mastermind/data/portfolio_watch/}"
+VPS_HOST="${VPS_HOST:-root@146.190.142.17}"
+VPS_KEY="${VPS_KEY:-$HOME/.ssh/macro_dashboard_deploy_v2}"
+VPS_DEST="${VPS_DEST:-/opt/mastermind/data/portfolio_watch/}"
 
 # If VPS_HOST is not set, exit silently (best-effort)
 if [[ -z "$VPS_HOST" ]]; then
