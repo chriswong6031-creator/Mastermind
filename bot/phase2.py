@@ -453,6 +453,25 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
                 f"status={_nw_audit.get('status')} asof={_nw_audit.get('asof')} "
                 f"age_days={_nw_audit.get('age_days')} n_candidates={_nw_audit.get('n_candidates')}",
                 **_nw_audit)
+        # W-M: append to persistent nw_context_audit.jsonl sidecar (FB-R11, FB-R3).
+        # Append-only; best-effort — exceptions never propagate (same pattern as _rl_log).
+        try:
+            import json as _json
+            from pathlib import Path as _Path
+            _audit_path = _Path(__file__).resolve().parent.parent / "data" / "brain" / "nw_context_audit.jsonl"
+            _audit_path.parent.mkdir(parents=True, exist_ok=True)
+            _audit_row = {
+                "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "run_id": _run_id,
+                "status": _nw_audit.get("status"),
+                "asof": _nw_audit.get("asof"),
+                "age_days": _nw_audit.get("age_days"),
+                "n_candidates": _nw_audit.get("n_candidates"),
+            }
+            with _audit_path.open("a", encoding="utf-8") as _fh:
+                _fh.write(_json.dumps(_audit_row, default=str) + "\n")
+        except Exception:
+            pass  # best-effort append; never raise
         if _nwc_mod.nw_prompts_enabled():
             _nw_plane = _nwc_mod.market_plane()
     except Exception:

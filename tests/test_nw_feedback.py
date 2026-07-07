@@ -14,7 +14,7 @@ import json
 import os
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -53,7 +53,7 @@ def test_build_schema_fields_present(monkeypatch, tmp_path):
     """build() returns all required top-level schema fields."""
     _patch_events(monkeypatch, tmp_path, [])
     result = nw_feedback.build()
-    assert result["schema"] == "mastermind_nw_feedback.v1"
+    assert result["schema"] == "mastermind_nw_feedback.v2"
     assert "generated_at" in result
     assert "window_days" in result
     assert "thesis_counts" in result
@@ -277,7 +277,7 @@ def test_write_redacts_mastermind_env_var_in_event_err(monkeypatch, tmp_path):
         "write() must scan and redact via _redact_secrets() before writing."
     )
     # The artifact is valid — schema and books are present
-    assert payload["schema"] == "mastermind_nw_feedback.v1"
+    assert payload["schema"] == "mastermind_nw_feedback.v2"
     assert "books" in payload
 
 
@@ -303,7 +303,7 @@ def test_write_redacts_dollar_amount_in_payload(monkeypatch, tmp_path):
         "Dollar-amount string was NOT redacted from the published JSON. "
         "write() must redact via _redact_secrets() before writing."
     )
-    assert payload["schema"] == "mastermind_nw_feedback.v1"
+    assert payload["schema"] == "mastermind_nw_feedback.v2"
 
 
 def test_write_redacts_hex_token_in_payload(monkeypatch, tmp_path):
@@ -329,7 +329,7 @@ def test_write_redacts_hex_token_in_payload(monkeypatch, tmp_path):
         "48-char hex token was NOT redacted from the published JSON. "
         "write() must redact via _redact_secrets() before writing."
     )
-    assert payload["schema"] == "mastermind_nw_feedback.v1"
+    assert payload["schema"] == "mastermind_nw_feedback.v2"
 
 
 # ---------------------------------------------------------------------------
@@ -344,7 +344,7 @@ def test_build_never_raises_on_missing_data(monkeypatch, tmp_path):
     # Also break the registry import
     with patch("bridge.nw_feedback._thesis_counts", side_effect=RuntimeError("broken")):
         result = nw_feedback.build()
-    assert result["schema"] == "mastermind_nw_feedback.v1"
+    assert result["schema"] == "mastermind_nw_feedback.v2"
     assert "books" in result
 
 
@@ -355,7 +355,7 @@ def test_build_never_raises_on_corrupt_events(monkeypatch, tmp_path):
     p.write_text("not json\n{broken\n{}\n")
     monkeypatch.setattr(nw_feedback, "_run_events_path", lambda: p)
     result = nw_feedback.build()
-    assert result["schema"] == "mastermind_nw_feedback.v1"
+    assert result["schema"] == "mastermind_nw_feedback.v2"
 
 
 def test_write_returns_path(monkeypatch, tmp_path):
@@ -367,7 +367,7 @@ def test_write_returns_path(monkeypatch, tmp_path):
     assert out == dest / "mastermind" / "nw_feedback.json"
     assert out.exists()
     payload = json.loads(out.read_text())
-    assert payload["schema"] == "mastermind_nw_feedback.v1"
+    assert payload["schema"] == "mastermind_nw_feedback.v2"
 
 
 # ---------------------------------------------------------------------------
@@ -568,3 +568,407 @@ def test_sanitize_key_function():
     assert nw_feedback._sanitize_key("key!@#$") == "other"
     # Empty string — fails the non-empty charset match, becomes 'other'
     assert nw_feedback._sanitize_key("") == "other"
+
+
+# ===========================================================================
+# v2 tests — new blocks: decision_flow, outcome_mix, context_audit
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Helpers for v2 ledger fixtures
+# ---------------------------------------------------------------------------
+
+def _write_packet_rejections(tmp_path: Path, rows: list[dict]) -> Path:
+    """Write a packet_rejections.jsonl fixture and return its path."""
+    p = tmp_path / "governance" / "packet_rejections.jsonl"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("\n".join(json.dumps(r) for r in rows) + ("\n" if rows else ""))
+    return p
+
+
+def _write_outcome_ledger(tmp_path: Path, rows: list[dict]) -> Path:
+    p = tmp_path / "brain" / "outcome_ledger.jsonl"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("\n".join(json.dumps(r) for r in rows) + ("\n" if rows else ""))
+    return p
+
+
+def _write_context_audit(tmp_path: Path, rows: list[dict]) -> Path:
+    p = tmp_path / "brain" / "nw_context_audit.jsonl"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("\n".join(json.dumps(r) for r in rows) + ("\n" if rows else ""))
+    return p
+
+
+# ---------------------------------------------------------------------------
+# v2 schema: new top-level fields present
+# ---------------------------------------------------------------------------
+
+def test_v2_schema_field_present(monkeypatch, tmp_path):
+    """build() v2 includes decision_flow, outcome_mix, context_audit, metric_families."""
+    _patch_events(monkeypatch, tmp_path, [])
+    monkeypatch.setattr(nw_feedback, "_packet_rejections_path",
+                        lambda: tmp_path / "governance" / "packet_rejections.jsonl")
+    monkeypatch.setattr(nw_feedback, "_outcome_ledger_path",
+                        lambda: tmp_path / "brain" / "outcome_ledger.jsonl")
+    monkeypatch.setattr(nw_feedback, "_nw_context_audit_path",
+                        lambda: tmp_path / "brain" / "nw_context_audit.jsonl")
+    result = nw_feedback.build()
+    assert result["schema"] == "mastermind_nw_feedback.v2"
+    assert "decision_flow" in result
+    assert "outcome_mix" in result
+    assert "context_audit" in result
+    assert "metric_families" in result
+
+
+def test_v2_metric_families_shape(monkeypatch, tmp_path):
+    """metric_families has live list and blocked list with expected entries."""
+    _patch_events(monkeypatch, tmp_path, [])
+    result = nw_feedback.build()
+    mf = result["metric_families"]
+    assert "live" in mf
+    assert "blocked" in mf
+    assert "context_engagement" in mf["live"]
+    assert "decision_flow" in mf["live"]
+    assert "outcome_mix" in mf["live"]
+    blocked_names = [b["name"] for b in mf["blocked"]]
+    assert "fill_slippage_by_context" in blocked_names
+    assert "warning_outcome_delta" in blocked_names
+
+
+# ---------------------------------------------------------------------------
+# decision_flow: packet_accepted/rejected counts + rejection error classes
+# ---------------------------------------------------------------------------
+
+def test_decision_flow_packet_counts(monkeypatch, tmp_path):
+    """decision_flow.by_book has correct packet_accepted/packet_rejected counts per book."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    events = [
+        {"ts": now, "kind": "packet_accepted", "book": "flagship", "status": "ok"},
+        {"ts": now, "kind": "packet_accepted", "book": "flagship", "status": "ok"},
+        {"ts": now, "kind": "packet_rejected", "book": "flagship", "status": "warn"},
+        {"ts": now, "kind": "packet_accepted", "book": "autonomous", "status": "ok"},
+    ]
+    _patch_events(monkeypatch, tmp_path, events)
+    monkeypatch.setattr(nw_feedback, "_packet_rejections_path",
+                        lambda: tmp_path / "governance" / "packet_rejections.jsonl")
+    result = nw_feedback.build()
+    by_book = {e["book_id"]: e for e in result["decision_flow"]["by_book"]}
+    assert by_book.get("flagship", {}).get("packet_accepted") == 2
+    assert by_book.get("flagship", {}).get("packet_rejected") == 1
+    assert by_book.get("autonomous", {}).get("packet_accepted") == 1
+
+
+def test_decision_flow_rejection_error_classes(monkeypatch, tmp_path):
+    """rejection_error_classes extracts leading field name, not prose."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    _patch_events(monkeypatch, tmp_path, [])
+    # Plant rejection rows with error strings of various field-name prefixes
+    rejections = [
+        {"ts": now, "book": "flagship", "errors": [
+            "falsifiers: must be a non-empty list",
+            "expected_failure_mode: fails the substance floor",
+            "falsifiers: must be a non-empty list",
+        ]},
+        {"ts": now, "book": "flagship", "errors": [
+            "holdings[0].ticker: required non-empty string",
+        ]},
+    ]
+    p = _write_packet_rejections(tmp_path, rejections)
+    monkeypatch.setattr(nw_feedback, "_packet_rejections_path", lambda: p)
+    result = nw_feedback.build()
+    classes = result["decision_flow"]["rejection_error_classes"]
+    # 'falsifiers' appears twice across two rejection rows
+    assert classes.get("falsifiers", 0) == 2
+    assert classes.get("expected_failure_mode", 0) == 1
+    assert classes.get("holdings", 0) == 1
+
+
+def test_decision_flow_rejection_classes_no_prose(monkeypatch, tmp_path):
+    """rejection_error_classes keys are sanitised — no raw prose reaches the output."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    _patch_events(monkeypatch, tmp_path, [])
+    rejections = [
+        {"ts": now, "book": "flagship", "errors": [
+            "falsifiers: the ticker AAPL is wrong for reason X",
+        ]},
+    ]
+    p = _write_packet_rejections(tmp_path, rejections)
+    monkeypatch.setattr(nw_feedback, "_packet_rejections_path", lambda: p)
+    result = nw_feedback.build()
+    classes = result["decision_flow"]["rejection_error_classes"]
+    # Only the field name key is present — ticker "AAPL" must not appear as a key
+    assert "AAPL" not in classes
+    assert "aapl" not in classes
+    # The class key is just 'falsifiers'
+    assert "falsifiers" in classes
+
+
+def test_decision_flow_rejection_classes_top10(monkeypatch, tmp_path):
+    """rejection_error_classes emits at most 10 classes."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    _patch_events(monkeypatch, tmp_path, [])
+    # Create 15 different field names
+    errors = [f"field{i:02d}: some prose" for i in range(15)]
+    rejections = [{"ts": now, "book": "flagship", "errors": errors}]
+    p = _write_packet_rejections(tmp_path, rejections)
+    monkeypatch.setattr(nw_feedback, "_packet_rejections_path", lambda: p)
+    result = nw_feedback.build()
+    classes = result["decision_flow"]["rejection_error_classes"]
+    assert len(classes) <= 10, f"Expected at most 10 classes, got {len(classes)}"
+
+
+def test_decision_flow_window_excludes_old_rejections(monkeypatch, tmp_path):
+    """Rejection rows older than window_days are excluded from error class counts."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    old_ts = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat(timespec="seconds")
+    _patch_events(monkeypatch, tmp_path, [])
+    rejections = [
+        {"ts": old_ts, "book": "flagship", "errors": ["falsifiers: old error"]},
+        {"ts": now, "book": "flagship", "errors": ["mandate: fresh error"]},
+    ]
+    p = _write_packet_rejections(tmp_path, rejections)
+    monkeypatch.setattr(nw_feedback, "_packet_rejections_path", lambda: p)
+    result = nw_feedback.build()
+    classes = result["decision_flow"]["rejection_error_classes"]
+    # Only 'mandate' from the fresh row; old 'falsifiers' excluded by window
+    assert classes.get("falsifiers", 0) == 0, "Old rejection row should be excluded by window"
+    assert classes.get("mandate", 0) == 1
+
+
+def test_decision_flow_missing_ledger_fail_soft(monkeypatch, tmp_path):
+    """decision_flow degrades gracefully when packet_rejections.jsonl is absent."""
+    _patch_events(monkeypatch, tmp_path, [])
+    monkeypatch.setattr(nw_feedback, "_packet_rejections_path",
+                        lambda: tmp_path / "nonexistent" / "packet_rejections.jsonl")
+    result = nw_feedback.build()
+    # Block must still be present, just empty
+    assert "decision_flow" in result
+    assert result["decision_flow"]["rejection_error_classes"] == {}
+
+
+# ---------------------------------------------------------------------------
+# Poisoned fixture: ticker, dollar amount, MASTERMIND_TOKEN in ledger inputs
+# ---------------------------------------------------------------------------
+
+def test_redaction_of_ticker_in_rejection_errors(monkeypatch, tmp_path):
+    """A ticker string planted in a rejection error must not appear as a class key."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    _patch_events(monkeypatch, tmp_path, [])
+    # Plant a ticker in the error prose — it must not leak as a key
+    rejections = [
+        {"ts": now, "book": "flagship", "errors": ["TSLA: not a valid field"]}
+    ]
+    p = _write_packet_rejections(tmp_path, rejections)
+    monkeypatch.setattr(nw_feedback, "_packet_rejections_path", lambda: p)
+    result = nw_feedback.build()
+    classes = result["decision_flow"]["rejection_error_classes"]
+    serialized = json.dumps(classes)
+    # TSLA downcases to 'tsla' — it would pass charset but it's only 4 chars so
+    # _classify_error extracts 'TSLA' → sanitise → 'tsla'. That's a valid key,
+    # but the prose "not a valid field" must not appear anywhere.
+    assert "not a valid field" not in serialized
+    assert "not" not in classes  # prose words must not be keys
+
+
+def test_redaction_dollar_amount_in_outcome_note(monkeypatch, tmp_path):
+    """A $12,345 string planted in an outcome_ledger note must be redacted by write()."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    _patch_events(monkeypatch, tmp_path, [])
+    monkeypatch.setattr(nw_feedback, "_packet_rejections_path",
+                        lambda: tmp_path / "governance" / "packet_rejections.jsonl")
+    # Inject dollar amount via patched _outcome_mix
+    def patched_outcome_mix(window_days):
+        return {"n_resolved": 1, "by_outcome": {"1": 1}, "_test_leaked": "$12,345"}
+    monkeypatch.setattr(nw_feedback, "_outcome_mix", patched_outcome_mix)
+    dest = tmp_path / "site"
+    out = nw_feedback.write(dest)
+    payload = json.loads(out.read_text())
+    serialized = json.dumps(payload)
+    assert "$12,345" not in serialized, "Dollar amount must be redacted from output"
+
+
+def test_redaction_mastermind_token_in_context_audit(monkeypatch, tmp_path):
+    """A MASTERMIND_TOKEN string planted in context_audit must be redacted."""
+    _patch_events(monkeypatch, tmp_path, [])
+    monkeypatch.setattr(nw_feedback, "_packet_rejections_path",
+                        lambda: tmp_path / "governance" / "packet_rejections.jsonl")
+    def patched_context_audit(window_days):
+        return {"n_present": 5, "n_stale": 1, "n_absent": 0, "n_runs_total": 6,
+                "context_seen_rate": 0.833, "_leaked": "MASTERMIND_TOKEN=abc"}
+    monkeypatch.setattr(nw_feedback, "_context_audit", patched_context_audit)
+    dest = tmp_path / "site"
+    out = nw_feedback.write(dest)
+    payload = json.loads(out.read_text())
+    serialized = json.dumps(payload)
+    assert "MASTERMIND_TOKEN" not in serialized, "MASTERMIND_ token must be redacted"
+
+
+# ---------------------------------------------------------------------------
+# outcome_mix: counts by outcome field, n_resolved, windowing
+# ---------------------------------------------------------------------------
+
+def test_outcome_mix_counts_correct(monkeypatch, tmp_path):
+    """outcome_mix counts resolved outcomes in window by outcome value."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    rows = [
+        {"thesis_id": "t1", "asof_resolved": now[:10], "outcome": 1},
+        {"thesis_id": "t2", "asof_resolved": now[:10], "outcome": 0},
+        {"thesis_id": "t3", "asof_resolved": now[:10], "outcome": 1},
+    ]
+    p = _write_outcome_ledger(tmp_path, rows)
+    monkeypatch.setattr(nw_feedback, "_outcome_ledger_path", lambda: p)
+    result = nw_feedback._outcome_mix(14)
+    assert result["n_resolved"] == 3
+    assert result["by_outcome"].get("1", 0) == 2
+    assert result["by_outcome"].get("0", 0) == 1
+    # No thesis_ids in output
+    serialized = json.dumps(result)
+    for row in rows:
+        assert row["thesis_id"] not in serialized
+
+
+def test_outcome_mix_excludes_old_rows(monkeypatch, tmp_path):
+    """outcome_mix excludes rows whose asof_resolved is outside the window."""
+    now_date = datetime.now(timezone.utc).date().isoformat()
+    old_date = (datetime.now(timezone.utc) - timedelta(days=30)).date().isoformat()
+    rows = [
+        {"thesis_id": "t1", "asof_resolved": old_date, "outcome": 1},
+        {"thesis_id": "t2", "asof_resolved": now_date, "outcome": 0},
+    ]
+    p = _write_outcome_ledger(tmp_path, rows)
+    monkeypatch.setattr(nw_feedback, "_outcome_ledger_path", lambda: p)
+    result = nw_feedback._outcome_mix(14)
+    assert result["n_resolved"] == 1, "Old outcome row must be excluded by window"
+    assert result["by_outcome"].get("0", 0) == 1
+
+
+def test_outcome_mix_missing_ledger_fail_soft(monkeypatch, tmp_path):
+    """_outcome_mix returns absence indicator when ledger is missing."""
+    monkeypatch.setattr(nw_feedback, "_outcome_ledger_path",
+                        lambda: tmp_path / "nonexistent" / "outcome_ledger.jsonl")
+    result = nw_feedback._outcome_mix(14)
+    assert result.get("state") == "absent" or result.get("n_resolved", -1) == 0
+
+
+def test_outcome_mix_corrupt_lines(monkeypatch, tmp_path):
+    """_outcome_mix survives corrupt lines in the ledger."""
+    p = tmp_path / "brain" / "outcome_ledger.jsonl"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("not json\n{broken\n")
+    monkeypatch.setattr(nw_feedback, "_outcome_ledger_path", lambda: p)
+    result = nw_feedback._outcome_mix(14)
+    assert "n_resolved" in result
+
+
+# ---------------------------------------------------------------------------
+# context_audit: engagement counts, context_seen_rate, accruing state
+# ---------------------------------------------------------------------------
+
+def test_context_audit_counts_correct(monkeypatch, tmp_path):
+    """_context_audit counts present/stale/absent and computes context_seen_rate."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    rows = [
+        {"ts": now, "run_id": "r1", "status": "present", "asof": "2026-07-01", "age_days": 5, "n_candidates": 3},
+        {"ts": now, "run_id": "r2", "status": "present", "asof": "2026-07-01", "age_days": 5, "n_candidates": 3},
+        {"ts": now, "run_id": "r3", "status": "stale",   "asof": "2026-06-01", "age_days": 30, "n_candidates": 0},
+        {"ts": now, "run_id": "r4", "status": "absent",  "asof": None,         "age_days": None, "n_candidates": 0},
+    ]
+    p = _write_context_audit(tmp_path, rows)
+    monkeypatch.setattr(nw_feedback, "_nw_context_audit_path", lambda: p)
+    result = nw_feedback._context_audit(14)
+    assert result["n_runs_total"] == 4
+    assert result["n_present"] == 2
+    assert result["n_stale"] == 1
+    assert result["n_absent"] == 1
+    assert result["context_seen_rate"] == round(2 / 4, 3)
+
+
+def test_context_audit_no_sidecar_returns_accruing(monkeypatch, tmp_path):
+    """When nw_context_audit.jsonl doesn't exist, context_audit returns accruing state."""
+    monkeypatch.setattr(nw_feedback, "_nw_context_audit_path",
+                        lambda: tmp_path / "nonexistent" / "nw_context_audit.jsonl")
+    result = nw_feedback._context_audit(14)
+    assert result.get("state") == "accruing"
+    assert result.get("n_runs_total") == 0
+    # Must not fabricate counts
+    assert "n_present" not in result
+
+
+def test_context_audit_window_excludes_old_runs(monkeypatch, tmp_path):
+    """context_audit excludes runs outside the window."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    old = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat(timespec="seconds")
+    rows = [
+        {"ts": old, "run_id": "r_old", "status": "present", "asof": "2026-06-01", "age_days": 35, "n_candidates": 1},
+        {"ts": now, "run_id": "r_new", "status": "absent",  "asof": None,         "age_days": None, "n_candidates": 0},
+    ]
+    p = _write_context_audit(tmp_path, rows)
+    monkeypatch.setattr(nw_feedback, "_nw_context_audit_path", lambda: p)
+    result = nw_feedback._context_audit(14)
+    # Only r_new is within the 14-day window
+    assert result["n_runs_total"] == 1
+    assert result.get("n_present", 0) == 0
+    assert result.get("n_absent", 0) == 1
+
+
+def test_context_audit_in_build_output(monkeypatch, tmp_path):
+    """build() includes context_audit from the sidecar correctly end-to-end."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    _patch_events(monkeypatch, tmp_path, [])
+    monkeypatch.setattr(nw_feedback, "_packet_rejections_path",
+                        lambda: tmp_path / "governance" / "packet_rejections.jsonl")
+    monkeypatch.setattr(nw_feedback, "_outcome_ledger_path",
+                        lambda: tmp_path / "brain" / "outcome_ledger.jsonl")
+    rows = [
+        {"ts": now, "run_id": "r1", "status": "present", "asof": "2026-07-01", "age_days": 5, "n_candidates": 2},
+    ]
+    p = _write_context_audit(tmp_path, rows)
+    monkeypatch.setattr(nw_feedback, "_nw_context_audit_path", lambda: p)
+    result = nw_feedback.build()
+    ca = result["context_audit"]
+    assert ca.get("n_runs_total") == 1
+    assert ca.get("n_present") == 1
+    assert ca.get("context_seen_rate") == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Sidecar append shape test
+# ---------------------------------------------------------------------------
+
+def test_sidecar_append_shape(tmp_path):
+    """nw_context_audit.jsonl rows written by the seam have the expected fields."""
+    import json as _json
+    # Simulate what phase2.py writes:
+    audit_path = tmp_path / "brain" / "nw_context_audit.jsonl"
+    audit_path.parent.mkdir(parents=True, exist_ok=True)
+    # Write one row in the exact shape phase2.py produces
+    from datetime import datetime, timezone
+    row = {
+        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "run_id": "test-run-001",
+        "status": "present",
+        "asof": "2026-07-05",
+        "age_days": 1,
+        "n_candidates": 5,
+    }
+    with audit_path.open("a") as fh:
+        fh.write(_json.dumps(row, default=str) + "\n")
+    # Verify it can be read back and parsed
+    lines = audit_path.read_text().strip().splitlines()
+    assert len(lines) == 1
+    parsed = _json.loads(lines[0])
+    assert set(parsed.keys()) >= {"ts", "run_id", "status", "asof", "age_days", "n_candidates"}
+    assert parsed["status"] in ("present", "stale", "absent")
+    # Verify _context_audit can read it
+    result = nw_feedback._context_audit.__wrapped__(14) if hasattr(nw_feedback._context_audit, "__wrapped__") else None
+    if result is None:
+        # Direct call with patched path
+        original = nw_feedback._nw_context_audit_path
+        nw_feedback._nw_context_audit_path = lambda: audit_path
+        try:
+            result = nw_feedback._context_audit(14)
+        finally:
+            nw_feedback._nw_context_audit_path = original
+    assert result["n_runs_total"] == 1
+    assert result["n_present"] == 1

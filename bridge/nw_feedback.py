@@ -1,10 +1,10 @@
-"""NW feedback artifact v1 — machine-readable governance summary for NW.
+"""NW feedback artifact v2 — machine-readable governance summary for NW.
 
 Writes site/mastermind/nw_feedback.json as a sibling of mastermind_snapshot.json.
 The file is pushed to the PUBLIC macro repo and treated as fully public — it MUST
 NOT contain dollar amounts, position sizes, API keys, or secrets of any kind.
 
-Schema: mastermind_nw_feedback.v1
+Schema: mastermind_nw_feedback.v2
 
 Contents (per-book governance snapshot):
   - gate_failures: guardrail event counts (by severity/guard) from
@@ -16,11 +16,21 @@ Contents (per-book governance snapshot):
   - thesis_counts: open/closed counts from brain/ledger.py (read-only)
   - run_counts: success/failure counts by job from run_events.jsonl
 
+v2 additions (counts-only, FB-R11):
+  - decision_flow: packet_accepted/packet_rejected counts per book + top
+    rejection error classes (sanitised field labels only, ≤10 classes)
+  - outcome_mix: resolved-outcome counts by band from outcome_ledger.jsonl;
+    n_resolved; counts only — no thesis_ids, subjects, or returns
+  - context_audit: context engagement counts from nw_context_audit.jsonl
+    (present/stale/absent runs), context_seen_rate, n_runs_total
+  - metric_families: live + blocked family registry (FB-R9)
+
 Public-surface hard constraints (tested in tests/test_nw_feedback.py):
   1. No dollar amounts / numeric values that look like $ amounts
   2. No API-key-shaped strings (long hex/base64 tokens)
   3. No MASTERMIND_* env variable names or values
   4. No position sizes (only counts of decisions, not weights/notional)
+  5. No ticker strings, IDs (rejection_id/packet_id/thesis_id), raw prose
 
 Integration:
   bridge/macro_snapshot.write() calls nw_feedback.build() best-effort (never-raise).
@@ -40,10 +50,13 @@ from pathlib import Path
 from typing import Any
 
 _ROOT = Path(__file__).resolve().parent.parent
-SCHEMA = "mastermind_nw_feedback.v1"
+SCHEMA = "mastermind_nw_feedback.v2"
 
 # How many days of run_events to include in the gate-failure window.
 _EVENT_WINDOW_DAYS = 14
+
+# Maximum number of rejection error classes emitted in decision_flow.
+_MAX_REJECTION_CLASSES = 10
 
 # Public-surface guard patterns — values matching these must never appear in the output.
 _SECRET_PATTERNS = [
@@ -58,13 +71,42 @@ def _run_events_path() -> Path:
     return _ROOT / "data" / "governance" / "run_events.jsonl"
 
 
+def _packet_rejections_path() -> Path:
+    return _ROOT / "data" / "governance" / "packet_rejections.jsonl"
+
+
+def _outcome_ledger_path() -> Path:
+    return _ROOT / "data" / "brain" / "outcome_ledger.jsonl"
+
+
+def _nw_context_audit_path() -> Path:
+    return _ROOT / "data" / "brain" / "nw_context_audit.jsonl"
+
+
+def _parse_ts(ts_raw: str) -> datetime | None:
+    """Parse an ISO-8601 timestamp; return None on failure."""
+    try:
+        if ts_raw.endswith("Z"):
+            ts_raw = ts_raw[:-1] + "+00:00"
+        ts = datetime.fromisoformat(ts_raw)
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return ts
+    except Exception:
+        return None
+
+
+def _cutoff(window_days: int) -> datetime:
+    return datetime.now(timezone.utc) - timedelta(days=window_days)
+
+
 def _load_events(window_days: int = _EVENT_WINDOW_DAYS) -> list[dict]:
     """Load run_events.jsonl; return events within the look-back window. Never raises."""
     try:
         p = _run_events_path()
         if not p.exists():
             return []
-        cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
+        cut = _cutoff(window_days)
         rows: list[dict] = []
         for line in p.read_text().splitlines():
             line = line.strip()
@@ -75,17 +117,9 @@ def _load_events(window_days: int = _EVENT_WINDOW_DAYS) -> list[dict]:
             except Exception:
                 continue
             ts_raw = ev.get("ts", "")
-            try:
-                # parse ISO-8601 with or without timezone
-                if ts_raw.endswith("Z"):
-                    ts_raw = ts_raw[:-1] + "+00:00"
-                ts = datetime.fromisoformat(ts_raw)
-                if ts.tzinfo is None:
-                    ts = ts.replace(tzinfo=timezone.utc)
-                if ts < cutoff:
-                    continue
-            except Exception:
-                pass  # include on parse error (conservative)
+            ts = _parse_ts(ts_raw)
+            if ts is not None and ts < cut:
+                continue  # exclude old events
             rows.append(ev)
         return rows
     except Exception:  # never raise
@@ -203,8 +237,209 @@ def _book_entry(book_id: str, events: list[dict]) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# v2: decision_flow — packet_accepted/rejected per book + error class counts
+# ---------------------------------------------------------------------------
+
+def _classify_error(error_str: str) -> str:
+    """Classify a rejection error string by its leading field name.
+
+    Error strings have the form '<field_name>: <prose>' or '<field_name>[n]: <prose>'.
+    We extract the leading identifier (up to the first colon or bracket) and sanitize
+    it as a key. Returns 'other' if no leading field name is found.
+
+    Counts only — the error prose itself never appears in the output.
+    """
+    s = str(error_str).strip()
+    # Extract the portion before the first colon or bracket
+    m = re.match(r'^([A-Za-z_][A-Za-z0-9_]*)', s)
+    if m:
+        return _sanitize_key(m.group(1))
+    return "other"
+
+
+def _decision_flow(events: list[dict], window_days: int) -> dict:
+    """Build decision_flow block from run_events.jsonl and packet_rejections.jsonl.
+
+    Per book: packet_accepted count, packet_rejected count (from run_events).
+    rejection_error_classes: top ≤10 sanitised field-name classes from
+      packet_rejections.jsonl rows in-window (counts only — no prose, no IDs).
+    Never raises — missing/corrupt ledger yields an absent block signal.
+    """
+    try:
+        # Per-book packet accepted/rejected counts from run_events
+        book_accepted: dict[str, int] = defaultdict(int)
+        book_rejected: dict[str, int] = defaultdict(int)
+        for ev in events:
+            kind = ev.get("kind", "")
+            book = ev.get("book", "")
+            if kind == "packet_accepted":
+                book_accepted[book] += 1
+            elif kind == "packet_rejected":
+                book_rejected[book] += 1
+
+        by_book: list[dict] = []
+        all_books = sorted(set(list(book_accepted.keys()) + list(book_rejected.keys())))
+        for book in all_books:
+            by_book.append({
+                "book_id": book,
+                "packet_accepted": book_accepted.get(book, 0),
+                "packet_rejected": book_rejected.get(book, 0),
+            })
+
+        # Rejection error classes from packet_rejections.jsonl
+        error_classes: dict[str, int] = defaultdict(int)
+        try:
+            p = _packet_rejections_path()
+            if p.exists():
+                cut = _cutoff(window_days)
+                for line in p.read_text().splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        row = json.loads(line)
+                    except Exception:
+                        continue
+                    # Window filter
+                    ts = _parse_ts(row.get("ts", ""))
+                    if ts is not None and ts < cut:
+                        continue
+                    # Classify each error string by leading field name only
+                    for err in (row.get("errors") or []):
+                        cls = _classify_error(str(err))
+                        error_classes[cls] += 1
+        except Exception:
+            pass  # fail-soft: missing rejections ledger yields empty classes
+
+        # Top ≤10 classes
+        top_classes = dict(
+            sorted(error_classes.items(), key=lambda kv: -kv[1])[:_MAX_REJECTION_CLASSES]
+        )
+
+        return {
+            "by_book": by_book,
+            "rejection_error_classes": top_classes,
+        }
+    except Exception:
+        return {"by_book": [], "rejection_error_classes": {}}
+
+
+# ---------------------------------------------------------------------------
+# v2: outcome_mix — resolved-outcome counts from outcome_ledger.jsonl
+# ---------------------------------------------------------------------------
+
+def _outcome_mix(window_days: int) -> dict:
+    """Build outcome_mix block from data/brain/outcome_ledger.jsonl.
+
+    Counts rows with asof_resolved in-window by the 'outcome' field value.
+    Returns {by_outcome: {str(value): count}, n_resolved}.
+    Counts only — no thesis_ids, subjects, or realized returns.
+    Never raises — missing/corrupt ledger yields absent block.
+    """
+    try:
+        p = _outcome_ledger_path()
+        if not p.exists():
+            return {"state": "absent", "n_resolved": 0, "by_outcome": {}}
+        cut = _cutoff(window_days)
+        by_outcome: dict[str, int] = defaultdict(int)
+        n_resolved = 0
+        for line in p.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except Exception:
+                continue
+            asof_raw = row.get("asof_resolved", "")
+            if not asof_raw:
+                continue
+            ts = _parse_ts(str(asof_raw) + "T00:00:00+00:00" if "T" not in str(asof_raw) else str(asof_raw))
+            if ts is not None and ts < cut:
+                continue
+            outcome_val = row.get("outcome")
+            if outcome_val is None:
+                continue
+            by_outcome[str(outcome_val)] += 1
+            n_resolved += 1
+        return {
+            "n_resolved": n_resolved,
+            "by_outcome": dict(by_outcome),
+        }
+    except Exception:
+        return {"state": "absent", "n_resolved": 0, "by_outcome": {}}
+
+
+# ---------------------------------------------------------------------------
+# v2: context_audit — context engagement from nw_context_audit.jsonl sidecar
+# ---------------------------------------------------------------------------
+
+def _context_audit(window_days: int) -> dict:
+    """Build context_audit block from data/brain/nw_context_audit.jsonl.
+
+    Counts runs in-window by nw_context status (present/stale/absent).
+    Returns {n_present, n_stale, n_absent, n_runs_total, context_seen_rate}.
+    If the sidecar doesn't exist yet, returns {state: 'accruing', n_runs_total: 0}.
+    Never fabricates data. Never raises.
+    """
+    try:
+        p = _nw_context_audit_path()
+        if not p.exists():
+            return {"state": "accruing", "n_runs_total": 0}
+        cut = _cutoff(window_days)
+        counts: dict[str, int] = defaultdict(int)
+        n_total = 0
+        for line in p.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except Exception:
+                continue
+            ts = _parse_ts(row.get("ts", ""))
+            if ts is not None and ts < cut:
+                continue
+            status = str(row.get("status", "absent"))
+            counts[status] += 1
+            n_total += 1
+        if n_total == 0:
+            return {"state": "accruing", "n_runs_total": 0}
+        n_present = counts.get("present", 0)
+        seen_rate = round(n_present / n_total, 3) if n_total > 0 else 0.0
+        return {
+            "n_present": n_present,
+            "n_stale": counts.get("stale", 0),
+            "n_absent": counts.get("absent", 0),
+            "n_runs_total": n_total,
+            "context_seen_rate": seen_rate,
+        }
+    except Exception:
+        return {"state": "accruing", "n_runs_total": 0}
+
+
+# ---------------------------------------------------------------------------
+# v2: metric_families registry (FB-R9, frozen)
+# ---------------------------------------------------------------------------
+
+_METRIC_FAMILIES: dict = {
+    "live": ["context_engagement", "decision_flow", "outcome_mix"],
+    "blocked": [
+        {
+            "name": "fill_slippage_by_context",
+            "reason": "no execution model (paper fills at close/open)",
+        },
+        {
+            "name": "warning_outcome_delta",
+            "reason": "needs >=60 context-audit sessions (FB-R10)",
+        },
+    ],
+}
+
+
 def build(window_days: int = _EVENT_WINDOW_DAYS) -> dict:
-    """Return the mastermind_nw_feedback.v1 payload. Never raises."""
+    """Return the mastermind_nw_feedback.v2 payload. Never raises."""
     try:
         events = _load_events(window_days)
 
@@ -223,9 +458,15 @@ def build(window_days: int = _EVENT_WINDOW_DAYS) -> dict:
             "thesis_counts": _thesis_counts(),
             "run_counts": _run_counts(events),
             "books": books,
+            # v2 additions — counts-only (FB-R11)
+            "decision_flow": _decision_flow(events, window_days),
+            "outcome_mix": _outcome_mix(window_days),
+            "context_audit": _context_audit(window_days),
+            "metric_families": _METRIC_FAMILIES,
             "note": (
                 "Machine-readable governance summary for NW integration. "
-                "Contains counts only — no position sizes, no notional values, no secrets."
+                "Contains counts only — no position sizes, no notional values, no secrets. "
+                "v2 adds decision_flow, outcome_mix, context_audit (all counts-only, FB-R11)."
             ),
         }
         return payload
