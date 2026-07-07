@@ -746,40 +746,60 @@ def test_macro_ok_low_tier(run_date):
 
 
 def test_macro_elevated_high_headwind(run_date):
-    """HIGH rate sensitivity + headwind regime → elevated."""
+    """HIGH rate sensitivity + rising rates direction in regime → elevated.
+
+    FIX-3: rates direction now sourced from
+    regime["rate_inflation_transmission"]["state"]["rates"]["direction"], not the
+    old macro_sensitivity chip. Regime fixture must supply that field for elevated
+    to fire; HIGH + rising + negative beta = headwind → elevated.
+    """
     from portfolio.held_risk import _lane_macro_sensitivity
 
+    # rates_beta sourced from profile.archetype.v2_inputs (primary path)
     sd = _make_stockdata({
-        "macro_sensitivity": {
-            "ticker": "TST", "rate_beta": -0.45, "rate_beta_se": 0.05,
-            "t_stat": -9.0, "tier": "high",
-            "regime": "headwind", "regime_label": {"en": "headwind", "zh": "逆风"},
-            "rate_state": {"regime": "restrictive", "direction": "rising", "real_10y": 2.5},
-            "infl_state": {"regime": "above target", "direction": "rising"},
-        }
+        "profile": {
+            "archetype": {
+                "key": "growth",
+                "v2_inputs": {"rates_beta": -0.45},
+            },
+        },
     })
-    regime = _make_regime()
+    # Supply rates direction via the correct regime path
+    regime = _make_regime({
+        "rate_inflation_transmission": {
+            "state": {"rates": {"direction": "rising"}},
+        },
+    })
     lane = _lane_macro_sensitivity(sd, regime, run_date)
     assert lane["state"] == "elevated", f"got {lane['state']}: {lane['reasons']}"
-    assert "regime_headwind" in lane["flags"]
+    assert "adverse_rates_headwind" in lane["flags"]
 
 
 def test_macro_watch_high_tier_neutral(run_date):
-    """HIGH rate sensitivity but neutral regime → watch."""
+    """HIGH rate sensitivity with steady/falling rates → watch (not elevated).
+
+    FIX-3: direction sourced from regime["rate_inflation_transmission"]["state"]["rates"]["direction"].
+    HIGH + steady rates = no headwind → watch (tier HIGH alone triggers watch).
+    """
     from portfolio.held_risk import _lane_macro_sensitivity
 
     sd = _make_stockdata({
-        "macro_sensitivity": {
-            "ticker": "TST", "rate_beta": -0.38, "rate_beta_se": 0.05,
-            "t_stat": -7.6, "tier": "high",
-            "regime": "neutral",
-            "rate_state": {"regime": "restrictive", "direction": "steady", "real_10y": 2.0},
-            "infl_state": {"regime": "above target", "direction": "steady"},
-        }
+        "profile": {
+            "archetype": {
+                "key": "growth",
+                "v2_inputs": {"rates_beta": -0.38},
+            },
+        },
     })
-    regime = _make_regime()
+    # Steady direction → no headwind → HIGH tier → watch
+    regime = _make_regime({
+        "rate_inflation_transmission": {
+            "state": {"rates": {"direction": "steady"}},
+        },
+    })
     lane = _lane_macro_sensitivity(sd, regime, run_date)
     assert lane["state"] == "watch", f"got {lane['state']}: {lane['reasons']}"
+    assert "rate_sensitivity_high" in lane["flags"]
 
 
 # ---------------------------------------------------------------------------
@@ -1846,3 +1866,288 @@ class TestLaneMarketRegimeOrange:
         assert role == "trim_review", (
             f"expected 'trim_review' with ORANGE + extension elevated, got {role!r}"
         )
+
+
+# ===========================================================================
+# FIX-1: mfe_high watch flag
+# ===========================================================================
+
+def test_mfe_high_watch_flag_small_giveback(run_date):
+    """mfe=25%, giveback=5% (small) → watch with mfe_high flag (take-profit lane active)."""
+    from portfolio.held_risk import _lane_extension_giveback
+
+    # entry=100, post_entry_high=125 (MFE=25%), close=124 (giveback ~4%)
+    # giveback_pct = (125-124)/(125-100) = 1/25 = 4% — well below 35% elevated threshold
+    sd = _make_stockdata()
+    metrics = {
+        "close": 124.0,
+        "ma20": 122.0, "ma50": 118.0, "ma200": 100.0,
+        "atr14": 3.0, "high_52w": 126.0, "rs20_spy_z": 0.5,
+        "ext_z": 0.8, "close_date": "2026-07-07",
+    }
+    position = {"entry_price": 100.0, "entry_date": "2026-01-01", "post_entry_high": 125.0}
+
+    lane, path = _lane_extension_giveback(metrics, sd, position)
+    assert lane["state"] == "watch", f"expected watch, got {lane['state']}: {lane['reasons']}"
+    assert "mfe_high" in lane["flags"], f"expected mfe_high in flags: {lane['flags']}"
+    assert any("take-profit lane active" in r for r in lane["reasons"]), \
+        f"expected take-profit reason: {lane['reasons']}"
+    # Must NOT be elevated (giveback < 35%)
+    assert "giveback_elevated" not in lane["flags"]
+
+
+def test_mfe_high_elevated_when_giveback_also_fires(run_date):
+    """mfe=25%, giveback=40% → elevated (giveback threshold met); mfe_high also present."""
+    from portfolio.held_risk import _lane_extension_giveback
+
+    # entry=100, high=125, close=115 → giveback=(125-115)/(125-100)=10/25=40%
+    sd = _make_stockdata()
+    metrics = {
+        "close": 115.0,
+        "ma20": 120.0, "ma50": 115.0, "ma200": 100.0,
+        "atr14": 3.0, "high_52w": 126.0, "rs20_spy_z": -0.3,
+        "ext_z": 0.5, "close_date": "2026-07-07",
+    }
+    position = {"entry_price": 100.0, "entry_date": "2026-01-01", "post_entry_high": 125.0}
+
+    lane, path = _lane_extension_giveback(metrics, sd, position)
+    assert lane["state"] == "elevated", f"expected elevated, got {lane['state']}: {lane['reasons']}"
+    assert "mfe_high" in lane["flags"], f"flags: {lane['flags']}"
+    assert "giveback_elevated" in lane["flags"], f"flags: {lane['flags']}"
+
+
+def test_mfe_below_threshold_no_mfe_high(run_date):
+    """mfe=15% (below 20%) → no mfe_high flag, state ok."""
+    from portfolio.held_risk import _lane_extension_giveback
+
+    # entry=100, high=115, close=114 → MFE=15%, giveback~0.9%
+    sd = _make_stockdata()
+    metrics = {
+        "close": 114.0,
+        "ma20": 112.0, "ma50": 108.0, "ma200": 95.0,
+        "atr14": 2.5, "high_52w": 116.0, "rs20_spy_z": 0.3,
+        "ext_z": 0.2, "close_date": "2026-07-07",
+    }
+    position = {"entry_price": 100.0, "entry_date": "2026-01-01", "post_entry_high": 115.0}
+
+    lane, path = _lane_extension_giveback(metrics, sd, position)
+    assert "mfe_high" not in lane["flags"], f"should not have mfe_high: {lane['flags']}"
+    assert lane["state"] == "ok", f"expected ok, got {lane['state']}: {lane['reasons']}"
+
+
+# ===========================================================================
+# FIX-2: low coverage info floor
+# ===========================================================================
+
+def test_role_info_floor_all_coverage_missing(run_date):
+    """When >= 5/8 evidence lanes are coverage_missing and no higher role fired, role = info."""
+    from portfolio.held_risk import _assign_role
+
+    def _cm():
+        return {"state": "coverage_missing", "flags": [], "reasons": [], "asof": None}
+    def _ok():
+        return {"state": "ok", "flags": [], "reasons": [], "asof": None}
+
+    # All 8 evidence lanes coverage_missing (price_only ticker scenario)
+    lanes = {
+        "price_trend":          _cm(),
+        "extension_giveback":   _cm(),
+        "event_window":         _cm(),
+        "earnings_expectation": _cm(),
+        "solvency_dilution":    _cm(),
+        "ownership_flow":       _cm(),
+        "macro_sensitivity":    _cm(),
+        "sector_rotation":      _cm(),
+        "market_regime":        _ok(),
+        "data_quality":         _ok(),
+    }
+    path = {"ref_close": 100.0, "ma200": None, "mfe_pct": None, "giveback_pct_of_mfe": None}
+    role, reasons = _assign_role(lanes, path, {})
+    assert role == "info", f"expected info, got {role}: {reasons}"
+    assert any("insufficient evidence coverage" in r for r in reasons), f"reasons: {reasons}"
+
+
+def test_role_info_floor_exactly_five_missing(run_date):
+    """Exactly 5/8 coverage_missing → role = info (floor applies)."""
+    from portfolio.held_risk import _assign_role
+
+    def _cm():
+        return {"state": "coverage_missing", "flags": [], "reasons": [], "asof": None}
+    def _ok():
+        return {"state": "ok", "flags": [], "reasons": [], "asof": None}
+
+    lanes = {
+        "price_trend":          _ok(),
+        "extension_giveback":   _ok(),
+        "event_window":         _ok(),
+        "earnings_expectation": _cm(),
+        "solvency_dilution":    _cm(),
+        "ownership_flow":       _cm(),
+        "macro_sensitivity":    _cm(),
+        "sector_rotation":      _cm(),
+        "market_regime":        _ok(),
+        "data_quality":         _ok(),
+    }
+    path = {"ref_close": 100.0, "ma200": None, "mfe_pct": None, "giveback_pct_of_mfe": None}
+    role, reasons = _assign_role(lanes, path, {})
+    assert role == "info", f"expected info, got {role}: {reasons}"
+
+
+def test_role_info_floor_does_not_override_higher_role(run_date):
+    """When a higher role fires even with >= 5 coverage_missing, it takes precedence."""
+    from portfolio.held_risk import _assign_role
+
+    def _cm():
+        return {"state": "coverage_missing", "flags": [], "reasons": [], "asof": None}
+    def _el(flags=None):
+        return {"state": "elevated", "flags": flags or [], "reasons": [], "asof": None}
+    def _ok():
+        return {"state": "ok", "flags": [], "reasons": [], "asof": None}
+
+    # price_trend elevated + market_regime elevated → tighten fires (before info floor)
+    lanes = {
+        "price_trend":          _el(),
+        "extension_giveback":   _cm(),
+        "event_window":         _cm(),
+        "earnings_expectation": _cm(),
+        "solvency_dilution":    _cm(),
+        "ownership_flow":       _cm(),
+        "macro_sensitivity":    _ok(),
+        "sector_rotation":      _ok(),
+        "market_regime":        _el(),
+        "data_quality":         _ok(),
+    }
+    path = {"ref_close": 80.0, "ma200": 100.0, "mfe_pct": None, "giveback_pct_of_mfe": None}
+    role, reasons = _assign_role(lanes, path, {})
+    assert role == "tighten", f"expected tighten (not info), got {role}: {reasons}"
+
+
+def test_role_info_floor_four_missing_stays_ok(run_date):
+    """4/8 coverage_missing → role stays ok (floor requires >= 5)."""
+    from portfolio.held_risk import _assign_role
+
+    def _cm():
+        return {"state": "coverage_missing", "flags": [], "reasons": [], "asof": None}
+    def _ok():
+        return {"state": "ok", "flags": [], "reasons": [], "asof": None}
+
+    lanes = {
+        "price_trend":          _ok(),
+        "extension_giveback":   _ok(),
+        "event_window":         _ok(),
+        "earnings_expectation": _ok(),
+        "solvency_dilution":    _cm(),
+        "ownership_flow":       _cm(),
+        "macro_sensitivity":    _cm(),
+        "sector_rotation":      _cm(),
+        "market_regime":        _ok(),
+        "data_quality":         _ok(),
+    }
+    path = {"ref_close": 100.0, "ma200": None, "mfe_pct": None, "giveback_pct_of_mfe": None}
+    role, reasons = _assign_role(lanes, path, {})
+    assert role == "ok", f"expected ok, got {role}: {reasons}"
+
+
+# ===========================================================================
+# FIX-3: rates-beta macro lane
+# ===========================================================================
+
+def test_macro_v2_inputs_rates_beta_high_rising_elevated(run_date):
+    """rates_beta from profile.archetype.v2_inputs + rising rates in regime → elevated."""
+    from portfolio.held_risk import _lane_macro_sensitivity
+
+    # abs(beta)=0.45 >= 0.30 → HIGH; direction=rising; beta<0 → headwind → elevated
+    sd = _make_stockdata({
+        "profile": {
+            "archetype": {
+                "key": "growth",
+                "v2_inputs": {"rates_beta": -0.45},
+            },
+        },
+    })
+    regime = _make_regime({
+        "rate_inflation_transmission": {
+            "state": {"rates": {"direction": "rising"}},
+        },
+    })
+    lane = _lane_macro_sensitivity(sd, regime, run_date)
+    assert lane["state"] == "elevated", f"got {lane['state']}: {lane['reasons']}"
+    assert "adverse_rates_headwind" in lane["flags"], f"flags: {lane['flags']}"
+    assert any("-0.450" in r or "0.450" in r for r in lane["reasons"]), \
+        f"beta value not in reasons: {lane['reasons']}"
+
+
+def test_macro_v2_inputs_rates_beta_high_no_direction_watch(run_date):
+    """HIGH beta but direction field absent in regime → capped at watch."""
+    from portfolio.held_risk import _lane_macro_sensitivity
+
+    sd = _make_stockdata({
+        "profile": {
+            "archetype": {
+                "key": "growth",
+                "v2_inputs": {"rates_beta": -0.40},
+            },
+        },
+    })
+    # No rate_inflation_transmission in regime
+    regime = _make_regime()
+    lane = _lane_macro_sensitivity(sd, regime, run_date)
+    assert lane["state"] == "watch", f"got {lane['state']}: {lane['reasons']}"
+    assert any("unavailable" in r for r in lane["reasons"]), f"reasons: {lane['reasons']}"
+
+
+def test_macro_v2_inputs_rates_beta_low_ok(run_date):
+    """LOW rate beta (abs < 0.15) → ok."""
+    from portfolio.held_risk import _lane_macro_sensitivity
+
+    sd = _make_stockdata({
+        "profile": {
+            "archetype": {
+                "key": "growth",
+                "v2_inputs": {"rates_beta": -0.05},
+            },
+        },
+    })
+    regime = _make_regime({
+        "rate_inflation_transmission": {
+            "state": {"rates": {"direction": "rising"}},
+        },
+    })
+    lane = _lane_macro_sensitivity(sd, regime, run_date)
+    assert lane["state"] == "ok", f"got {lane['state']}: {lane['reasons']}"
+
+
+def test_macro_no_profile_coverage_missing(run_date):
+    """Missing profile.archetype.v2_inputs AND no macro_sensitivity chip → coverage_missing."""
+    from portfolio.held_risk import _lane_macro_sensitivity
+
+    # Remove both profile.archetype.v2_inputs and macro_sensitivity
+    sd = _make_stockdata()
+    # Strip v2_inputs and macro_sensitivity
+    sd["profile"]["archetype"] = {"key": "growth"}  # no v2_inputs
+    sd["macro_sensitivity"] = {}                     # empty chip
+    regime = _make_regime()
+    lane = _lane_macro_sensitivity(sd, regime, run_date)
+    assert lane["state"] == "coverage_missing", f"got {lane['state']}: {lane['reasons']}"
+
+
+def test_macro_fallback_to_old_chip_beta(run_date):
+    """When v2_inputs absent, fall back to macro_sensitivity.rate_beta."""
+    from portfolio.held_risk import _lane_macro_sensitivity
+
+    sd = _make_stockdata({
+        "macro_sensitivity": {
+            "ticker": "TST",
+            "rate_beta": -0.35,  # HIGH by abs threshold
+        },
+    })
+    sd["profile"]["archetype"] = {"key": "growth"}  # no v2_inputs
+    regime = _make_regime({
+        "rate_inflation_transmission": {
+            "state": {"rates": {"direction": "falling"}},
+        },
+    })
+    # HIGH + falling → no headwind (beta<0 but rates not rising) → watch
+    lane = _lane_macro_sensitivity(sd, regime, run_date)
+    assert lane["state"] == "watch", f"got {lane['state']}: {lane['reasons']}"
+    assert "rate_sensitivity_high" in lane["flags"], f"flags: {lane['flags']}"

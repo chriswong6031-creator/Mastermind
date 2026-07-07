@@ -29,6 +29,11 @@ Field-name deviations from spec (real data vs brief):
   - No `short_ratio_z` → factors.legs.short_interest z-score used instead
   - No dilution_events.parquet → skip with coverage_missing for that sub-check
   - market_state not a separate file → risk_state inside regime/latest.json
+  - macro_sensitivity rates_beta: primary path = profile.archetype.v2_inputs.rates_beta;
+    fallback = macro_sensitivity.rate_beta (old chip, absent in fresh tickers like AAPL).
+    Rates direction: regime["rate_inflation_transmission"]["state"]["rates"]["direction"]
+    (values observed: "rising"/"falling"/"steady"; present in vendor/macro/data/regime/latest.json).
+    If the direction field is absent, HIGH-tier is capped at watch; MEDIUM → ok.
   - OHLCV parquet at data/yahoo/<TICKER>.parquet (columns: close_price, close, volume)
   - insider cluster from positioning.insider (n_buyers, n_sellers, net_usd_mn)
 """
@@ -558,6 +563,14 @@ def _lane_extension_giveback(
         flags.append("stretched")
         reasons.append("extension grade: stretched")
 
+    # MFE high flag: mfe >= 20% activates the take-profit lane regardless of giveback
+    mfe_high = mfe_pct is not None and mfe_pct >= _MFE_GIVEBACK_ELEVATED_MFE
+    if mfe_high:
+        flags.append("mfe_high")
+        reasons.append(
+            f"MFE +{mfe_pct*100:.1f}% since entry — take-profit lane active"
+        )
+
     # Giveback flags
     critical_giveback = False
     if mfe_pct is not None and giveback_pct is not None:
@@ -574,10 +587,12 @@ def _lane_extension_giveback(
             critical_giveback = True
 
     # State
+    # Elevated: parabolic extension OR (mfe>=20% AND giveback>=35%)
     if parabolic or (mfe_pct and mfe_pct >= _MFE_GIVEBACK_ELEVATED_MFE
                      and giveback_pct and giveback_pct >= _MFE_GIVEBACK_ELEVATED_GB):
         state = "elevated"
     elif flags:
+        # mfe_high alone (without sufficient giveback) still triggers watch
         state = "watch"
     elif sd is None and metrics:
         state = "ok"
@@ -1132,13 +1147,34 @@ def _lane_ownership_flow(
 # ===========================================================================
 
 def _lane_macro_sensitivity(sd: dict | None, regime: dict, run_date: date) -> dict:
-    """Elevated: rate_beta_tier HIGH AND regime_read = headwind.
-    Watch: HIGH tier alone or in adverse rate trend.
+    """Rates-beta macro sensitivity lane.
 
-    Real data mapping:
-      - macro_sensitivity.tier: 'high'/'medium'/'low'
-      - macro_sensitivity.regime: 'neutral'/'headwind'/'tailwind'
-      - macro_sensitivity.rate_state.direction: 'rising'/'falling'/'steady'
+    Rate beta source (priority order):
+      1. profile.archetype.v2_inputs.rates_beta  (fresh R2 path; present in real AAPL-like data)
+      2. macro_sensitivity.rate_beta              (legacy chip; kept as fallback)
+
+    Beta tiers:
+      HIGH   if abs(beta) >= 0.30
+      MEDIUM if abs(beta) >= 0.15
+      LOW    otherwise
+
+    Rates-direction source:
+      regime["rate_inflation_transmission"]["state"]["rates"]["direction"]
+      Observed values: "rising" / "falling" / "steady"
+      Field is present in the live vendor/macro/data/regime/latest.json payload.
+
+    State logic (when direction field is available):
+      elevated: tier HIGH AND rates rising AND beta < 0   (hurt by rising rates)
+      watch:    tier HIGH (any direction) OR tier MEDIUM AND rates rising/headwind
+      ok:       tier LOW or MEDIUM with non-headwind direction
+
+    State logic (when direction field is ABSENT or not usable):
+      cap at watch for HIGH tier — honest, never elevated without direction.
+      watch reason: "high rate sensitivity (|beta|=X); rates-direction source unavailable"
+
+    coverage_missing only when the profile block is truly absent (no beta at all).
+
+    PRD-R3: no LLM, fully deterministic.
     """
     if sd is None:
         return _missing_lane("macro_sensitivity")
@@ -1150,40 +1186,74 @@ def _lane_macro_sensitivity(sd: dict | None, regime: dict, run_date: date) -> di
     flags: list[str] = []
     reasons: list[str] = []
 
-    ms = sd.get("macro_sensitivity", {})
-    if not ms:
-        return _lane("coverage_missing", reasons=["macro_sensitivity block absent"], asof=sd_asof)
+    # ---- Step 1: resolve rates_beta (fresh R2 path first, fallback to old chip) ----
+    rate_beta: float | None = None
+    try:
+        rate_beta = float(sd["profile"]["archetype"]["v2_inputs"]["rates_beta"])
+    except (KeyError, TypeError, ValueError):
+        pass
 
-    tier = ms.get("tier", "").lower()
-    regime_read = ms.get("regime", "").lower()
-    rate_state = ms.get("rate_state", {})
-    rate_direction = rate_state.get("direction", "") if rate_state else ""
-    rate_beta = ms.get("rate_beta")
+    if rate_beta is None:
+        # Fallback: old macro_sensitivity chip (absent in many fresh tickers)
+        ms_block = sd.get("macro_sensitivity") or {}
+        try:
+            rate_beta = float(ms_block["rate_beta"])
+        except (KeyError, TypeError, ValueError):
+            pass
 
-    # Also check by abs(rate_beta) >= 0.3 as HIGH proxy
-    high_by_beta = rate_beta is not None and abs(rate_beta) >= _RATE_BETA_HIGH_ABS
-    is_high = tier in ("high",) or high_by_beta
+    if rate_beta is None:
+        return _lane("coverage_missing", reasons=["rates_beta absent (profile.archetype.v2_inputs and macro_sensitivity both missing)"], asof=sd_asof)
 
-    headwind = regime_read in ("headwind",)
-    # Adverse rate trend: rates rising and negative rate_beta (bond-proxy stocks hurt)
-    adverse_rate = rate_direction == "rising" and rate_beta is not None and rate_beta < -0.2
+    # ---- Step 2: tier ----
+    abs_beta = abs(rate_beta)
+    if abs_beta >= _RATE_BETA_HIGH_ABS:
+        tier = "high"
+    elif abs_beta >= 0.15:
+        tier = "medium"
+    else:
+        tier = "low"
 
-    if is_high:
-        flags.append(f"rate_sensitivity_high")
-        reasons.append(
-            f"rate beta {rate_beta:.3f} (tier={tier})" if rate_beta is not None
-            else f"rate sensitivity tier: {tier}"
-        )
-        if headwind:
-            flags.append("regime_headwind")
-            reasons.append(f"regime read: {regime_read}")
-    if adverse_rate and not headwind:
-        flags.append("adverse_rate_trend")
-        reasons.append(f"rising rates with negative rate beta {rate_beta:.3f}")
+    # ---- Step 3: rates direction from regime ----
+    rates_direction: str | None = None
+    try:
+        rates_direction = str(
+            regime["rate_inflation_transmission"]["state"]["rates"]["direction"]
+        ).lower()
+    except (KeyError, TypeError):
+        pass
 
-    if is_high and headwind:
+    direction_available = rates_direction in ("rising", "falling", "steady")
+
+    # ---- Step 4: state logic ----
+    beta_str = f"|beta|={abs_beta:.3f} (raw {rate_beta:+.3f})"
+
+    if tier == "low":
+        return _lane("ok", flags=[], reasons=[f"low rate sensitivity ({beta_str})"], asof=sd_asof)
+
+    # MEDIUM or HIGH
+    flags.append(f"rate_sensitivity_{tier}")
+    reasons.append(f"rate sensitivity {tier.upper()} ({beta_str})")
+
+    if not direction_available:
+        # Cap at watch — cannot determine headwind without direction
+        reasons.append(f"rates-direction source unavailable (regime field absent or unrecognized: {rates_direction!r})")
+        if tier == "high":
+            return _lane("watch", flags, reasons, asof=sd_asof)
+        else:
+            # MEDIUM with no direction → ok (not enough signal to warn)
+            return _lane("ok", flags, reasons, asof=sd_asof)
+
+    # Direction is available
+    rates_rising = rates_direction == "rising"
+    headwind = rates_rising and rate_beta < 0  # negative beta hurt by rising rates
+
+    if headwind:
+        flags.append("adverse_rates_headwind")
+        reasons.append(f"rising rates headwind: rates {rates_direction}, beta {rate_beta:+.3f} (negative → rate-sensitive stocks hurt)")
+
+    if tier == "high" and headwind:
         state = "elevated"
-    elif is_high or adverse_rate:
+    elif tier == "high" or (tier == "medium" and headwind):
         state = "watch"
     else:
         state = "ok"
@@ -1452,6 +1522,17 @@ def _assign_role(lanes: dict, path: dict, position: dict) -> tuple[str, list[str
         if len(watch_names) >= 2:
             monitor_reasons.append(f"{len(watch_names)} watch lanes: {', '.join(watch_names)}")
         return "monitor", monitor_reasons
+
+    # --- info (coverage floor) ---
+    # When >= 5 of the 8 evidence lanes are coverage_missing and no higher role
+    # fired, the position reads as calm with no evidence — violates PRD-R6 spirit.
+    # Cap at "info" so the user sees "insufficient evidence" rather than a false calm.
+    missing_count = sum(
+        1 for k in _EVIDENCE_LANES
+        if lanes.get(k, {}).get("state") == "coverage_missing"
+    )
+    if missing_count >= 5:
+        return "info", ["insufficient evidence coverage (price_only ticker)"]
 
     return "ok", []
 
