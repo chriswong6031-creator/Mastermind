@@ -58,6 +58,9 @@ _EVENT_WINDOW_DAYS = 14
 # Maximum number of rejection error classes emitted in decision_flow.
 _MAX_REJECTION_CLASSES = 10
 
+# Maximum number of by_outcome keys emitted in outcome_mix.
+_MAX_OUTCOME_KEYS = 12
+
 # Public-surface guard patterns — values matching these must never appear in the output.
 _SECRET_PATTERNS = [
     re.compile(r'\bMASTERMIND_[A-Z_]+\b'),          # env var names
@@ -361,9 +364,16 @@ def _outcome_mix(window_days: int) -> dict:
             outcome_val = row.get("outcome")
             if outcome_val is None:
                 continue
-            by_outcome[str(outcome_val)] += 1
+            # Sanitize outcome value to a safe key before storing (MAJOR-1).
+            safe_key = _sanitize_key(str(outcome_val))
+            by_outcome[safe_key] += 1
             n_resolved += 1
+        # Cap to _MAX_OUTCOME_KEYS: keep top by count, break ties lexicographically.
+        if len(by_outcome) > _MAX_OUTCOME_KEYS:
+            top_keys = sorted(by_outcome, key=lambda k: (-by_outcome[k], k))[:_MAX_OUTCOME_KEYS]
+            by_outcome = defaultdict(int, {k: by_outcome[k] for k in top_keys})
         return {
+            "state": "ok",
             "n_resolved": n_resolved,
             "by_outcome": dict(by_outcome),
         }
@@ -402,6 +412,9 @@ def _context_audit(window_days: int) -> dict:
             if ts is not None and ts < cut:
                 continue
             status = str(row.get("status", "absent"))
+            # MINOR-2: unknown status → bucket into n_absent (conservative: unusable context).
+            if status not in {"present", "stale", "absent"}:
+                status = "absent"
             counts[status] += 1
             n_total += 1
         if n_total == 0:
@@ -409,6 +422,7 @@ def _context_audit(window_days: int) -> dict:
         n_present = counts.get("present", 0)
         seen_rate = round(n_present / n_total, 3) if n_total > 0 else 0.0
         return {
+            "state": "ok",
             "n_present": n_present,
             "n_stale": counts.get("stale", 0),
             "n_absent": counts.get("absent", 0),
@@ -485,33 +499,57 @@ def build(window_days: int = _EVENT_WINDOW_DAYS) -> dict:
 
 
 def _redact_secrets(payload: dict) -> dict:
-    """Scan the serialized payload for secret-shaped strings and redact matching values.
+    """Scan the payload for secret-shaped strings and redact matching content.
 
-    Walks the payload in-place (returns the modified dict).  Any string value that
-    matches a _SECRET_PATTERNS pattern is replaced with "<redacted>".  Emits a
-    GuardrailResult(ADVISORY_ONLY) run-event for each offending key found so the
+    Walks the payload recursively (returns the modified structure).  Covers both
+    string VALUES and dict KEYS: any string that matches a _SECRET_PATTERNS pattern
+    is replaced with "<redacted>" for values, or the key is rewritten to "<redacted>"
+    for keys.  On a key collision after rewriting, numeric values are summed; all other
+    values keep the last-written value (keys are rare, counts are the common case).
+
+    Pattern-limited — this is a backstop against accidental leakage; producer-side
+    sanitization (counts-only ledger reads, _sanitize_key) remains the primary guarantee.
+
+    Emits a GuardrailResult(ADVISORY_ONLY) run-event for each offending path so the
     incident is logged without ever blocking the publish.
     """
+    def _redact_str(s: str, path: str) -> str:
+        for pat in _SECRET_PATTERNS:
+            if pat.search(s):
+                try:
+                    from control_plane.guardrail import GuardrailResult, Severity
+                    result = GuardrailResult.failed(
+                        guard="nw_feedback_redaction",
+                        severity=Severity.ADVISORY_ONLY,
+                        detail=f"secret-shaped string redacted at {path!r}",
+                        action_taken="string replaced with <redacted>",
+                        extra={"path": path, "pattern": pat.pattern},
+                    )
+                    result.log(job="export_macro_snapshot")
+                except Exception:
+                    pass  # logging failure must never prevent the redaction
+                return "<redacted>"
+        return s
+
     def _redact_value(v: object, path: str) -> object:
         if isinstance(v, str):
-            for pat in _SECRET_PATTERNS:
-                if pat.search(v):
-                    try:
-                        from control_plane.guardrail import GuardrailResult, Severity
-                        result = GuardrailResult.failed(
-                            guard="nw_feedback_redaction",
-                            severity=Severity.ADVISORY_ONLY,
-                            detail=f"secret-shaped value redacted at {path!r}",
-                            action_taken="value replaced with <redacted>",
-                            extra={"path": path, "pattern": pat.pattern},
-                        )
-                        result.log(job="export_macro_snapshot")
-                    except Exception:
-                        pass  # logging failure must never prevent the redaction
-                    return "<redacted>"
-            return v
+            return _redact_str(v, path)
         if isinstance(v, dict):
-            return {k: _redact_value(val, f"{path}.{k}") for k, val in v.items()}
+            out: dict = {}
+            for k, val in v.items():
+                # Redact the key itself (MAJOR-2).
+                safe_k = _redact_str(str(k), f"{path}.{k}[key]") if isinstance(k, str) else k
+                redacted_val = _redact_value(val, f"{path}.{k}")
+                if safe_k in out:
+                    # Collision after key redaction — merge by summing numeric values.
+                    existing = out[safe_k]
+                    if isinstance(existing, (int, float)) and isinstance(redacted_val, (int, float)):
+                        out[safe_k] = existing + redacted_val
+                    else:
+                        out[safe_k] = redacted_val
+                else:
+                    out[safe_k] = redacted_val
+            return out
         if isinstance(v, list):
             return [_redact_value(item, f"{path}[{i}]") for i, item in enumerate(v)]
         return v

@@ -47,6 +47,38 @@ def _rl_log(run_id, step_type, title, detail, **kw):
         pass
 
 
+def _append_nw_context_audit(root: Path, run_id: str, audit_row: dict) -> None:
+    """Append one nw_context_audit row to the persistent JSONL sidecar.
+
+    Extracted from the W-NW.1 seam so it can be unit-tested directly (MAJOR-3).
+    Append-only; best-effort — IOErrors and all other exceptions are swallowed internally,
+    matching the never-raise contract of _rl_log.  The call site also wraps in try/except
+    for defence-in-depth, but this function is safe to call bare.
+
+    Args:
+        root:      repo root Path (used to locate data/brain/nw_context_audit.jsonl).
+        run_id:    current run identifier string.
+        audit_row: dict with keys {status, asof, age_days, n_candidates} as returned by
+                   neural_web_context.audit_row(); a 'ts' field is injected here.
+    """
+    try:
+        import json as _json
+        audit_path = root / "data" / "brain" / "nw_context_audit.jsonl"
+        audit_path.parent.mkdir(parents=True, exist_ok=True)
+        row = {
+            "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "run_id": run_id,
+            "status": audit_row.get("status"),
+            "asof": audit_row.get("asof"),
+            "age_days": audit_row.get("age_days"),
+            "n_candidates": audit_row.get("n_candidates"),
+        }
+        with audit_path.open("a", encoding="utf-8") as fh:
+            fh.write(_json.dumps(row, default=str) + "\n")
+    except Exception:
+        pass  # best-effort append; never raise
+
+
 def _conv_theme_id(t: str) -> str:
     """A REAL per-name theme key for the cross-sleeve theme cap. Every conviction name used to share
     the literal 'conviction', so their summed weight tripped the 0.25 book theme-cap every run and
@@ -454,22 +486,14 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
                 f"age_days={_nw_audit.get('age_days')} n_candidates={_nw_audit.get('n_candidates')}",
                 **_nw_audit)
         # W-M: append to persistent nw_context_audit.jsonl sidecar (FB-R11, FB-R3).
-        # Append-only; best-effort — exceptions never propagate (same pattern as _rl_log).
+        # Delegates to _append_nw_context_audit (MAJOR-3) so the logic is unit-testable.
+        # Never-raise wrapper kept at the call site per docstring contract.
         try:
-            import json as _json
-            from pathlib import Path as _Path
-            _audit_path = _Path(__file__).resolve().parent.parent / "data" / "brain" / "nw_context_audit.jsonl"
-            _audit_path.parent.mkdir(parents=True, exist_ok=True)
-            _audit_row = {
-                "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "run_id": _run_id,
-                "status": _nw_audit.get("status"),
-                "asof": _nw_audit.get("asof"),
-                "age_days": _nw_audit.get("age_days"),
-                "n_candidates": _nw_audit.get("n_candidates"),
-            }
-            with _audit_path.open("a", encoding="utf-8") as _fh:
-                _fh.write(_json.dumps(_audit_row, default=str) + "\n")
+            _append_nw_context_audit(
+                Path(__file__).resolve().parent.parent,
+                _run_id,
+                _nw_audit,
+            )
         except Exception:
             pass  # best-effort append; never raise
         if _nwc_mod.nw_prompts_enabled():

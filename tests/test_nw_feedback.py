@@ -933,42 +933,243 @@ def test_context_audit_in_build_output(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Sidecar append shape test
+# Sidecar append: real seam test via _append_nw_context_audit (MAJOR-3)
 # ---------------------------------------------------------------------------
 
-def test_sidecar_append_shape(tmp_path):
-    """nw_context_audit.jsonl rows written by the seam have the expected fields."""
-    import json as _json
-    # Simulate what phase2.py writes:
-    audit_path = tmp_path / "brain" / "nw_context_audit.jsonl"
-    audit_path.parent.mkdir(parents=True, exist_ok=True)
-    # Write one row in the exact shape phase2.py produces
-    from datetime import datetime, timezone
-    row = {
-        "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "run_id": "test-run-001",
+def test_append_nw_context_audit_row_shape(tmp_path):
+    """_append_nw_context_audit writes a row with all required fields."""
+    from bot.phase2 import _append_nw_context_audit
+
+    audit_row = {
         "status": "present",
         "asof": "2026-07-05",
         "age_days": 1,
         "n_candidates": 5,
     }
-    with audit_path.open("a") as fh:
-        fh.write(_json.dumps(row, default=str) + "\n")
-    # Verify it can be read back and parsed
+    _append_nw_context_audit(tmp_path, "run-001", audit_row)
+
+    audit_path = tmp_path / "data" / "brain" / "nw_context_audit.jsonl"
+    assert audit_path.exists(), "sidecar file must be created"
     lines = audit_path.read_text().strip().splitlines()
     assert len(lines) == 1
-    parsed = _json.loads(lines[0])
+    parsed = json.loads(lines[0])
     assert set(parsed.keys()) >= {"ts", "run_id", "status", "asof", "age_days", "n_candidates"}
-    assert parsed["status"] in ("present", "stale", "absent")
-    # Verify _context_audit can read it
-    result = nw_feedback._context_audit.__wrapped__(14) if hasattr(nw_feedback._context_audit, "__wrapped__") else None
-    if result is None:
-        # Direct call with patched path
-        original = nw_feedback._nw_context_audit_path
-        nw_feedback._nw_context_audit_path = lambda: audit_path
+    assert parsed["run_id"] == "run-001"
+    assert parsed["status"] == "present"
+    assert parsed["asof"] == "2026-07-05"
+    assert parsed["age_days"] == 1
+    assert parsed["n_candidates"] == 5
+
+
+def test_append_nw_context_audit_append_only(tmp_path):
+    """_append_nw_context_audit is append-only: multiple calls yield multiple rows."""
+    from bot.phase2 import _append_nw_context_audit
+
+    for i in range(3):
+        _append_nw_context_audit(tmp_path, f"run-{i:03d}", {
+            "status": "absent", "asof": None, "age_days": None, "n_candidates": 0,
+        })
+
+    audit_path = tmp_path / "data" / "brain" / "nw_context_audit.jsonl"
+    lines = [l for l in audit_path.read_text().strip().splitlines() if l]
+    assert len(lines) == 3, "must append, not overwrite"
+    run_ids = [json.loads(l)["run_id"] for l in lines]
+    assert run_ids == ["run-000", "run-001", "run-002"]
+
+
+def test_append_nw_context_audit_ioerror_swallowed(tmp_path):
+    """_append_nw_context_audit swallows IOError — the caller's never-raise contract."""
+    from bot.phase2 import _append_nw_context_audit
+    from unittest.mock import patch
+
+    # Make mkdir fail to provoke an IOError-family exception inside the function.
+    with patch("pathlib.Path.mkdir", side_effect=OSError("disk full")):
         try:
-            result = nw_feedback._context_audit(14)
-        finally:
-            nw_feedback._nw_context_audit_path = original
-    assert result["n_runs_total"] == 1
+            _append_nw_context_audit(tmp_path, "run-err", {"status": "absent"})
+        except Exception as exc:
+            pytest.fail(
+                f"_append_nw_context_audit must swallow IOError but raised: {exc!r}"
+            )
+
+
+def test_seam_calls_append_nw_context_audit():
+    """Source-level assertion: _append_nw_context_audit( is invoked in the nw_context block of phase2.run.
+
+    Rationale: driving phase2.run() in this worktree requires a live DB, live ledgers,
+    and a live LLM call — not practical in unit tests.  The weakest acceptable form of
+    the MAJOR-3 seam test is a source inspection asserting the extracted function is
+    referenced inside the nw_context block (the try/except around _nwc_mod.audit_row()).
+    This test will fail if the inline block is restored (removing the extracted call),
+    which is the deletion-detection requirement.
+    """
+    import inspect
+    from bot import phase2
+
+    src = inspect.getsource(phase2.run)
+    assert "_append_nw_context_audit(" in src, (
+        "The nw_context seam in phase2.run must call _append_nw_context_audit(). "
+        "Restoring the inline sidecar block would break the real seam test contract. "
+        "See MAJOR-3 in the Opus review."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Shape stabilization: state field always present (outcome_mix + context_audit)
+# ---------------------------------------------------------------------------
+
+def test_outcome_mix_state_ok_when_populated(monkeypatch, tmp_path):
+    """outcome_mix emits state='ok' when the ledger has in-window rows."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    rows = [{"thesis_id": "t1", "asof_resolved": now[:10], "outcome": 1}]
+    p = _write_outcome_ledger(tmp_path, rows)
+    monkeypatch.setattr(nw_feedback, "_outcome_ledger_path", lambda: p)
+    result = nw_feedback._outcome_mix(14)
+    assert result.get("state") == "ok", (
+        f"outcome_mix with populated rows must emit state='ok', got {result.get('state')!r}"
+    )
+
+
+def test_outcome_mix_state_absent_when_missing(monkeypatch, tmp_path):
+    """outcome_mix emits state='absent' when the ledger is missing."""
+    monkeypatch.setattr(nw_feedback, "_outcome_ledger_path",
+                        lambda: tmp_path / "nonexistent" / "outcome_ledger.jsonl")
+    result = nw_feedback._outcome_mix(14)
+    assert result.get("state") == "absent"
+
+
+def test_context_audit_state_ok_when_populated(monkeypatch, tmp_path):
+    """_context_audit emits state='ok' when the sidecar has in-window rows."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    rows = [{"ts": now, "run_id": "r1", "status": "present", "asof": "2026-07-01",
+             "age_days": 5, "n_candidates": 2}]
+    p = _write_context_audit(tmp_path, rows)
+    monkeypatch.setattr(nw_feedback, "_nw_context_audit_path", lambda: p)
+    result = nw_feedback._context_audit(14)
+    assert result.get("state") == "ok", (
+        f"_context_audit with populated rows must emit state='ok', got {result.get('state')!r}"
+    )
+
+
+def test_context_audit_state_accruing_when_missing(monkeypatch, tmp_path):
+    """_context_audit emits state='accruing' when the sidecar is absent."""
+    monkeypatch.setattr(nw_feedback, "_nw_context_audit_path",
+                        lambda: tmp_path / "nonexistent" / "nw_context_audit.jsonl")
+    result = nw_feedback._context_audit(14)
+    assert result.get("state") == "accruing"
+
+
+# ---------------------------------------------------------------------------
+# MINOR-2: unknown context status buckets into n_absent
+# ---------------------------------------------------------------------------
+
+def test_context_audit_unknown_status_buckets_to_absent(monkeypatch, tmp_path):
+    """Unknown status strings are counted as n_absent (conservative: unusable context)."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    rows = [
+        {"ts": now, "run_id": "r1", "status": "present"},
+        {"ts": now, "run_id": "r2", "status": "degraded"},   # unknown → n_absent
+        {"ts": now, "run_id": "r3", "status": "error"},      # unknown → n_absent
+        {"ts": now, "run_id": "r4", "status": "absent"},
+    ]
+    p = _write_context_audit(tmp_path, rows)
+    monkeypatch.setattr(nw_feedback, "_nw_context_audit_path", lambda: p)
+    result = nw_feedback._context_audit(14)
+    assert result["n_runs_total"] == 4
     assert result["n_present"] == 1
+    assert result["n_absent"] == 3, (
+        f"Unknown statuses 'degraded'+'error' must bucket into n_absent (got n_absent={result['n_absent']})"
+    )
+    assert result["n_stale"] == 0
+
+
+# ---------------------------------------------------------------------------
+# MINOR-1: prose/ticker outcome value sanitized + capped (MAJOR-1 negative test)
+# ---------------------------------------------------------------------------
+
+def test_outcome_mix_prose_outcome_sanitized_and_no_ticker(monkeypatch, tmp_path):
+    """Prose/ticker outcome values are sanitized — AAPL and prose must not appear as by_outcome keys."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    # Simulate 502 distinct prose outcomes (only 12 must survive the cap)
+    rows = []
+    for i in range(20):
+        rows.append({"asof_resolved": now[:10], "outcome": f"AAPL beat by {i}%"})
+    for i in range(20):
+        rows.append({"asof_resolved": now[:10], "outcome": f"TSLA missed by {i}pts"})
+    # Also add some simple numeric outcomes that should survive
+    for v in [0, 1]:
+        rows.append({"asof_resolved": now[:10], "outcome": v})
+    p = _write_outcome_ledger(tmp_path, rows)
+    monkeypatch.setattr(nw_feedback, "_outcome_ledger_path", lambda: p)
+
+    result = nw_feedback._outcome_mix(14)
+    serialized = json.dumps(result)
+
+    # No ticker or prose must appear
+    assert "AAPL" not in serialized, "AAPL ticker must not appear in outcome_mix output"
+    assert "TSLA" not in serialized, "TSLA ticker must not appear in outcome_mix output"
+    assert "beat" not in serialized, "Prose word 'beat' must not appear in outcome_mix keys"
+    assert "missed" not in serialized, "Prose word 'missed' must not appear in outcome_mix keys"
+
+    # Cap: at most 12 keys
+    assert len(result["by_outcome"]) <= 12, (
+        f"by_outcome must be capped at 12 keys, got {len(result['by_outcome'])}"
+    )
+
+    # The keys that survive must be sanitized (all safe charset)
+    _safe_re = re.compile(r'^[a-z0-9_:.\-]+$')
+    for k in result["by_outcome"]:
+        assert _safe_re.match(k), f"Unsafe by_outcome key survived sanitization: {k!r}"
+
+
+def test_outcome_mix_digit_keys_survive_sanitization(monkeypatch, tmp_path):
+    """Digit-only outcome values '0'/'1' survive _sanitize_key unchanged (MAJOR-1 guard)."""
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    rows = [
+        {"asof_resolved": now[:10], "outcome": 0},
+        {"asof_resolved": now[:10], "outcome": 1},
+        {"asof_resolved": now[:10], "outcome": 1},
+    ]
+    p = _write_outcome_ledger(tmp_path, rows)
+    monkeypatch.setattr(nw_feedback, "_outcome_ledger_path", lambda: p)
+    result = nw_feedback._outcome_mix(14)
+    assert result["by_outcome"].get("0") == 1
+    assert result["by_outcome"].get("1") == 2
+
+
+# ---------------------------------------------------------------------------
+# MAJOR-2: _redact_secrets backstops dict KEYS
+# ---------------------------------------------------------------------------
+
+def test_redact_secrets_redacts_mastermind_key(tmp_path):
+    """_redact_secrets must redact a MASTERMIND_* string that appears as a dict KEY."""
+    payload = {
+        "schema": "mastermind_nw_feedback.v2",
+        "outcome_mix": {
+            "MASTERMIND_SECRET_KEY": 42,
+            "safe_key": 1,
+        },
+    }
+    result = nw_feedback._redact_secrets(payload)
+    serialized = json.dumps(result)
+    assert "MASTERMIND_SECRET_KEY" not in serialized, (
+        "_redact_secrets must redact MASTERMIND_* dict keys, not just values"
+    )
+    assert "<redacted>" in serialized
+
+
+def test_redact_secrets_key_collision_sums_numeric(tmp_path):
+    """When key redaction causes a collision, numeric values are summed."""
+    # Two keys that both redact to "<redacted>" — values should be summed
+    payload = {
+        "counts": {
+            "MASTERMIND_KEY_A": 3,
+            "MASTERMIND_KEY_B": 5,
+        }
+    }
+    result = nw_feedback._redact_secrets(payload)
+    counts = result["counts"]
+    # Both keys collapsed to "<redacted>"; numeric sum = 8
+    assert "<redacted>" in counts
+    assert counts["<redacted>"] == 8, (
+        f"Colliding redacted numeric keys must be summed (expected 8, got {counts.get('<redacted>')})"
+    )
