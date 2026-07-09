@@ -37,6 +37,13 @@ _AM_CLOSE = time(11, 30)
 _PM_OPEN = time(13, 0)
 _PM_CLOSE = time(15, 0)
 
+# HKEX regular cash session (Hong Kong time == CST, both UTC+8, no DST): 09:30–12:00 / 13:00–16:00.
+# The HK book gates on THESE bounds (via is_open(venue='HK')), not the earlier-closing A-share ones.
+_HK_AM_OPEN = time(9, 30)
+_HK_AM_CLOSE = time(12, 0)
+_HK_PM_OPEN = time(13, 0)
+_HK_PM_CLOSE = time(16, 0)
+
 # SSE/SZSE full-day closures (best-effort; Lunar holidays are approximate in forward years —
 # refresh from the official exchange calendar yearly). Covers the live track's near lifetime.
 _HOLIDAYS: frozenset[date] = frozenset(
@@ -167,64 +174,76 @@ def _now_cst(now: datetime | None) -> datetime:
     return now.astimezone(CST)
 
 
-def is_open(now: datetime | None = None) -> bool:
-    """True iff a mainland A-share session half is open right now (CST)."""
+def is_open(now: datetime | None = None, venue: str = "CN") -> bool:
+    """True iff a regular session half is open right now at `venue` ('CN' A-share / 'HK' HKEX).
+
+    Default ``venue='CN'`` keeps the mainland A-share session + holidays (existing callers unchanged).
+    ``venue='HK'`` gates on the HKEX holiday set AND the HKEX session hours (09:30–12:00 / 13:00–16:00;
+    HK time == CST, both UTC+8). Fixes CN-HK-1: the HK book was gating on the A-share calendar+hours,
+    so it read HKEX-only holidays (e.g. 2026-07-01) as OPEN and the 15:00–16:00 HK hour as CLOSED."""
     cst = _now_cst(now)
-    if not is_trading_day(cst.date()):
+    if not is_trading_day(cst.date(), venue=venue):
         return False
     t = cst.time()
+    if venue == "HK":
+        return (_HK_AM_OPEN <= t < _HK_AM_CLOSE) or (_HK_PM_OPEN <= t < _HK_PM_CLOSE)
     return (_AM_OPEN <= t < _AM_CLOSE) or (_PM_OPEN <= t < _PM_CLOSE)
 
 
-def previous_trading_day(d: date) -> date:
-    """The most recent trading day strictly before `d`."""
+def previous_trading_day(d: date, venue: str = "CN") -> date:
+    """The most recent trading day strictly before `d` (at `venue`)."""
     cur = d - timedelta(days=1)
-    while not is_trading_day(cur):
+    while not is_trading_day(cur, venue=venue):
         cur -= timedelta(days=1)
     return cur
 
 
-def next_trading_day(d: date) -> date:
-    """The next trading day strictly after `d`."""
+def next_trading_day(d: date, venue: str = "CN") -> date:
+    """The next trading day strictly after `d` (at `venue`)."""
     cur = d + timedelta(days=1)
-    while not is_trading_day(cur):
+    while not is_trading_day(cur, venue=venue):
         cur += timedelta(days=1)
     return cur
 
 
-def next_open(now: datetime | None = None) -> datetime:
-    """The next moment a session opens: today's morning open if still pre-market, the same-day
-    13:00 afternoon reopen during the 11:30–13:00 lunch break, else the next trading day's 09:30."""
+def next_open(now: datetime | None = None, venue: str = "CN") -> datetime:
+    """The next moment a session opens (at `venue`): today's morning open if still pre-market, the
+    same-day afternoon reopen during the lunch break, else the next trading day's morning open."""
     cst = _now_cst(now)
     today = cst.date()
-    if is_trading_day(today):
+    am_open, am_close, pm_open = (
+        (_HK_AM_OPEN, _HK_AM_CLOSE, _HK_PM_OPEN) if venue == "HK"
+        else (_AM_OPEN, _AM_CLOSE, _PM_OPEN))
+    if is_trading_day(today, venue=venue):
         t = cst.time()
-        if t < _AM_OPEN:
-            return datetime.combine(today, _AM_OPEN, tzinfo=CST)
-        if _AM_CLOSE <= t < _PM_OPEN:                 # lunch break — the next open is this afternoon
-            return datetime.combine(today, _PM_OPEN, tzinfo=CST)
-    nxt = next_trading_day(today)
-    return datetime.combine(nxt, _AM_OPEN, tzinfo=CST)
+        if t < am_open:
+            return datetime.combine(today, am_open, tzinfo=CST)
+        if am_close <= t < pm_open:                   # lunch break — the next open is this afternoon
+            return datetime.combine(today, pm_open, tzinfo=CST)
+    nxt = next_trading_day(today, venue=venue)
+    return datetime.combine(nxt, am_open, tzinfo=CST)
 
 
-def next_open_day(now: datetime | None = None) -> date:
-    """Calendar date of the next session open (for display: 'fills at <date>')."""
-    return next_open(now).date()
+def next_open_day(now: datetime | None = None, venue: str = "CN") -> date:
+    """Calendar date of the next session open at `venue` (for display: 'fills at <date>')."""
+    return next_open(now, venue=venue).date()
 
 
-def status(now: datetime | None = None) -> dict:
-    """A compact, display-ready snapshot of where we are in the China calendar."""
+def status(now: datetime | None = None, venue: str = "CN") -> dict:
+    """A compact, display-ready snapshot of where we are in the calendar (A-share by default, HKEX
+    when ``venue='HK'`` — so the HK book's status strip reflects its own exchange, not the A-share)."""
     cst = _now_cst(now)
-    open_now = is_open(cst)
-    nxt = next_open(cst)
+    open_now = is_open(cst, venue=venue)
+    nxt = next_open(cst, venue=venue)
+    hk = venue == "HK"
     return {
         "open": open_now,
-        "venue": "A-share (Shanghai/Shenzhen)",
+        "venue": "HKEX (Hong Kong)" if hk else "A-share (Shanghai/Shenzhen)",
         "asof": cst.isoformat(),        # stable key matching no-suffix consumers
         "asof_cst": cst.isoformat(),
-        "trading_day": is_trading_day(cst.date()),
-        "holiday": is_holiday(cst.date()),
+        "trading_day": is_trading_day(cst.date(), venue=venue),
+        "holiday": (is_hkex_holiday(cst.date()) if hk else is_holiday(cst.date())),
         "next_open": nxt.isoformat(),
         "next_open_day": nxt.date().isoformat(),
-        "prev_trading_day": previous_trading_day(cst.date()).isoformat(),
+        "prev_trading_day": previous_trading_day(cst.date(), venue=venue).isoformat(),
     }

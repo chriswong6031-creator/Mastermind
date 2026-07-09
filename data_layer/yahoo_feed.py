@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import os
+import threading
 import time
 from datetime import date
 
@@ -29,6 +30,12 @@ _CACHE: dict[str, float] = {}      # SYMBOL -> latest Close quote in its local c
 _OPEN_CACHE: dict[str, float] = {} # SYMBOL -> today's session Open price (cleared daily, same TTL)
 _TS: dict[str, float] = {}         # SYMBOL -> monotonic ts of its last fetch (drives the intraday TTL)
 _FETCHED_DAY: str | None = None    # the calendar day the cache was populated for (cleared when it rolls)
+
+# Serialise blocking fetches so concurrent callers dedup onto ONE batched download (kills the
+# book-switch stampede), and track which symbols a background thread is already fetching so the hot
+# request path can refresh the cache off-thread without ever blocking on yfinance.
+_LOCK = threading.Lock()
+_INFLIGHT: set[str] = set()
 
 
 def _ttl() -> float:
@@ -65,17 +72,60 @@ def _fresh(sym: str, now: float, ttl: float) -> bool:
     return (now - _TS.get(sym, 0.0)) <= ttl
 
 
-def warm(tickers) -> None:
+def warm(tickers, background: bool = False) -> None:
     """Fetch quotes for `tickers` in ONE batched yfinance call and cache the latest per symbol.
     Re-fetches only symbols that are missing or past the intraday TTL — fresh symbols cost nothing.
     Best-effort: a missing yfinance / network / parse failure leaves the cache as-is, and callers
-    degrade to the vendored snapshot."""
+    degrade to the vendored snapshot.
+
+    ``background=True`` (the hot request path — the dashboard) runs the fetch in a daemon thread and
+    returns immediately, so a book SWITCH never blocks on a network download: it serves whatever is
+    cached now (see ``price_cached``) or the caller's own instant Terminal-snapshot fallback, and the
+    fresh quote lands on a subsequent lookup. Concurrent background callers dedup via ``_INFLIGHT`` —
+    the three parallel switch endpoints spawn at most ONE fetch, not three (the old stampede).
+
+    ``background=False`` (scheduler pre-warm / NAV marks) blocks under ``_LOCK`` so two concurrent
+    callers serialise onto a single batched download instead of both hitting the network."""
     _reset_if_stale()
     now, ttl = time.monotonic(), _ttl()
     want = sorted({(t or "").upper().strip() for t in (tickers or [])} - {""})
     want = [s for s in want if not _fresh(s, now, ttl)]
     if not want:
         return
+    if background:
+        # NON-BLOCKING: if a fetch already holds the lock (a blocking pre-warm / NAV mark is mid
+        # yf.download), do NOT wait — the request serves the cache / Terminal fallback and the fresh
+        # quote lands on a later lookup. Only _INFLIGHT is touched under the (try-acquired) lock.
+        if not _LOCK.acquire(blocking=False):
+            return
+        try:
+            todo = [s for s in want if s not in _INFLIGHT]
+            if not todo:
+                return
+            _INFLIGHT.update(todo)
+        finally:
+            _LOCK.release()
+        threading.Thread(target=_bg_fetch, args=(todo,), daemon=True).start()
+        return
+    with _LOCK:
+        # re-check freshness under the lock — a caller we queued behind may have just populated these
+        todo = [s for s in want if not _fresh(s, time.monotonic(), ttl)]
+        if todo:
+            _fetch_and_cache(todo)
+
+
+def _bg_fetch(want) -> None:
+    """Daemon-thread wrapper: fetch off the request thread, then clear the in-flight guard."""
+    try:
+        _fetch_and_cache(want)
+    finally:
+        with _LOCK:
+            _INFLIGHT.difference_update(want)
+
+
+def _fetch_and_cache(want) -> None:
+    """The actual batched yfinance download + cache populate (Close for marks, Open for settle)."""
+    now = time.monotonic()
     try:
         import yfinance as yf
         df = yf.download(want, period="7d", progress=False, auto_adjust=False, threads=False)
@@ -132,6 +182,19 @@ def price_local(ticker: str, asof: str | None = None) -> float | None:
         return None
     warm([t])                                     # no-op when the symbol is still fresh
     return _CACHE.get(t)
+
+
+def price_cached(ticker: str) -> float | None:
+    """Cache-ONLY lookup: the last cached quote in its LOCAL currency if still fresh, else None.
+    NEVER fetches — for the hot request path (the dashboard). Pair with a prior
+    ``warm(..., background=True)`` and a Terminal-snapshot fallback so a book switch never blocks."""
+    _reset_if_stale()
+    t = (ticker or "").upper().strip()
+    if not t:
+        return None
+    if _fresh(t, time.monotonic(), _ttl()):
+        return _CACHE.get(t)
+    return None
 
 
 def open_price_local(ticker: str) -> float | None:

@@ -512,16 +512,17 @@ def test_enrich_quotes_computes_market_value():
         {"id": "p1", "ticker": "SPY", "shares": 10.0, "entry_price": 400.0},
     ]
 
-    def mock_warm(tickers):
+    def mock_warm(tickers, background=False):
         pass
 
-    # Stub prev-close fetch at the yfinance level by temporarily replacing the
-    # entire try/except block: patch _enrich_quotes's local yfinance import path
-    # by removing yfinance from sys.modules so the inner try falls through.
+    # _enrich_quotes now reads the NON-BLOCKING cache accessor (price_cached) rather than the blocking
+    # price_local, and warms in the background — mirror that here. Prev-close is now fetched in a daemon
+    # thread; popping yfinance from sys.modules makes that thread's import fail (no prev), which is fine —
+    # this test asserts last / market_value / pnl, not day_change.
     yf_backup = sys.modules.pop("yfinance", None)
     try:
         with patch("data_layer.yahoo_feed.warm", mock_warm), \
-             patch("data_layer.yahoo_feed.price_local", return_value=450.0):
+             patch("data_layer.yahoo_feed.price_cached", return_value=450.0):
             enriched = _enrich_quotes(positions)
     finally:
         if yf_backup is not None:

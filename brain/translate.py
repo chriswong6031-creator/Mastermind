@@ -41,16 +41,29 @@ _CACHE_PATH = _ROOT / "data" / "brain" / "translations.json"
 # Cache helpers
 # ---------------------------------------------------------------------------
 
+# In-process memo of the translations cache, invalidated by file mtime. The dashboard hot path
+# (app/web.api_portfolio) calls cached_zh dozens-to-100+ times per request; re-reading + re-parsing
+# the whole JSON file each time was pure wasted I/O. _save_cache replaces the file (mtime bumps), so a
+# warm-cache write is picked up on the very next load.
+_cache_mem: dict[str, str] | None = None
+_cache_mtime: float = -1.0
+
+
 def _load_cache() -> dict[str, str]:
-    """Load the translations cache from disk. Returns {} on any error."""
+    """Load the translations cache from disk, memoized by mtime. Returns {} on any error."""
+    global _cache_mem, _cache_mtime
     try:
         if _CACHE_PATH.exists():
+            mt = _CACHE_PATH.stat().st_mtime
+            if _cache_mem is not None and mt == _cache_mtime:
+                return _cache_mem
             data = json.loads(_CACHE_PATH.read_text(encoding="utf-8"))
             if isinstance(data, dict):
+                _cache_mem, _cache_mtime = data, mt
                 return data
     except Exception:
         pass
-    return {}
+    return _cache_mem if _cache_mem is not None else {}
 
 
 def _save_cache(cache: dict[str, str]) -> None:

@@ -42,9 +42,14 @@ def _calendar(pid: str):
 
 def is_open(pid: str) -> bool:
     """True iff `pid`'s market is open right now. Defaults to False (queue) on any calendar error —
-    fail SAFE: never book an off-hours fill because the calendar hiccuped."""
+    fail SAFE: never book an off-hours fill because the calendar hiccuped. The HK book gates on the
+    HKEX calendar+hours (venue='HK'); china_calendar otherwise defaults to the A-share session, which
+    would read HKEX-only holidays as open and the 15:00–16:00 HK hour as closed."""
     try:
-        return bool(_calendar(pid).is_open())
+        cal = _calendar(pid)
+        if pid == "hk":
+            return bool(cal.is_open(venue="HK"))
+        return bool(cal.is_open())
     except Exception:
         return False
 

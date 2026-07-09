@@ -78,42 +78,70 @@ def _account_tickers(portfolio_id: str | None = None) -> list[str]:
         return []
 
 
-def _live_prices(tickers: list[str]) -> dict[str, float]:
-    """Live (intraday, TTL-cached) US quotes for `tickers` via Yahoo (yfinance), in USD; {} when
-    unavailable.
+def _dash_mark_usd(t: str) -> float | None:
+    """Best-available USD mark for a ticker on the DASHBOARD READ path — NEVER blocks on the network.
 
-    Yahoo reflects TODAY's tape. This REPLACED the Polygon path, whose key is an EOD/delayed tier
-    that returned a stale prevDay close — so on a fast day (SMH -7%) US books mis-marked to yesterday.
-    Only bare US symbols (no venue suffix) route here; venue-suffixed names (``*.HK`` / ``*.SS`` /
-    ``*.SZ``) are marked off their own live/snapshot path (and a Yahoo HK/CN fetch would need the
-    suffix anyway). One batched ``warm`` keeps the whole book to a single request."""
+    Order: the hot in-process live cache (kept warm by the ``prewarm_marks`` scheduler job) → the
+    Terminal (Macro Dashboard) per-ticker snapshot, an instant local file read. The authoritative NAV
+    is still marked from the LIVE feeds by the scheduler; this fast path only feeds the dashboard's
+    live-preview so switching books paints immediately instead of stalling ~5s on a synchronous
+    yfinance download."""
+    tt = (t or "").upper().strip()
+    if not tt:
+        return None
+    try:
+        from data_layer import yahoo_feed, terminal_prices
+    except Exception:
+        return None
+    cached = yahoo_feed.price_cached(tt)   # LOCAL ccy: USD for US, HKD for *.HK (tushare *.SS not cached here)
+    if cached is not None and cached > 0:
+        if tt.endswith(".HK"):
+            try:
+                from portfolio import fx
+                usd = fx.to_usd(cached, tt)
+                return float(usd) if usd and usd > 0 else None
+            except Exception:
+                return None
+        return float(cached)               # US: the cache already holds USD
+    return terminal_prices.price_usd(tt)   # cold miss → instant Terminal snapshot (→ USD)
+
+
+def _live_prices(tickers: list[str]) -> dict[str, float]:
+    """USD marks for the bare-US names in `tickers`, for the DASHBOARD read path — {} when none.
+
+    NON-BLOCKING: kicks a background refresh of the live Yahoo cache (so it never blocks the response)
+    and reads the cache, falling back to the Terminal snapshot on a cold miss. This REPLACED the old
+    synchronous ``warm() → yf.download`` that made switching to a cold book stall ~5s while three
+    parallel endpoints (/api/portfolio, /api/performance, /api/trades) stampeded the same fetch. The
+    authoritative NAV is unaffected (the scheduler marks off the live feeds directly). Only bare US
+    symbols route here; venue-suffixed names are marked on their own path in ``_book_marks``."""
     us = [t for t in (tickers or []) if t and "." not in t]
     if not us:
         return {}
     try:
         from data_layer import yahoo_feed
-        yahoo_feed.warm(us)                          # ONE batched request; TTL-cached for liveness
-        out: dict[str, float] = {}
-        for t in us:
-            v = yahoo_feed.price_local(t)
-            if v and v > 0:
-                out[t] = float(v)
-        return out
+        yahoo_feed.warm(us, background=True)          # refresh off the request thread; never blocks
     except Exception:
-        return {}
+        pass
+    out: dict[str, float] = {}
+    for t in us:
+        v = _dash_mark_usd(t)
+        if v and v > 0:
+            out[t] = float(v)
+    return out
 
 
 def _book_marks(portfolio_id: str | None = None) -> dict[str, float]:
-    """Current marks for a book's held names, in the book's BASE currency — the live valuation
-    input for NAV / per-position P&L.
+    """Current marks for a book's held names, in the book's BASE currency — the dashboard's live
+    valuation preview for NAV / per-position P&L.
 
-      * USD books (flagship / autonomous / heavyweight)  → batched live Polygon delayed quotes.
-      * HKD / CNY books (hk / china)                      → the vendored snapshot price converted
-        to the base currency via ``portfolio.fx`` (Polygon carries no HK / A-share listings — and
-        a venue-suffixed request can HANG — so we never route them through ``_live_prices``).
-
-    Returns {} when nothing is priceable, so callers degrade to the avg-cost mark (no movement)
-    rather than mis-marking. Network-light: USD is one batched call; the non-US path is file reads.
+    NON-BLOCKING (dashboard read path): pre-warms the live caches in the BACKGROUND and marks each
+    name off the hot cache or the instant Terminal snapshot — never a synchronous per-name network
+    fetch (the old HK path fired one yf.download PER NAME, ~5-12s). USD books mark in USD;
+    single-currency non-US books (hk=HKD / china=CNY) convert the USD mark to base via ``portfolio.fx``
+    exactly as before. Returns {} when nothing is priceable, so callers degrade to the avg-cost mark
+    (no movement) rather than mis-marking. The book of record's NAV is still marked from the LIVE feeds
+    by the scheduler's daily_mark/build jobs — this fast path never writes NAV.
     """
     tickers = _account_tickers(portfolio_id)
     if not tickers:
@@ -123,33 +151,31 @@ def _book_marks(portfolio_id: str | None = None) -> dict[str, float]:
         ccy = registry.currency(portfolio_id)
     except Exception:
         ccy = "USD"
-    if ccy == "USD":
-        return _live_prices(tickers)
-    # single-currency non-US book: mark each name in its base currency off the shared snapshot.
+    # Pre-warm the live caches OFF the request thread (US + HK); a cold miss falls back to the Terminal
+    # snapshot inside _dash_mark_usd, so this never blocks. (A-shares mark off the snapshot directly.)
     try:
-        from portfolio import fx, paper_account
+        from data_layer import yahoo_feed
+        yahoo_feed.warm([t for t in tickers if t and "." not in t], background=True)
+        hk = [t for t in tickers if (t or "").upper().endswith(".HK")]
+        if hk:
+            yahoo_feed.warm(hk, background=True)
     except Exception:
-        return {}
-    # Pre-warm the per-venue live caches in ONE batched request so the per-name loop below hits a
-    # warm cache instead of firing a separate fetch per holding. Hong Kong needs this most: without
-    # it, yahoo_feed fires one yf.download PER NAME (8 names ≈ 8 sequential downloads, ~5-12s); a
-    # single warm() pulls the whole book in one call. (A-shares already bulk-cache on first touch via
-    # tushare's _load_day, so they need no explicit warm.)
-    hk = [t for t in tickers if (t or "").upper().endswith(".HK")]
-    if hk:
-        try:
-            from data_layer import yahoo_feed
-            yahoo_feed.warm(hk)
-        except Exception:
-            pass
+        pass
     out: dict[str, float] = {}
     for t in tickers:
-        try:
-            base = fx.usd_to(paper_account._current_price(t), ccy)
-        except Exception:
-            base = None
-        if base and base > 0:
-            out[t] = float(base)
+        usd = _dash_mark_usd(t)
+        if not (usd and usd > 0):
+            continue
+        if ccy == "USD":
+            out[t] = float(usd)
+        else:
+            try:
+                from portfolio import fx
+                base = fx.usd_to(usd, ccy)
+            except Exception:
+                base = None
+            if base and base > 0:
+                out[t] = float(base)
     return out
 
 
@@ -1002,27 +1028,39 @@ def api_trades(portfolio: str = "flagship") -> JSONResponse:
     on still-open buy remainders. Scoped to a portfolio (default: flagship)."""
     try:
         from portfolio import market_calendar, paper_account, position_log, registry, trade_history
-        prices = _live_prices(_account_tickers(portfolio))
+        # Venue-restricted books (china=*.SS/*.SZ CNY, hk=*.HK HKD) must mark their open lots in BASE
+        # currency via _book_marks — _live_prices filters to bare US names, so it returns {} for these
+        # books and the blotter's still-open lots showed NULL unrealized P&L (the Positions panel used
+        # _book_marks and worked). US books keep the US-only _live_prices path.
+        venue_book = bool(registry.venues(portfolio))
+        prices = _book_marks(portfolio) if venue_book else _live_prices(_account_tickers(portfolio))
         history = trade_history.history(prices, portfolio_id=portfolio)
         pending = paper_account.load_pending(portfolio)
         # Region books (China A-shares, HK) trade opaque numeric / HK codes — attach the
         # human display name (Chinese for A-shares, English for HK/ADR) to each blotter and
         # pending row so Trade History reads like the Positions panel. Scoped to venue-
         # restricted books; US tickers are self-describing and stay code-only.
-        if registry.venues(portfolio):
+        if venue_book:
             from brain import china_intake
             for row in (*history, *pending):
                 tk = (row.get("ticker") or "")
                 nm = china_intake.display_name(tk)
                 if nm and nm.upper() != tk.upper():
                     row["name"] = nm
+        # Market-status strip: the venue books report their own exchange (HKEX for hk, A-share for
+        # china), not the NYSE calendar the US books use.
+        if venue_book:
+            from portfolio import china_calendar
+            market_status = china_calendar.status(venue="HK" if portfolio == "hk" else "CN")
+        else:
+            market_status = market_calendar.status()
         return JSONResponse({
             "open": position_log.open_positions(portfolio_id=portfolio),
             "closed": position_log.closed_positions(portfolio_id=portfolio),
             "history": history,
             # PENDING orders queued while the market is closed — fill at next open
             "pending": pending,
-            "market": market_calendar.status(),
+            "market": market_status,
         })
     except Exception as exc:
         return JSONResponse({"open": [], "closed": [], "history": [],

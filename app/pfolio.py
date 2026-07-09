@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from datetime import date as _date, datetime, timezone
 from pathlib import Path
@@ -220,11 +221,53 @@ def _set_prev_close_cached(ticker: str, val: float) -> None:
     _PREV_CLOSE_CACHE[ticker] = (val, time.monotonic() + _PREV_CLOSE_TTL)
 
 
-def _enrich_quotes(positions: list[dict]) -> list[dict]:
-    """Attach live quote data to positions. Best-effort; leaves fields null on failure.
+def _price_to_usd(px, ticker: str) -> float | None:
+    """Convert a native-currency price to USD — venue-suffixed names (*.HK / *.SS / *.SZ) via
+    ``portfolio.fx``; bare US names pass through. Returns None on any miss so callers leave the money
+    field null rather than mis-summing mixed currencies into one USD total."""
+    if px is None:
+        return None
+    try:
+        t = (ticker or "").upper()
+        if "." in t:
+            from portfolio import fx
+            u = fx.to_usd(float(px), t)
+            return float(u) if u and u > 0 else None
+        return float(px)
+    except Exception:
+        return None
 
-    Uses yahoo_feed.warm() + price_local() — same pattern as web.py _live_prices().
-    Computes: last, day_change_pct, market_value, pnl_usd, pnl_pct, portfolio totals.
+
+def _bg_fetch_prev_close(uncached: list[str]) -> None:
+    """Populate the prev_close TTL cache (in NATIVE currency) off the request thread — a batched 5d
+    yfinance download. Best-effort; a failure just leaves day_change null until the next 60s poll."""
+    try:
+        import yfinance as yf
+        df = yf.download(uncached, period="5d", progress=False, auto_adjust=False, threads=False)
+        close = df.get("Close") if hasattr(df, "get") else df["Close"]
+        if hasattr(close, "columns"):
+            for sym in close.columns:
+                s = close[sym].dropna()
+                if len(s) >= 2:
+                    _set_prev_close_cached(str(sym).upper(), float(s.iloc[-2]))
+        elif len(uncached) == 1:
+            s = close.dropna() if close is not None else None
+            if s is not None and len(s) >= 2:
+                _set_prev_close_cached(uncached[0], float(s.iloc[-2]))
+    except Exception:
+        pass
+
+
+def _enrich_quotes(positions: list[dict]) -> list[dict]:
+    """Attach live quote data to positions (all monetary fields in USD). Best-effort; leaves fields
+    null on failure.
+
+    NON-BLOCKING (dashboard read path): refreshes the live cache in the BACKGROUND and reads it,
+    falling back to the Terminal snapshot on a cold miss — never a synchronous per-name yf.download
+    (the old path fired one download per uncached name, ~5-12s for an HK book). All money fields are
+    converted to USD via ``portfolio.fx``: a *.HK / *.SS / *.SZ position is priced by the feed in its
+    LOCAL currency, so without conversion its market_value / pnl_usd and the portfolio total were
+    wrong by the ~7x FX factor. day_change_pct is a ratio and currency-invariant.
     """
     if not positions:
         return positions
@@ -233,52 +276,39 @@ def _enrich_quotes(positions: list[dict]) -> list[dict]:
     if not tickers:
         return positions
 
-    price_map: dict[str, float] = {}
-    prev_map: dict[str, float] = {}
+    price_map: dict[str, float] = {}      # ticker -> last, in USD
+    prev_map: dict[str, float] = {}       # ticker -> prev_close, in USD
     try:
-        from data_layer import yahoo_feed
-        yahoo_feed.warm(tickers)
+        from data_layer import yahoo_feed, terminal_prices
+        yahoo_feed.warm(tickers, background=True)   # refresh off the request thread; never blocks
         for t in tickers:
-            v = yahoo_feed.price_local(t)
-            if v and v > 0:
-                price_map[t] = float(v)
+            raw = yahoo_feed.price_cached(t)
+            if raw is None or raw <= 0:
+                raw = terminal_prices.price_local(t)   # instant Terminal snapshot (native ccy)
+            usd = _price_to_usd(raw, t) if raw and raw > 0 else None
+            if usd and usd > 0:
+                price_map[t] = usd
     except Exception:
         pass
 
-    # prev_close: serve from TTL cache where available; batch-fetch only uncached tickers
-    uncached = [t for t in tickers if _get_prev_close_cached(t) is None]
+    # prev_close: serve from the TTL cache (stored native → convert to USD at read); fetch any uncached
+    # tickers in the BACKGROUND so day_change_pct fills on the next poll instead of blocking this one.
     for t in tickers:
         cached = _get_prev_close_cached(t)
         if cached is not None:
-            prev_map[t] = cached
-
+            u = _price_to_usd(cached, t)
+            if u:
+                prev_map[t] = u
+    uncached = [t for t in tickers if _get_prev_close_cached(t) is None]
     if uncached:
-        try:
-            import yfinance as yf
-            df = yf.download(uncached, period="5d", progress=False, auto_adjust=False, threads=False)
-            close = df.get("Close") if hasattr(df, "get") else df["Close"]
-            if hasattr(close, "columns"):
-                for sym in close.columns:
-                    s = close[sym].dropna()
-                    if len(s) >= 2:
-                        val = float(s.iloc[-2])
-                        prev_map[str(sym).upper()] = val
-                        _set_prev_close_cached(str(sym).upper(), val)
-            elif len(uncached) == 1:
-                s = close.dropna() if close is not None else None
-                if s is not None and len(s) >= 2:
-                    val = float(s.iloc[-2])
-                    prev_map[uncached[0]] = val
-                    _set_prev_close_cached(uncached[0], val)
-        except Exception:
-            pass
+        threading.Thread(target=_bg_fetch_prev_close, args=(uncached,), daemon=True).start()
 
     out = []
     for p in positions:
         t = (p.get("ticker") or "").upper()
         last = price_map.get(t)
         prev = prev_map.get(t)
-        entry = p.get("entry_price")
+        entry = _price_to_usd(p.get("entry_price"), t)   # entry stored native → USD, matches `last`
         shares = p.get("shares")
 
         day_change_pct = None
