@@ -414,14 +414,22 @@
         finish();
       }
     }
-    function finish() { busy = false; sendBtn.disabled = false; scrollDown(); }
+    function finish() {
+      busy = false; sendBtn.disabled = false;
+      if (typing.parentNode) typing.remove();   // never leave the '...' spinner up (incl. content-free clean close)
+      renderQuick();                             // restore the quick-reply chips cleared at send() (idempotent)
+      scrollDown();
+    }
 
     fetch("/chat", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message: text, conversation_id: convId }) })
       .then(function (resp) {
         if (!resp.ok || !resp.body) throw new Error("HTTP " + resp.status);
         var reader = resp.body.getReader(), dec = new TextDecoder(), buf = "";
-        (function pump() {
+        // RETURN the pump promise so a mid-stream reader.read() rejection (a 524/proxy drop, VPS
+        // hiccup, or crash after the 200 header) propagates to the .catch below -> onEvent(error) ->
+        // finish(). Without the return, the pump chain was orphaned and the widget wedged forever.
+        return (function pump() {
           return reader.read().then(function (r) {
             if (r.done) { if (busy) finish(); return; }
             buf += dec.decode(r.value, { stream: true });
