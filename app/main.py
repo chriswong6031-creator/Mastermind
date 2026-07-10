@@ -52,6 +52,12 @@ if FastAPI is not None:
     # blocking (see app/auth.py _PFOLIO_PATHS). Session-auth still required.
     app.include_router(pfolio.router)
 
+    # Short-TTL response cache for GET /api/* — installed BEFORE auth so the auth gate stays
+    # OUTERMOST (an unauthenticated request never reaches the cache). No-op unless
+    # MASTERMIND_RESP_CACHE_TTL>0 (set on the serve-only mirror; unset on the canonical Mac).
+    from app import response_cache
+    response_cache.install(app)
+
     # App-level auth gate — protects the UI + every /api route + the SSE stream.
     # Opt-in via MASTERMIND_PASSWORD; a no-op (auth disabled) when it's unset, so
     # local dev is unchanged. MUST be installed before the server handles requests.
