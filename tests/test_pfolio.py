@@ -5,8 +5,10 @@ Covers:
 - totals math (shares-null handling)
 - PostgREST URL/filter construction (operator scoping on every verb)
 - fail-soft on missing env
-- serve-only carve-out (POST /api/pfolio/* passes when MASTERMIND_SERVE_ONLY=1,
-  while a standard operator POST stays blocked)
+- serve-only pfolio block (GET/POST/PATCH/DELETE /api/pfolio/* -> 403 when
+  MASTERMIND_SERVE_ONLY=1; the personal panel is disabled on the read mirror
+  now that the browser-login cookie that used to gate it was removed) while a
+  standard operator POST also stays blocked; canonical instance leaves pfolio open
 - missing-table error shape
 
 No network calls: httpx and yahoo_feed are fully mocked.
@@ -324,11 +326,31 @@ def test_missing_table_on_post(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# 6. Serve-only carve-out (PRD-R8)
+# 6. Serve-only mode BLOCKS the pfolio panel entirely (PRD-R8, revised)
+#
+# The browser password-cookie login that used to gate /api/pfolio/* was removed.
+# On the public read mirror the personal panel must NOT be reachable at all:
+# every method (GET/POST/PATCH/PUT/DELETE) returns 403 serve_only.
 # ---------------------------------------------------------------------------
 
-def test_serve_only_allows_pfolio_post(monkeypatch):
-    """POST /api/pfolio/* must NOT be blocked by MASTERMIND_SERVE_ONLY=1."""
+def test_serve_only_blocks_pfolio_get(monkeypatch):
+    """GET /api/pfolio/* must be blocked (403 serve_only) on the read mirror."""
+    uid = "op-uid-so-get"
+    monkeypatch.setenv("MASTERMIND_SERVE_ONLY", "1")
+    app, _ = _make_app(monkeypatch, uid=uid)
+    # Re-apply SERVE_ONLY after _make_app which deletes it
+    monkeypatch.setenv("MASTERMIND_SERVE_ONLY", "1")
+    _mock_uid_resolve(monkeypatch, uid)
+
+    client = TestClient(app)
+    r = client.get("/api/pfolio/positions")
+
+    assert r.status_code == 403
+    assert r.json()["error"] == "serve_only"
+
+
+def test_serve_only_blocks_pfolio_post(monkeypatch):
+    """POST /api/pfolio/* must be blocked (403 serve_only) on the read mirror."""
     uid = "op-uid-so"
     monkeypatch.setenv("MASTERMIND_SERVE_ONLY", "1")
     app, _ = _make_app(monkeypatch, uid=uid)
@@ -336,20 +358,11 @@ def test_serve_only_allows_pfolio_post(monkeypatch):
     monkeypatch.setenv("MASTERMIND_SERVE_ONLY", "1")
     _mock_uid_resolve(monkeypatch, uid)
 
-    def mock_post(url, json=None, headers=None, timeout=None):
-        row = {**(json or {}), "id": "so-id-1", "status": "open"}
-        return _httpx_resp(201, [row])
+    client = TestClient(app)
+    r = client.post("/api/pfolio/positions", json={"ticker": "AAPL"})
 
-    with patch("httpx.post", mock_post):
-        client = TestClient(app)
-        r = client.post("/api/pfolio/positions", json={"ticker": "AAPL"})
-
-    # Must NOT be 403 serve_only block
-    assert r.status_code == 200
-    body = r.json()
-    assert body.get("error") != "serve_only"
-    # Should succeed (ok=True) or fail-soft (supabase_unavailable) but NOT serve_only
-    assert body.get("error") in (None, "supabase_unavailable")
+    assert r.status_code == 403
+    assert r.json()["error"] == "serve_only"
 
 
 def test_serve_only_blocks_standard_operator_post(monkeypatch):
@@ -375,13 +388,22 @@ def test_serve_only_blocks_standard_operator_post(monkeypatch):
     assert r.json()["error"] == "serve_only"
 
 
-def test_pfolio_still_requires_auth(monkeypatch):
-    """PRD-R8 carve-out exempts pfolio from serve-only blocking, but NOT from auth.
-    When auth is enabled, unauthenticated requests to /api/pfolio/* get 401."""
-    monkeypatch.setenv("MASTERMIND_PASSWORD", "secret")
+def test_pfolio_open_on_canonical_instance(monkeypatch):
+    """On the CANONICAL (non-serve-only) instance, /api/pfolio/* is OPEN.
+
+    The browser password-cookie login that used to gate pfolio was removed, so
+    there is no cookie/bearer the localhost browser panel can send. pfolio is
+    therefore NOT in _OPERATOR_PATHS: an unauthenticated request must pass the
+    auth gate (not 401, not 403). The endpoint's own response body is whatever
+    it is (fail-soft here, no Supabase env), but the gate itself must let it
+    through.
+    """
+    monkeypatch.delenv("MASTERMIND_PASSWORD", raising=False)
     monkeypatch.delenv("MASTERMIND_AUTH_TOKEN", raising=False)
     monkeypatch.delenv("MASTERMIND_REQUIRE_AUTH", raising=False)
     monkeypatch.delenv("MASTERMIND_SERVE_ONLY", raising=False)
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.delenv("SUPABASE_SERVICE_ROLE_KEY", raising=False)
 
     from app import auth, pfolio
     pfolio._operator_uid_cache.clear()
@@ -390,9 +412,13 @@ def test_pfolio_still_requires_auth(monkeypatch):
     app.include_router(pfolio.router)
     client = TestClient(app)
 
-    # No cookie, no bearer -> 401
+    # No cookie, no bearer -> must pass the auth gate (NOT 401/403 from auth).
     r = client.get("/api/pfolio/positions")
-    assert r.status_code == 401
+    assert r.status_code not in (401, 403), (
+        f"pfolio must be open on the canonical instance, got {r.status_code}"
+    )
+    # Sanity: the endpoint itself ran (fail-soft on absent Supabase env).
+    assert r.json().get("error") != "serve_only"
 
 
 # ---------------------------------------------------------------------------
@@ -896,25 +922,38 @@ def test_serve_only_blocks_delete_on_operator_paths(monkeypatch):
     assert r.json()["error"] == "serve_only"
 
 
-def test_serve_only_allows_pfolio_patch(monkeypatch):
-    """PATCH /api/pfolio/* must NOT be blocked even in serve-only mode."""
+def test_serve_only_blocks_pfolio_patch(monkeypatch):
+    """PATCH /api/pfolio/* must be blocked (403 serve_only) on the read mirror.
+
+    PRD-R8 (revised): the pfolio panel is disabled entirely on the mirror now
+    that the cookie that used to gate it is gone.
+    """
     uid = "op-uid-so-patch"
     monkeypatch.setenv("MASTERMIND_SERVE_ONLY", "1")
     app, _ = _make_app(monkeypatch, uid=uid)
     monkeypatch.setenv("MASTERMIND_SERVE_ONLY", "1")
     _mock_uid_resolve(monkeypatch, uid)
 
-    def mock_patch(url, json=None, params=None, headers=None, timeout=None):
-        return _httpx_resp(200, [{"id": "pos-so-1", "shares": 20.0}])
+    client = TestClient(app)
+    r = client.patch("/api/pfolio/positions/pos-so-1", json={"shares": 20.0})
 
-    with patch("httpx.patch", mock_patch):
-        client = TestClient(app)
-        r = client.patch("/api/pfolio/positions/pos-so-1", json={"shares": 20.0})
+    assert r.status_code == 403
+    assert r.json()["error"] == "serve_only"
 
-    # Must NOT be 403 serve_only block
-    assert r.status_code == 200
-    body = r.json()
-    assert body.get("error") != "serve_only"
+
+def test_serve_only_blocks_pfolio_delete(monkeypatch):
+    """DELETE /api/pfolio/* must be blocked (403 serve_only) on the read mirror."""
+    uid = "op-uid-so-del"
+    monkeypatch.setenv("MASTERMIND_SERVE_ONLY", "1")
+    app, _ = _make_app(monkeypatch, uid=uid)
+    monkeypatch.setenv("MASTERMIND_SERVE_ONLY", "1")
+    _mock_uid_resolve(monkeypatch, uid)
+
+    client = TestClient(app)
+    r = client.delete("/api/pfolio/positions/pos-so-1")
+
+    assert r.status_code == 403
+    assert r.json()["error"] == "serve_only"
 
 
 # ---------------------------------------------------------------------------

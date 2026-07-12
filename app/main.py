@@ -47,9 +47,11 @@ if FastAPI is not None:
     app = FastAPI(title="Mastermind", version="0.0.1")
 
     app.include_router(web.router)
-    # Portfolio Risk Desk CRUD proxy (W1). PRD-R8: these endpoints mutate Supabase
-    # only — no local state, no LLM — and are exempt from MASTERMIND_SERVE_ONLY
-    # blocking (see app/auth.py _PFOLIO_PATH_PREFIX). Not in the bearer operator tier.
+    # Portfolio Risk Desk CRUD proxy (W1). PRD-R8 (revised): the personal Supabase
+    # portfolio panel. Open on the CANONICAL localhost instance (the browser panel
+    # has no cookie/bearer to send; not in the bearer operator tier), but BLOCKED
+    # entirely (all methods -> 403) on the serve-only mirror now that the browser
+    # login that used to gate it was removed (see app/auth.py _PFOLIO_PATH_PREFIX).
     app.include_router(pfolio.router)
 
     # Short-TTL response cache for GET /api/* — installed BEFORE auth so the auth gate stays

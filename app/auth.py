@@ -65,7 +65,23 @@ SERVE-ONLY MODE (MW6)
   (a) scheduler is NEVER started (guarded in app.main startup)
   (b) first-run daemon threads are skipped
   (c) ALL operator paths return 403 JSON naming the mirror
-  (d) /health gains "serve_only": true
+  (d) /api/pfolio/* (personal Supabase portfolio CRUD) is BLOCKED entirely —
+      ALL methods (GET/POST/PATCH/PUT/DELETE) return 403. See PFOLIO below.
+  (e) /health gains "serve_only": true
+
+PERSONAL PFOLIO PANEL (PRD-R8, revised after the browser-login removal)
+-----------------------------------------------------------------------
+``/api/pfolio/*`` is the personal Supabase portfolio panel (holdings CRUD via a
+service-role JWT). It used to be gated solely by the browser PASSWORD COOKIE.
+That login flow is now GONE, so the cookie that used to protect it no longer
+exists. The new model:
+  - CANONICAL localhost instance  -> OPEN. The browser panel has no cookie/bearer
+    to send, and the box is localhost-only, so pfolio passes the auth gate
+    unauthenticated (it is NOT in _OPERATOR_PATHS; no bearer is required).
+  - SERVE-ONLY mirror (public VPS) -> BLOCKED (all methods, 403). The public box
+    is a read mirror; the personal panel must not be reachable there now that
+    the cookie that used to gate it is gone (it would otherwise expose the
+    user's holdings and Supabase writes unauthenticated).
 
 NOTE: two stale worktrees from a prior session contain another agent's
 MASTERMIND_SERVE_ONLY WIP — do NOT merge or read those branches. This
@@ -117,10 +133,16 @@ _NON_LLM_OPERATOR_PATHS: frozenset[str] = frozenset({
 _OPERATOR_PATHS: frozenset[str] = _LLM_OPERATOR_PATHS | _NON_LLM_OPERATOR_PATHS
 
 # ---------------------------------------------------------------------------
-# PRD-R8: portfolio CRUD carve-out from the serve-only POST block.
-# These endpoints mutate Supabase only — no local state, no LLM, no scheduler.
-# They are NOT in _OPERATOR_PATHS (cookie is sufficient; no bearer required),
-# and they are NOT blocked by MASTERMIND_SERVE_ONLY=1. Normal session-auth applies.
+# PRD-R8 (revised): personal Supabase portfolio CRUD.
+# The browser PASSWORD-COOKIE login that used to be the SOLE gate on these
+# endpoints has been REMOVED, so pfolio is no longer cookie-protected. The new
+# model splits by instance:
+#   - CANONICAL localhost instance  -> OPEN (the browser panel has no cookie or
+#     bearer to send; these paths are NOT in _OPERATOR_PATHS, so no bearer is
+#     required and they pass the auth gate).
+#   - SERVE-ONLY mirror (public VPS) -> BLOCKED entirely (all methods, 403);
+#     the personal panel must not be reachable on the public read mirror now
+#     that the cookie that used to gate it is gone. Enforced in `_gate` below.
 # ---------------------------------------------------------------------------
 _PFOLIO_PATH_PREFIX = "/api/pfolio/"
 
@@ -242,11 +264,22 @@ def install(app) -> None:
         if method == "OPTIONS" or path in _OPEN_PATHS:
             return await call_next(request)
 
+        # --- serve-only mode: block the personal pfolio panel ENTIRELY ---
+        # PRD-R8 (revised): the browser password-cookie login that used to gate
+        # /api/pfolio/* is gone, so these endpoints are no longer cookie-protected.
+        # On the public read mirror they must NOT be reachable at all (they expose
+        # the user's holdings on GET and Supabase writes on POST/PATCH/PUT/DELETE),
+        # so block every method here. On the canonical localhost instance this
+        # branch is inert and pfolio stays open for the browser panel.
+        if serve_only() and path.startswith(_PFOLIO_PATH_PREFIX):
+            return JSONResponse(
+                {"error": "serve_only",
+                 "detail": "portfolio panel disabled on the read mirror"},
+                status_code=403,
+            )
+
         # --- serve-only mode: block all operator mutations ---
-        # PRD-R8 carve-out: /api/pfolio/* paths are allowed through even in serve-only
-        # mode because they only mutate Supabase (no local state, no LLM, no scheduler).
-        _is_pfolio = path.startswith(_PFOLIO_PATH_PREFIX)
-        if serve_only() and method in {"POST", "PATCH", "PUT", "DELETE"} and path in _OPERATOR_PATHS and not _is_pfolio:
+        if serve_only() and method in {"POST", "PATCH", "PUT", "DELETE"} and path in _OPERATOR_PATHS:
             return JSONResponse(
                 {"error": "serve_only", "detail": (
                     "This instance is running in serve-only (read-only mirror) mode. "
