@@ -98,6 +98,212 @@ def _conv_theme_id(t: str) -> str:
     return f"name:{t.upper()}"
 
 
+def _sector_phase_at_entry(ticker: str, cycles: dict | None) -> str | None:
+    """The name's sector-cycle PHASE at decision time (E3 learning field). Fail-soft None.
+
+    Resolves the name → its sector ETF (divergence_clue._default_sector_etf mirrors
+    conviction._sector_of) and reads that ETF's phase from the pre-computed ``cycles`` map
+    (regime_frame.cycles(), the SOLE stale-gated sector-cycle reader). An unmapped / un-sectored /
+    stale-empty read degrades to None — a name simply gets no phase, never a fabricated one.
+    Pure given ``cycles``; never raises. Observability-only — reads, never sizes."""
+    try:
+        if not cycles:
+            return None
+        from brain import divergence_clue as _dc
+        etf = _dc._default_sector_etf(ticker)
+        if not etf:
+            return None
+        row = cycles.get(str(etf).upper()) if isinstance(cycles, dict) else None
+        if isinstance(row, dict):
+            ph = row.get("phase")
+            return str(ph) if ph is not None else None
+        return None
+    except Exception:  # noqa: BLE001 — a learning field is additive; never break the record
+        return None
+
+
+def _decision_time_learning_fields(ticker: str, *, cycles: dict | None,
+                                   market_plane: dict | None, synthesis: dict | None) -> dict:
+    """Assemble the E3 DECISION-TIME learning fields for ``ticker`` (all nullable/additive).
+
+    Every field is derivable from data ALREADY gathered in the build and is FAIL-SOFT — a name
+    with none of these just gets None fields. Nothing here sizes, gates, or changes a decision;
+    these fields are merged into signal_history.make_record's ``extra=`` purely as learnable
+    substrate joined to realized outcomes later. Never raises.
+
+    Fields
+    ------
+    sector_phase_at_entry     : the name's sector-cycle phase (regime_frame.cycles), None on miss.
+    divergence_from_sector    : the pattern of a divergence/standout clue present for the name
+                                (from the engine synthesis divergences), else None.
+    nw_bottom_state           : NW candidate bottom_state, None on miss.
+    nw_conflicts              : NW graph_conflicts count (int), None on miss.
+    nw_verdict                : NW market-plane verdict label, None on miss.
+    nw_contradiction_count    : NW market-plane contradiction_count (int), None on miss.
+    safe_haven_diverger       : the NW 'clean-in-conflicted' safe-haven tell (bool), None if undeterminable.
+    """
+    out: dict = {
+        "sector_phase_at_entry": None,
+        "divergence_from_sector": None,
+        "nw_bottom_state": None,
+        "nw_conflicts": None,
+        "nw_verdict": None,
+        "nw_contradiction_count": None,
+        "safe_haven_diverger": None,
+    }
+    try:
+        out["sector_phase_at_entry"] = _sector_phase_at_entry(ticker, cycles)
+    except Exception:  # noqa: BLE001
+        pass
+    # divergence_from_sector — take the first divergence pattern the engine synthesis carries for the
+    # name (a divergence-clue / standout tell already surfaced upstream); None when the name diverges
+    # from nothing. Kept absent-safe: a str pattern or a {pattern:...} dict both resolve.
+    try:
+        divs = (synthesis or {}).get("divergences") or []
+        if divs:
+            first = divs[0]
+            patt = first.get("pattern") if isinstance(first, dict) else first
+            out["divergence_from_sector"] = str(patt) if patt is not None else None
+    except Exception:  # noqa: BLE001
+        pass
+    # NW per-name + market context — fail-soft, all None on absence.
+    try:
+        from brain import neural_web_context as _nwc
+        _cand = _nwc.candidate(ticker) or {}
+        _bottom = _cand.get("bottom") or {}
+        if isinstance(_bottom, dict):
+            out["nw_bottom_state"] = _bottom.get("bottom_state") or _bottom.get("state")
+        _conf = _cand.get("graph_conflicts")
+        if isinstance(_conf, list):
+            out["nw_conflicts"] = len(_conf)
+        mp = market_plane or {}
+        _verdict = (mp.get("verdict") or {}) if isinstance(mp, dict) else {}
+        if isinstance(_verdict, dict):
+            out["nw_verdict"] = _verdict.get("label_en") or _verdict.get("verdict")
+        _cc = mp.get("contradiction_count") if isinstance(mp, dict) else None
+        if _cc is not None:
+            try:
+                out["nw_contradiction_count"] = int(_cc)
+            except (TypeError, ValueError):
+                out["nw_contradiction_count"] = None
+        # safe_haven_diverger — the typed 'clean in a conflicted tape' tell. decision_signals is the
+        # single chokepoint (fail-soft inert when its flag is off / row absent); we only READ the
+        # boolean, we never act on it. None when the signal path is inert / undeterminable.
+        try:
+            _sig = _nwc.decision_signals(ticker) or {}
+            if not _sig.get("inert", True):
+                out["safe_haven_diverger"] = bool(_sig.get("clean_in_conflicted"))
+        except Exception:  # noqa: BLE001
+            pass
+    except Exception:  # noqa: BLE001 — NW context is additive; never break the record
+        pass
+    return out
+
+
+def _provenance_rows(*, book, gate_info, shadow_inputs, research_held, rejected,
+                     cycles=None) -> list[dict]:
+    """Assemble the E2 replayable decision-provenance rows from data ALREADY computed in the build.
+
+    ONE row per evaluated candidate (the confirmed book names, the research-held/committee/timing
+    withholds, and the conviction rejects), each stamping the stage-verdict chain, the intake
+    sources/vetoes, the seats that ran, the sector phase at entry, the NW context block, and the
+    final {action, weight}. Pure + fail-soft: it only READS the finalized decision state and returns
+    a list of decision_provenance.row(...) dicts. It sizes nothing and changes no book/verdict — the
+    shadow-book record it reads from stays byte-identical (this never mutates ``shadow_inputs``).
+    Never raises; a bad candidate degrades to a minimal row or is skipped.
+
+    Row-source map (all already-computed):
+      * shadow_inputs (by ticker) → forge_confirmed, committee, sentinel, nw_context, weight_prod;
+      * gate_info[t]              → intake vetoes + research breakdown (engine/research/combined);
+      * book (by ticker)          → final {action=verdict, weight, sleeve} for confirmed names;
+      * research_held / rejected  → the withheld / vetoed names' reason + final action.
+    """
+    from brain import decision_provenance as _dp
+
+    shadow_by_tkr: dict[str, dict] = {}
+    for si in (shadow_inputs or []):
+        if isinstance(si, dict) and si.get("ticker"):
+            shadow_by_tkr.setdefault(str(si["ticker"]).upper(), si)
+    book_by_tkr: dict[str, dict] = {}
+    for p in (book or []):
+        tk = str(p.get("ticker") or "").upper()
+        if tk:
+            book_by_tkr.setdefault(tk, p)
+
+    def _one(ticker, *, final_action, final_weight, reason=None):
+        tk = str(ticker or "").upper()
+        gi = (gate_info or {}).get(ticker) or (gate_info or {}).get(tk) or {}
+        si = shadow_by_tkr.get(tk, {})
+        _full = gi.get("full") or {}
+        _syn = _full.get("synthesis") or {}
+        _bd = gi.get("breakdown") or {}
+        # intake sources / provenance — the engine's veto surface + confluence (what the name carried in)
+        sources = {
+            "vetoes": _syn.get("vetoes") or [],
+            "confluence": _syn.get("confluence"),
+            "is_new": si.get("is_new"),
+            "retained": si.get("retained"),
+        }
+        # the stage-verdict chain (all already decided upstream; None where a stage didn't run)
+        stage_verdicts = {
+            "forge_confirmed": si.get("forge_confirmed"),
+            "gate": _bd.get("confirmed"),
+            "engine_score": _bd.get("engine_score"),
+            "research_score": _bd.get("research_score"),
+            "combined": _bd.get("combined"),
+            "committee": (si.get("committee") or {}).get("action") if isinstance(si.get("committee"), dict) else None,
+            "timing": ("withheld" if (reason and "timing" in str(reason)) else None),
+            "action": final_action,
+            "reason": reason,
+        }
+        # the seats that ran (committee/sentinel presence is the observable seat record)
+        seats = []
+        if si.get("committee"):
+            seats.append("committee")
+        if si.get("sentinel"):
+            seats.append("sentinel")
+        return _dp.row(
+            ticker,
+            sources=sources,
+            stage_verdicts=stage_verdicts,
+            seats=seats or None,
+            sector_phase=_sector_phase_at_entry(ticker, cycles),
+            nw=si.get("nw_context"),
+            final={"action": final_action, "weight": final_weight},
+        )
+
+    rows: list[dict] = []
+    seen: set[str] = set()
+    try:
+        # confirmed book names → their final verdict + weight
+        for p in (book or []):
+            tk = str(p.get("ticker") or "").upper()
+            if not tk or tk in seen:
+                continue
+            seen.add(tk)
+            rows.append(_one(p.get("ticker"), final_action=p.get("verdict"),
+                             final_weight=p.get("weight")))
+        # research-held / committee-drop / timing-withheld names (in-book=False, weight 0)
+        for h in (research_held or []):
+            tk = str(h.get("ticker") or "").upper()
+            if not tk or tk in seen:
+                continue
+            seen.add(tk)
+            rows.append(_one(h.get("ticker"), final_action="held", final_weight=0.0,
+                             reason=h.get("reason")))
+        # conviction rejects (the negative space)
+        for r in (rejected or []):
+            tk = str(r.get("ticker") or "").upper()
+            if not tk or tk in seen:
+                continue
+            seen.add(tk)
+            rows.append(_one(r.get("ticker"), final_action="rejected", final_weight=0.0,
+                             reason=r.get("reason")))
+    except Exception:  # noqa: BLE001 — provenance is observability-only; return what we have
+        pass
+    return rows
+
+
 def _freeze_book_list_to_prior(book: list[dict], prior: dict[str, float]) -> list[dict]:
     """Shared shape-handling: freeze a list-of-dicts book to prior weights.
 
@@ -1703,26 +1909,49 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
     # outcomes once theses resolve (~2026-07-17). Irreversible if skipped; degrade-safe.
     try:
         from brain import signal_history
+        # E3 — decision-time LEARNING fields (always-on observability; additive + fail-soft). Compute
+        # the per-build SHARED reads ONCE (regime_frame.cycles() + the NW market plane) so the per-name
+        # extractor is cheap; a failure here degrades every field to None (never breaks the record).
+        try:
+            from brain import regime_frame as _rf_e3
+            _e3_cycles = _rf_e3.cycles() or {}
+        except Exception:  # noqa: BLE001
+            _e3_cycles = {}
+        try:
+            from brain import neural_web_context as _nwc_e3
+            _e3_market_plane = _nwc_e3.market_plane() or {}
+        except Exception:  # noqa: BLE001
+            _e3_market_plane = {}
         _sig: list[dict] = []
         for p in book:
             if p.get("sleeve") == "conviction":
                 _syn, _rows = _synth_map.get(p.get("thesis_id"), ({}, []))
+                _e3 = _decision_time_learning_fields(
+                    p["ticker"], cycles=_e3_cycles, market_plane=_e3_market_plane, synthesis=_syn)
                 _sig.append(signal_history.make_record(
                     asof, p["ticker"], sleeve="conviction",
                     decision="held" if p.get("retained") else "sized", regime=regime,
                     synthesis=_syn, rows=_rows, verdict=p.get("verdict"), weight=p.get("weight"),
                     size_stage=p.get("size_stage"), price=p.get("entry_price"),
-                    time_stop_by=p.get("time_stop_by")))
+                    time_stop_by=p.get("time_stop_by"), extra=_e3))
             else:
+                _e3 = _decision_time_learning_fields(
+                    p["ticker"], cycles=_e3_cycles, market_plane=_e3_market_plane, synthesis=None)
                 _sig.append(signal_history.make_record(
                     asof, p["ticker"], sleeve=p.get("sleeve", "leadership"), decision="leadership",
                     regime=regime, verdict=p.get("verdict"), weight=p.get("weight"),
-                    price=p.get("entry_price")))
+                    price=p.get("entry_price"), extra=_e3))
         for _r in _rejected:
+            # keep the rejected record's original synthesis byte-identical (confluence + vetoes only);
+            # E3 fields are purely ADDITIVE via extra= (a rejected name that carries a divergence still
+            # gets divergence_from_sector inside extra, without changing the base record).
+            _r_syn = {"confluence": _r.get("confluence"), "vetoes": _r.get("vetoes") or []}
+            _e3 = _decision_time_learning_fields(
+                _r["ticker"], cycles=_e3_cycles, market_plane=_e3_market_plane,
+                synthesis={**_r_syn, "divergences": _r.get("divergences") or []})
             _sig.append(signal_history.make_record(
                 asof, _r["ticker"], sleeve="conviction", decision="rejected", regime=regime,
-                synthesis={"confluence": _r.get("confluence"), "vetoes": _r.get("vetoes") or []},
-                reason=_r.get("reason")))
+                synthesis=_r_syn, reason=_r.get("reason"), extra=_e3))
         _n_sig = signal_history.archive(asof, _sig)
         _rl_log(_run_id, "book_step", "signal history archived",
                 f"records={_n_sig} (sized/held + leadership + rejected)")
@@ -1882,6 +2111,29 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
                 f"open={_rjc.get('n_open')} resolved={_rjc.get('n_resolved')} total={_rjc.get('n_total')}")
     except Exception as _e:
         _rl_log(_run_id, "decision", "rejection log error", f"{_e!r}"[:160])
+
+    # ———— E2 DECISION-PROVENANCE ledger — one replayable row per evaluated candidate ————
+    # ALWAYS-ON OBSERVABILITY (additive + fail-soft): derive one self-contained provenance row per
+    # candidate from data ALREADY computed above (book verdicts, gate_info stage breakdowns, the
+    # shadow-book decision inputs' NW/committee/sentinel blocks, research_held + rejects), stamped
+    # with the flag-config fingerprint so a build is REPLAYABLE end-to-end. It only READS the finalized
+    # decision state and WRITES a jsonl sidecar — it sizes nothing, gates nothing, changes no
+    # book/size/verdict, and the shadow-book record it reads stays byte-identical. A write failure is
+    # logged + swallowed here and inside the writer, so it can NEVER break the build.
+    try:
+        from brain import decision_provenance as _dprov, regime_frame as _rf_e2
+        try:
+            _e2_cycles = _rf_e2.cycles() or {}
+        except Exception:  # noqa: BLE001
+            _e2_cycles = {}
+        _prov_rows = _provenance_rows(
+            book=book, gate_info=gate_info, shadow_inputs=_shadow_inputs,
+            research_held=research_held, rejected=_rejected, cycles=_e2_cycles)
+        _dprov.write(asof, _prov_rows)
+        _rl_log(_run_id, "book_step", "decision provenance written",
+                f"rows={len(_prov_rows)} flags_hash={_dprov.flags_hash()}")
+    except Exception as _e:  # noqa: BLE001 — provenance is observability-only; never break the build
+        _rl_log(_run_id, "decision", "decision provenance error", f"{_e!r}"[:160])
 
     # ———— forward-proof READINESS watcher — pings (persistent dashboard alert) the moment a
     #      forward threshold crosses (calibration n≥min, cross-sectional IC ≥ enough clusters, shadow
