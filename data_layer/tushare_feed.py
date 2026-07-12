@@ -83,12 +83,17 @@ def _call(api: str, params: dict, fields: str) -> dict | None:
     return r.get("data")
 
 
-def _load_day(td: str, today: str) -> dict[str, float]:
+def _load_day(td: str, today: str, *, force: bool = False) -> dict[str, float]:
     """All A-share CNY closes for trade_date `td` (one bulk call), cached.
 
     Past trade dates cache permanently; TODAY caches only once it has data, so an intraday empty
-    (today's bar not published until after the close) is re-fetched rather than frozen empty."""
-    if td in _CACHE:
+    (today's bar not published until after the close) is re-fetched rather than frozen empty.
+
+    ``force=True`` bypasses the cache READ and hits the live feed — for ``feed_healthy``'s outage
+    probe, so a genuine close cached BEFORE an outage cannot mask an ongoing outage in a long-lived
+    process. A forced probe never caches an EMPTY result (it must not poison a prior good close with a
+    transient miss); a successful forced probe DOES cache, so a later ``price_local`` pays no extra call."""
+    if not force and td in _CACHE:
         return _CACHE[td]
     out: dict[str, float] = {}
     data = _call("daily", {"trade_date": td}, "ts_code,close")
@@ -100,8 +105,10 @@ def _load_day(td: str, today: str) -> dict[str, float]:
                     out[code] = float(close)
             except (TypeError, ValueError, IndexError):
                 pass
-    if out or td != today:
+    if out:
         _CACHE[td] = out
+    elif not force and td != today:
+        _CACHE[td] = out          # non-forced: cache a genuinely-empty PAST date (holiday) to avoid re-fetch
     return out
 
 
@@ -151,8 +158,8 @@ def feed_healthy(asof: str | None = None) -> bool | None:
     today = d0.isoformat().replace("-", "")
     for back in range(0, _WALK_BACK_DAYS + 1):
         td = (d0 - timedelta(days=back)).isoformat().replace("-", "")
-        if _load_day(td, today):                  # any non-empty trade-date market → feed is up
-            return True
+        if _load_day(td, today, force=True):      # LIVE probe (bypass cache) so an ongoing outage,
+            return True                            # not a pre-outage cached close, decides feed health
     return False
 
 

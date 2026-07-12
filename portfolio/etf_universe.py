@@ -49,7 +49,10 @@ _DEFAULT_OVEREXTENSION = {"pct_vs_200d_cap": 40.0, "max_weight": 0.08}
 # single-factor bet wearing many tickers (SPY/QQQ/SMH/MTUM were all one growth/semis trade on 06-22).
 _DEFAULT_FACTOR_CLUSTERS = [
     {"name": "megacap_growth_semis", "members": ["QQQ", "XLK", "SMH", "IGV", "MTUM", "SIZE"],
-     "max_gross": 0.40},
+     # 0.35 mirrors the firm-decided cap in config/clusters.yml + config/etf_strategy.yml. This in-code
+     # default is the fallback when BOTH configs are absent/unparseable, so it must NOT loosen below the
+     # firm level (a stale 0.40 silently weakened the proven G5 semis/AI brake by 5pp during a config gap).
+     "max_gross": 0.35},
 ]
 _DEFAULT_HORIZON = 21
 

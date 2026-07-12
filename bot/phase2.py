@@ -2101,8 +2101,15 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
         _tw: dict = _dd(float)
         for p in book:
             _tw[p["ticker"]] += p.get("weight", 0.0)
+        # Price the union of TARGET ∪ HELD ∪ SPY. Without HELD, a name dropped from the target is
+        # absent from _prices, so rebalance()'s close-out sells it at avg_cost — a fake zero-P&L exit
+        # at a price that never traded (the sibling Brain books already price set(target)|set(held)).
+        try:
+            _held_now = list((paper_account._load_account().get("positions") or {}).keys())
+        except Exception:  # noqa: BLE001
+            _held_now = []
         _prices: dict = {}
-        for _t in set(_tw) | {"SPY"}:
+        for _t in set(_tw) | set(_held_now) | {"SPY"}:
             _px = paper_account._current_price(_t)
             if _px and _px > 0:
                 _prices[_t] = _px

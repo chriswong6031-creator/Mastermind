@@ -469,11 +469,19 @@ function render(d) {
   if (d.market) {
     var ms = document.getElementById("mkt-strip");
     ms.classList.remove("hidden");
-    document.getElementById("mkt-state").textContent = d.market.market_state || "—";
+    // market_state / risk_radar arrive as nested objects ({verdict, score, ...}); read .verdict
+    // (tolerating a bare string for older payloads). The old code used the dict directly, which
+    // printed "[object Object]" and threw TypeError on .toLowerCase() below — that exception
+    // propagated to the fetch .catch and blanked the ENTIRE positions table.
+    var verdictOf = function(x) {
+      if (x && typeof x === "object") return x.verdict || x.state || "";
+      return x || "";
+    };
+    document.getElementById("mkt-state").textContent = verdictOf(d.market.market_state) || "—";
     document.getElementById("mkt-quad").textContent  = d.market.quad_name   || d.market.quad || "—";
     var radarEl = document.getElementById("mkt-radar");
-    var radarVal = d.market.risk_radar || "—";
-    radarEl.textContent = radarVal;
+    var radarVal = verdictOf(d.market.risk_radar);
+    radarEl.textContent = radarVal || "—";
     // Color-code verdict
     var radarLower = (radarVal || "").toLowerCase();
     if (radarLower.indexOf("risk-off") !== -1 || radarLower.indexOf("caution") !== -1) {

@@ -52,6 +52,12 @@ if FastAPI is not None:
     # blocking (see app/auth.py _PFOLIO_PATH_PREFIX). Not in the bearer operator tier.
     app.include_router(pfolio.router)
 
+    # Short-TTL response cache for GET /api/* — installed BEFORE auth so the auth gate stays
+    # OUTERMOST (an unauthenticated request never reaches the cache). No-op unless
+    # MASTERMIND_RESP_CACHE_TTL>0 (set on the serve-only mirror; unset on the canonical Mac).
+    from app import response_cache
+    response_cache.install(app)
+
     # App-level middleware — the serve-only POST guard (MASTERMIND_SERVE_ONLY),
     # the bearer-token OPERATOR tier (MASTERMIND_AUTH_TOKEN) over mutating/LLM POSTs,
     # and operator-path rate limiting. There is NO browser login: read-only browsing

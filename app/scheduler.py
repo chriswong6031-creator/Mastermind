@@ -331,10 +331,21 @@ def _settle_pending_job():
             return
         try:
             from scripts.fill_pending_now import settle
-            try:
-                settle("flagship", require_open=True)
-            except Exception as exc:  # noqa: BLE001 — a settle miss must never kill the scheduler
-                _step_failed_event("settle_pending", "flagship", "fill_pending_flagship", exc)
+            # settle("flagship") mutates the flagship account + latest.json, so hold book:flagship
+            # around it — otherwise a manual POST /daily (which holds book:flagship) can race this write
+            # (the corruption class MW1 per-book locking exists to prevent). If a build already holds it,
+            # skip ONLY the flagship settle (the build fills its own pending) and still settle the US
+            # Brain books. acquire_or_log is a non-blocking try-lock, so this adds no ordering deadlock.
+            _lock_flag = locks.acquire_or_log("book:flagship", job="settle_pending", book="flagship")
+            if _lock_flag is None:
+                _skip_event("settle_pending", "flagship")
+            else:
+                try:
+                    settle("flagship", require_open=True)
+                except Exception as exc:  # noqa: BLE001 — a settle miss must never kill the scheduler
+                    _step_failed_event("settle_pending", "flagship", "fill_pending_flagship", exc)
+                finally:
+                    _lock_flag.release()
             try:
                 from bot import settle as _settle
                 _settle.settle_us()  # autonomous + etf: settle the queued target at the US open
@@ -409,11 +420,14 @@ def _watch_asia_job():
     handle = _ledger_start("watch_asia_overnight", trigger="cron")
     try:
         from bot import overnight
-        overnight.watch_asia()
+        try:
+            overnight.watch_asia()
+        except Exception as exc:  # noqa: BLE001 — a watch miss must never kill the scheduler
+            _step_failed_event("watch_asia_overnight", "", "watch_asia", exc)
         _ledger_end(handle, "ok")
     except Exception as exc:  # noqa: BLE001
         _ledger_end(handle, "error")
-        log.warning("watch_asia_overnight failed: %s", exc)
+        log.warning("watch_asia_overnight outer failed: %s", exc)
 
 
 def _derisk_us_job():
@@ -1025,6 +1039,59 @@ def _portfolio_risk_daily_job():
         log.warning("portfolio_risk_daily failed: %s", exc)
 
 
+def _prewarm_marks_job():
+    """Keep the in-process live-price caches HOT so the dashboard serves book marks WITHOUT a
+    per-request network fetch — the fix for the ~5s book-switch stall. Gathers every held US/HK/CN
+    name across the paper books and warms Yahoo (US + HK) + Tushare (A-shares) in one batched pass.
+    A cheap no-op when the caches are already fresh (TTL-gated). Read-only, never trades, never raises
+    into the scheduler. Absent on the serve-only VPS (the scheduler is disabled there)."""
+    handle = _ledger_start("prewarm_marks", trigger="cron")
+    try:
+        from portfolio import paper_account, registry
+        us: set = set()
+        hk: set = set()
+        cn: set = set()
+        for pid in registry.ids():
+            if pid == "self_directed":
+                continue  # its own engine + the Supabase-backed desk warm on their own request path
+            try:
+                held = paper_account._load_account(pid).get("positions", {}).keys()
+            except Exception:  # noqa: BLE001
+                held = []
+            for t in held:
+                tt = (t or "").upper().strip()
+                if not tt:
+                    continue
+                if tt.endswith(".HK"):
+                    hk.add(tt)
+                elif tt.endswith((".SS", ".SZ")):
+                    cn.add(tt)
+                elif "." not in tt:
+                    us.add(tt)
+        try:
+            from data_layer import yahoo_feed
+            if us:
+                yahoo_feed.warm(sorted(us))   # blocking is fine here — a background job, one batched call
+            if hk:
+                yahoo_feed.warm(sorted(hk))
+        except Exception:  # noqa: BLE001
+            pass
+        if cn:
+            try:
+                from data_layer import tushare_feed
+                for t in sorted(cn):
+                    try:
+                        tushare_feed.price_local(t)   # bulk-caches the A-share close on first touch
+                    except Exception:  # noqa: BLE001
+                        pass
+            except Exception:  # noqa: BLE001
+                pass
+        _ledger_end(handle, "ok")
+    except Exception as exc:  # noqa: BLE001
+        _ledger_end(handle, "error")
+        log.debug("prewarm_marks failed: %s", exc)
+
+
 def start():
     """Start the daily-loop scheduler (idempotent). Returns the scheduler or None."""
     global _scheduler
@@ -1209,6 +1276,15 @@ def start():
                 CronTrigger(day_of_week="mon-fri", hour=15, minute=5, timezone="UTC"),
                 id="portfolio_risk_daily", replace_existing=True,
                 misfire_grace_time=3600, coalesce=True)
+    # LIVE-PRICE PRE-WARM — keep the dashboard's in-process quote caches hot so book-switching serves
+    # marks with NO per-request network fetch (the ~5s switch-stall fix). Every 2 min across the global
+    # market window (Asia 01-09 + US 13-21 UTC); a cheap no-op off-hours and when caches are fresh.
+    # Absent on the serve-only VPS (MASTERMIND_SERVE_ONLY disables the scheduler). Cadence/window via env.
+    prewarm_min = (os.environ.get("PREWARM_MARKS_MINUTE", "*/2").strip() or "*/2")
+    prewarm_hours = (os.environ.get("PREWARM_MARKS_UTC_HOURS", "1-9,13-21").strip() or "1-9,13-21")
+    sch.add_job(_prewarm_marks_job,
+                CronTrigger(day_of_week="mon-fri", hour=prewarm_hours, minute=prewarm_min, timezone="UTC"),
+                id="prewarm_marks", replace_existing=True, misfire_grace_time=120, coalesce=True)
     sch.start()
     _scheduler = sch
     return sch
@@ -1265,7 +1341,7 @@ def scheduler_health() -> list[dict]:
         "autonomous_daily", "heavyweight_daily", "china_daily", "hk_daily", "etf_daily",
         "settle_pending", "settle_brain_asia",
         "watch_us_overnight", "watch_asia_overnight",
-        "derisk_us_intraday",
+        "derisk_us_intraday", "prewarm_marks",
         "publish_macro_snapshot",
         "cio_weekly", "improvement_agenda_weekly",
         "loop_maintenance", "experiment_maturity",

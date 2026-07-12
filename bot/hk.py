@@ -409,7 +409,7 @@ def _build_payload(asof: str, submission: dict | None, prices: dict, executed: l
         "executed_today": executed,
         "skipped_unpriceable": skipped,
         "feed_health": feed_health,
-        "market_status": china_calendar.status(),
+        "market_status": china_calendar.status(venue="HK"),
         "brain": {k: brain.get(k) for k in ("cost_usd", "tools_used", "model")},
     }
 
