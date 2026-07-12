@@ -235,6 +235,225 @@ def _eval_governor_arming(item: dict, asof: date) -> dict:
         )
 
 
+def _eval_judgment_book_promotion(item: dict, asof: date) -> dict:
+    """judgment-book-promotion: ready ONLY when the judgment shadow book has accrued enough
+    non-overlapping forward NAV observations to clear the pre-registered forward-shadow bar.
+
+    Gate (registry): "4wk shadow NAV >= engine in WEAKENING/CAUTION vs max(SPY,defensive)".
+    The forward significance floor is NOT the calendar — it is pre-registered in
+    docs/design/desk/AB_EXPERIMENT.md (§4.2 "Significance", §5 "Decision Rule", §7 "Power"):
+      - effective-n >= _MIN_DATES = 8 INDEPENDENT, date-clustered, NON-OVERLAPPING 21-bday
+        observations before ANY forward verdict is read; AND
+      - a >= 168-calendar-day floor from the first instrumented mark (8 x 21 bdays).
+    AB_EXPERIMENT.md §5 verbatim: "If neither arm has cleared its bar, the verdict is
+    'INSUFFICIENT POWER — keep running'; no build decision is made and no threshold is revised."
+    §7 states plainly: "The 2026-07-17 calibration deadline is BEFORE any forward verdict" — i.e.
+    this experiment's comeback_date is calendar-only and MUST NOT auto-mature the promotion.
+
+    Evidence: the judgment shadow book NAV lives at the registry artifact path
+    data/shadow/books/flagship_judgment/nav_history.jsonl (one JSON row per date; same schema the
+    other shadow books emit: {date, nav, cash, invested, spy_px}). The engine comparator is the
+    control book data/shadow/books/prod/ (the braked-engine baseline; AB_EXPERIMENT.md §2.1).
+
+    We count the judgment book's DISTINCT dated NAV rows and derive an effective-n by thinning to
+    NON-overlapping 21-trading-day (~29 calendar-day) clusters — greedy >= _INDEP_GAP_DAYS spacing,
+    mirroring the _thin_independent contract AB_EXPERIMENT.md §4.2 cites. Ready requires BOTH
+    effective-n >= _MIN_DATES AND the calendar span >= _FORWARD_FLOOR_DAYS. Anything short → blocked
+    (== insufficient_power). When the threshold or the data is ambiguous we default to blocked: it
+    is always safe to UNDER-arm; the bug being fixed is auto-maturing on the calendar.
+    """
+    # Pre-registered thresholds — source: docs/design/desk/AB_EXPERIMENT.md §4.2/§5/§7.
+    # DO NOT tune these to make the experiment pass; revising them voids the pre-registration.
+    required_effective_n = 8      # _MIN_DATES (AB_EXPERIMENT.md §4.2 "Significance", §5)
+    _FORWARD_FLOOR_DAYS = 168     # 8 x 21 bdays min runtime before ANY verdict (§4.2, §7)
+    _INDEP_GAP_DAYS = 29          # ~21 trading days -> non-overlapping cluster spacing (§4.2)
+
+    book_dir = _ROOT / "data" / "shadow" / "books" / "flagship_judgment"
+    nav_path = book_dir / "nav_history.jsonl"
+    if not nav_path.exists():
+        return _eval_result(
+            STATE_BLOCKED,
+            "judgment shadow book absent — data/shadow/books/flagship_judgment/nav_history.jsonl "
+            f"does not exist; 0 forward NAV observations (need effective-n>={required_effective_n} "
+            f"non-overlapping 21-bday obs AND >={_FORWARD_FLOOR_DAYS}d span). INSUFFICIENT POWER — "
+            "keep running (AB_EXPERIMENT.md §5); the 2026-07-17 comeback_date is calendar-only.",
+            evidence_n=0, required_n=required_effective_n,
+        )
+    try:
+        # Collect distinct, valid dated NAV rows (a row must carry a parseable 'date' and 'nav').
+        dates: list[date] = []
+        seen: set[str] = set()
+        for line in nav_path.read_text().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except Exception:  # noqa: BLE001 — a bad line never counts, never raises
+                continue
+            if not isinstance(row, dict) or row.get("nav") is None:
+                continue
+            d_str = str(row.get("date") or "")[:10]
+            if not d_str or d_str in seen:
+                continue
+            try:
+                d = date.fromisoformat(d_str)
+            except Exception:  # noqa: BLE001
+                continue
+            seen.add(d_str)
+            dates.append(d)
+
+        raw_n = len(dates)
+        if raw_n == 0:
+            return _eval_result(
+                STATE_BLOCKED,
+                "judgment shadow book has no parseable dated NAV rows — 0 forward observations "
+                f"(need effective-n>={required_effective_n}). INSUFFICIENT POWER — keep running.",
+                evidence_n=0, required_n=required_effective_n,
+            )
+
+        # Thin to NON-overlapping ~21-trading-day clusters (greedy >= _INDEP_GAP_DAYS gap), the
+        # effective-n the AB_EXPERIMENT.md HAC test consumes. Overlapping daily marks are NOT
+        # independent observations; counting raw rows would overstate power.
+        dates.sort()
+        effective_n = 0
+        last_kept: date | None = None
+        for d in dates:
+            if last_kept is None or (d - last_kept).days >= _INDEP_GAP_DAYS:
+                effective_n += 1
+                last_kept = d
+        span_days = (dates[-1] - dates[0]).days
+
+        if effective_n >= required_effective_n and span_days >= _FORWARD_FLOOR_DAYS:
+            return _eval_result(
+                STATE_READY,
+                f"judgment shadow book cleared the forward bar: effective-n={effective_n} "
+                f">= {required_effective_n} non-overlapping 21-bday obs AND span {span_days}d "
+                f">= {_FORWARD_FLOOR_DAYS}d floor. The 4wk WEAKENING/CAUTION NAV-vs-engine "
+                "comparison (vs data/shadow/books/prod/) can now be judged (AB_EXPERIMENT.md §5).",
+                evidence_n=effective_n, required_n=required_effective_n,
+            )
+
+        # Short on power on EITHER axis → insufficient_power (blocked). Never mature on the calendar.
+        # Estimate readiness from whichever floor binds later.
+        weeks_for_n = max(0, (required_effective_n - effective_n)) * 3   # ~3 cal-wk per indep obs
+        days_for_span = max(0, _FORWARD_FLOOR_DAYS - span_days)
+        ready_est = (asof + timedelta(days=max(weeks_for_n * 7, days_for_span))).isoformat()
+        return _eval_result(
+            STATE_BLOCKED,
+            f"judgment shadow book INSUFFICIENT POWER: effective-n={effective_n} "
+            f"(need {required_effective_n}), span={span_days}d (need {_FORWARD_FLOOR_DAYS}d) — "
+            "keep running (AB_EXPERIMENT.md §5); 2026-07-17 is a calendar marker, NOT a data verdict.",
+            evidence_n=effective_n, required_n=required_effective_n,
+            expected_ready_date=ready_est,
+        )
+    except Exception:  # noqa: BLE001 — evaluators must not raise; ambiguity defaults to blocked
+        return _eval_result(
+            STATE_BLOCKED,
+            "error reading data/shadow/books/flagship_judgment/nav_history.jsonl — treating as "
+            f"0 forward observations (need effective-n>={required_effective_n}). INSUFFICIENT POWER.",
+            evidence_n=0, required_n=required_effective_n,
+        )
+
+
+def _eval_posture_decider_arming(item: dict, asof: date) -> dict:
+    """posture-decider-arming: ready ONLY when BOTH arming preconditions are met on disk.
+
+    Gate (registry): "E2.2 wired + grep-gate CI + calm-tape zero-drift + 2wk shadow no-compounding
+    on disagreeing tapes". The two mechanically-checkable, data-accrual preconditions are:
+      (A) >= 2 CALENDAR WEEKS (14 days) of shadow posture records, no-compounding. The posture
+          decider publishes a dated data/posture/<asof>.json EVERY build in shadow (flag OFF) so
+          the window accrues from day one — see brain/posture_decider.py:build()/module docstring
+          ("Publishes ... a dated copy EVERY BUILD ... so the shadow window accrues from day one").
+          We require the span between the earliest and latest dated artifact to be >= 14 days AND
+          at least _MIN_POSTURE_SNAPSHOTS distinct daily records inside that window.
+      (B) >= _MIN_EFFECTIVE_N = 8 weekly benchmark snapshots in data/benchmark/ — the SAME bar
+          posture_governor.guards() enforces (brain/posture_governor.py:48 `_MIN_EFFECTIVE_N = 8`,
+          consumed by governor-arming above). The arming decision (E3.3) shares the governor's
+          statistical floor: no arming without the governor's own evidence base.
+
+    UNMET on EITHER precondition → insufficient_power (blocked). The E2.2-wired / grep-gate-CI /
+    calm-tape-zero-drift conditions are code-review / CI facts with NO machine-readable artifact in
+    this repo to verify mechanically, so a human/Fable review must still confirm them before resolve
+    — this evaluator only guarantees we never AUTO-mature on the 2026-07-17 calendar with the data
+    absent. Default to blocked whenever the data or the threshold is ambiguous (safe under-arming).
+    """
+    # Precondition (A) — shadow posture window. 14 days = the "2wk" the gate names.
+    _MIN_WINDOW_DAYS = 14              # "2wk shadow no-compounding" (registry gate string)
+    _MIN_POSTURE_SNAPSHOTS = 10        # >= ~10 build-day records inside the 2wk window (no-compound)
+    # Precondition (B) — benchmark snapshot floor. Source: brain/posture_governor.py:48
+    # `_MIN_EFFECTIVE_N = 8`, the arming guard posture_governor.guards() enforces.
+    required_bench_n = 8
+
+    posture_dir = _ROOT / "data" / "posture"
+    bench_dir = _ROOT / "data" / "benchmark"
+
+    # ── (A) count distinct dated posture artifacts (data/posture/<asof>.json) ──
+    posture_dates: list[date] = []
+    if posture_dir.exists():
+        try:
+            for f in sorted(posture_dir.glob("*.json")):
+                if f.name.startswith("_") or f.name in ("latest.json", "state.json"):
+                    continue
+                stem = f.stem  # "2026-07-11"
+                try:
+                    posture_dates.append(date.fromisoformat(stem[:10]))
+                except Exception:  # noqa: BLE001 — non-dated json (e.g. deviations) never counts
+                    continue
+        except Exception:  # noqa: BLE001
+            posture_dates = []
+    posture_n = len(posture_dates)
+    posture_span = (max(posture_dates) - min(posture_dates)).days if posture_n >= 2 else 0
+    window_ok = posture_n >= _MIN_POSTURE_SNAPSHOTS and posture_span >= _MIN_WINDOW_DAYS
+
+    # ── (B) count weekly benchmark snapshots (data/benchmark/*.json, excluding internal files) ──
+    bench_n = 0
+    if bench_dir.exists():
+        try:
+            bench_n = len([f for f in sorted(bench_dir.glob("*.json"))
+                           if not f.name.startswith("_")])
+        except Exception:  # noqa: BLE001
+            bench_n = 0
+    bench_ok = bench_n >= required_bench_n
+
+    if window_ok and bench_ok:
+        return _eval_result(
+            STATE_READY,
+            f"posture arming preconditions met: {posture_n} shadow posture records spanning "
+            f"{posture_span}d (>= {_MIN_WINDOW_DAYS}d 2wk window) AND {bench_n} benchmark snapshots "
+            f"(>= {required_bench_n}). NOTE: E2.2-wired / grep-gate-CI / calm-tape-zero-drift are "
+            "code/CI facts a human must still confirm — this evaluator gates the DATA-accrual bar only.",
+            evidence_n=min(posture_n, bench_n), required_n=required_bench_n,
+        )
+
+    # ── insufficient on at least one precondition → blocked (never mature on the calendar) ──
+    unmet: list[str] = []
+    if not window_ok:
+        if posture_n == 0:
+            unmet.append(
+                "data/posture/ has no dated shadow records (need >= "
+                f"{_MIN_POSTURE_SNAPSHOTS} records spanning >= {_MIN_WINDOW_DAYS}d)")
+        else:
+            unmet.append(
+                f"shadow posture window short: {posture_n} records / {posture_span}d span "
+                f"(need >= {_MIN_POSTURE_SNAPSHOTS} records AND >= {_MIN_WINDOW_DAYS}d)")
+    if not bench_ok:
+        unmet.append(
+            f"benchmark snapshots {bench_n} < required {required_bench_n} "
+            "(posture_governor._MIN_EFFECTIVE_N)")
+    # Estimate readiness from whichever axis binds later (~1 posture record/build-day; ~1 bench/wk).
+    days_for_window = max(0, _MIN_WINDOW_DAYS - posture_span, _MIN_POSTURE_SNAPSHOTS - posture_n)
+    days_for_bench = max(0, required_bench_n - bench_n) * 7
+    ready_est = (asof + timedelta(days=max(days_for_window, days_for_bench))).isoformat()
+    return _eval_result(
+        STATE_BLOCKED,
+        "posture arming INSUFFICIENT POWER — " + "; ".join(unmet)
+        + ". Keep running; the 2026-07-17 comeback_date is a calendar marker, NOT a data verdict.",
+        evidence_n=min(posture_n, bench_n), required_n=required_bench_n,
+        expected_ready_date=ready_est,
+    )
+
+
 def _eval_bubble_formation_grading(item: dict, asof: date) -> dict:
     """bubble-formation-grading: blocked on H4 handoff from the dashboard side.
 
@@ -324,6 +543,8 @@ def _eval_date_driven(item: dict, asof: date) -> dict:
 _EVALUATORS: dict[str, _EvaluatorFn] = {
     "shadow-trim-ladder":        _eval_shadow_trim_ladder,
     "governor-arming":           _eval_governor_arming,
+    "judgment-book-promotion":   _eval_judgment_book_promotion,
+    "posture-decider-arming":    _eval_posture_decider_arming,
     "bubble-formation-grading":  _eval_bubble_formation_grading,
     "deploy-lag-sla":            _eval_deploy_lag_sla,
 }

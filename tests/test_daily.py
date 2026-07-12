@@ -21,6 +21,11 @@ def test_daily_loop_deterministic():
     assert out["book"]["sleeves"]["cash"] >= 0.05
     # armed steps are skipped without armed=True
     assert "research" not in out
+    # 0d perception organs run UNCONDITIONALLY and fail-soft — they must record a status into
+    # `out` without ever breaking the daily flow, even absent vendor data (no exception, no error key
+    # required, but the key is always present).
+    assert "universe_triage" in out
+    assert "divergence_clue" in out
     _clean()
 
 

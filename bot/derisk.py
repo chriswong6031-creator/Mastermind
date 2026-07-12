@@ -32,8 +32,21 @@ _ROOT = Path(__file__).resolve().parent.parent
 _V = _ROOT / "vendor" / "macro"
 _ARTIFACTS = _ROOT / "data" / "macro_risk"
 
-_US_BOOKS = ("flagship", "autonomous", "etf")
+# NOTE: _US_BOOKS is NOT iterated — the US books split into two structurally-different cutter
+# families (see sweep_us): flagship + heavyweight are HELD books cut in place, while autonomous +
+# etf are QUEUED Brain books whose pending target is revised.  A single "for pid in _US_BOOKS"
+# loop would be a misleading second code path (heavyweight through derisk_brain is a no-op — it
+# never queues a pending_target).  Kept as documentation of the US perimeter; do not route a sweep
+# off it.  Held-book cutters: ("flagship", "heavyweight"); queued Brain books: ("autonomous", "etf").
+_US_BOOKS = ("flagship", "heavyweight", "autonomous", "etf")
 _ASIA_BOOKS = ("china", "hk")
+
+# The held-book sleeve sets the in-place cutters (derisk_flagship / derisk_heavyweight) act on.
+# Flagship holds two derisked sleeves (conviction + leadership); heavyweight is a single "heavy"
+# sleeve (bot/heavyweight.SLEEVE) with its own concentration doctrine — no conviction ½-Kelly
+# minimum-invested floor, so its exits bypass risk_officer exactly as flagship's leadership sleeve
+# does.  Subtract-only in both: we only trim/exit, never add.
+_HEAVYWEIGHT_SLEEVES: frozenset[str] = frozenset({"heavy"})
 
 # Sleeves that participate in the held-position sweep — conviction (flagship-style) AND leadership
 # (40-60% NAV in the brain books that hold both sleeves).  The leadership sleeve is the one that
@@ -448,6 +461,172 @@ def derisk_flagship(asof: str | None = None, *, regime: dict | None = None, forc
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# HEAVYWEIGHT — off-cycle subtract-only cut of the held concentrated book to the gross cap.
+#
+# Heavyweight (bot/heavyweight.py) is a HELD book: it rebalances directly at close via
+# paper_account.rebalance(..., portfolio_id="heavyweight") and NEVER queues a pending_target. So the
+# "just add it to sweep_us()" one-liner that routes a book through derisk_brain would be a silent
+# no-op here ("nothing_queued"). Heavyweight is in the US risk perimeter (firm_exposure._FIRM_US_BOOKS
+# includes it) but had NO off-ramp; this is that off-ramp — a HELD-book cutter faithfully mirroring
+# derisk_flagship, scoped to portfolio_id="heavyweight" and its single "heavy" sleeve.
+#
+# Parity with derisk_flagship: SAME tripwire, SAME severity-derived eff_cap (min(state_cap, sev_cap)
+# + posture notch), SAME worst-loser/cracking-chain-first ordering, SAME REAL paper exits
+# (paper_account.execute_fill — the mechanism heavyweight itself uses to reduce a line at rebalance),
+# SAME fail-soft telemetry shape. The ONE deliberate divergence: heavyweight does NOT route exits
+# through risk_officer.apply_exits. That guard is CONVICTION-ONLY (its _held_map filters to
+# sleeve=='conviction'), so a "heavy"-sleeve book would be filtered to zero held names → zero exits.
+# Heavyweight is single-sleeve with its own concentration doctrine and no ½-Kelly minimum-invested
+# floor — exactly the case flagship's LEADERSHIP sleeve is in, which also bypasses risk_officer.
+# The never-blow-to-cash property is structural: the cut stops the instant gross ≤ eff_cap (0.55–0.70),
+# so it always leaves 30–45% invested — it can never liquidate the book to cash.
+# ─────────────────────────────────────────────────────────────────────────────
+def derisk_heavyweight(asof: str | None = None, *, regime: dict | None = None,
+                       force: bool = False) -> dict:
+    """When the tripwire fires, cut the held Heavyweight concentrated book down to the risk-off gross
+    cap — cracking-chain + worst-loser first — realizing REAL paper exits (scoped to
+    portfolio_id="heavyweight") so cash is freed. Subtract-only; never adds; never raises. No-op (and
+    free) when disabled, no trigger, or already under the cap. ``force`` bypasses the trigger gate.
+
+    Mirrors derisk_flagship's severity discipline exactly (min(state_cap, sev_cap) + posture notch);
+    the only divergence is that heavyweight's single "heavy" sleeve bypasses the conviction-only
+    risk_officer guard (see the module note above)."""
+    from bot.heavyweight import PORTFOLIO_ID as _HW_PID  # "heavyweight" — single source of truth
+    asof = asof or date.today().isoformat()
+    out: dict = {"pid": _HW_PID, "asof": asof}
+    if not (enabled() or force):
+        return {**out, "skipped": "disabled"}
+    regime = regime if regime is not None else _regime()
+    tw = tripwire(_HW_PID, asof, regime=regime)
+    out["tripwire"] = {k: tw.get(k) for k in ("trigger", "severity", "reasons", "state")}
+    if not (force or tw["trigger"]):
+        return {**out, "skipped": "no_trigger"}
+
+    rs = tw["risk_state"]
+    # Severity-decoupled cap — identical to derisk_flagship: the cut ALWAYS bites once severity ≥ 2,
+    # regardless of the macro-state scorer's instantaneous read (the 07-01 no-op fix).
+    state_gross_cap = _f(rs.get("gross_cap")) or 1.0
+    sev = tw.get("severity", 0)
+    sev_cap = _severity_cap(sev)                             # None when severity < 2
+    eff_cap = min(state_gross_cap, sev_cap) if sev_cap is not None else state_gross_cap
+    # E2.2 posture notch — MIN-composition, identical to derisk_flagship. Flag OFF ⇒ dead block.
+    posture_notch_cap = None
+    try:
+        from brain import posture_decider as _pd
+        if _pd.posture_flag():
+            _rec = _pd.latest() or {}
+            _pn = _f(_rec.get("posture_notch_cap"))
+            if _pn is not None and _pn > 0:
+                posture_notch_cap = _pn
+                eff_cap = min(eff_cap, _pn)
+    except Exception:  # noqa: BLE001 — P2: degrade to the two-term min
+        pass
+    try:
+        from portfolio import position_log, paper_account, fragility_chain
+        from brain import ledger
+    except Exception as e:  # noqa: BLE001
+        return {**out, "error": f"import: {e!r}"[:160]}
+
+    # Held Heavyweight names, scoped to its pid + its single "heavy" sleeve. Subtract-only invariant
+    # preserved: we only trim/exit, never add.
+    held = [p for p in position_log.open_positions(_HW_PID)
+            if (p or {}).get("sleeve") in _HEAVYWEIGHT_SLEEVES]
+    if not held:
+        _write_artifact(asof, _HW_PID, {**out, "action": "flat"})
+        return {**out, "skipped": "flat"}
+
+    # which chains are cracking (so we exit those names first)
+    try:
+        fr = fragility_chain.assess_book(
+            [{"ticker": p["ticker"], "weight": _f(p.get("current_weight")) or 0.0} for p in held], rs)
+        blocked = set(fr.get("blocked_chains") or [])
+    except Exception:  # noqa: BLE001
+        blocked = set()
+
+    rows = []
+    for p in held:
+        t = str(p.get("ticker") or "").upper().strip()
+        if not t:
+            continue
+        w = _f(p.get("current_weight")) or 0.0
+        sleeve = str(p.get("sleeve") or "heavy")
+        entry, cur = p.get("entry_price"), None
+        try:
+            cur = paper_account._current_price(t)
+        except Exception:  # noqa: BLE001
+            cur = None
+        rel = ((cur / float(entry)) - 1.0) if (cur and entry and float(entry) > 0) else None
+        try:
+            in_crack = bool(fragility_chain.chains_of(t) & blocked)
+        except Exception:  # noqa: BLE001
+            in_crack = False
+        rows.append({"ticker": t, "sleeve": sleeve, "current_weight": w,
+                     "rel_return_since_entry": rel, "in_crack": in_crack})
+
+    gross = round(sum(r["current_weight"] for r in rows), 4)
+    if gross <= eff_cap + 1e-9 and not blocked:
+        artifact = {**out, "action": "hold", "gross": gross,
+                    "gross_cap": eff_cap, "state_gross_cap": state_gross_cap,
+                    "severity_cap": sev_cap, "posture_notch_cap": posture_notch_cap, "eff_cap": eff_cap,
+                    "cut_scope": sorted(_HEAVYWEIGHT_SLEEVES)}
+        _write_artifact(asof, _HW_PID, artifact)
+        return {**out, "action": "hold", "gross": gross, "gross_cap": eff_cap,
+                "eff_cap": eff_cap, "severity_cap": sev_cap,
+                "cut_scope": sorted(_HEAVYWEIGHT_SLEEVES), "reasons": tw["reasons"]}
+
+    # order: cracking-chain first, then worst rel-return first; exit until gross ≤ eff_cap.
+    def _rel_key(r):
+        rr = r.get("rel_return_since_entry")
+        return rr if isinstance(rr, (int, float)) else 0.0
+
+    order = sorted(rows, key=lambda r: (0 if r["in_crack"] else 1, _rel_key(r)))
+    decisions: list[dict] = []
+    running = gross
+    for r in order:
+        if running <= eff_cap + 1e-9:
+            break
+        decisions.append({"ticker": r["ticker"], "action": "exit", "scale": 0.0,
+                          "sleeve": r["sleeve"],
+                          "rel_return": r["rel_return_since_entry"]})
+        running -= r["current_weight"]
+
+    _reason_str = f"exited (fast de-risk: {'; '.join(tw['reasons'])[:120]})"
+    exited: list[str] = []
+    realized: list[str] = []
+
+    def _execute_exit(t: str, sleeve: str) -> None:
+        try:
+            # REAL paper exit scoped to heavyweight → frees cash in the heavyweight account (the SAME
+            # execute_fill path heavyweight uses to reduce a line at rebalance, single-name variant).
+            res = paper_account.execute_fill(t, "sell", asof=asof, portfolio_id=_HW_PID)
+            if res.get("ok"):
+                realized.append(t)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            position_log.close_position(sleeve, t, asof, reason="fast_derisk", portfolio_id=_HW_PID)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            ledger.close(t, _reason_str)
+        except Exception:  # noqa: BLE001
+            pass
+        exited.append(t)
+
+    # Single sleeve — no conviction ½-Kelly floor to enforce (see the module note); the never-blow-to-
+    # cash property is the gross cap itself (the cut stops at eff_cap, leaving 30–45% invested).
+    for d in decisions:
+        _execute_exit(d["ticker"], d["sleeve"])
+
+    result = {**out, "action": "cut", "exited": exited, "realized": realized,
+              "gross_before": gross, "gross_cap": eff_cap,
+              "state_gross_cap": state_gross_cap, "severity_cap": sev_cap, "posture_notch_cap": posture_notch_cap, "eff_cap": eff_cap,
+              "cut_scope": sorted(_HEAVYWEIGHT_SLEEVES), "reasons": tw["reasons"]}
+    _write_artifact(asof, _HW_PID, result)
+    return result
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # BRAIN books — revise the queued pending target down to the gross cap (settles defensively at open).
 # ─────────────────────────────────────────────────────────────────────────────
 def derisk_brain(pid: str, asof: str | None = None, *, regime: dict | None = None,
@@ -554,16 +733,25 @@ def _log_sweep_advisory(pid: str, exc: Exception) -> None:
 
 
 def sweep_us(asof: str | None = None) -> dict:
-    """Intraday/overnight de-risk sweep for the US books (scheduler job). Flagship cuts held; the US
-    Brain books revise their queued targets. No-op unless armed + a confirmation fires. Never raises."""
+    """Intraday/overnight de-risk sweep for the US books (scheduler job). Flagship AND Heavyweight cut
+    HELD (in place, real exits); the US Brain books (autonomous, etf) revise their QUEUED targets. No-op
+    unless armed + a confirmation fires. Never raises.
+
+    Heavyweight is a HELD book (it rebalances directly at close, never queues a pending_target), so it
+    needs the held-book cutter derisk_heavyweight — routing it through derisk_brain would be a silent
+    'nothing_queued' no-op. It is in the US risk perimeter (firm_exposure._FIRM_US_BOOKS) but had no
+    off-ramp before this."""
     out: dict = {}
     if not enabled():
         return {"skipped": "disabled"}
-    try:
-        out["flagship"] = derisk_flagship(asof)
-    except Exception as e:  # noqa: BLE001
-        out["flagship"] = {"error": repr(e)[:160]}
-        _log_sweep_advisory("flagship", e)
+    # HELD-book cutters (real exits, in place) — flagship + heavyweight.
+    for pid, _cut in (("flagship", derisk_flagship), ("heavyweight", derisk_heavyweight)):
+        try:
+            out[pid] = _cut(asof)
+        except Exception as e:  # noqa: BLE001
+            out[pid] = {"error": repr(e)[:160]}
+            _log_sweep_advisory(pid, e)
+    # QUEUED Brain books (revise the pending target) — autonomous + etf.
     for pid in ("autonomous", "etf"):
         try:
             out[pid] = derisk_brain(pid, asof)

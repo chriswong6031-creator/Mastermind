@@ -46,6 +46,65 @@ def run_daily(asof: str | None = None, *, force: bool = False, armed: bool = Tru
     except Exception as e:  # noqa: BLE001 — freshness must never kill the build
         out["macro_data"] = {"error": str(e)[:200]}
 
+    # 0c. PERCEPTION ORGANS — materialize the read-only market_view planes nightly, AFTER the
+    #     vendored macro data is fresh (they read data/yahoo + the vendored regime/site products)
+    #     and BEFORE the book build (so a same-run PM payload can pick up today's artifacts).
+    #     These are ADVISORY perception artifacts: they change ZERO trading behavior (both organs
+    #     ship notch_eligible=False / advisory:True). Each is wrapped in its OWN try/except and only
+    #     records a status into `out` — a failure here must NEVER break the daily run.
+    #
+    #     Rotation Tensor → data/market_view/rotation_tensor.json (the rotation *magnitude* organ).
+    try:
+        from brain import rotation_tensor
+        _art = rotation_tensor.assemble(asof=asof)   # production default readers; never raises
+        rotation_tensor.write_artifact(_art)         # atomic tmp→replace (this CAN raise → caught)
+        out["rotation_tensor"] = {"as_of": _art.get("as_of"),
+                                  "confidence": _art.get("confidence")}
+    except Exception as e:  # noqa: BLE001 — a perception organ must never kill the build
+        out["rotation_tensor"] = {"error": str(e)[:200]}
+
+    #     Anticipation Battery → data/anticipation/<asof>.json (+ latest.json). write_battery builds
+    #     AND persists in one call and never raises; the try/except is belt-and-suspenders.
+    try:
+        from brain import anticipation
+        _batt = anticipation.write_battery(asof=asof)   # builds + persists; never raises
+        out["anticipation"] = {"asof": _batt.get("asof"),
+                               "top_level": _batt.get("top_level")}
+    except Exception as e:  # noqa: BLE001 — a perception organ must never kill the build
+        out["anticipation"] = {"error": str(e)[:200]}
+
+    # 0d. PERCEPTION ORGANS (cont.) — materialize the two whole-universe / single-name planes nightly,
+    #     in the same seam as 0c (after the vendored macro data is fresh, before the book build).
+    #     These are OBSERVABILITY-ONLY producers: they WRITE artifacts + a ledger; they change ZERO
+    #     trading behaviour. universe_triage ships every sector at action='neutral' by default, and
+    #     divergence_clue consumption is gated behind MASTERMIND_DIVERGENCE_CLUE (default OFF) — the
+    #     scan()/write here only records the perception, it never injects candidacy. Each organ is
+    #     wrapped in its OWN try/except and only records a status into `out`; a failure NEVER breaks
+    #     the daily run (both modules are internally fail-soft, this is belt-and-suspenders).
+    #
+    #     Universe Triage → data/universe_triage/latest.json (the whole-universe per-sector verdict).
+    try:
+        from brain import universe_triage
+        _art = universe_triage.assemble(asof=asof)   # composes the perception readers; never raises
+        universe_triage.write_artifact(_art)         # atomic tmp→replace (this CAN raise → caught)
+        _secs = _art.get("sectors")
+        out["universe_triage"] = {"as_of": _art.get("as_of"),
+                                  "n_sectors": len(_secs) if isinstance(_secs, dict) else 0}
+    except Exception as e:  # noqa: BLE001 — a perception organ must never kill the build
+        out["universe_triage"] = {"error": str(e)[:200]}
+
+    #     Divergence Clue → data/brain/divergence_clue_latest.json (+ append-only ...jsonl ledger).
+    #     scan() only reads + measures (safe regardless of the consumption flag); write_latest and
+    #     append_ledger persist the observation. All three are internally fail-soft.
+    try:
+        from brain import divergence_clue
+        _rows = divergence_clue.scan(asof)           # detector; never raises (returns [] on outage)
+        divergence_clue.write_latest(_rows, asof)    # fail-soft artifact write
+        divergence_clue.append_ledger(_rows)         # idempotent per (ticker, asof); fail-soft
+        out["divergence_clue"] = {"n_clues": len(_rows) if isinstance(_rows, list) else 0}
+    except Exception as e:  # noqa: BLE001 — a perception organ must never kill the build
+        out["divergence_clue"] = {"error": str(e)[:200]}
+
     # 1. the gated paper book (deterministic; always runs).
     #    MW3 R3: pass the macro_data refresh result so phase2 can apply the stale-anchor
     #    freeze BEFORE ledger/store/rebalance/publish (the correct seam).  The freeze logic

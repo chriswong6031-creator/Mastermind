@@ -723,6 +723,15 @@ def _run_loop_maintenance_steps():
         _calibration.persist(asof_d)
     except Exception as exc:  # noqa: BLE001
         _step_failed_event("loop_maintenance", "", "calibration.persist", exc)
+    # 3b. per-seat Brinson ATTRIBUTION rollup — decompose every RESOLVED name's active return across
+    #     the seats that touched it and update data/brain/attribution/<asof>.json + _rollup.json. This
+    #     is the substrate brain/reputation.py reads to warm the seat weights off the reputation floor.
+    #     Pure (no LLM), reads only on-disk seat artifacts, idempotent per asof, never liquidates.
+    try:
+        from brain import attribution as _attribution
+        _attribution.persist(asof_d)
+    except Exception as exc:  # noqa: BLE001
+        _step_failed_event("loop_maintenance", "", "attribution.persist", exc)
 
 
 # The books that the deterministic/Brain builders mark only on their OWN run day. flagship marks
