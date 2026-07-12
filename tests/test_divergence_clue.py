@@ -25,14 +25,42 @@ from __future__ import annotations
 
 import json
 import math
+from datetime import date, timedelta
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
+from brain import board_track_record as BTR
 from brain import divergence_clue as DC
 
 _ROOT = Path(__file__).resolve().parent.parent
+_BTR_FIXTURE = _ROOT / "tests" / "fixtures" / "us_board_track_record.json"
+
+
+def _point_btr_at_fixture(monkeypatch, tmp_path, *, days_old: int = 0) -> None:
+    """Point board_track_record's artifact at a FRESH copy of the committed ledger fixture.
+
+    The fixture's envelope as_of is a far-future placeholder; rewrite it to `days_old` days before
+    today so the freshness gate passes, but leave the per-row `surfaced` dates as the historical
+    2026 facts (the point-in-time surface). Resets the reader cache.
+    """
+    art = json.loads(_BTR_FIXTURE.read_text())
+    art["as_of"] = (date.today() - timedelta(days=days_old)).isoformat()
+    primary = tmp_path / "us_board_track_record.json"
+    primary.write_text(json.dumps(art))
+    monkeypatch.setattr(BTR, "_ARTIFACT_PATH", primary)
+    monkeypatch.setattr(BTR, "_ARTIFACT_PATH_FALLBACK", tmp_path / "nope.json")
+    BTR._reset_cache()
+
+
+@pytest.fixture(autouse=True)
+def _reset_btr_cache():
+    """Reset the board_track_record process cache around EVERY test so a fixture-pointed ledger read
+    never leaks into a later test after monkeypatch reverts the artifact path."""
+    BTR._reset_cache()
+    yield
+    BTR._reset_cache()
 
 
 # ===========================================================================
@@ -179,7 +207,8 @@ def test_real_replay_2026_07_01_aapl():
     price/sector inputs. When the retained data does NOT carry the trigger — which is the
     case in this checkout (the 2026-07-01 board is gate_go=False and AAPL's radar reads
     QUIET) — the detector CORRECTLY emits no AAPL clue, so this test SKIPS with that exact
-    reason. The synthetic acceptance test below carries the pattern guarantee unconditionally."""
+    reason. The synthetic + ledger acceptance tests below carry the pattern guarantee
+    unconditionally."""
     present, reason = _replay_trigger_present()
     if not present:
         pytest.skip(f"2026-07-01 AAPL replay not assertable: {reason}")
@@ -187,6 +216,51 @@ def test_real_replay_2026_07_01_aapl():
     tickers = {r["ticker"] for r in rows}
     assert "AAPL" in tickers, (
         f"AAPL trigger present in 2026-07-01 snapshot but not surfaced; got {sorted(tickers)}")
+
+
+def test_ledger_regrounds_aapl_trigger_point_in_time(monkeypatch, tmp_path):
+    """POINT-IN-TIME re-grounding: with the PERSISTENT track-record ledger present (the committed
+    fixture — the real macro export has not shipped to this worktree), AAPL is a VALID buy-board
+    trigger for asof='2026-07-01' via surfaced_on(), even though the live board reads gate_go=False.
+    This is the mechanism the AAPL-Jul-1 example now rests on — asserted, not skipped."""
+    _point_btr_at_fixture(monkeypatch, tmp_path)
+
+    # 1) the ledger itself carries AAPL as a 2026-07-01 board-ENTRY (the immutable historical fact).
+    assert "AAPL" in BTR.surfaced_on("2026-07-01")
+
+    # 2) the production board-membership union treats that surfacing as a trigger for the replay asof,
+    #    NOT gated by the volatile board's gate_go. (_default_standouts is absent in this worktree → the
+    #    ledger leg alone supplies AAPL.)
+    membership = DC._default_board_membership("2026-07-01")
+    assert "AAPL" in membership
+
+    # 3) end-to-end: a scan whose board-membership is the ledger union surfaces AAPL when the
+    #    corroborator inputs are provided (series injected; the TRIGGER is the ledger, asserted above).
+    aapl, xlk = _aapl_pattern_series()
+    rows = DC.scan(
+        asof="2026-07-01",
+        board_membership_fn=DC._default_board_membership,   # unions live board (empty here) + ledger
+        sector_etf_fn=lambda t: {"AAPL": "XLK"}.get(t.upper()),
+        series_fn=lambda t: {"AAPL": aapl, "XLK": xlk}.get(t.upper()),
+        cycles_fn=lambda: {"XLK": {"phase": "Peak", "late_cycle": True,
+                                   "osc_slope": -0.4, "pos": 82.0}},
+        risk_state_fn=lambda a: {"state": "caution"},
+        radar_fn=lambda: {},
+        cooldown_fn=lambda: {},
+    )
+    clue = next((r for r in rows if r["ticker"] == "AAPL"), None)
+    assert clue is not None, f"AAPL ledger trigger present but not surfaced; got {rows}"
+    assert clue["trigger"] == "standout_buy_board"
+
+
+def test_ledger_stale_drops_point_in_time_trigger(monkeypatch, tmp_path):
+    """A STALE ledger (as_of past the 5-day budget) contributes nothing to the membership union —
+    the point-in-time surfacing is gone, so AAPL is no longer a ledger-sourced trigger. (The live
+    board is absent in this worktree, so the union is empty.) Confirms the staleness gate is wired
+    into the re-grounding, fail-closed."""
+    _point_btr_at_fixture(monkeypatch, tmp_path, days_old=9)  # stale
+    assert BTR.surfaced_on("2026-07-01") == set()
+    assert "AAPL" not in DC._default_board_membership("2026-07-01")
 
 
 # ===========================================================================

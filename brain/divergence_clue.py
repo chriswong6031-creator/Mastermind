@@ -20,7 +20,27 @@ is always safe to run (it only reads + measures, never sizes, never executes).
 
 THE CONJUNCTION (a name is a clue ONLY on all three)
 ----------------------------------------------------
-  TRIGGER    : (name on the standout buy-board) OR (radar POSITIVE_DIVERGENCE)
+  TRIGGER    : (name on the buy-board MEMBERSHIP set) OR (radar POSITIVE_DIVERGENCE)
+
+BOARD MEMBERSHIP — LIVE vs POINT-IN-TIME (the AAPL-Jul-1 re-grounding)
+---------------------------------------------------------------------
+The buy-board trigger has TWO membership sources, unioned by ``_default_board_membership(asof)``:
+
+  (1) the VOLATILE board (``us_standouts.json``, overwritten each build, no history). It RESPECTS its
+      own ``gate_go`` — an explicit ``gate_go=False`` means the LIVE board is not validated, so it
+      contributes NOTHING to today's membership. This is the live/today read.
+  (2) the PERSISTENT track-record ledger (``brain/board_track_record.surfaced_on(asof)``), the
+      immutable append-only record of every name ever SURFACED on the board on a given date. A past
+      surfacing is a HISTORICAL FACT, so this source is NOT gated by gate_go — for a replay/backtest
+      ``asof`` it answers "was this name surfaced that day" from the retained ledger, which the
+      volatile board (having been overwritten) can no longer answer.
+
+This re-grounds the module's central AAPL-Jul-1 example on the REAL, retained surface: on a replay of
+``asof='2026-07-01'`` AAPL is a valid trigger via ``surfaced_on('2026-07-01')`` even though the live
+board today reads ``gate_go=False``. IMPORTANT — this only broadens the historical/point-in-time
+TRIGGER membership (what to LOOK at); it never weakens the live ``gate_go`` discipline for SIZING.
+Consumption is still gated by ``MASTERMIND_DIVERGENCE_CLUE`` (default OFF); this change is byte-
+identical for a default-OFF consumer.
   ≥2 CORROBORATORS of:
       S1 down-day alpha : member out-performs its sector on the sector's DOWN days by
                           ≥ +50 bps/day over ~63 sessions, with a decent recent hit-rate.
@@ -382,7 +402,11 @@ def _pct_vs_50dma(series: Any) -> float | None:
 
 def _default_standouts() -> set[str]:
     """The names on the standout BUY board. Respects the board's own gate_go (P-NEW-2):
-    an explicit gate_go=False → the board is not validated → empty set. {} on any miss."""
+    an explicit gate_go=False → the board is not validated → empty set. {} on any miss.
+
+    This is the VOLATILE / LIVE membership source (us_standouts.json is overwritten each build).
+    The gate_go discipline is preserved here on purpose — the live board must be validated to
+    contribute to TODAY's membership."""
     d = _read_json("factordata/us_standouts.json") or {}
     if d.get("gate_go") is False:
         return set()
@@ -391,6 +415,37 @@ def _default_standouts() -> set[str]:
         t = _u(s.get("ticker") if isinstance(s, dict) else s)
         if t:
             out.add(t)
+    return out
+
+
+def _default_board_membership(asof: str | None) -> set[str]:
+    """The buy-board TRIGGER membership set for ``asof`` — the UNION of two sources:
+
+      (1) the VOLATILE live board (``_default_standouts``, gate_go-respecting) — the today read; and
+      (2) the PERSISTENT track-record ledger's point-in-time board-ENTRY set for ``asof``
+          (``board_track_record.surfaced_on(asof)``) — the immutable historical surfacing, NOT gated
+          by gate_go (a past surfacing is a fact the overwritten live board can no longer answer).
+
+    This is what re-grounds the AAPL-Jul-1 replay: for ``asof='2026-07-01'`` the ledger answers
+    "AAPL was surfaced that day" even though the live board reads gate_go=False. Fail-soft: any source
+    failure degrades that leg to empty (which can only ever REMOVE a trigger, never fabricate one);
+    never raises. Broadens the point-in-time TRIGGER membership only — NOT the live sizing gate."""
+    out: set[str] = set()
+    # (1) volatile live board (gate_go-respecting).
+    try:
+        live = _default_standouts()
+        if isinstance(live, set):
+            out |= {_u(t) for t in live if _u(t)}
+    except Exception:  # noqa: BLE001 — a live-board failure just drops that leg
+        pass
+    # (2) persistent ledger point-in-time surfacing (NOT gated by gate_go).
+    try:
+        from brain import board_track_record
+        surfaced = board_track_record.surfaced_on(str(asof)[:10]) if asof else set()
+        if isinstance(surfaced, set):
+            out |= {_u(t) for t in surfaced if _u(t)}
+    except Exception:  # noqa: BLE001 — a ledger failure just drops that leg
+        pass
     return out
 
 
@@ -580,6 +635,7 @@ def scan(
     asof: str | None = None,
     *,
     standouts_fn: Optional[Callable[[], set[str]]] = None,
+    board_membership_fn: Optional[Callable[[str | None], set[str]]] = None,
     radar_fn: Optional[Callable[[], dict[str, str]]] = None,
     sector_etf_fn: Optional[Callable[[str], str | None]] = None,
     series_fn: Optional[Callable[[str], Any]] = None,
@@ -598,6 +654,22 @@ def scan(
     the function NEVER raises and returns ``[]`` when nothing qualifies (or on total
     data outage).
 
+    BOARD MEMBERSHIP (the point-in-time re-grounding)
+    -------------------------------------------------
+    The buy-board trigger reads its membership from ``board_membership_fn(asof)``. Its production
+    default (``_default_board_membership``) UNIONS the volatile live board (gate_go-respecting) with
+    the persistent track-record ledger's ``surfaced_on(asof)`` (NOT gated — a past surfacing is a
+    fact). This is what lets a replay of ``asof='2026-07-01'`` surface AAPL from the retained ledger
+    even though the live board reads gate_go=False.
+
+    For BACKWARD COMPATIBILITY: if a caller injects ``standouts_fn`` but NOT ``board_membership_fn``
+    (as the synthetic tests do), the membership set is taken verbatim from that injected
+    ``standouts_fn`` — the injected board is treated as the point-in-time membership, so no test needs
+    to supply the ledger. ``board_membership_fn``, when injected, takes precedence.
+
+    This broadens only the point-in-time TRIGGER membership (what to LOOK at); it never touches the
+    live gate_go SIZING discipline. Consumption stays gated by MASTERMIND_DIVERGENCE_CLUE (default OFF).
+
     Returns a list of clue rows (≤ _MAX_CLUES), each::
 
         {ticker, asof, sector, sector_etf, trigger, corroborators:[...],
@@ -605,9 +677,20 @@ def scan(
          falsifier:{kind:'rel_return', subject, benchmark, horizon_bdays:21, op:'>', value:0}}
     """
     try:
+        # Resolve the board-membership reader:
+        #  * an explicit board_membership_fn always wins;
+        #  * else if standouts_fn was injected (tests), treat that injected board as the point-in-time
+        #    membership verbatim (backward compat — no ledger needed in a fixture-driven test);
+        #  * else the production default that unions the volatile board + the ledger surfaced_on(asof).
+        if board_membership_fn is not None:
+            membership_fn = board_membership_fn
+        elif standouts_fn is not None:
+            membership_fn = lambda a, _s=standouts_fn: _s()  # noqa: E731
+        else:
+            membership_fn = _default_board_membership
         return _scan_impl(
             asof,
-            standouts_fn=standouts_fn or _default_standouts,
+            board_membership_fn=membership_fn,
             radar_fn=radar_fn or _default_radar,
             sector_etf_fn=sector_etf_fn or _default_sector_etf,
             series_fn=series_fn or _default_series_fn,
@@ -622,24 +705,24 @@ def scan(
         return []
 
 
-def _scan_impl(asof, *, standouts_fn, radar_fn, sector_etf_fn, series_fn,
+def _scan_impl(asof, *, board_membership_fn, radar_fn, sector_etf_fn, series_fn,
                cycles_fn, tensor_fn, risk_state_fn, rvol_z_fn, cooldown_fn) -> list[dict[str, Any]]:
     asof = str(asof)[:10] if asof else datetime.now(tz=timezone.utc).strftime("%Y-%m-%d")
 
-    standouts = _safe_call(standouts_fn, set())
+    board = _safe_call(lambda: board_membership_fn(asof), set())
     radar = _safe_call(radar_fn, {})
     cycles = _safe_call(cycles_fn, {})
     tensor = _safe_call(lambda: tensor_fn(asof), {})
     risk = _safe_call(lambda: risk_state_fn(asof), {})
     cooldown = _safe_call(cooldown_fn, {})
 
-    if not isinstance(standouts, set):
-        standouts = set(standouts or [])
+    if not isinstance(board, set):
+        board = set(board or [])
     radar = radar if isinstance(radar, dict) else {}
 
     # candidate universe = every name that fires the TRIGGER
     triggers: dict[str, str] = {}
-    for t in standouts:
+    for t in board:
         tu = _u(t)
         if tu:
             triggers[tu] = "standout_buy_board"
