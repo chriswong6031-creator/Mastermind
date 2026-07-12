@@ -52,6 +52,7 @@ KNOWN_FLAGS: list[str] = [
     "MASTERMIND_SELF_TUNE",
     "MASTERMIND_STUDENT",
     "MASTERMIND_TECHNICIAN",        # dark seat: entry-timing TECHNICIAN (brain/technician.py), default OFF
+    "MASTERMIND_DESK_QUORUM",       # dark ladder off|shadow|enforce: admit the TECHNICIAN seat into the buy gate, default off
     # Neural Web / P2 candidacy funnel (dark — additive buy-source, arm on a statistical bar, roadmap E8)
     "MASTERMIND_NW_DECISION",       # enum off|shadow|candidacy|shrink|vote (default off)
     "MASTERMIND_ROTATION_IN",       # enum off|watch|starter (default off)

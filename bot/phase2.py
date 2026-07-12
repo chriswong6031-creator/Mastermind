@@ -568,6 +568,28 @@ def _is_parabolic_withhold(tech: dict | None) -> bool:
         return False
 
 
+# Where the desk-quorum TECHNICIAN seat writes one row per evaluated NEW name. A durable, agent-
+# labelled sidecar so the outcome loop can later grade the seat's verdicts (mirrors the committee
+# artifacts + brain.decision_provenance.write jsonl idiom). Only written in shadow/enforce mode.
+_PIPELINE_LEDGER = Path(__file__).resolve().parent.parent / "data" / "pipeline" / "ledger.jsonl"
+
+
+def _pipeline_ledger_write(row: dict) -> None:
+    """Append ONE technician-seat row to data/pipeline/ledger.jsonl. FAIL-SOFT: mkdir parents,
+    one buffered JSON line, and any error (unwritable dir, un-serializable row) is SWALLOWED — a
+    ledger-write failure can NEVER break the build. Mirrors brain.decision_provenance.write. Only
+    called in desk-quorum shadow/enforce mode (OFF = never called → zero cost, zero side effect)."""
+    try:
+        if not isinstance(row, dict):
+            return
+        _PIPELINE_LEDGER.parent.mkdir(parents=True, exist_ok=True)
+        line = json.dumps(row, default=str, ensure_ascii=False)
+        with _PIPELINE_LEDGER.open("a", encoding="utf-8") as fh:
+            fh.write(line + "\n")
+    except Exception:  # noqa: BLE001 — the pipeline ledger is best-effort; never break the gate
+        pass
+
+
 def _judgment_enabled() -> bool:
     """The Flagship deep-reasoning JUDGMENT layer (MACRO STRATEGIST + PM-CONVICTION seats that
     reshape the engine's confirmed list into the PM's target book) runs ONLY when explicitly
@@ -1261,6 +1283,65 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
                             scaled = round(scaled * float(cm.get("scale", 1.0)), 4)
                 except Exception:  # noqa: BLE001 — committee is additive; never block the gate
                     committee_block = None
+            # ── DESK-QUORUM TECHNICIAN seat (MASTERMIND_DESK_QUORUM ladder off|shadow|enforce) ──
+            #    The staged admission of the entry-timing TECHNICIAN into the live buy gate. When the
+            #    mode is "off" (the DEFAULT), NONE of this runs — the whole block is guarded on
+            #    `_dqm != "off"` up front, so the gate is BYTE-IDENTICAL to base: the Sonnet seat is
+            #    never invoked (zero cost) and no ledger row is written. In "shadow"/"enforce" the seat
+            #    runs and a pipeline-ledger row is written; only in "enforce" is the verdict APPLIED,
+            #    SUBTRACT-ONLY (wait → park via the EXACT timing-withhold path; staged_starter → cap the
+            #    scale). Fail-soft: a seat/LLM failure degrades to a None verdict (no-op) — a failed seat
+            #    NEVER parks a name; only a real "wait" verdict parks. Never blocks the build.
+            if is_new:
+                _dqm = "off"
+                try:
+                    from brain import committee as _committee
+                    _dqm = _committee.desk_quorum_mode()
+                except Exception:  # noqa: BLE001 — mode read never blocks the gate
+                    _dqm = "off"
+                if _dqm != "off":
+                    _tech_verdict = None
+                    try:
+                        from brain import technician as _technician
+                        _tv = _technician.technician_assess(
+                            _technician.technician_input(
+                                t, entry_signal=_published_entry_signal(t),
+                                tech=_entry_tech_fields(t)),
+                            asof=asof, ticker=t)
+                        _tech_verdict = (_tv or {}).get("verdict")
+                    except Exception:  # noqa: BLE001 — seat failure → None verdict (no-op, never parks)
+                        _tech_verdict = None
+                    _tg = _committee.technician_gate(_dqm, "confirm", 1.0, _tech_verdict)
+                    _final_action = "park" if _tg["park"] else ("trim" if _tg["scale"] < 1.0 else "confirm")
+                    try:
+                        _pipeline_ledger_write({
+                            "asof": asof, "ticker": t,
+                            "forge_confirmed": bool(breakdown.get("confirmed")),
+                            "sentinel_stance": (committee_block or {}).get("sentinel_stance"),
+                            "technician_verdict": _tech_verdict,
+                            "final_action": _final_action, "mode": _dqm,
+                        })
+                    except Exception:  # noqa: BLE001 — ledger is best-effort
+                        pass
+                    if _dqm == "enforce":
+                        if _tg["park"]:
+                            # PARK the name via the EXACT existing timing-withhold path: append to the
+                            # watchlist, emit a shadow weight-0 row, and `continue` (no book entry).
+                            _twreason = "technician: wait"
+                            research_held.append({"ticker": t, "reason": "timing withhold: " + _twreason,
+                                                  **research_block})
+                            _emit_shadow(t, c, breakdown, forge_confirmed=True, weight_prod=0.0,
+                                         committee_block=committee_block, sentinel=_sent, price=px, is_new=is_new)
+                            try:
+                                from portfolio import watchlist as _watchlist
+                                _watchlist.append(t, asof, _twreason, tech=_entry_tech_fields(t),
+                                                  combined=breakdown.get("combined"))
+                            except Exception:  # noqa: BLE001 — watchlist logging never blocks the gate
+                                pass
+                            _rl_log(_run_id, "decision", f"TECHNICIAN WAIT {t}", _twreason, ticker=t)
+                            continue
+                        if _tg["scale"] < 1.0:
+                            scaled = round(scaled * float(_tg["scale"]), 4)
             entry = {**c, "weight": scaled, "research": research_block}
             if committee_block:
                 entry["committee"] = committee_block

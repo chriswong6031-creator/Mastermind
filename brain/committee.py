@@ -38,6 +38,28 @@ def enabled() -> bool:
         return False
 
 
+# Desk-quorum modes (MASTERMIND_DESK_QUORUM) — the staged ladder that admits the TECHNICIAN
+# entry-timing seat into the live buy decision. "off" is the default and is BYTE-IDENTICAL to base.
+_DESK_QUORUM_MODES = ("off", "shadow", "enforce")
+
+
+def desk_quorum_mode() -> str:
+    """Return the desk-quorum mode: ``off`` | ``shadow`` | ``enforce`` (default ``off``).
+
+    THE STAGED LADDER for admitting the TECHNICIAN seat into the live buy gate:
+      * ``off`` (default) → the technician seat is NOT run, ``nexus()`` keeps its 2-arg behaviour,
+        no ledger write. ZERO cost, ZERO behaviour change — byte-identical to base.
+      * ``shadow``        → run the technician seat + LOG its verdict to the pipeline ledger, but
+        DO NOT change the book (pure observability; trading byte-identical).
+      * ``enforce``       → additionally APPLY the verdict SUBTRACT-ONLY (``wait`` → park the name;
+        ``staged_starter`` → cap scale at 0.7). Never forces a buy, never escalates.
+
+    Fail-soft: any unrecognised / empty value degrades to ``off`` (the safe default), so a typo in
+    the env can only ever make the seat inert — it can never accidentally arm enforcement."""
+    val = os.environ.get("MASTERMIND_DESK_QUORUM", "off").strip().lower()
+    return val if val in _DESK_QUORUM_MODES else "off"
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # SENTINEL — the blind adversary
 # ─────────────────────────────────────────────────────────────────────────────
@@ -128,14 +150,112 @@ def sentinel_assess(ticker: str, engine_full: dict, regime: dict, portfolio_ctx:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# TECHNICIAN — subtract-only entry-timing ratchet applied on top of the NEXUS action
+# ─────────────────────────────────────────────────────────────────────────────
+# The TECHNICIAN verdict caps (never lifts) the SUBTRACT-ONLY scale each verdict may leave a name at:
+#   wait           → 0.0  (park the name — the seat's strongest withhold)
+#   staged_starter → 0.7  (a starter only — cap the scale here)
+#   now / unknown  → 1.0  (no cap — the seat leaves NEXUS's action untouched)
+# Because these are CAPS applied with min(), the seat can only ever RATCHET DOWN: a "now" verdict's
+# 1.0 cap is a no-op (min(x, 1.0) == x for any x ≤ 1), so the seat can never raise a scale.
+_TECH_SCALE_CAP = {"wait": 0.0, "staged_starter": 0.7}
+
+
+def apply_technician(action: str, scale: float, technician_verdict: str | None) -> tuple[str, float]:
+    """Apply the TECHNICIAN entry-timing verdict to a (action, scale) pair — SUBTRACT-ONLY.
+
+    Pure + total; the single source of truth for how a technician verdict ratchets an action, so the
+    phase2 gate and the ``nexus`` extension share ONE tested decision. Returns the (possibly reduced)
+    ``(action, scale)``:
+
+      * ``wait``           → force ``("drop", 0.0)`` — park the name (scale 0).
+      * ``staged_starter`` → cap the scale at 0.7; if that lowers it, the action becomes ``"trim"``.
+      * ``now`` / None / unknown → UNCHANGED. The cap for "now" is 1.0, i.e. ``min(scale, 1.0)`` which
+        equals ``scale`` for any legal scale — so a "now" (or absent) verdict can NEVER raise the scale.
+
+    CAN ONLY RATCHET DOWN: the returned scale is always ``<= scale`` and the action never escalates
+    (confirm/trim → drop/trim only; never the reverse). ``None`` (seat not run) is a pure no-op."""
+    if technician_verdict is None:
+        return action, scale
+    v = str(technician_verdict).strip().lower()
+    cap = _TECH_SCALE_CAP.get(v)
+    if cap is None:                       # "now" or any unrecognised verdict → no change (no ratchet up)
+        return action, scale
+    new_scale = min(scale, cap)
+    if new_scale <= 0.0:
+        return "drop", 0.0
+    if new_scale < scale:
+        return "trim", round(new_scale, 4)
+    return action, scale
+
+
+def technician_gate(mode: str, action: str, scale: float,
+                    technician_verdict: str | None) -> dict:
+    """Mode-aware, SUBTRACT-ONLY resolution of a technician verdict for the phase2 buy gate.
+
+    Factored out of the phase2 loop so the park/scale decision is a PURE, exhaustively-testable
+    function (the loop only translates the result into the existing park+continue / scale paths).
+    The single source of truth for how the desk-quorum ladder turns a verdict into a book effect:
+
+      * ``off``     → always a NO-OP: ``{"park": False, "scale": scale, "action": action}`` —
+        the input ``(action, scale)`` is returned unchanged (byte-identical to base).
+      * ``shadow``  → also a NO-OP on the BOOK (log-only observability): the verdict is NOT applied,
+        so the returned ``(action, scale)`` is identical to the input. (The caller still logs it.)
+      * ``enforce`` → apply the verdict SUBTRACT-ONLY via ``apply_technician``: ``wait`` → park
+        (``park=True``, scale 0); ``staged_starter`` → cap scale at 0.7; ``now``/None/unknown →
+        unchanged. Never escalates, never forces a buy.
+
+    ``park`` is True ONLY in enforce mode on a ``wait`` verdict (the ``("drop", 0.0)`` outcome). A
+    seat FAILURE surfaces to the caller as a ``None`` verdict → no-op (a failed seat NEVER parks a
+    name; only a real ``wait`` verdict parks). Pure; never raises."""
+    if mode not in ("shadow", "enforce"):
+        # "off" (or any unrecognised mode) → inert no-op, byte-identical to base.
+        return {"park": False, "scale": scale, "action": action}
+    if mode == "shadow":
+        # observability only — the verdict is logged by the caller but NEVER changes the book.
+        return {"park": False, "scale": scale, "action": action}
+    # enforce: subtract-only application of the verdict.
+    new_action, new_scale = apply_technician(action, scale, technician_verdict)
+    park = (new_action == "drop" and new_scale <= 0.0)
+    return {"park": park, "scale": new_scale, "action": new_action}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # NEXUS — deterministic, subtract-only synthesis
 # ─────────────────────────────────────────────────────────────────────────────
-def nexus(breakdown: dict, sentinel: dict | None) -> dict:
+def nexus(breakdown: dict, sentinel: dict | None, *, technician: dict | None = None) -> dict:
     """Combine FORGE (breakdown) + SENTINEL into a final action. SUBTRACT-ONLY: the committee can
     confirm, trim, or drop a buy the engine+FORGE already approved — it can NEVER escalate size or
     rescue a name FORGE did not confirm. Pure function (no LLM) → exhaustively testable.
 
+    ``technician`` (optional, default None) is the entry-timing seat's verdict dict
+    ({"verdict": "now|staged_starter|wait", ...}). When ``None`` the result is BYTE-IDENTICAL to the
+    original 2-arg ``nexus``: the technician ratchet is skipped entirely. When a verdict is passed the
+    final (action, scale) is routed through ``apply_technician`` — SUBTRACT-ONLY, applied on top of the
+    SENTINEL synthesis (both are subtract-only; the STRICTER wins because a cap of 0.0/0.7 can only
+    lower a scale SENTINEL already produced). "now" → no change; "staged_starter" → cap 0.7; "wait" →
+    drop/park (scale 0). The technician can only ratchet DOWN, never up.
+
     Returns {action: confirm|trim|drop, scale: 0..1, lean, rationale, sentinel_stance}."""
+    decision = _nexus_synthesis(breakdown, sentinel)
+    if technician is None:
+        return decision           # BYTE-IDENTICAL to the original 2-arg path — no ratchet, no mutation.
+    verdict = technician.get("verdict") if isinstance(technician, dict) else technician
+    new_action, new_scale = apply_technician(decision["action"], decision["scale"], verdict)
+    if (new_action, new_scale) == (decision["action"], decision["scale"]):
+        return decision           # "now"/unknown/absent verdict — the seat left the action untouched.
+    out = dict(decision)
+    out["action"], out["scale"] = new_action, new_scale
+    out["lean"] = "watch" if new_action == "drop" else out.get("lean")
+    out["technician_verdict"] = str(verdict) if verdict is not None else None
+    out["rationale"] = (f"{out.get('rationale', '')} | TECHNICIAN {verdict}: "
+                        f"{'parked (wait)' if new_action == 'drop' else f'scale capped at {new_scale}'}").strip(" |")
+    return out
+
+
+def _nexus_synthesis(breakdown: dict, sentinel: dict | None) -> dict:
+    """The original SENTINEL-only synthesis (unchanged). Factored out so ``nexus`` can layer the
+    subtract-only technician ratchet on top without touching this proven branch structure."""
     forge_confirmed = bool((breakdown or {}).get("confirmed"))
     combined = (breakdown or {}).get("combined")
 

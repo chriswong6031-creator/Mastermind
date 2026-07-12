@@ -206,6 +206,21 @@ flags:
       wired into the phase2 buy gate (that is the separate desk-quorum wiring step); arming is a
       Fable decision recorded in the governance ledger before the flag changes. Come-back TBD.
 
+  MASTERMIND_DESK_QUORUM:
+    authority_level: A4
+    allowed_effect: [arm_desk_quorum_shadow, arm_desk_quorum_enforce, disarm_desk_quorum]
+    note: >
+      Desk-quorum ladder (brain/committee.desk_quorum_mode()) that admits the entry-timing
+      TECHNICIAN seat into the live phase2 buy gate. enum: "off" (default — the seat is NOT run,
+      no ledger write, byte-identical to base) | "shadow" (run the seat + LOG its verdict to
+      data/pipeline/ledger.jsonl, but NEVER change the book — pure observability) | "enforce"
+      (additionally APPLY the verdict SUBTRACT-ONLY: "wait" → park the name via the existing
+      timing-withhold path, "staged_starter" → cap scale at 0.7; never forces a buy, never
+      escalates). DARK: default "off" = byte-identical to base. Fail-soft — a seat/LLM failure
+      degrades to the existing behaviour (a failed seat never parks; only a real "wait" parks).
+      A4 gate: off→shadow→enforce is a staged arm/disarm toggle; arming to enforce is a Fable
+      decision recorded in the governance ledger BEFORE the flag changes. Come-back TBD.
+
   # ── Neural Web / P2 candidacy funnel (DARK — additive buy-source, arm on a statistical bar) ──
   # These four flags gate the P2 candidacy/decision funnel: the new (dark) paths that let the Neural
   # Web / rotation / divergence / universe-triage lanes NOMINATE additional buy candidates. Lane-A
