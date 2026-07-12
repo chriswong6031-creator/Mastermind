@@ -222,7 +222,7 @@ if FastAPI is not None:
 
     @app.post("/daily")
     def daily(force: bool = False) -> dict:
-        """Manually fire the daily loop (gated book + armed research + competitor edge note)."""
+        """Manually fire the daily loop (gated book + armed research)."""
         from control_plane import run_ledger, locks
         handle = run_ledger.start_run("daily_loop", book="flagship", trigger="http")
         lock = locks.acquire_or_log("book:flagship", job="daily_loop", book="flagship")
@@ -234,7 +234,7 @@ if FastAPI is not None:
                 from bot.daily import run_daily
                 out = run_daily(force=force)
             run_ledger.end_run(handle, "ok")
-            return {k: out.get(k) for k in ("asof", "research", "competitor")} | {
+            return {k: out.get(k) for k in ("asof", "research")} | {
                 "book_ran": (out.get("book") or {}).get("ran")}
         except Exception as exc:
             run_ledger.end_run(handle, "error")

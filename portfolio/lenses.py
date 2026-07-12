@@ -208,7 +208,7 @@ def _flows_13f_dir(nb, ns):
     return "bull" if (_nb - _ns) >= 2 else "bear" if (_ns - _nb) >= 2 else "neutral"
 
 
-# ---------------- alt-data flow lens (Signal Intelligence Desk / Quiver / TrumpFlow) ----------------
+# ---------------- alt-data flow lens (Signal Intelligence Desk / political / congress / insider) ----------------
 def _intelligence() -> dict:
     """The unified per-ticker News+Intelligence bundle (macro engine.intelligence) — one
     file, two facts per name ({news, alt}). Falls back to the standalone feeds when absent."""

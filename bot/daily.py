@@ -5,7 +5,6 @@ Runs, in order, each step degrading gracefully (a missing credential never break
   0b. Freshen the vendored macro analyzer data before the engine reads it.
   1.  Gated multi-name paper book (phase2, material-change gated).
   2.  Armed Claude regime/theme research -> proposals gated into the falsifiable ledger.
-  3.  Competitor desk — pull Quiver's AI strategies + an armed "where's our edge" note.
 
 Run:  python -m bot.daily        (or POST /daily, or the APScheduler job in app/scheduler.py)
 """
@@ -78,18 +77,11 @@ def run_daily(asof: str | None = None, *, force: bool = False, armed: bool = Tru
         except Exception as e:
             out["research"] = {"error": str(e)[:200]}
 
-        # 3. competitor desk — Quiver pull + edge note
-        try:
-            from brain import competitor_desk
-            out["competitor"] = competitor_desk.analyze(asof)
-        except Exception as e:
-            out["competitor"] = {"error": str(e)[:200]}
-
-        # 4. warm the EN->ZH translation cache for the freshly-written book, research
+        # 3. warm the EN->ZH translation cache for the freshly-written book, research
         #    notes and papers. This is what lets the dashboard render Chinese (Brain
         #    Log, Research Feed, the thesis reports) WITHOUT a live LLM call in the
         #    request path — the API only does cache lookups via cached_zh(). Gated on
-        #    `armed` because it needs the Claude bridge, same as steps 2-3 (so the
+        #    `armed` because it needs the Claude bridge, same as step 2 (so the
         #    offline/deterministic path stays LLM-free). Incremental (skips
         #    already-cached strings) and best-effort: a missing bridge or slow call
         #    never breaks the loop; the UI just falls back to English until warmed.
@@ -123,9 +115,5 @@ if __name__ == "__main__":
           f"gross_mult={_ov.get('gross_mult')}", f"reasons={_ov.get('reasons')}")
     r = o.get("research", {})
     print("research:", (r.get("ingest") or {}).get("ingested", r.get("error")), "theses ingested")
-    c = o.get("competitor", {})
-    ca = (c or {}).get("analysis", {})
-    print("competitor:", "note written" if ca.get("ok") else ca.get("error"),
-          "| quiver pull:", (c or {}).get("pull", {}).get("ok"))
     tx = o.get("translate", {})
     print("translate:", "cache warmed" if tx.get("ok") else tx.get("error"))

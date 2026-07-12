@@ -280,7 +280,6 @@ pytest -q --tb=short 2>&1 | tail -40
 - `test_phase1`
 - `test_research_paper`
 - `test_translate` zh-cache
-- `test_web` competitors
 - `tests/test_auth/`, `tests/test_desk_api/`, `tests/test_research_pdf/` — collection-ignored
 
 Any NEW failure introduced by an agenda-item execution is a ship-blocker.  Diagnose

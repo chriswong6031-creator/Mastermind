@@ -153,17 +153,6 @@ def _book_marks(portfolio_id: str | None = None) -> dict[str, float]:
     return out
 
 
-def _latest_quiver(strategy_dir: Path) -> dict[str, Any] | None:
-    """Return the parsed JSON from the newest date-named file in a strategy dir."""
-    try:
-        files = sorted(strategy_dir.glob("*.json"), reverse=True)
-        if not files:
-            return None
-        return json.loads(files[0].read_text())
-    except Exception:
-        return None
-
-
 def _parse_note(path: Path) -> dict[str, Any] | None:
     """Parse a research note markdown file into {title, tickers, date, body_md}."""
     try:
@@ -1595,38 +1584,6 @@ def api_runlog(run_id: str | None = None) -> JSONResponse:
         return JSONResponse(runlog.read_run(run_id or None))
     except Exception as exc:
         return JSONResponse({"run_id": run_id, "steps": [], "error": str(exc)}, status_code=500)
-
-
-@router.get("/api/competitors")
-def api_competitors() -> JSONResponse:
-    base = _data() / "quiver"
-    strategies: list[dict[str, Any]] = []
-    strategy_names = ["chatgpt_enhanced", "claude_enhanced", "chatgpt_standard", "claude_standard"]
-    for name in strategy_names:
-        d = _latest_quiver(base / name)
-        if d is None:
-            continue
-        holdings = d.get("holdings", [])
-        top_holdings = [h["ticker"] for h in holdings[:8]]
-        top_picks = d.get("top_picks", [])
-        strategies.append({
-            "strategy": d.get("strategy", name),
-            "slug": d.get("slug", name),
-            "model": d.get("model", ""),
-            "scraped": d.get("scraped", ""),
-            "metrics": d.get("metrics", {}),
-            "n_holdings": len(holdings),
-            "top_holdings": top_holdings,
-            "n_top_picks": len(top_picks),
-        })
-
-    note = (
-        "Quiver benchmark strategies: claude_* runs claude-haiku-4-5 (mini-tier), "
-        "chatgpt_* runs gpt-5.4 — both momentum/single-factor rotation. "
-        "Mastermind gates size by multi-side confluence, hard vetoes (parabolic/distress/cycle-blocked), "
-        "and a falsifiable scorecard ledger — never auto-executes."
-    )
-    return JSONResponse({"strategies": strategies, "note": note})
 
 
 # ---------------------------------------------------------------------------

@@ -65,7 +65,7 @@ def test_mcp_decision_matrix_tool():
     assert "mcp__bot__get_decision_matrix" in bot_mcp.TOOL_NAMES
 
 
-# ---------------- alt-data flow lens (Quiver / TrumpFlow) ----------------
+# ---------------- alt-data flow lens (Signal Intelligence Desk / TrumpFlow) ----------------
 def test_altdata_lens_surfaces_even_without_stockdata(monkeypatch):
     bt = {"tickers": {"EFX": {"convergence_score": 2, "channels": ["gov_contract", "trump"],
                               "trump_linked": True, "gov_contract_usd_30d": 7e7, "trump_side": "buy"}}}

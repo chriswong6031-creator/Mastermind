@@ -968,7 +968,7 @@ The mechanical layer is blind to thesis-invalidation that has not yet shown up a
 | Invalidation class the detectors miss | Signal source consumed | Risk Officer reads it as |
 |---|---|---|
 | Guidance cut / earnings miss | `get_anticipation` (`next_date`, `sue_z`), `get_fundamentals` | thesis falsifier *condition* may have tripped before price |
-| Competitive / regulatory shock | `get_themes`, news in `get_decision_matrix`, `get_quiver_*` | the economic hypothesis is broken regardless of chart |
+| Competitive / regulatory shock | `get_themes`, news in `get_decision_matrix`, `get_intel_hub (divergence_alerts / flags)` | the economic hypothesis is broken regardless of chart |
 | Mid-thesis regime / narrative rotation **away** | `get_regime` (quad, liquidity_overlay), `get_standouts` sector_heat | "right name, wrong regime now" — the backdrop that justified entry is gone |
 | RS roll / relative-strength break | `get_fundamentals` tech (`pct_vs_50dma`, `pct_vs_200dma`, `off_52w_high_pct`) | leadership is leaving this name (precedes D5's 63-day clock by weeks) |
 | Distribution / topping structure | `get_options` (gamma_flip, walls, expected_move), tech block | Stage 3→4 tell; trim into strength before the break |

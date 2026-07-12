@@ -16,11 +16,11 @@ def _clean():
 def test_daily_loop_deterministic():
     _clean()
     from bot import daily
-    out = daily.run_daily(armed=False)            # offline: book only, no Claude/Quiver
+    out = daily.run_daily(armed=False)            # offline: book only, no Claude bridge
     assert out["book"]["ran"] is True
     assert out["book"]["sleeves"]["cash"] >= 0.05
     # armed steps are skipped without armed=True
-    assert "competitor" not in out and "research" not in out
+    assert "research" not in out
     _clean()
 
 

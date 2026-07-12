@@ -1,7 +1,7 @@
 """Dashboard web route tests.
 
 Uses TestClient without the context manager to avoid firing the scheduler startup
-event. Relies on real data fixtures already in data/ (portfolio, research, quiver).
+event. Relies on real data fixtures already in data/ (portfolio, research).
 """
 from __future__ import annotations
 
@@ -70,13 +70,3 @@ def test_api_research_returns_list():
     assert r.status_code == 200
     data = r.json()
     assert isinstance(data, list)
-
-
-def test_api_competitors_returns_strategies():
-    client = _client()
-    r = client.get("/api/competitors")
-    assert r.status_code == 200
-    data = r.json()
-    assert "strategies" in data
-    assert isinstance(data["strategies"], list)
-    assert len(data["strategies"]) > 0

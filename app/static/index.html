@@ -734,7 +734,7 @@ body.page-mm td.l { text-align: left; }
 .mm-body-preview .preview-hidden { display: none; }
 
 /* ────────────────────────────────────────────────────────────────────────────
-   COMPETITOR COMPARE
+   COMPARE CARDS (shadow books / predictions)
    ──────────────────────────────────────────────────────────────────────────── */
 .mm-comp-note {
   font-size: 12.5px;
@@ -2180,14 +2180,6 @@ body.page-mm :is(.mm-nav-tab, .mm-pf-tab, .mm-rsub-tab, .mm-sd-btn, .mm-sd-qbtn,
   </div>
 </div>
 
-<!-- ── COMPETITOR COMPARE ─────────────────────────────────────────────────── -->
-<div class="mm-section">
-  <div class="panel span12" id="competitors" style="grid-column:span 12">
-    <h2><span class="l-en">Competitor Compare — Quiver</span><span class="l-zh">竞品对比 — Quiver</span></h2>
-    <div class="mm-empty"><span class="mm-empty-icon">⊙</span><span class="l-en">Loading competitors…</span><span class="l-zh">加载竞品数据中…</span></div>
-  </div>
-</div>
-
 <!-- ── SHADOW BOOKS (Policy A/B) ──────────────────────────────────────────── -->
 <div class="mm-section">
   <div class="panel span12 mm-collapsible mm-collapsed" id="shadow-books" style="grid-column:span 12">
@@ -2666,14 +2658,6 @@ var I18N = {
   'rej.empty':            { en: "No rejected names — either the book hasn't run yet or all evaluated names passed.", zh: '暂无剔除标的 — 账本未运行或所有标的均通过评估。' },
   'rej.note':             { en: 'Names evaluated by the conviction gate but not held. Vetoes are hard rules (parabolic extension, distress, cycle-blocked). Bear bullets show the exact risk factors that kept them out. Sorted worst-confluence first.', zh: '经过信念门槛评估但未持仓的标的。否决为强制规则（抛物线延伸、财务困境、周期封锁）。看空条目列出了被剔除的具体风险因素。按汇聚分最差排序。' },
   'rej.confluence':       { en: 'Confluence:', zh: '汇聚分:' },
-  // Competitors
-  'comp.title':           { en: 'Competitor Compare — Quiver', zh: '竞品对比 — Quiver' },
-  'comp.loading':         { en: 'Loading competitors…', zh: '加载竞品数据中…' },
-  'comp.empty':           { en: 'No competitor data yet — pull from Quiver to compare.', zh: '暂无竞品数据 — 请从Quiver拉取。' },
-  'comp.positions':       { en: 'positions', zh: '仓位' },
-  'comp.picks':           { en: 'picks', zh: '精选' },
-  'comp.scraped':         { en: 'scraped', zh: '采集于' },
-  'comp.top_holdings':    { en: 'Top Holdings', zh: '主要持仓' },
   // Hero / regime section
   'hero.regime':          { en: 'Regime', zh: '市场状态' },
   'hero.gross_exp':       { en: 'Gross Exposure', zh: '总敞口' },
@@ -2976,7 +2960,7 @@ var fmtTsShort = function(s) {
 };
 
 // ── state ────────────────────────────────────────────────────────────────────
-var _book = null, _trades = null, _activity = [], _research = [], _competitors = null, _regime = null;
+var _book = null, _trades = null, _activity = [], _research = [], _regime = null;
 var _outcomes = null;             // live thesis-outcome labels + Brier track record (/api/outcomes)
 var _shadowBooks = null;          // parallel forward shadow-book leaderboard (/api/shadow_books)
 var _predictions = null;          // universe-wide prediction log coverage + cross-sectional scorecard
@@ -5529,7 +5513,7 @@ window.showView = function(view) {
 // ── MULTI-PORTFOLIO SWITCHER ──────────────────────────────────────────────────
 // Gated-only sections (hidden when the free-form autonomous book is active). 'research' (the feed)
 // shares the feeds-row section with 'brainlog', so hiding brainlog's section hides both.
-var PF_GATED_ONLY = ['hero', 'alloc', 'brainlog', 'runs', 'rejected', 'competitors',
+var PF_GATED_ONLY = ['hero', 'alloc', 'brainlog', 'runs', 'rejected',
                      'shadow-books', 'xsec', 'engine-bt', 'factor-zoo', 'fundamentals', 'learning-models'];
 var PF_AUTO_ONLY  = ['auto-banner', 'decisions'];
 
@@ -5882,44 +5866,6 @@ function _renderRunTrace(run) {
     }
     return '';
   }).join('') + '</div>';
-}
-
-// ── COMPETITORS ───────────────────────────────────────────────────────────────
-function renderCompetitors() {
-  var el = E('competitors');
-  var data = _competitors;
-  if (!data || !data.strategies || !data.strategies.length) {
-    el.innerHTML = '<h2><span class="l-en">Competitor Compare — Quiver</span><span class="l-zh">竞品对比 — Quiver</span></h2><div class="mm-empty"><span class="mm-empty-icon">○</span>' + t('comp.empty') + '</div>';
-    return;
-  }
-  var note = data.note || '';
-  var strats = data.strategies;
-
-  var html = '<h2><span class="l-en">Competitor Compare — Quiver</span><span class="l-zh">竞品对比 — Quiver</span></h2>';
-  if (note) html += '<div class="mm-comp-note">' + esc(note) + '</div>';
-  html += '<div class="mm-comp-grid">';
-
-  strats.forEach(function(s) {
-    var model = (s.model||'').toLowerCase();
-    var isClaude = model.includes('claude') || model.includes('haiku') || model.includes('sonnet') || model.includes('opus');
-    var modelClass = isClaude ? 'mm-model-claude' : 'mm-model-gpt';
-    var cardClass = isClaude ? 'm-claude' : 'm-gpt';
-    var metrics = s.metrics || {};
-    var metricRows = Object.entries(metrics).slice(0,6).map(function(kv) {
-      return '<div class="mm-comp-metric"><div class="mk">' + esc(kv[0]) + '</div><div class="mv">' + esc(String(kv[1])) + '</div></div>';
-    }).join('');
-    var topH = (s.top_holdings||[]).map(function(tk) { return '<span class="mm-ticker-chip">' + esc(tk) + '</span>'; }).join(' ');
-
-    html += '<div class="mm-comp-card ' + cardClass + '">' +
-      '<div class="mm-comp-name">' + esc(s.slug||s.strategy||'—') + '</div>' +
-      '<span class="mm-comp-model-badge ' + modelClass + '">' + esc(s.model||'unknown') + '</span>' +
-      '<div class="mm-comp-sub">' + t('comp.scraped') + ' ' + esc(s.scraped||'—') + ' &middot; ' + (s.n_holdings||0) + ' ' + t('comp.positions') + ' &middot; ' + (s.n_top_picks||0) + ' ' + t('comp.picks') + '</div>' +
-      (metricRows ? '<div class="mm-comp-metrics">' + metricRows + '</div>' : '') +
-      (topH ? '<div class="mm-comp-holdings-h">' + t('comp.top_holdings') + '</div><div style="line-height:2">' + topH + '</div>' : '') +
-    '</div>';
-  });
-  html += '</div>';
-  el.innerHTML = html;
 }
 
 // ── SHADOW BOOKS (Policy A/B) ───────────────────────────────────────────────────
@@ -6537,7 +6483,7 @@ function _renderAll() {
     ['performance', renderPerformance], ['macro', renderMacro], ['equityCurve', renderEquityCurve],
     ['hero', renderHero], ['allocation', renderAllocation], ['safety', renderSafety], ['positions', renderPositions],
     ['trades', renderTrades], ['brainLog', renderBrainLog], ['research', renderResearch],
-    ['runs', renderRuns], ['rejected', renderRejected], ['competitors', renderCompetitors],
+    ['runs', renderRuns], ['rejected', renderRejected],
     ['shadowBooks', renderShadowBooks], ['xsec', renderXsec], ['engineBacktest', renderEngineBacktest],
     ['factorZoo', renderFactorZoo], ['fundamentals', renderFundamentals], ['readiness', renderReadiness],
     ['learningModels', renderLearningModels],
@@ -6582,7 +6528,7 @@ function loadBarDone() {
 
 async function fetchAll(opts) {
   opts = opts || {};
-  // Engine-level endpoints (regime, macro, research feed, competitors, shadow books, predictions,
+  // Engine-level endpoints (regime, macro, research feed, shadow books, predictions,
   // backtests, factor zoo, fundamentals, …) are IDENTICAL across books. After the first full load
   // a portfolio SWITCH only needs the portfolio-scoped endpoints — this is what makes switching
   // snappy instead of refetching ~18 endpoints (most of them redundant) every time.
@@ -6596,7 +6542,6 @@ async function fetchAll(opts) {
     var sharedPromise = scopedOnly ? null : Promise.allSettled([
       fetch('/api/activity').then(function(r)  { return r.ok ? r.json() : [];   }).catch(function() { return []; }),
       fetch('/api/research').then(function(r)  { return r.ok ? r.json() : [];   }).catch(function() { return []; }),
-      fetch('/api/competitors').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
       fetch('/regime').then(function(r)         { return r.ok ? r.json() : null; }).catch(function() { return null; }),
       fetch('/api/runs').then(function(r)       { return r.ok ? r.json() : [];   }).catch(function() { return []; }),
       fetch('/api/macro').then(function(r)      { return r.ok ? r.json() : null; }).catch(function() { return null; }),
@@ -6632,13 +6577,12 @@ async function fetchAll(opts) {
       // fetch; a switch that fires while the (slower) shared bundle is still in flight would
       // otherwise fall through and clobber the now-active tab with this stale load's data.
       if (mySeq !== _pfFetchSeq) return;
-      var actRes = s[0], researchRes = s[1], compRes = s[2], regimeRes = s[3], runsRes = s[4],
-          macroRes = s[5], papersRes = s[6], calibRes = s[7], shadowRes = s[8], predRes = s[9],
-          ebtRes = s[10], fzRes = s[11], fundRes = s[12], readyRes = s[13],
-          studentRes = s[14], distillRes = s[15];
+      var actRes = s[0], researchRes = s[1], regimeRes = s[2], runsRes = s[3],
+          macroRes = s[4], papersRes = s[5], calibRes = s[6], shadowRes = s[7], predRes = s[8],
+          ebtRes = s[9], fzRes = s[10], fundRes = s[11], readyRes = s[12],
+          studentRes = s[13], distillRes = s[14];
       _activity    = (actRes.status    === 'fulfilled' ? actRes.value     : null) || [];
       _research    = (researchRes.status === 'fulfilled' ? researchRes.value : null) || [];
-      _competitors = compRes.status    === 'fulfilled' ? compRes.value    : null;
       _regime      = regimeRes.status  === 'fulfilled' ? regimeRes.value  : null;
       _runs        = (runsRes.status   === 'fulfilled' ? runsRes.value    : null) || [];
       _macro       = macroRes.status   === 'fulfilled' ? macroRes.value   : null;
