@@ -418,3 +418,204 @@ def test_update_close_reason_not_duplicated_on_same_day_rerun(tmp_path, monkeypa
     assert len(close_events) == 1, (
         f"exactly one close event expected on same-day rerun, got {len(close_events)}"
     )
+
+
+# ===========================================================================
+# CLOSE-REASON TAXONOMY (structured reason_code) — observability, additive,
+# byte-compatible. A rebuild rotation must be machine-distinguishable from a
+# risk exit / time-stop / cap / hard-veto / manual close.
+# ===========================================================================
+
+def _last_close(ledger: dict, key: str) -> dict:
+    return [e for e in ledger[key]["history"] if e["event"] == "close"][-1]
+
+
+def test_reason_codes_taxonomy_is_closed_and_expected():
+    """The enum is a small CLOSED set with the doctrine-named codes."""
+    from portfolio import position_log as pl
+    assert pl.REASON_CODES == frozenset({
+        "rebuild_dropped", "hard_veto", "time_stop_d5", "cap_trim",
+        "risk_officer_exit", "judgment_exit", "manual", "unspecified",
+    })
+
+
+def test_update_stamps_rebuild_dropped_code(tmp_path, monkeypatch):
+    """A rebuild-drop close carries reason_code='rebuild_dropped'."""
+    from portfolio import position_log as pl
+    monkeypatch.setattr(pl, "_LEDGER_PATH", tmp_path / "ledger.json", raising=False)
+
+    pl.update([
+        {"ticker": "URI", "sleeve": "conviction", "weight": 0.05},
+        {"ticker": "NVDA", "sleeve": "conviction", "weight": 0.04},
+    ], "2026-06-30")
+    pl.update(
+        [{"ticker": "NVDA", "sleeve": "conviction", "weight": 0.04}],
+        "2026-07-01",
+        close_reasons={"URI": "rebuild: fell below exit floor (confluence +0.18)"},
+        reason_codes={"URI": "rebuild_dropped"},
+    )
+
+    ledger = json.loads((tmp_path / "ledger.json").read_text())
+    ev = _last_close(ledger, "conviction:URI")
+    assert ev.get("reason_code") == "rebuild_dropped"
+    # human string preserved alongside (nothing removed)
+    assert ev.get("reason") == "rebuild: fell below exit floor (confluence +0.18)"
+
+
+def test_update_stamps_hard_veto_and_time_stop_codes(tmp_path, monkeypatch):
+    """A hard-veto rebuild drop and a D5 time-stop drop carry their distinct codes."""
+    from portfolio import position_log as pl
+    monkeypatch.setattr(pl, "_LEDGER_PATH", tmp_path / "ledger.json", raising=False)
+
+    pl.update([
+        {"ticker": "AEIS", "sleeve": "conviction", "weight": 0.05},
+        {"ticker": "LII",  "sleeve": "conviction", "weight": 0.04},
+    ], "2026-06-30")
+    pl.update(
+        [],
+        "2026-07-01",
+        close_reasons={
+            "AEIS": "rebuild: hard exit (veto/downtrend/blocked) — Vetoed: parabolic",
+            "LII":  "exited (D5 dead-capital time-stop)",
+        },
+        reason_codes={"AEIS": "hard_veto", "LII": "time_stop_d5"},
+    )
+
+    ledger = json.loads((tmp_path / "ledger.json").read_text())
+    assert _last_close(ledger, "conviction:AEIS").get("reason_code") == "hard_veto"
+    assert _last_close(ledger, "conviction:LII").get("reason_code") == "time_stop_d5"
+
+
+def test_update_no_reason_code_field_when_mapping_absent(tmp_path, monkeypatch):
+    """BYTE-COMPAT: with no reason_codes mapping the close event has NO reason_code key."""
+    from portfolio import position_log as pl
+    monkeypatch.setattr(pl, "_LEDGER_PATH", tmp_path / "ledger.json", raising=False)
+
+    pl.update([{"ticker": "WAB", "sleeve": "conviction", "weight": 0.05}], "2026-06-30")
+    # Legacy call signature — no reason_codes at all
+    pl.update([], "2026-07-01")
+
+    ledger = json.loads((tmp_path / "ledger.json").read_text())
+    ev = _last_close(ledger, "conviction:WAB")
+    assert "reason_code" not in ev, "reason_code must be absent when no mapping supplied (byte-compat)"
+
+
+def test_update_reason_code_absent_for_ticker_not_in_mapping(tmp_path, monkeypatch):
+    """A ticker absent from the reason_codes mapping gets no reason_code key on its close."""
+    from portfolio import position_log as pl
+    monkeypatch.setattr(pl, "_LEDGER_PATH", tmp_path / "ledger.json", raising=False)
+
+    pl.update([
+        {"ticker": "CI",  "sleeve": "conviction", "weight": 0.05},
+        {"ticker": "UNP", "sleeve": "conviction", "weight": 0.04},
+    ], "2026-06-30")
+    pl.update([], "2026-07-01", reason_codes={"CI": "rebuild_dropped"})
+
+    ledger = json.loads((tmp_path / "ledger.json").read_text())
+    assert _last_close(ledger, "conviction:CI").get("reason_code") == "rebuild_dropped"
+    assert "reason_code" not in _last_close(ledger, "conviction:UNP")
+
+
+def test_update_out_of_taxonomy_code_coerced_to_unspecified(tmp_path, monkeypatch):
+    """An out-of-enum code is coerced to 'unspecified' rather than admitted to the ledger."""
+    from portfolio import position_log as pl
+    monkeypatch.setattr(pl, "_LEDGER_PATH", tmp_path / "ledger.json", raising=False)
+
+    pl.update([{"ticker": "ODD", "sleeve": "conviction", "weight": 0.05}], "2026-06-30")
+    pl.update([], "2026-07-01", reason_codes={"ODD": "totally_made_up_code"})
+
+    ledger = json.loads((tmp_path / "ledger.json").read_text())
+    assert _last_close(ledger, "conviction:ODD").get("reason_code") == "unspecified"
+
+
+def test_close_position_infers_code_from_reason_string(tmp_path, monkeypatch):
+    """close_position() lands the RIGHT code from the legacy reason string — no call-site change."""
+    from portfolio import position_log as pl
+    monkeypatch.setattr(pl, "_LEDGER_PATH", tmp_path / "ledger.json", raising=False)
+
+    for tk, reason, expected in [
+        ("INCY", "hard_exit_sweep",   "hard_veto"),
+        ("URI",  "risk_officer_exit", "risk_officer_exit"),
+        ("LII",  "macro_risk_cap",    "cap_trim"),
+    ]:
+        pl.update([{"ticker": tk, "sleeve": "conviction", "weight": 0.05}], "2026-06-30")
+        pl.close_position("conviction", tk, "2026-07-01", reason=reason)
+
+    ledger = json.loads((tmp_path / "ledger.json").read_text())
+    assert _last_close(ledger, "conviction:INCY").get("reason_code") == "hard_veto"
+    assert _last_close(ledger, "conviction:URI").get("reason_code") == "risk_officer_exit"
+    assert _last_close(ledger, "conviction:LII").get("reason_code") == "cap_trim"
+
+
+def test_close_position_explicit_code_wins(tmp_path, monkeypatch):
+    """An explicit reason_code overrides string inference; unknown string → 'unspecified'."""
+    from portfolio import position_log as pl
+    monkeypatch.setattr(pl, "_LEDGER_PATH", tmp_path / "ledger.json", raising=False)
+
+    pl.update([{"ticker": "ANET", "sleeve": "conviction", "weight": 0.05}], "2026-06-30")
+    pl.close_position("conviction", "ANET", "2026-07-01",
+                      reason="something_weird", reason_code="time_stop_d5")
+    # An unrecognised string with no explicit code → unspecified
+    pl.update([{"ticker": "ZZZ", "sleeve": "conviction", "weight": 0.05}], "2026-06-30")
+    pl.close_position("conviction", "ZZZ", "2026-07-01", reason="fast_derisk")
+
+    ledger = json.loads((tmp_path / "ledger.json").read_text())
+    assert _last_close(ledger, "conviction:ANET").get("reason_code") == "time_stop_d5"
+    assert _last_close(ledger, "conviction:ZZZ").get("reason_code") == "unspecified"
+
+
+def test_record_manual_close_tags_manual_code(tmp_path, monkeypatch):
+    """The advisor-chat ad-hoc close is coded 'manual'; adds/trims carry no code."""
+    from portfolio import position_log as pl
+    monkeypatch.setattr(pl, "_LEDGER_PATH", tmp_path / "ledger.json", raising=False)
+
+    pl.record_manual("PLTR", "conviction", event="open", weight=0.05, asof_iso="2026-06-30")
+    pl.record_manual("PLTR", "conviction", event="close", asof_iso="2026-07-01")
+
+    ledger = json.loads((tmp_path / "ledger.json").read_text())
+    hist = ledger["conviction:PLTR"]["history"]
+    open_ev = [e for e in hist if e["event"] == "open"][-1]
+    close_ev = [e for e in hist if e["event"] == "close"][-1]
+    assert "reason_code" not in open_ev, "open event should carry no reason_code (byte-compat)"
+    assert close_ev.get("reason_code") == "manual"
+
+
+def test_closed_positions_surfaces_reason_code(tmp_path, monkeypatch):
+    """closed_positions() echoes the structured code; legacy rows degrade to 'unspecified'."""
+    from portfolio import position_log as pl
+    monkeypatch.setattr(pl, "_LEDGER_PATH", tmp_path / "ledger.json", raising=False)
+
+    # coded close
+    pl.update([{"ticker": "COHR", "sleeve": "conviction", "weight": 0.05}], "2026-06-30")
+    pl.update([], "2026-07-01", reason_codes={"COHR": "rebuild_dropped"})
+    # legacy close — no code
+    pl.update([{"ticker": "APH", "sleeve": "conviction", "weight": 0.05}], "2026-06-30")
+    pl.update([], "2026-07-01")
+
+    closed = {p["ticker"]: p for p in pl.closed_positions()}
+    assert closed["COHR"]["reason_code"] == "rebuild_dropped"
+    assert closed["APH"]["reason_code"] == "unspecified", "legacy (no-code) rows → unspecified"
+
+
+def test_phase2_rebuild_reason_code_derivation():
+    """Replicate the phase2 _rebuild_reason_code closure: hard structural marker → 'hard_veto',
+    everything else (exit floor / not-in-universe) → 'rebuild_dropped'."""
+    rejected_index = {
+        "AEIS": {"reason": "Vetoed: parabolic", "vetoes": ["parabolic"]},
+        "URI":  {"reason": "Downtrend — price rolling over", "vetoes": []},
+        "CI":   {"reason": "Insufficient confluence (+0.18)", "vetoes": [], "confluence": 0.18},
+    }
+
+    def _rebuild_reason_code(ticker: str) -> str:
+        rej = rejected_index.get(ticker)
+        if rej is not None:
+            _reason_lower = (rej.get("reason") or "").lower()
+            _hard = ("vetoed", "blocked", "downtrend", "falling knife")
+            if rej.get("vetoes") or any(m in _reason_lower for m in _hard):
+                return "hard_veto"
+        return "rebuild_dropped"
+
+    assert _rebuild_reason_code("AEIS") == "hard_veto"        # veto list
+    assert _rebuild_reason_code("URI")  == "hard_veto"        # 'downtrend' keyword
+    assert _rebuild_reason_code("CI")   == "rebuild_dropped"  # merely fell below floor
+    assert _rebuild_reason_code("MISS") == "rebuild_dropped"  # not in the candidate universe

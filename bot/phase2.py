@@ -600,7 +600,8 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
             except Exception:
                 continue
             if _is_hard_exit(_syn) and position_log.close_position("conviction", _hp["ticker"], asof,
-                                                                   reason="hard_exit_sweep"):
+                                                                   reason="hard_exit_sweep",
+                                                                   reason_code="hard_veto"):
                 _swept.append(_hp["ticker"])
                 try:
                     ledger.close(_hp["ticker"], "exited (hard veto/downtrend, gate-closed sweep)")
@@ -1332,6 +1333,7 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
     # the leading sector, then REDEPLOY — drop them from the book and close their thesis so the
     # capital is freed (was unwired with unpopulated inputs, so it could never fire).
     _d5_fired: list[dict] = []
+    _d5_exited_tk: set[str] = set()   # names exited on the D5 time-stop — used to code their ledger close
     try:
         from portfolio import paper_account as _pa_d5
         # use the PRE-update ledger so a carried name carries its ORIGINAL time_stop_by (the book's is
@@ -1354,6 +1356,7 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
                                   date.fromisoformat(asof))
         _d5_fired = detectors.d5_dead_capital(_d5_lots, date.fromisoformat(asof), "self")
         _d5_exit = {d["subject"] for d in _d5_fired if d.get("mode") == "self"}
+        _d5_exited_tk = set(_d5_exit)
         if _d5_exit:
             book = [p for p in book
                     if not (p.get("sleeve") == "conviction" and p["ticker"] in _d5_exit)]
@@ -1432,7 +1435,8 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
                             if not (p.get("sleeve") == "conviction" and p["ticker"] == _t)]
                     try:
                         position_log.close_position("conviction", _t, asof,
-                                                    reason="risk_officer_exit")
+                                                    reason="risk_officer_exit",
+                                                    reason_code="risk_officer_exit")
                     except Exception:
                         pass
                     try:
@@ -1474,7 +1478,8 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
                     if _p["ticker"] not in _kept_tk:
                         try:
                             position_log.close_position("conviction", _p["ticker"], asof,
-                                                        reason="macro_risk_cap")
+                                                        reason="macro_risk_cap",
+                                                        reason_code="cap_trim")
                         except Exception:
                             pass
                         try:
@@ -1574,6 +1579,34 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
     _dropped_conv = _held_conv - _final_conv
     _close_reasons: dict[str, str] = {t: _rebuild_reason(t) for t in _dropped_conv}
 
+    def _rebuild_reason_code(ticker: str) -> str:
+        """Structured close code for a name the rebuild reconciliation drops from the book.
+
+        A name evaluated-and-rejected on a hard structural marker (veto / downtrend / blocked) is a
+        'hard_veto'; every other rebuild drop (fell below the exit floor, or simply not in the new
+        candidate universe) is a routine 'rebuild_dropped' rotation. This is what makes a nightly
+        rotation machine-distinguishable from a deliberate risk exit."""
+        rej = _rejected_index.get(ticker)
+        if rej is not None:
+            _reason_lower = (rej.get("reason") or "").lower()
+            _hard_markers = ("vetoed", "blocked", "downtrend", "falling knife")
+            if rej.get("vetoes") or any(m in _reason_lower for m in _hard_markers):
+                return "hard_veto"
+        return "rebuild_dropped"
+
+    # Structured companion to _close_reasons — same keys, machine-readable codes (see
+    # position_log.REASON_CODES). Threaded to update() so the ledger close event carries both.
+    _close_reason_codes: dict[str, str] = {t: _rebuild_reason_code(t) for t in _dropped_conv}
+
+    # A D5 dead-capital exit REMOVES the name from `book` above, so update()'s reconciliation would
+    # otherwise close it as a generic 'rebuild_dropped' rotation — hiding the time-stop. Override the
+    # code (and the human string) for D5-exited names still in _dropped_conv so the close is honestly
+    # coded as the time-stop it is. (position_log.close_position isn't used on the D5 path; the close
+    # lands via update()'s reconciliation, which is why the override belongs here.)
+    for _t in _d5_exited_tk & _dropped_conv:
+        _close_reason_codes[_t] = "time_stop_d5"
+        _close_reasons[_t] = "exited (D5 dead-capital time-stop)"
+
     # ———— MW3 R3 STALE-ANCHOR FREEZE — applied BEFORE ledger/store/rebalance/publish ————
     # When a FREEZE-class anchor is stale beyond its contract budget, freeze the flagship
     # targets to the prior published book: no new adds, no weight increases (de-risk allowed).
@@ -1603,7 +1636,7 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
                     f"MASTERMIND_STALE_FREEZE=0; reasons={_sf_reasons}"[:200])
 
     # ———— update positions ledger ————
-    position_log.update(book, asof, close_reasons=_close_reasons)
+    position_log.update(book, asof, close_reasons=_close_reasons, reason_codes=_close_reason_codes)
 
     # close ledger theses for conviction names that LEFT the book this run — the append-only ledger
     # otherwise keeps the old thesis 'open' forever (blocking any re-proposal and accreting stale
