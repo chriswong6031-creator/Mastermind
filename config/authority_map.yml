@@ -193,6 +193,19 @@ flags:
     note: >
       Arms the distilled CatBoost student for cheap-call routing.
 
+  MASTERMIND_TECHNICIAN:
+    authority_level: A4
+    allowed_effect: [arm_technician_seat, disarm_technician_seat]
+    note: >
+      Arms the entry-timing TECHNICIAN seat (brain/technician.py) — the desk seat that judges
+      whether NOW is the right time to enter a name (TECH_NOW / TECH_STAGE / TECH_WAIT). DARK:
+      default OFF (unset/falsy) = byte-identical to base; the seat never runs. SUBTRACT-ONLY and
+      fail-conservative — when armed it can only ADD wait/staged_starter on top of the deterministic
+      timing floor (portfolio.watchlist.timing_withhold), and with no LLM it defaults to "wait";
+      it can NEVER force a buy or escalate size. A4 gate: arm/disarm is a boolean toggle. NOT yet
+      wired into the phase2 buy gate (that is the separate desk-quorum wiring step); arming is a
+      Fable decision recorded in the governance ledger before the flag changes. Come-back TBD.
+
   # ── Neural Web / P2 candidacy funnel (DARK — additive buy-source, arm on a statistical bar) ──
   # These four flags gate the P2 candidacy/decision funnel: the new (dark) paths that let the Neural
   # Web / rotation / divergence / universe-triage lanes NOMINATE additional buy candidates. Lane-A
