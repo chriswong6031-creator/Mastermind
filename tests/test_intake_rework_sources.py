@@ -22,13 +22,16 @@ import pytest
 from brain import intake
 
 
-# The four rework flags — cleared here so every test starts from the default-OFF invariant
-# regardless of the ambient shell environment.
+# The rework flags — cleared here so every test starts from the default-OFF invariant regardless of
+# the ambient shell environment. Includes the two buy-board LEARNING-loop flags (STANDOUT_UNGATED /
+# BOARD_LEARNING) so the standout byte-identical-when-off baseline holds in every test too.
 _REWORK_FLAGS = (
     "MASTERMIND_ROTATION_IN",
     "MASTERMIND_DIVERGENCE_CLUE",
     "MASTERMIND_NW_DECISION",
     "MASTERMIND_UNIVERSE_TRIAGE",
+    "MASTERMIND_STANDOUT_UNGATED",
+    "MASTERMIND_BOARD_LEARNING",
 )
 
 
@@ -303,3 +306,115 @@ def test_armed_source_flows_into_build(monkeypatch):
     assert "AAPL" in cands
     assert "divergence_clue" in cands["AAPL"]["sources"]
     assert cands["AAPL"]["lean"] == 1
+
+
+# =========================================================================== #
+# 8. STANDOUT LEARNING LOOP — the gate_go candidacy fix + the board-edge trust multiplier.
+#    Two flags (MASTERMIND_STANDOUT_UNGATED / MASTERMIND_BOARD_LEARNING), both default OFF ⇒
+#    _from_standouts is BYTE-IDENTICAL to today (a gate_go=False board is skipped, scores un-shrunk).
+# =========================================================================== #
+
+# a gate_go=False standout board carrying one buy name (AAPL) — the board the dashboard flagged NO-GO.
+_GATE_NOGO_BOARD = {
+    "gate_go": False,
+    "buy": [{"ticker": "AAPL", "label": "BUY ZONE", "conviction": 0.8,
+             "entry_signal": {"stop": 180.0, "buy_zone": 195.0, "entry_grade": "A"}}],
+}
+# a gate-cleared board (gate_go True) — ingested unconditionally today.
+_GATE_GO_BOARD = {
+    "gate_go": True,
+    "buy": [{"ticker": "AAPL", "label": "BUY ZONE", "conviction": 0.8}],
+}
+
+
+def _patch_standouts(monkeypatch, board):
+    """Make intake._read return `board` for the standouts artifact only (None otherwise)."""
+    monkeypatch.setattr(
+        intake, "_read",
+        lambda rel: board if rel == "factordata/us_standouts.json" else None)
+
+
+def test_standouts_flags_off_skips_gate_nogo_byte_identical(monkeypatch):
+    # (a) both flags OFF + gate_go=False → the WHOLE source is skipped, exactly as today.
+    _patch_standouts(monkeypatch, _GATE_NOGO_BOARD)
+    assert intake._from_standouts() == {}
+
+
+def test_standouts_flags_off_still_ingests_gate_go_board(monkeypatch):
+    # control: a gate_go=True board is still ingested un-shrunk with flags off (nothing regressed).
+    _patch_standouts(monkeypatch, _GATE_GO_BOARD)
+    out = intake._from_standouts()
+    assert set(out) == {"AAPL"}
+    assert out["AAPL"]["score"] == pytest.approx(0.8)          # raw conviction, un-shrunk
+    assert out["AAPL"]["reason"] == "buy-board: BUY ZONE"      # today's reason string
+
+
+def test_standout_ungated_admits_gate_nogo_as_candidacy(monkeypatch):
+    # (b) MASTERMIND_STANDOUT_UNGATED on + gate_go=False → the board's names appear as candidates.
+    monkeypatch.setenv("MASTERMIND_STANDOUT_UNGATED", "1")
+    _patch_standouts(monkeypatch, _GATE_NOGO_BOARD)
+    out = intake._from_standouts()
+    assert set(out) == {"AAPL"}                                 # NOT skipped anymore
+    assert out["AAPL"]["lean"] == 1
+    # base conviction (0.8) is damped on the ungated path (candidacy, not sizing).
+    assert out["AAPL"]["score"] == pytest.approx(round(0.8 * intake._UNGATED_SCORE_DAMP, 3))
+    # reason is tagged with the event-edge rationale (the operator's requested tag).
+    assert "gate_go=false event-edge" in out["AAPL"]["reason"]
+    # provenance entry-risk levels still carried through.
+    assert out["AAPL"]["stop"] == 180.0 and out["AAPL"]["entry_grade"] == "A"
+
+
+def test_standout_ungated_flows_into_build(monkeypatch):
+    # integration: the ungated board name surfaces as a merged candidate through build().
+    monkeypatch.setenv("MASTERMIND_STANDOUT_UNGATED", "1")
+    _patch_standouts(monkeypatch, _GATE_NOGO_BOARD)
+    monkeypatch.setattr(intake, "_from_open_theses", lambda: {})
+    cands = {c["ticker"]: c for c in intake.build(limit=20)["candidates"]}
+    assert "AAPL" in cands
+    assert "standout" in cands["AAPL"]["sources"]
+
+
+def test_board_learning_shrinks_standout_scores(monkeypatch):
+    # (c) MASTERMIND_BOARD_LEARNING on + a WEAK board → standout scores shrunk by 0.75.
+    monkeypatch.setenv("MASTERMIND_BOARD_LEARNING", "1")
+    _patch_standouts(monkeypatch, _GATE_GO_BOARD)          # gate-cleared so the source ingests
+    import brain.board_learning as bl
+    monkeypatch.setattr(bl, "standout_trust_multiplier", lambda: 0.75)
+    out = intake._from_standouts()
+    # base 0.8 × weak-board multiplier 0.75 = 0.6
+    assert out["AAPL"]["score"] == pytest.approx(round(0.8 * 0.75, 3))
+
+
+def test_board_learning_noop_when_board_empty(monkeypatch):
+    # an empty/insufficient board → multiplier 1.0 → scores UNCHANGED even with the flag on.
+    monkeypatch.setenv("MASTERMIND_BOARD_LEARNING", "1")
+    _patch_standouts(monkeypatch, _GATE_GO_BOARD)
+    import brain.board_learning as bl
+    monkeypatch.setattr(bl, "standout_trust_multiplier", lambda: 1.0)   # insufficient-board neutral
+    out = intake._from_standouts()
+    assert out["AAPL"]["score"] == pytest.approx(0.8)      # no shrink applied
+
+
+def test_board_learning_off_leaves_scores_unshrunk(monkeypatch):
+    # flag OFF → the multiplier is NEVER consulted; even a would-be-weak board leaves scores untouched.
+    _patch_standouts(monkeypatch, _GATE_GO_BOARD)
+    import brain.board_learning as bl
+
+    def _should_not_be_called():
+        raise AssertionError("board_learning must not be consulted when the flag is OFF")
+    monkeypatch.setattr(bl, "standout_trust_multiplier", _should_not_be_called)
+    out = intake._from_standouts()
+    assert out["AAPL"]["score"] == pytest.approx(0.8)
+
+
+def test_board_learning_fail_soft_leaves_scores(monkeypatch):
+    # flag ON but the multiplier RAISES → scores are left untouched (fail-soft, no propagation).
+    monkeypatch.setenv("MASTERMIND_BOARD_LEARNING", "1")
+    _patch_standouts(monkeypatch, _GATE_GO_BOARD)
+    import brain.board_learning as bl
+
+    def _boom():
+        raise RuntimeError("learning loop blew up")
+    monkeypatch.setattr(bl, "standout_trust_multiplier", _boom)
+    out = intake._from_standouts()                         # must not raise
+    assert out["AAPL"]["score"] == pytest.approx(0.8)      # untouched

@@ -56,6 +56,9 @@ KNOWN_FLAGS: list[str] = [
     "MASTERMIND_ROTATION_IN",       # enum off|watch|starter (default off)
     "MASTERMIND_DIVERGENCE_CLUE",   # bool 0|1 (default 0)
     "MASTERMIND_UNIVERSE_TRIAGE",   # bool 0|1 (default 0)
+    # Buy-board LEARNING loop (dark — standout candidacy gate_go fix + proven-edge trust multiplier)
+    "MASTERMIND_STANDOUT_UNGATED",  # bool 0|1 (default 0): admit gate_go=false board names as candidacy
+    "MASTERMIND_BOARD_LEARNING",    # bool 0|1 (default 0): shrink standout scores by the board's forward edge
     # Portfolio / sizing
     "MASTERMIND_ALLOW_FRACTIONAL",
     "MASTERMIND_CAUTION_GROSS",

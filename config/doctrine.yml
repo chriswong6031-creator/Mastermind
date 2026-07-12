@@ -770,3 +770,22 @@ rotation:
     CONFIRMED:  0.65
   preignition_size_frac:     0.5    # (unverified-prior) pre-ignition starter size as a fraction of a full starter
   freshness_sessions:        2      # (unverified-prior) a rotation-in read older than this many sessions is stale
+
+# ---- BUY-BOARD LEARNING LOOP (brain/board_learning.py — buy-board proven-edge trust, DARK) ----
+# The learning loop over the macro buy board's PROVEN forward edge. board_track_record.py reads the
+# board's persistent forward-grade ledger (running/stopped/flat + return); board_learning collapses its
+# aggregate stats into an edge_verdict (insufficient/strong/weak/negative) and a SHRINK-ONLY trust
+# multiplier the intake standout source may apply (gated by MASTERMIND_BOARD_LEARNING, default OFF).
+# DECLARATION ONLY this wave: the module carries its OWN module-level constants; this block centralizes
+# them (one tunable source for a future consumer) but the module does NOT read doctrine.yml yet.
+# INVARIANTS: the multiplier is SHRINK-ONLY (<= 1.0, never a boost) and NEUTRAL on cold-start
+# (insufficient / no data → 1.0 — never penalize a board with thin forward evidence). Every value is a
+# heuristic prior; the paired MASTERMIND_STANDOUT_UNGATED candidacy gate_go fix is intake-side only.
+board_learning:
+  min_n:      12        # (unverified-prior) forward-graded rows required before the edge is judged (below → insufficient/1.0)
+  multipliers:          # (unverified-prior) SHRINK-ONLY trust multipliers by edge_verdict (strong/insufficient → 1.0 par, never a boost)
+    weak:     0.75      # (unverified-prior) a real-but-unproven sample earns a mild trim
+    negative: 0.5       # (unverified-prior) a board actively mis-picking is trusted at half
+  edge:                 # (unverified-prior) edge_verdict thresholds (applied only once n >= min_n)
+    strong_win_rate:   0.55   # (unverified-prior) win_rate >= this AND avg_return > 0 → strong
+    negative_win_rate: 0.40   # (unverified-prior) avg_return <= 0 OR win_rate < this → negative

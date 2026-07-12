@@ -231,6 +231,33 @@ flags:
       divergence clue may nominate an additive buy candidate). DARK: default "0" = no behavior change.
       Additive buy-source (Lane-A); arm only on the E8 statistical bar, ledgered first. Come-back TBD.
 
+  # ── Buy-board LEARNING loop (DARK — candidacy gate_go fix + proven-edge trust multiplier) ──
+  # Two flags that close the buy-board learning loop: (1) STANDOUT_UNGATED makes the board's own
+  # gate_go=False names candidacy-eligible (candidacy != sizing) instead of skipped; (2) BOARD_LEARNING
+  # shrinks the standout candidacy score by the board's PROVEN forward edge (shrink-only, [0.5,1.0]).
+  # Both DEFAULT OFF / byte-identical to base. A4 (GATE): each is an arm/disarm toggle for a candidacy
+  # path; arming is a Fable decision recorded in the governance ledger first. Come-back TBD.
+  MASTERMIND_STANDOUT_UNGATED:
+    authority_level: A4
+    allowed_effect: [arm_standout_ungated_candidacy, disarm_standout_ungated_candidacy]
+    note: >
+      Standout buy-board gate_go=False candidacy fix (brain/intake._from_standouts). bool: "0"
+      (default — a gate_go=False board is skipped, today's behaviour) | "1" (the board's names flow in
+      as CANDIDACY only, tagged "gate_go=false event-edge", damped base score; never sizing). DARK:
+      default "0" = byte-identical to base. Additive candidacy source (Lane-A); arm only on the E8
+      statistical bar, ledgered first. Come-back TBD.
+
+  MASTERMIND_BOARD_LEARNING:
+    authority_level: A4
+    allowed_effect: [arm_board_learning_multiplier, disarm_board_learning_multiplier]
+    note: >
+      Buy-board proven-edge trust multiplier (brain/board_learning.standout_trust_multiplier applied in
+      brain/intake._from_standouts). bool: "0" (default — no multiplier, today's behaviour) | "1" (each
+      standout candidate's score is multiplied by the board's forward-edge trust multiplier, SHRINK-ONLY
+      in [0.5, 1.0]; an insufficient/empty board → 1.0 no-op). DARK: default "0" = byte-identical to
+      base. SHRINK-ONLY (can only reduce a candidacy score, never boost). Arm only on the E8 statistical
+      bar, ledgered first. Come-back TBD.
+
   MASTERMIND_UNIVERSE_TRIAGE:
     authority_level: A4
     allowed_effect: [arm_universe_triage_candidacy, disarm_universe_triage_candidacy]

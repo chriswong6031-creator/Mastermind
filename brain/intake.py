@@ -105,6 +105,41 @@ def _respect_standout_gate() -> bool:
         return True
 
 
+def _standout_ungated_enabled() -> bool:
+    """Return True iff MASTERMIND_STANDOUT_UNGATED is set truthy (default OFF).
+
+    LEARNING-LOOP gate_go fix: when ON, a board with an explicit ``gate_go=False`` is NOT skipped —
+    its names flow in as CANDIDACY (never sizing) so the desk can look at them on their own merits,
+    tagged as an unvalidated event-edge. Default OFF ⇒ the standout source is byte-identical to today
+    (an explicit gate_go=False still skips the whole source). Mirrors nw_prompts_enabled's truthy set;
+    fail-soft — an env read never sinks the funnel."""
+    try:
+        return os.environ.get("MASTERMIND_STANDOUT_UNGATED", "0").strip().lower() in (
+            "1", "true", "yes", "on")
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _board_learning_enabled() -> bool:
+    """Return True iff MASTERMIND_BOARD_LEARNING is set truthy (default OFF).
+
+    LEARNING-LOOP trust multiplier: when ON, each standout candidate's score is multiplied by
+    board_learning.standout_trust_multiplier() (SHRINK-ONLY in [0.5, 1.0]; an empty/insufficient board
+    → 1.0 so the funnel is unchanged). Default OFF ⇒ no multiplier is applied (byte-identical to today).
+    Mirrors nw_prompts_enabled's truthy set; fail-soft."""
+    try:
+        return os.environ.get("MASTERMIND_BOARD_LEARNING", "0").strip().lower() in (
+            "1", "true", "yes", "on")
+    except Exception:  # noqa: BLE001
+        return False
+
+
+# when the ungated gate_go fix admits an unvalidated board (gate_go=False), its base conviction is
+# damped by this factor to reflect that the board has NOT cleared its own Phase-0 gate — a candidate,
+# never a veto, and modestly lower than a gate-cleared board. Only ever applied on the ungated path.
+_UNGATED_SCORE_DAMP = 0.75
+
+
 def _from_standouts() -> dict:
     d = _read("factordata/us_standouts.json") or {}
     # RESPECT THE BOARD'S OWN GATE (P-NEW-2): when the dashboard's `gate_go` verdict is explicitly
@@ -112,28 +147,62 @@ def _from_standouts() -> dict:
     # NO positive corroboration to the intake funnel. Skip the whole source. Invariant-safe: gate_go
     # missing (None) or truthy → today's behaviour (ingest); only an explicit False skips, and only
     # while the doctrine toggle is on. Skipping removes a source, never adds one.
+    #
+    # LEARNING-LOOP gate_go fix (MASTERMIND_STANDOUT_UNGATED, default OFF): when the flag is ON the
+    # gate_go=False board is NOT skipped — its names flow in as CANDIDACY (candidacy != sizing), tagged
+    # as an unvalidated event-edge and damped by _UNGATED_SCORE_DAMP. When the flag is OFF (default) the
+    # skip below is byte-identical to today's behaviour.
     gate_go = d.get("gate_go")
-    if gate_go is False and _respect_standout_gate():
+    ungated = gate_go is False and _respect_standout_gate() and _standout_ungated_enabled()
+    if gate_go is False and _respect_standout_gate() and not _standout_ungated_enabled():
         rows = d.get("buy") or d.get("standouts") or []
         log.warning("us_standouts gate_go=False (board not statistically validated) — skipping "
                     "%d standout buy names from intake funnel", len(rows))
         return {}
+    if ungated:
+        rows = d.get("buy") or d.get("standouts") or []
+        log.warning("us_standouts gate_go=False — MASTERMIND_STANDOUT_UNGATED on: admitting "
+                    "%d standout names as candidacy (event-edge, unvalidated)", len(rows))
     out = {}
     for s in (d.get("buy") or d.get("standouts") or []):
         t = _u(s.get("ticker"))
         if not t:
             continue
         conv = _f(s.get("conviction"))
+        base = min(max(conv if conv is not None else 0.5, 0.0), 1.0)
+        # on the ungated path, damp the base conviction (candidacy, not sizing; board unvalidated) and
+        # tag the reason so provenance shows WHY the name is here despite the board's own no-go gate.
+        if ungated:
+            base = round(base * _UNGATED_SCORE_DAMP, 3)
+            reason = (f"buy-board (gate_go=false event-edge): "
+                      f"{s.get('label') or s.get('state') or 'standout'}")
+        else:
+            reason = f"buy-board: {s.get('label') or s.get('state') or 'standout'}"
         # carry the PUBLISHED entry-risk levels (P-NEW-3) into the provenance record so the candidate
         # funnel shows the board's stop / buy_zone / entry_grade. Purely additive — these do NOT size
         # or gate the name (that stays the conviction sleeve's job); None-on-miss for legacy rows.
         _es = s.get("entry_signal") if isinstance(s.get("entry_signal"), dict) else {}
-        out[t] = {"score": min(max(conv if conv is not None else 0.5, 0.0), 1.0),
-                  "reason": f"buy-board: {s.get('label') or s.get('state') or 'standout'}",
+        out[t] = {"score": base,
+                  "reason": reason,
                   "lean": -1 if "AVOID" in (s.get("label") or "").upper() else 1,
                   "confidence": None, "falsifier": None,
                   "stop": _es.get("stop"), "buy_zone": _es.get("buy_zone"),
                   "entry_grade": _es.get("entry_grade")}
+
+    # LEARNING-LOOP trust multiplier (MASTERMIND_BOARD_LEARNING, default OFF): shrink each standout
+    # candidate's score by the board's PROVEN forward edge. SHRINK-ONLY in [0.5, 1.0]; an empty /
+    # insufficient board → 1.0 so this is a no-op. Default OFF ⇒ no multiplier (byte-identical). Lazy
+    # import (codebase convention) so importing intake never pulls board_learning. Fail-soft: any
+    # error leaves the scores untouched.
+    if out and _board_learning_enabled():
+        try:
+            from brain import board_learning
+            mult = board_learning.standout_trust_multiplier()
+            if mult is not None and mult != 1.0:
+                for rec in out.values():
+                    rec["score"] = round(min(max(rec["score"] * float(mult), 0.0), 1.0), 3)
+        except Exception as e:  # noqa: BLE001 — fail-soft: a broken learning loop never sinks intake
+            log.debug("intake: board_learning multiplier failed (%s)", e)
     return out
 
 
