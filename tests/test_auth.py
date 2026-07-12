@@ -1,41 +1,17 @@
-"""Auth gate tests — built on a THROWAWAY FastAPI app so we never trigger the real
-app.main startup (scheduler + first-run book builds)."""
+"""Auth-middleware tests — built on a THROWAWAY FastAPI app so we never trigger the
+real app.main startup (scheduler + first-run book builds).
+
+The browser password-cookie login flow was REMOVED (page-only scope). What remains
+and is tested here: read access is always open (no login), and the bearer-token
+OPERATOR tier gates mutating/LLM POSTs. Serve-only + rate limits live in
+tests/test_mw6_security.py.
+"""
 from __future__ import annotations
 
-import time
-
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app import auth
-
-
-# ------------------------------------------------------- signed cookie ----
-
-def test_cookie_roundtrip_and_tamper():
-    assert auth.verify_cookie(auth.make_cookie("hunter2"), "hunter2")
-    # wrong password (derived key differs) -> reject
-    assert not auth.verify_cookie(auth.make_cookie("hunter2"), "other")
-    # tampered signature -> reject
-    tok = auth.make_cookie("hunter2")
-    assert not auth.verify_cookie(tok[:-1] + ("0" if tok[-1] != "0" else "1"), "hunter2")
-    assert not auth.verify_cookie("garbage", "hunter2")
-    assert not auth.verify_cookie(None, "hunter2")
-
-
-def test_cookie_expiry():
-    past = auth.make_cookie("pw", ttl_days=1, now=time.time() - 2 * 86400)
-    assert not auth.verify_cookie(past, "pw")
-    fresh = auth.make_cookie("pw", ttl_days=1)
-    assert auth.verify_cookie(fresh, "pw")
-
-
-def test_safe_next_blocks_open_redirect():
-    assert auth.safe_next("/api/portfolio") == "/api/portfolio"
-    assert auth.safe_next("//evil.com") == "/"
-    assert auth.safe_next("https://evil.com") == "/"
-    assert auth.safe_next(None) == "/"
 
 
 # ----------------------------------------------------------- middleware ----
@@ -55,80 +31,40 @@ def _app() -> FastAPI:
     return app
 
 
-def test_disabled_when_no_password(monkeypatch):
-    monkeypatch.delenv("MASTERMIND_PASSWORD", raising=False)
-    monkeypatch.delenv("MASTERMIND_AUTH_TOKEN", raising=False)
-    # bot/__init__ loads the production .env into os.environ at import — in the
-    # main checkout that carries MASTERMIND_REQUIRE_AUTH=1, which makes install()
-    # correctly REFUSE this no-password config. Clear it: this test is about the
-    # dev pass-through path, not the production refusal (covered below).
-    monkeypatch.delenv("MASTERMIND_REQUIRE_AUTH", raising=False)
-    c = TestClient(_app())
-    assert c.get("/secret").status_code == 200      # pass-through
-
-
-def test_api_blocked_then_login_flow(monkeypatch):
-    monkeypatch.setenv("MASTERMIND_PASSWORD", "letmein")
+def test_read_access_is_open_no_login(monkeypatch):
+    """No browser login exists: every GET is served without any credential,
+    on both localhost and the VPS mirror."""
     monkeypatch.delenv("MASTERMIND_AUTH_TOKEN", raising=False)
     c = TestClient(_app())
-
-    # XHR/API with no session -> 401 JSON
-    r = c.get("/secret")
-    assert r.status_code == 401 and r.json()["error"] == "unauthorized"
-
-    # browser navigation -> 303 redirect to /login
+    # Plain XHR/API GET -> 200 (was 401 under the old cookie gate).
+    assert c.get("/secret").status_code == 200
+    # Browser navigation GET -> 200, NOT a 303 redirect to a (now-missing) /login.
     r = c.get("/secret", headers={"accept": "text/html"}, follow_redirects=False)
-    assert r.status_code == 303 and r.headers["location"].startswith("/login?next=/secret")
-
-    # /health stays open
+    assert r.status_code == 200
+    # /health stays open.
     assert c.get("/health").status_code == 200
 
-    # wrong password -> 401, no cookie
-    r = c.post("/login", data={"password": "nope", "next": "/secret"}, follow_redirects=False)
-    assert r.status_code == 401 and "mm_session" not in r.cookies
 
-    # correct password -> 303 + Set-Cookie, then the gate opens
-    r = c.post("/login", data={"password": "letmein", "next": "/secret"}, follow_redirects=False)
-    assert r.status_code == 303 and r.headers["location"] == "/secret"
-    assert "mm_session" in r.cookies
-    assert c.get("/secret").status_code == 200       # cookie now carried by the client
-
-    # logout clears it
-    c.get("/logout", follow_redirects=False)
-    c.cookies.clear()
-    assert c.get("/secret").status_code == 401
+def test_no_login_or_logout_routes(monkeypatch):
+    """The /login and /logout routes are gone — they must 404 now."""
+    monkeypatch.delenv("MASTERMIND_AUTH_TOKEN", raising=False)
+    c = TestClient(_app())
+    assert c.get("/login").status_code == 404
+    assert c.post("/login", data={"password": "x"}).status_code == 404
+    assert c.get("/logout").status_code == 404
 
 
-def test_bearer_token(monkeypatch):
-    monkeypatch.setenv("MASTERMIND_PASSWORD", "letmein")
+def test_read_access_open_even_with_bearer_configured(monkeypatch):
+    """Configuring a bearer token gates only operator POSTs — reads stay open."""
     monkeypatch.setenv("MASTERMIND_AUTH_TOKEN", "s3cr3t-bot-token")
     c = TestClient(_app())
-    assert c.get("/secret").status_code == 401
+    assert c.get("/secret").status_code == 200            # no credential needed to read
+    # A bearer header on a read is accepted (ignored) — still 200.
     r = c.get("/secret", headers={"authorization": "Bearer s3cr3t-bot-token"})
     assert r.status_code == 200
-    r = c.get("/secret", headers={"authorization": "Bearer wrong"})
-    assert r.status_code == 401
 
 
-# ---------------------------------------- MW0 auth-hardening tests ----
-
-def test_require_auth_raises_when_no_password(monkeypatch):
-    """install() must raise RuntimeError at startup when MASTERMIND_REQUIRE_AUTH=1
-    and MASTERMIND_PASSWORD is absent — production cannot boot unauthenticated."""
-    monkeypatch.delenv("MASTERMIND_PASSWORD", raising=False)
-    monkeypatch.delenv("MASTERMIND_AUTH_TOKEN", raising=False)
-    monkeypatch.setenv("MASTERMIND_REQUIRE_AUTH", "1")
-    with pytest.raises(RuntimeError, match="MASTERMIND_REQUIRE_AUTH"):
-        auth.install(FastAPI())
-
-
-def test_require_auth_passes_when_password_set(monkeypatch):
-    """install() must NOT raise when MASTERMIND_REQUIRE_AUTH=1 AND a password is present."""
-    monkeypatch.setenv("MASTERMIND_PASSWORD", "s3cr3t")
-    monkeypatch.setenv("MASTERMIND_REQUIRE_AUTH", "1")
-    # Should not raise:
-    auth.install(FastAPI())
-
+# ---------------------------------------- health-route hardening ----
 
 def _real_health_app(monkeypatch):
     """Build a throwaway app using the real /health handler from app.main (not the stub)."""
@@ -158,9 +94,7 @@ def test_health_no_filesystem_path(monkeypatch):
     """/health response must not contain any absolute filesystem path or cli_path.
 
     Uptime probes must still receive status=ok (their only contract)."""
-    monkeypatch.delenv("MASTERMIND_PASSWORD", raising=False)
     monkeypatch.delenv("MASTERMIND_AUTH_TOKEN", raising=False)
-    monkeypatch.delenv("MASTERMIND_REQUIRE_AUTH", raising=False)
     c = TestClient(_real_health_app(monkeypatch))
     r = c.get("/health")
     assert r.status_code == 200
@@ -176,14 +110,13 @@ def test_health_no_filesystem_path(monkeypatch):
             raise AssertionError(f"/health field contains a filesystem path: {val!r}")
 
 
-def test_operator_route_requires_auth(monkeypatch):
-    """POST /api/autonomous/run without credentials must return 401 or 403 when auth is on.
+def test_operator_route_requires_bearer(monkeypatch):
+    """POST /api/autonomous/run without a bearer token must return 401 when a token
+    is configured; with the valid token it passes.
 
-    The Brain runner is monkeypatched so no LLM call is made."""
-    monkeypatch.setenv("MASTERMIND_PASSWORD", "testpw")
-    monkeypatch.delenv("MASTERMIND_AUTH_TOKEN", raising=False)
+    The Brain runner is a stub so no LLM call is made."""
+    monkeypatch.setenv("MASTERMIND_AUTH_TOKEN", "bot-tok")
 
-    # Build a minimal app that mirrors the real auth gate + one protected operator route.
     app = FastAPI()
     auth.install(app)
 
@@ -191,14 +124,31 @@ def test_operator_route_requires_auth(monkeypatch):
     def autonomous_run(force: bool = False):
         return {"started": True}
 
+    auth.reset_rate_buckets()
     c = TestClient(app, raise_server_exceptions=True)
-    # No credentials -> must be rejected.
+    # No bearer -> rejected (401).
     r = c.post("/api/autonomous/run")
-    assert r.status_code in (401, 403), (
-        f"Expected 401/403 without credentials, got {r.status_code}"
+    assert r.status_code == 401, (
+        f"Expected 401 without a bearer token, got {r.status_code}"
     )
     # With valid bearer token -> allowed.
-    monkeypatch.setenv("MASTERMIND_AUTH_TOKEN", "bot-tok")
-    c2 = TestClient(app)
-    r2 = c2.post("/api/autonomous/run", headers={"authorization": "Bearer bot-tok"})
+    auth.reset_rate_buckets()
+    r2 = c.post("/api/autonomous/run", headers={"authorization": "Bearer bot-tok"})
     assert r2.status_code == 200
+
+
+def test_operator_route_passes_without_token_in_dev(monkeypatch):
+    """With no bearer token configured (dev), operator paths pass — dev ergonomics."""
+    monkeypatch.delenv("MASTERMIND_AUTH_TOKEN", raising=False)
+
+    app = FastAPI()
+    auth.install(app)
+
+    @app.post("/api/autonomous/run")
+    def autonomous_run(force: bool = False):
+        return {"started": True}
+
+    auth.reset_rate_buckets()
+    c = TestClient(app)
+    r = c.post("/api/autonomous/run")
+    assert r.status_code == 200

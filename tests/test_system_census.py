@@ -8,7 +8,8 @@ Verifies that the census script:
      must have value "<set>", never the real value).
   5. Generated-at timestamp and git-sha header are present.
   6. Both files are non-empty and valid JSON / non-empty Markdown.
-  7. Auth routes (GET /login, POST /login, GET /logout) are present and open-path.
+  7. The browser login flow is GONE: /login and /logout are NOT in the census
+     endpoint list, and /health is the only open auth path.
   8. No cron_spec leaks a bare lowercase identifier (unresolved variable name).
 """
 from __future__ import annotations
@@ -126,27 +127,39 @@ def test_census_flags_known_not_set_is_list(census_data):
 
 
 def test_census_endpoints_present(census_data):
-    """At least the well-known routes are present, including auth routes."""
+    """At least the well-known routes are present.
+
+    The browser login flow was removed (page-only scope): /login and /logout
+    no longer exist as routes, so the census must NOT list them.
+    """
     endpoints = census_data.get("endpoints") or []
     paths = {(ep["method"], ep["path"]) for ep in endpoints}
     assert ("GET", "/health") in paths, "/health route not found"
     assert ("POST", "/daily") in paths, "POST /daily not found"
     assert ("POST", "/chat") in paths, "POST /chat not found"
-    # auth routes from app/auth.py
-    assert ("GET", "/login") in paths, "GET /login route not found"
-    assert ("POST", "/login") in paths, "POST /login route not found"
-    assert ("GET", "/logout") in paths, "GET /logout route not found"
+    # The browser login flow is GONE — these routes must not be present.
+    assert ("GET", "/login") not in paths, "GET /login should be removed (login flow gone)"
+    assert ("POST", "/login") not in paths, "POST /login should be removed (login flow gone)"
+    assert ("GET", "/logout") not in paths, "GET /logout should be removed (login flow gone)"
 
 
-def test_census_auth_routes_are_open_path(census_data):
-    """Auth routes (GET /login, POST /login, GET /logout) must be tagged open=True."""
+def test_census_open_paths_match_current_auth_surface(census_data):
+    """The only open auth path is /health; /login and /logout are gone.
+
+    Repurposed from the old login-page open-path assertion: the browser login
+    flow was removed, so /health is the sole route tagged open=True, and no
+    /login or /logout endpoint remains to be tagged at all.
+    """
     endpoints = census_data.get("endpoints") or []
     ep_map = {(e["method"], e["path"]): e for e in endpoints}
+    # /health is open.
+    health = ep_map.get(("GET", "/health"))
+    assert health is not None, "GET /health not found in census endpoints"
+    assert health.get("open") is True, "GET /health must be tagged open=True"
+    # No login/logout routes remain to be open-tagged.
     for method, path in [("GET", "/login"), ("POST", "/login"), ("GET", "/logout")]:
-        ep = ep_map.get((method, path))
-        assert ep is not None, f"{method} {path} not found in census endpoints"
-        assert ep.get("open") is True, (
-            f"{method} {path} must be tagged open=True (it is in _OPEN_PATHS)"
+        assert (method, path) not in ep_map, (
+            f"{method} {path} should no longer exist (login flow removed)"
         )
 
 

@@ -250,9 +250,9 @@ def _collect_endpoints() -> list[dict]:
     """Static-parse app/main.py, app/web.py, and app/auth.py for route declarations."""
     try:
         from app import auth  # type: ignore[import]
-        open_paths: set[str] = set(getattr(auth, "_OPEN_PATHS", {"/login", "/logout", "/health"}))
+        open_paths: set[str] = set(getattr(auth, "_OPEN_PATHS", {"/health"}))
     except Exception:
-        open_paths = {"/login", "/logout", "/health"}
+        open_paths = {"/health"}
 
     endpoints = []
     for src_file in (_ROOT / "app" / "main.py", _ROOT / "app" / "web.py", _ROOT / "app" / "auth.py"):

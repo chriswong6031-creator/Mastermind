@@ -19,8 +19,10 @@ from app import auth
 # helpers
 # ---------------------------------------------------------------------------
 
-def _app_with_operator_routes(monkeypatch, *, password="testpw", token=None):
-    """Build a minimal app that mirrors the real auth gate + operator + read routes."""
+def _app_with_operator_routes(monkeypatch, *, token=None):
+    """Build a minimal app that mirrors the real auth gate + operator + read routes.
+
+    (No browser login exists — the only credential is the bearer token.)"""
     app = FastAPI()
     auth.install(app)
 
@@ -52,7 +54,6 @@ def _app_with_operator_routes(monkeypatch, *, password="testpw", token=None):
             out["serve_only"] = True
         return out
 
-    monkeypatch.setenv("MASTERMIND_PASSWORD", password)
     if token:
         monkeypatch.setenv("MASTERMIND_AUTH_TOKEN", token)
     else:
@@ -66,32 +67,29 @@ def _app_with_operator_routes(monkeypatch, *, password="testpw", token=None):
 # ---------------------------------------------------------------------------
 
 class TestOperatorRouteRequiresBearer:
-    """Cookie session is NOT sufficient for operator paths; bearer token is required."""
+    """A bearer token is required for operator paths; no browser login exists."""
 
-    def test_operator_post_with_cookie_only_rejected(self, monkeypatch):
-        """POST /api/autonomous/run with only a session cookie must be rejected (401)."""
-        monkeypatch.setenv("MASTERMIND_PASSWORD", "testpw")
+    def test_operator_post_without_bearer_rejected(self, monkeypatch):
+        """POST /api/autonomous/run with no bearer token must be rejected (401) when a
+        token is configured — there is no session cookie that could substitute."""
         monkeypatch.setenv("MASTERMIND_AUTH_TOKEN", "operator-secret")
-        app = _app_with_operator_routes(monkeypatch, password="testpw", token="operator-secret")
+        app = _app_with_operator_routes(monkeypatch, token="operator-secret")
 
         c = TestClient(app, raise_server_exceptions=True)
 
-        # First log in to get a session cookie.
-        r = c.post("/login", data={"password": "testpw", "next": "/"}, follow_redirects=False)
-        assert r.status_code == 303
-        assert "mm_session" in r.cookies, "Login should set mm_session cookie"
+        # /login is gone — confirm it 404s (no login flow to obtain a session).
+        assert c.post("/login", data={"password": "x"}).status_code == 404
 
-        # Now hit an operator route with the cookie but NO bearer token.
+        # Operator route with NO bearer token -> rejected.
         r = c.post("/api/autonomous/run")
         assert r.status_code in (401, 403), (
-            f"Operator route with cookie-only must be rejected; got {r.status_code}"
+            f"Operator route without a bearer token must be rejected; got {r.status_code}"
         )
 
     def test_operator_post_with_bearer_passes(self, monkeypatch):
         """POST /api/autonomous/run with a valid bearer token must pass the auth layer."""
-        monkeypatch.setenv("MASTERMIND_PASSWORD", "testpw")
         monkeypatch.setenv("MASTERMIND_AUTH_TOKEN", "operator-secret")
-        app = _app_with_operator_routes(monkeypatch, password="testpw", token="operator-secret")
+        app = _app_with_operator_routes(monkeypatch, token="operator-secret")
 
         c = TestClient(app, raise_server_exceptions=True)
         # Reset the rate-limit buckets so this isolated test doesn't hit the limit.
@@ -102,25 +100,21 @@ class TestOperatorRouteRequiresBearer:
             f"Valid bearer token must pass operator route; got {r.status_code}"
         )
 
-    def test_readonly_get_with_cookie_passes(self, monkeypatch):
-        """Read-only GET /api/portfolio with a valid session cookie must pass."""
-        monkeypatch.setenv("MASTERMIND_PASSWORD", "testpw")
+    def test_readonly_get_is_open(self, monkeypatch):
+        """Read-only GET /api/portfolio must pass with NO login and NO credential."""
         monkeypatch.setenv("MASTERMIND_AUTH_TOKEN", "operator-secret")
-        app = _app_with_operator_routes(monkeypatch, password="testpw", token="operator-secret")
+        app = _app_with_operator_routes(monkeypatch, token="operator-secret")
 
         c = TestClient(app, raise_server_exceptions=True)
-        # Log in to get a session cookie.
-        c.post("/login", data={"password": "testpw", "next": "/"}, follow_redirects=False)
         r = c.get("/api/portfolio")
         assert r.status_code == 200, (
-            f"Read-only GET with session cookie must pass; got {r.status_code}"
+            f"Read-only GET must be open (no login); got {r.status_code}"
         )
 
     def test_operator_route_with_wrong_token_rejected(self, monkeypatch):
         """POST /api/autonomous/run with a wrong bearer token must be rejected."""
-        monkeypatch.setenv("MASTERMIND_PASSWORD", "testpw")
         monkeypatch.setenv("MASTERMIND_AUTH_TOKEN", "correct-secret")
-        app = _app_with_operator_routes(monkeypatch, password="testpw", token="correct-secret")
+        app = _app_with_operator_routes(monkeypatch, token="correct-secret")
 
         c = TestClient(app, raise_server_exceptions=True)
         r = c.post("/api/autonomous/run",
@@ -129,11 +123,9 @@ class TestOperatorRouteRequiresBearer:
             f"Wrong bearer token must be rejected; got {r.status_code}"
         )
 
-    def test_auth_disabled_operator_passes(self, monkeypatch):
-        """When auth is fully disabled (dev mode), operator paths pass without any token."""
-        monkeypatch.delenv("MASTERMIND_PASSWORD", raising=False)
+    def test_no_token_operator_passes(self, monkeypatch):
+        """With no bearer token configured (dev mode), operator paths pass — dev ergonomics."""
         monkeypatch.delenv("MASTERMIND_AUTH_TOKEN", raising=False)
-        monkeypatch.delenv("MASTERMIND_REQUIRE_AUTH", raising=False)
         app = FastAPI()
         auth.install(app)
 

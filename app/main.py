@@ -49,12 +49,14 @@ if FastAPI is not None:
     app.include_router(web.router)
     # Portfolio Risk Desk CRUD proxy (W1). PRD-R8: these endpoints mutate Supabase
     # only — no local state, no LLM — and are exempt from MASTERMIND_SERVE_ONLY
-    # blocking (see app/auth.py _PFOLIO_PATHS). Session-auth still required.
+    # blocking (see app/auth.py _PFOLIO_PATH_PREFIX). Not in the bearer operator tier.
     app.include_router(pfolio.router)
 
-    # App-level auth gate — protects the UI + every /api route + the SSE stream.
-    # Opt-in via MASTERMIND_PASSWORD; a no-op (auth disabled) when it's unset, so
-    # local dev is unchanged. MUST be installed before the server handles requests.
+    # App-level middleware — the serve-only POST guard (MASTERMIND_SERVE_ONLY),
+    # the bearer-token OPERATOR tier (MASTERMIND_AUTH_TOKEN) over mutating/LLM POSTs,
+    # and operator-path rate limiting. There is NO browser login: read-only browsing
+    # (the UI + read /api routes + the SSE stream) is always open. MUST be installed
+    # before the server handles requests.
     from app import auth
     auth.install(app)
 
