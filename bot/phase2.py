@@ -389,6 +389,58 @@ def _macro_risk_enabled() -> bool:
     return os.environ.get("MASTERMIND_MACRO_RISK", "0").strip().lower() in ("1", "true", "yes", "on")
 
 
+def _universe_triage_enabled() -> bool:
+    """The leadership-selection UNIVERSE-TRIAGE brake (subtract-only: drop a NEW, non-held leadership
+    sector whose universe_triage.sector_action == 'reduce', so a Topping/rolling sector can't claim a
+    leadership slot on raw RS). Freed budget goes to CASH — a survivor is NEVER up-weighted. Default OFF
+    — so the live Flagship build is BYTE-IDENTICAL to today until the user opts in. Enable with env
+    MASTERMIND_UNIVERSE_TRIAGE in {1, true, yes, on}; anything else is OFF. Fail-soft: an env read never
+    sinks the build. (Mirrors the MASTERMIND_MACRO_RISK / brain.intake._flag_on 0|1 pattern.)"""
+    try:
+        return os.environ.get("MASTERMIND_UNIVERSE_TRIAGE", "0").strip().lower() in ("1", "true", "yes", "on")
+    except Exception:  # noqa: BLE001 — fail-soft: default OFF on any error
+        return False
+
+
+def _rotation_in_mode() -> str:
+    """Return the MASTERMIND_ROTATION_IN ladder value (off|watch|starter), default 'off'. Fail-soft.
+
+    Rotation-in watchlist enrollment is active when the mode is in {'watch','starter'}; any
+    unrecognized / empty value degrades to 'off' (inert → the enrollment block is a no-op, so the
+    build is byte-identical to today). Mirrors brain.intake._rotation_in_mode verbatim."""
+    try:
+        raw = os.environ.get("MASTERMIND_ROTATION_IN", "off").strip().lower()
+        return raw if raw in ("off", "watch", "starter") else "off"
+    except Exception:  # noqa: BLE001
+        return "off"
+
+
+def _suppress_reduce_sectors(leaders_pre: list[dict], held: set[str], enabled: bool,
+                             action_fn) -> tuple[list[dict], set[str]]:
+    """Pure leadership-selection brake for the universe-triage suppression (CHANGE 1).
+
+    Returns ``(leaders, reduce_secs)`` where ``reduce_secs`` is the set of NEW (non-held) leader
+    tickers whose ``action_fn(ticker) == 'reduce'`` and ``leaders`` is ``leaders_pre`` with those
+    dropped. HELD tickers (``ticker.upper() in held``) are EXEMPT — never suppressed. When ``enabled``
+    is False, ``reduce_secs`` is empty and ``leaders is leaders_pre`` (the SAME object), guaranteeing
+    byte-identical behaviour to the pre-brake path. Fail-soft: any error in ``action_fn`` degrades to
+    NO suppression (the whole set is emptied), so a triage fault can only ever leave the book unchanged,
+    never partially suppress.
+
+    NOTE the caller must compute the per-leg weight ``lw`` on ``len(leaders_pre)`` (NOT ``len(leaders)``)
+    so a suppressed leg's budget goes to CASH and no surviving leg is ever up-weighted (invariant ii)."""
+    if not enabled:
+        return leaders_pre, set()
+    try:
+        reduce_secs = {s["ticker"] for s in leaders_pre
+                       if s["ticker"].upper() not in held and action_fn(s["ticker"]) == "reduce"}
+    except Exception:  # noqa: BLE001 — fail-soft: no suppression on any error
+        return leaders_pre, set()
+    if not reduce_secs:
+        return leaders_pre, set()
+    return [s for s in leaders_pre if s["ticker"] not in reduce_secs], reduce_secs
+
+
 def _is_hard_exit(syn: dict) -> bool:
     """A held name must be EXITED immediately (no hysteresis) on a hard veto (parabolic / Altman /
     cycle-blocked), a confirmed STRUCTURAL downtrend, or size_authority 'blocked'. (A fresh
@@ -670,8 +722,35 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
     except Exception:  # noqa: BLE001 — P2: posture failure never blocks the build
         _posture = None
 
-    leaders = [s for s in secrs[:6] if s.get("above_200d_trend")][:4]
-    lw = round(lead_budget / max(1, len(leaders)), 4)
+    # ── leadership selection (top-RS, trend-gated) + UNIVERSE-TRIAGE suppression (flag-gated) ──
+    # _leaders_pre is the ORIGINAL selection. lw is ALWAYS computed on len(_leaders_pre) so that when
+    # the triage brake drops a NEW (non-held) 'reduce' sector, the freed budget flows to CASH and NO
+    # surviving leg is up-weighted (invariant ii). Flag OFF ⇒ _reduce_secs empty ⇒ leaders is
+    # _leaders_pre (SAME object) and lw is identical to today ⇒ BYTE-IDENTICAL (invariant i).
+    _leaders_pre = [s for s in secrs[:6] if s.get("above_200d_trend")][:4]
+    lw = round(lead_budget / max(1, len(_leaders_pre)), 4)
+    _reduce_secs: set[str] = set()
+    if _universe_triage_enabled():
+        try:
+            from brain import universe_triage as _ut
+            # HELD leadership tickers are EXEMPT (never suppressed) — a name we already carry rides
+            # through a softened sector; only a genuinely NEW leadership add can be triaged out.
+            _held_lead_pre = {hp["ticker"].upper() for hp in position_log.open_positions()
+                              if hp.get("sleeve") == "leadership"}
+            leaders, _reduce_secs = _suppress_reduce_sectors(
+                _leaders_pre, _held_lead_pre, True, _ut.sector_action)
+        except Exception as _e:  # noqa: BLE001 — fail-soft: no suppression on any error
+            leaders, _reduce_secs = _leaders_pre, set()
+            _rl_log(_run_id, "decision", "leadership triage error", f"{_e!r}"[:160])
+    else:
+        leaders = _leaders_pre
+    if _reduce_secs:
+        # freed budget (len(_leaders_pre) − len(leaders) legs × lw) is NOT redistributed — it lands in
+        # cash (gross = Σ book weights; cash = 1 − gross). Observability line for the suppression event.
+        _rl_log(_run_id, "decision", "leadership triage-suppressed",
+                f"dropped={sorted(_reduce_secs)} kept={[s['ticker'] for s in leaders]} "
+                f"weight_each={lw} freed_to_cash={round(lw * len(_reduce_secs), 4)}",
+                sleeve="leadership")
     book = []
 
     _rl_log(_run_id, "book_step", "leadership sleeve selected",
@@ -712,6 +791,45 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
                         ticker=_b["ticker"], sleeve="leadership")
     except Exception as _e:  # noqa: BLE001 — caps are subtract-only; a failure degrades to un-capped legs
         _rl_log(_run_id, "decision", "leadership caps error", f"{_e!r}"[:160])
+
+    # ———— ROTATION-IN watchlist enrollment (flag-gated, default OFF, NON-DISRUPTIVE) ————
+    # "Hold names through unconfirmed turns": each build, EARLY/TURNING (unconfirmed) rotation calls
+    # PARK their member names on the Flagship watchlist STATE for future review/promotion. This block
+    # does NOT touch `book`, sizing, or any trading state — it only writes watchlist_state rows
+    # (append_rotation is idempotent per call_id and NEVER raises), so it is inherently non-disruptive.
+    # Gate: enroll only when MASTERMIND_ROTATION_IN ∈ {watch, starter}; OFF (default) ⇒ this is a pure
+    # no-op ⇒ the build is byte-identical to today. Wrapped in try/except (fail-soft).
+    if _rotation_in_mode() in ("watch", "starter"):
+        try:
+            from brain import rotation_intake as _ri
+            from portfolio import watchlist as _wl
+            _enrolled = 0
+            for _call in _ri.active_calls(asof) or []:
+                if not isinstance(_call, dict):
+                    continue
+                _cstate = _call.get("state")
+                if _cstate not in ("EARLY", "TURNING"):   # only UNCONFIRMED turns; terminal/unknown skip
+                    continue
+                _cid = str(_call.get("call_id") or _call.get("target") or "").strip()
+                if not _cid:
+                    continue
+                _ctarget = _call.get("target")
+                _cconf = _call.get("confidence")
+                _cthesis = f"rotation_in {_cid} {_cstate}"
+                for _m in _ri.expand(_call) or []:
+                    if not isinstance(_m, dict):
+                        continue
+                    _mt = _m.get("ticker")
+                    if not _mt:
+                        continue
+                    if _wl.append_rotation(_mt, asof, _cid, target=_ctarget, confidence=_cconf,
+                                           thesis=_cthesis, trigger=_call.get("falsifier")):
+                        _enrolled += 1
+            if _enrolled:
+                _rl_log(_run_id, "book_step", "rotation-in enrolled",
+                        f"n_parked={_enrolled} mode={_rotation_in_mode()}")
+        except Exception as _e:  # noqa: BLE001 — enrollment is additive; a failure never blocks the build
+            _rl_log(_run_id, "decision", "rotation-in enroll error", f"{_e!r}"[:160])
 
     # ———— CONVICTION sleeve ————
     from portfolio import conviction
