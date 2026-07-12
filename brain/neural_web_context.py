@@ -11,11 +11,16 @@ PUBLIC API
 * market_plane()       — compact dict for the neural_web market_view plane.
 * seat_prompt_block(tickers, max_chars=1200) — compact text for prompt injection (NO cortex prose).
 * audit_row()          — {status, asof, age_days, n_candidates, gap_notes_count}.
-* nw_prompts_enabled() — reads MASTERMIND_NW_CONTEXT; default OFF.
+* nw_prompts_enabled() — reads MASTERMIND_NW_CONTEXT; default OFF (text-only prompt injection).
+* nw_decision_mode()   — reads MASTERMIND_NW_DECISION; default 'off' (typed decision ladder).
+* decision_signals(ticker) — THE typed decision-policy chokepoint; default-OFF inert no-op.
 * _reset_context_cache() — explicit cache reset for tests.
 
-FLAG: MASTERMIND_NW_CONTEXT defaults OFF (dark ship — §1.7 of NW_MASTERMIND_BRIDGE_PROGRAM.md).
-Reader + audit rows are flag-independent; only prompt/plane injection is gated.
+FLAGS (independent):
+  MASTERMIND_NW_CONTEXT  — default OFF; owns TEXT-ONLY prompt/plane injection.
+  MASTERMIND_NW_DECISION — default 'off'; owns the typed decision ladder
+                           (off|shadow|candidacy|shrink|vote) — see nw_decision_mode().
+Reader + audit rows are flag-independent; prompt injection and decision signals are gated.
 
 STALENESS: as_of age > 4 calendar days → treat as absent-stale.
 """
@@ -39,6 +44,36 @@ _EXPECTED_SCHEMA = "neural_web_mastermind_context.v1"
 _STALE_DAYS = 4   # calendar days
 
 # --------------------------------------------------------------------------- #
+# typed decision-policy priors (A5) — ALL UNVERIFIED, tunable module constants
+# --------------------------------------------------------------------------- #
+# Candidacy scores by NW bottom_state. Unverified priors: leader-anticipation is
+# coin-flip per the China-basket program; these are conservative starter weights,
+# never authority to size. Only ever *add* a candidate for the gate to filter.
+NW_CANDIDACY_SCORES: dict[str, float] = {
+    "WATCH": 0.35,          # eyes-only prior — turn not yet confirmed
+    "BOTTOMING": 0.50,      # turn in progress
+    "CONFIRMED": 0.50,      # confirmed turn — still a starter-grade prior
+}
+# graph_conflicts count at/above which a NEW entry is shrunk (subtract-only). Unverified.
+NW_CONFLICTS_MIN: int = 2
+# entry-size multiplier applied when the conflict floor is breached (subtract-only). Unverified.
+NW_ENTRY_SHRINK: float = 0.7
+# market-plane contradiction_count at/above which the tape is "conflicted", so a
+# name with zero graph_conflicts reads as a clean/safe-haven tell. Unverified.
+NW_CONTRADICTIONS_MIN: int = 3
+
+# Monotone decision-mode ladder (see nw_decision_mode()). Ordinal only — the values
+# are used solely for threshold (>=) comparisons via _mode_ge().
+_DECISION_MODE_ORDER: dict[str, int] = {
+    "off": 0,
+    "shadow": 1,
+    "candidacy": 2,
+    "shrink": 3,
+    "vote": 4,
+}
+_DECISION_MODE_DEFAULT = "off"
+
+# --------------------------------------------------------------------------- #
 # process-level cache — reset via _reset_context_cache() for tests
 # --------------------------------------------------------------------------- #
 _CACHE: dict[str, Any] | None = None   # None = not yet loaded; {} = empty/absent
@@ -57,8 +92,140 @@ def _reset_context_cache() -> None:
 # --------------------------------------------------------------------------- #
 
 def nw_prompts_enabled() -> bool:
-    """Return True iff MASTERMIND_NW_CONTEXT is set to '1' (default OFF)."""
+    """Return True iff MASTERMIND_NW_CONTEXT is set to '1' (default OFF).
+
+    NOTE: this flag owns TEXT-ONLY prompt injection (seat_prompt_block / pm_conviction
+    section) and is fully independent of MASTERMIND_NW_DECISION (see nw_decision_mode),
+    which owns the typed decision-signal chokepoint.
+    """
     return os.environ.get("MASTERMIND_NW_CONTEXT", "0").strip().lower() in ("1", "true", "yes")
+
+
+# --------------------------------------------------------------------------- #
+# typed decision-policy chokepoint (A5)
+# --------------------------------------------------------------------------- #
+
+def nw_decision_mode() -> str:
+    """Return the NW decision mode from MASTERMIND_NW_DECISION (default 'off').
+
+    The five-mode monotone ladder — each mode is a strict superset of the prior's
+    authority (use _mode_ge for threshold checks):
+
+        off        nothing; decision_signals() is a byte-identical no-op (inert).
+        shadow     compute + log only; signals are still inert to downstream sizing.
+        candidacy  NW MAY add candidates (a candidacy prior for the gate to filter).
+        shrink     NW may ALSO subtract entry size on graph-conflict density.
+        vote       NW may ALSO cast a graded lens vote.
+
+    This flag is SEPARATE from MASTERMIND_NW_CONTEXT, which stays owning text-only
+    prompt injection. Unrecognized / empty values fail-soft to 'off'.
+    """
+    try:
+        raw = os.environ.get("MASTERMIND_NW_DECISION", _DECISION_MODE_DEFAULT).strip().lower()
+        return raw if raw in _DECISION_MODE_ORDER else _DECISION_MODE_DEFAULT
+    except Exception:  # noqa: BLE001 — fail-soft: never raise
+        return _DECISION_MODE_DEFAULT
+
+
+def _mode_ge(mode: str, threshold: str) -> bool:
+    """True iff `mode` is at or above `threshold` on the decision ladder.
+
+    Unrecognized modes/thresholds resolve to 'off' (rank 0), so unknown input is inert.
+    """
+    m = _DECISION_MODE_ORDER.get(mode, 0)
+    t = _DECISION_MODE_ORDER.get(threshold, 0)
+    return m >= t
+
+
+def _inert_signals(mode: str) -> dict[str, Any]:
+    """The byte-identical no-op signal dict: everything None/inert."""
+    return {
+        "candidacy": None,
+        "entry_shrink": None,
+        "clean_in_conflicted": False,
+        "inert": True,
+        "mode": mode,
+    }
+
+
+def decision_signals(ticker: str) -> dict[str, Any]:
+    """Return TYPED decision signals for `ticker`, gated by nw_decision_mode().
+
+    THE single place that converts raw NW candidate/market fields into decision
+    signals, so no downstream consumer reads raw NW fields ad hoc. Fail-soft: any
+    absent/stale/malformed context, or an fdr-uncleared name, degrades to the inert
+    default (a byte-identical no-op for every caller).
+
+    Return shape::
+
+        {
+          "candidacy": {"state": <bottom_state>, "score": <float>, "lean": +1} | None,
+          "entry_shrink": 0.7 | None,
+          "clean_in_conflicted": <bool>,
+          "inert": <bool>,
+          "mode": <mode string>,
+        }
+
+    Derivation (all fail-soft; absent data → None, never a fabricated signal):
+      * off              → fully inert (candidacy/entry_shrink None, clean_in_conflicted False).
+      * fdr not cleared  → per-name inert (display-armed-only names never originate a signal).
+      * candidacy (mode>=candidacy) → bottom_state WATCH→0.35, BOTTOMING/CONFIRMED→0.50,
+                                      lean=+1; any other state → candidacy None.
+      * entry_shrink (mode>=shrink) → graph_conflicts>=NW_CONFLICTS_MIN AND fdr ok → NW_ENTRY_SHRINK;
+                                      missing/insufficient conflicts → None (never shrink on absence).
+      * clean_in_conflicted (mode>=candidacy) → conflicts==0 AND market contradiction_count
+                                      >=NW_CONTRADICTIONS_MIN (the safe-haven tell).
+    """
+    mode = nw_decision_mode()
+    try:
+        # mode off — byte-identical no-op regardless of row content.
+        if not _mode_ge(mode, "shadow"):
+            return _inert_signals(mode)
+
+        row = candidate(ticker)
+        # per-name inert: absent row, or a name not cleared by the FDR batch.
+        kernel = row.get("kernel") if isinstance(row, dict) else None
+        fdr_ok = isinstance(kernel, dict) and kernel.get("fdr_cleared") is True
+        if not row or not fdr_ok:
+            return _inert_signals(mode)
+
+        signals = _inert_signals(mode)
+        # From here on the name is fdr-cleared and present → not per-name inert,
+        # though individual signals may still be None until their mode arms.
+        signals["inert"] = False
+
+        # --- graph_conflicts (shared leg for shrink + clean_in_conflicted) --- #
+        conflicts_raw = row.get("graph_conflicts")
+        conflicts = len(conflicts_raw) if isinstance(conflicts_raw, list) else 0
+
+        # --- candidacy (mode >= candidacy) --- #
+        if _mode_ge(mode, "candidacy"):
+            bottom = row.get("bottom") or {}
+            state = None
+            if isinstance(bottom, dict):
+                state = bottom.get("bottom_state") or bottom.get("state")
+            score = NW_CANDIDACY_SCORES.get(state) if isinstance(state, str) else None
+            if score is not None:
+                signals["candidacy"] = {"state": state, "score": score, "lean": +1}
+
+            # --- clean_in_conflicted (available at candidacy+) --- #
+            try:
+                contradictions = int((market_plane() or {}).get("contradiction_count") or 0)
+            except Exception:  # noqa: BLE001
+                contradictions = 0
+            signals["clean_in_conflicted"] = (
+                conflicts == 0 and contradictions >= NW_CONTRADICTIONS_MIN
+            )
+
+        # --- entry_shrink (mode >= shrink; subtract-only, never on absence) --- #
+        if _mode_ge(mode, "shrink"):
+            if conflicts >= NW_CONFLICTS_MIN:
+                signals["entry_shrink"] = NW_ENTRY_SHRINK
+
+        return signals
+    except Exception as e:  # noqa: BLE001 — fail-soft: never raise into a decision
+        log.debug("neural_web_context: decision_signals failed (%s)", e)
+        return _inert_signals(mode)
 
 
 # --------------------------------------------------------------------------- #

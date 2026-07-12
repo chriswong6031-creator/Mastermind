@@ -51,6 +51,11 @@ KNOWN_FLAGS: list[str] = [
     "MASTERMIND_SELF_MIRROR",
     "MASTERMIND_SELF_TUNE",
     "MASTERMIND_STUDENT",
+    # Neural Web / P2 candidacy funnel (dark — additive buy-source, arm on a statistical bar, roadmap E8)
+    "MASTERMIND_NW_DECISION",       # enum off|shadow|candidacy|shrink|vote (default off)
+    "MASTERMIND_ROTATION_IN",       # enum off|watch|starter (default off)
+    "MASTERMIND_DIVERGENCE_CLUE",   # bool 0|1 (default 0)
+    "MASTERMIND_UNIVERSE_TRIAGE",   # bool 0|1 (default 0)
     # Portfolio / sizing
     "MASTERMIND_ALLOW_FRACTIONAL",
     "MASTERMIND_CAUTION_GROSS",

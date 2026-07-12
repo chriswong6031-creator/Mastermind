@@ -38,6 +38,22 @@ _TTL_WATCH = 20          # trading days in WATCH without promotion → EXPIRED (
 _TTL_ARMED = 10          # trading days in ARMED without firing → EXPIRED (decayed)
 MAX_WATCH = 40           # cap on the active parked book; lowest-`combined` evicted at the cap
 
+# ── ORIGIN namespaces (the rotation-in park lane, additive) ─────────────────────────────────────
+# Every state/log row carries an `origin` tag. LEGACY rows written before this field existed have
+# NO `origin` key; they are read back as ORIGIN_TIMING (see `_origin`), so a row persisted by the
+# pre-rotation code round-trips byte-identically — the field is inferred on read, never rewritten
+# onto a legacy row until that row is next mutated. The two origins occupy SEPARATE caps/TTLs so a
+# rotation-in park can never evict a timing park (and vice versa).
+ORIGIN_TIMING = "timing"          # the entry-timing withhold lane (the pre-existing behaviour)
+ORIGIN_ROTATION = "rotation_in"   # a rotation-in call parked for pre-ignition follow (§ rotation seam)
+
+# Rotation lane caps/TTLs — deliberately LONGER than the timing lane: a sector/name bottoming and
+# turning takes longer to confirm than a stretched-entry reset, so a rotation park gets more runway
+# before it decays (the operator's "buy on rotation-ins, don't only act on confirmed trades" goal).
+MAX_ROTATION_WATCH = 20   # cap on the active rotation-parked book; lowest-`confidence` evicted at cap
+_TTL_ROTATION_WATCH = 30  # trading days in WATCH without advancing → EXPIRED (bottoming takes longer)
+_TTL_ROTATION_ARMED = 15  # trading days in ARMED without confirming → EXPIRED
+
 # Thresholds — identical to portfolio.desk_ab (the shadow lever) so the two gates never diverge.
 _EXT_PCT_VS_200DMA = 30.0           # >= 30% above the 200dma → extended
 _WEAK_RS_PCTILE = 50.0              # RS vs SPY below the median → weak relative strength
@@ -81,6 +97,21 @@ def _read_rows() -> list[dict]:
         return [json.loads(l) for l in _path().read_text().splitlines() if l.strip()]
     except Exception:  # noqa: BLE001
         return []
+
+
+def _origin(row: dict | None) -> str:
+    """The origin lane of a row, defaulting to ORIGIN_TIMING for LEGACY rows with no `origin` key.
+
+    This is the byte-compat read guarantee: a row written before the `origin` field existed has no
+    such key, so it is read back as a timing-origin row exactly as before. Only ORIGIN_ROTATION is
+    ever persisted explicitly (by `append_rotation`); a stored timing row need not carry the field.
+    Pure; never raises — a non-dict / missing key both collapse to ORIGIN_TIMING (fail to the
+    pre-existing lane, which is the safe/inert default since the rotation lane is caps-separate)."""
+    try:
+        o = (row or {}).get("origin")
+    except Exception:  # noqa: BLE001
+        return ORIGIN_TIMING
+    return ORIGIN_ROTATION if o == ORIGIN_ROTATION else ORIGIN_TIMING
 
 
 def append(ticker: str, asof: str, reason: str, tech: dict | None = None,
@@ -180,6 +211,131 @@ def _seed_from_log(state_by_ticker: dict[str, dict]) -> dict[str, dict]:
     return state_by_ticker
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# ROTATION-IN park lane (additive; DORMANT — no live call site enrolls yet).
+#
+# A rotation-in call (from the rotation-calls seam, brain/rotation_intake) is parked here as a
+# FIRST-CLASS WATCH/ARMED state row so the desk can hold it through UNCONFIRMED turns — "buy on
+# rotation-ins, don't only act on confirmed trades". These rows live in the SAME ``_STATE`` snapshot
+# as the timing-origin rows but in a SEPARATE cap/TTL namespace (``origin == ORIGIN_ROTATION``):
+#   * they are NEVER aged/expired by the timing ``still_withheld`` predicate,
+#   * they are NEVER counted in (or evicted by) the timing ``MAX_WATCH`` eviction, and
+#   * a rotation park can never evict a timing park (and vice versa).
+# Each rotation row additionally carries ``call_id`` (the immutable join key back to the
+# identification call) and ``review_trigger`` (the condition that advances/kills the park — the
+# call's falsifier / advancement rule, logged verbatim, never recomputed here).
+# ─────────────────────────────────────────────────────────────────────────────
+def append_rotation(ticker: str, asof: str, call_id: str, *, target: str | None = None,
+                    state: str = _WATCH, confidence: float | None = None,
+                    thesis: str | None = None, trigger=None) -> bool:
+    """Enroll a ROTATION-origin name as a first-class WATCH/ARMED state row (idempotent per call_id).
+
+    Writes directly into the ``_STATE`` snapshot (a rotation park IS a state row — there is no
+    withhold log to seed it from). IDEMPOTENT per ``call_id``: a re-enroll of the same call updates
+    the existing row's fields (state/confidence/thesis/trigger/target) WITHOUT resetting its age or
+    duplicating it — the ``call_id`` is the immutable join key, so the same underlying turn keeps one
+    park row across re-enrolls. A NEW call_id (or a first enroll) creates a fresh WATCH row at
+    days_in_state=0. Enforces the rotation cap (``MAX_ROTATION_WATCH``) over rotation rows ONLY,
+    evicting the lowest-``confidence`` rotation name — timing rows are never touched.
+
+    Best-effort; NEVER raises (mirrors ``append`` — an enrollment failure must not break a build).
+    Returns True iff a row was written. DORMANT today: no live call site invokes this yet.
+    """
+    t = (ticker or "").upper().strip()
+    cid = str(call_id or "").strip()
+    if not t or not asof or not cid:
+        return False
+    asof10 = str(asof)[:10]
+    st = state if state in (_WATCH, _ARMED, _EXPIRED) else _WATCH
+    try:
+        rows = _read_state()
+        existing = None
+        for r in rows:
+            if _origin(r) == ORIGIN_ROTATION and str(r.get("call_id") or "").strip() == cid:
+                existing = r
+                break
+        if existing is not None:
+            # re-enroll of the SAME call — refresh fields, keep the row's age/first-seen intact.
+            existing["ticker"] = t
+            existing["state"] = st
+            if confidence is not None:
+                existing["confidence"] = confidence
+            if thesis is not None:
+                existing["thesis"] = thesis
+            if trigger is not None:
+                existing["review_trigger"] = trigger
+            if target is not None:
+                existing["target"] = target
+        else:
+            rows.append({
+                "ticker": t,
+                "asof": asof10,
+                "origin": ORIGIN_ROTATION,
+                "call_id": cid,
+                "target": target,
+                "state": st,
+                "confidence": confidence,
+                "thesis": thesis or cid,
+                "review_trigger": trigger,
+                "reason": thesis or f"rotation_in {cid}",
+                "combined": None,
+                "tech": None,
+                "last_review": None,
+                "days_in_state": 0,
+            })
+        # rotation-lane cap — evict lowest-`confidence` ACTIVE rotation rows ONLY (timing untouched).
+        rot_active = [r for r in rows
+                      if _origin(r) == ORIGIN_ROTATION and r.get("state") != _EXPIRED]
+        if len(rot_active) > MAX_ROTATION_WATCH:
+            rot_active.sort(key=lambda r: (r.get("confidence") is None,
+                                           -(r.get("confidence") or 0.0)))
+            for r in rot_active[MAX_ROTATION_WATCH:]:
+                r["state"] = _EXPIRED
+                r["expire_reason"] = "max_rotation_watch_evicted"
+        return _write_state(rows)
+    except Exception:  # noqa: BLE001 — enrollment is additive; never break the build
+        return False
+
+
+def _advance_rotation(call_id: str, asof: str, *, state=None, confidence: float | None = None,
+                      trigger=None, promote: bool = False) -> dict | None:
+    """Advance a rotation park row (WATCH→ARMED on TURNING/evidence; ARMED→promote on CONFIRMED).
+
+    A thin, documented hook for the (later-step) enrollment call sites: it moves an existing
+    rotation row along the state ladder and, on ``promote=True`` (the CONFIRMED turn), flags it for
+    re-entry into the funnel the same way the timing loop marks a cleared name (``_cleared_today``).
+    Resets ``days_in_state`` on a state CHANGE (a new state gets fresh TTL runway). Idempotent
+    enough for hand calls; the full CONFIRMED→promote wiring lands with the enrollment step.
+    Returns the updated row, or None if the call_id is not an active rotation park. Never raises."""
+    cid = str(call_id or "").strip()
+    if not cid:
+        return None
+    try:
+        rows = _read_state()
+        target_row = None
+        for r in rows:
+            if _origin(r) == ORIGIN_ROTATION and str(r.get("call_id") or "").strip() == cid \
+                    and r.get("state") != _EXPIRED:
+                target_row = r
+                break
+        if target_row is None:
+            return None
+        if state in (_WATCH, _ARMED) and state != target_row.get("state"):
+            target_row["state"] = state
+            target_row["days_in_state"] = 0   # fresh TTL runway on a state change
+        if confidence is not None:
+            target_row["confidence"] = confidence
+        if trigger is not None:
+            target_row["review_trigger"] = trigger
+        if promote:
+            target_row["last_review"] = str(asof)[:10]
+            target_row["_cleared_today"] = True
+        _write_state(rows)
+        return target_row
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def review(asof: str, *, still_withheld) -> dict:
     """Run the once-per-build-day re-review over every ACTIVE parked name. IDEMPOTENT per
     (ticker, asof): a re-run on the same build day does not double-age or re-promote a name.
@@ -192,11 +348,19 @@ def review(asof: str, *, still_withheld) -> dict:
     ``MAX_WATCH`` is enforced AFTER aging by EXPIRING the lowest-``combined`` active names.
 
     Returns ``{"promote": [...], "expired": [...], "active": [...]}`` (each a list of state rows).
-    Best-effort; NEVER raises — returns an empty result on any failure."""
+    ROTATION-origin rows are OUT OF SCOPE here — they are neither aged by ``still_withheld`` nor
+    counted in the ``MAX_WATCH`` eviction; they are carried through the snapshot untouched (their
+    own advancement runs via ``_advance_rotation`` / the enrollment step). Timing behaviour is
+    byte-identical to before this lane existed. Best-effort; NEVER raises — returns an empty result
+    on any failure."""
     try:
         asof10 = str(asof)[:10]
+        all_state = _read_state()
+        # Carry ROTATION rows through untouched; only TIMING rows flow through the re-review below.
+        rotation_rows = [r for r in all_state if _origin(r) == ORIGIN_ROTATION]
         state_by_ticker = {(r.get("ticker") or "").upper().strip(): r
-                           for r in _read_state() if r.get("ticker")}
+                           for r in all_state
+                           if r.get("ticker") and _origin(r) != ORIGIN_ROTATION}
         state_by_ticker = _seed_from_log(state_by_ticker)
 
         promote: list[dict] = []
@@ -251,8 +415,10 @@ def review(asof: str, *, still_withheld) -> dict:
             promote = [r for r in promote if r.get("state") != _EXPIRED]
 
         # persist: active rows + this build's expiries (expired rows are retained one snapshot so
-        # the API/grading can see them, then drop on the next review since they're no longer active).
-        snapshot = active + [r for r in expired if r.get("state") == _EXPIRED]
+        # the API/grading can see them, then drop on the next review since they're no longer active)
+        # + the carried-through ROTATION rows (untouched — a separate lane the timing loop never
+        # ages or evicts). Rotation rows are preserved across every timing review.
+        snapshot = active + [r for r in expired if r.get("state") == _EXPIRED] + rotation_rows
         _write_state(snapshot)
         return {"promote": promote, "expired": expired, "active": active}
     except Exception:  # noqa: BLE001 — the re-review loop is additive; never break the build
@@ -286,3 +452,23 @@ def state_rows() -> list[dict]:
     """The current re-review state snapshot (one row per tracked ticker) — the source for the
     /api/desk/watchlist surface (state + days-in-state). Never raises."""
     return _read_state()
+
+
+def origin_of(row: dict | None) -> str:
+    """Public accessor for a row's origin lane (ORIGIN_TIMING for a legacy row with no field).
+
+    The byte-compat read contract in one place: any consumer that wants to know a row's lane calls
+    this rather than reading the raw key, so a LEGACY row (no `origin`) is uniformly seen as
+    ORIGIN_TIMING. Never raises."""
+    return _origin(row)
+
+
+def rotation_rows() -> list[dict]:
+    """The ACTIVE rotation-origin park rows (state != expired). The rotation-lane counterpart of the
+    timing snapshot: one row per rotation call_id, each carrying call_id + review_trigger + state.
+    Never raises."""
+    try:
+        return [r for r in _read_state()
+                if _origin(r) == ORIGIN_ROTATION and r.get("state") != _EXPIRED]
+    except Exception:  # noqa: BLE001
+        return []

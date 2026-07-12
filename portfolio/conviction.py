@@ -122,6 +122,20 @@ _EXIT_CONFLUENCE_FLOOR = 0.25
 # leading theme) takes only INITIAL size — this fraction of its confluence-weighted target.
 _INITIAL_SIZE_FRACTION = 0.7
 
+# ── NEURAL-WEB WHOLE-UNIVERSE CANDIDACY SCAN (P2, flag-gated) ──────────────────────────────────────
+# The operator's "review the whole universe via Neural Web" ask: at the candidacy layer of the NW
+# decision ladder (MASTERMIND_NW_DECISION >= "candidacy") the whole NW candidate_context is swept and
+# every fdr-cleared name with a qualifying bottom_state is fed into candidates() as an ADDITIVE
+# candidacy prior — the gate (build) still filters it exactly like any other source. This never sizes
+# a name and never touches a held name. STRICTLY ADDITIVE + FAIL-SOFT + DEFAULT-OFF: below candidacy
+# mode the scan returns [] and candidates() is byte-identical to today.
+#
+# NW_UNIVERSE_SCAN_CAP is an UNVERIFIED PRIOR — a defensive bound on how many NW-originated candidacy
+# names may enter one build so the gate isn't flooded by a wide/degraded NW artifact. The exact value
+# (25) is a starter guess, not a validated number; leader-anticipation is coin-flip (China-basket
+# program), so this is a firebreak, not a target.
+NW_UNIVERSE_SCAN_CAP = 25
+
 
 # ── W2.2 GRADED EXTENSION SCHEDULE (entry brake) ──────────────────────────────────────────────────
 def _ext_schedule() -> tuple[float, float]:
@@ -352,12 +366,56 @@ def universe() -> list[str]:
     return sorted(set(_us_standouts()) | set(_basket_top_picks()))
 
 
+def nw_universe_scan() -> list[str]:
+    """The Neural-Web WHOLE-UNIVERSE candidacy scan (P2 funnel, flag-gated + fail-soft).
+
+    Below candidacy mode (nw_decision_mode() < "candidacy", the DEFAULT) this returns [] and has ZERO
+    effect — candidates() is byte-identical to today. At/above candidacy mode it sweeps the entire NW
+    candidate_context and returns every TICKER whose decision_signals()["candidacy"] is non-None (i.e.
+    fdr-cleared AND a qualifying bottom_state), capped at NW_UNIVERSE_SCAN_CAP and with the operational
+    _MANUAL_EXCLUDE hold-out honoured. Names are ADDITIVE candidacy priors for the gate to filter; the
+    scan never sizes and never touches a held name.
+
+    FAIL-SOFT: any absent/stale/malformed NW artifact, or an unexpected error anywhere, degrades to []
+    (the additive source simply contributes nothing — never raises into a build). Lazy import so the
+    NW leaf is never loaded when the flag is off.
+    """
+    try:
+        from brain import neural_web_context as nwc
+        if not nwc._mode_ge(nwc.nw_decision_mode(), "candidacy"):
+            return []
+        cand_ctx = (nwc.context() or {}).get("candidate_context") or {}
+        if not isinstance(cand_ctx, dict):
+            return []
+        out: list[str] = []
+        seen: set[str] = set()
+        for tkr in cand_ctx:
+            if not isinstance(tkr, str):
+                continue
+            sym = tkr.upper()
+            if sym in seen or sym in _MANUAL_EXCLUDE:
+                continue
+            try:
+                sig = nwc.decision_signals(sym)
+            except Exception:  # noqa: BLE001 — one bad row never sinks the scan
+                continue
+            if isinstance(sig, dict) and sig.get("candidacy") is not None:
+                seen.add(sym)
+                out.append(sym)
+                if len(out) >= NW_UNIVERSE_SCAN_CAP:
+                    break
+        return out
+    except Exception:  # noqa: BLE001 — additive + fail-soft: never raise into candidate assembly
+        return []
+
+
 def candidates() -> list[str]:
     """Conviction candidate pool: the fed-in universe (top us_stocks + top basket picks)
     ∪ open ledger theses (Claude's proposals) ∪ the DERIVED regime seed (W2.3 — bottleneck-chain +
     cycle-favored basket leaders, replacing the dead hardcoded _SHORTLIST) ∪ the unified intake queue
-    (radar / alt-data / briefing-corroborated + divergent names the buy board alone misses). The
-    engine gate (build) filters this down — broad feed in, discipline at the gate."""
+    (radar / alt-data / briefing-corroborated + divergent names the buy board alone misses) ∪ the
+    Neural-Web whole-universe candidacy scan (P2 — additive + flag-gated, [] unless NW decision mode
+    >= candidacy). The engine gate (build) filters this down — broad feed in, discipline at the gate."""
     try:
         from brain import ledger
         proposed = {t["subject"].upper() for t in ledger.all_theses() if t.get("status") == "open"}
@@ -373,7 +431,11 @@ def candidates() -> list[str]:
         seed = set(regime_seed())
     except Exception:  # noqa: BLE001 — seed is additive; a failure degrades to the other sources
         seed = set()
-    return sorted((seed | set(universe()) | proposed | fed_in) - _MANUAL_EXCLUDE)
+    # P2: whole-universe NW candidacy passthrough. Byte-identical when off (nw_universe_scan() == [] →
+    # `set() | ...` leaves the union unchanged), deduped by ticker (set union), and still subject to
+    # the _MANUAL_EXCLUDE hold-out below like every other source.
+    nw_scan = set(nw_universe_scan())
+    return sorted((seed | set(universe()) | proposed | fed_in | nw_scan) - _MANUAL_EXCLUDE)
 
 
 def build(budget: float, name_cap: float = 0.08,

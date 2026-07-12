@@ -1,0 +1,81 @@
+{
+  "schema": "rotation_calls.v1",
+  "as_of": "2099-01-01",
+  "generated_at": "2099-01-01T13:05:00Z",
+  "engine_version": "rotation-id-engine@0.3.1",
+  "_note": "Golden fixture for rotation_calls.v1. as_of is a far-future placeholder that the test suite REWRITES to today's date (or to a stale date) before pointing _ARTIFACT_PATH at a tmp copy, so the freshness gate is exercised without the fixture rotting. 3 calls: a sector EARLY, a sector TURNING (with explicit members), and a ticker CONFIRMED.",
+  "calls": [
+    {
+      "call_id": "rc-2099-financials-001",
+      "target_kind": "sector",
+      "target": "financials",
+      "members": null,
+      "state": "EARLY",
+      "direction": "rotation_in",
+      "confidence": 0.42,
+      "horizon_bdays": 20,
+      "evidence": [
+        {"source": "breadth_migration", "value": {"participation_shift_bps": 34}, "note": "financials breadth turning up, 4 sessions"},
+        {"source": "rs_velocity", "value": {"lead": "XLF", "R_bps_day": 21.4}, "note": "XLF gaining on SPY"}
+      ],
+      "falsifier": {
+        "text": "XLF fails to hold relative gains vs SPY over the next 20 sessions",
+        "check": {"kind": "rel_return", "subject": "XLF", "benchmark": "SPY", "horizon_bdays": 20, "op": "<", "value": 0.0},
+        "check_by": "2099-02-01"
+      },
+      "first_seen": "2098-12-28",
+      "state_history": [
+        {"date": "2098-12-28", "state": "EARLY"}
+      ]
+    },
+    {
+      "call_id": "rc-2099-semis-002",
+      "target_kind": "sector",
+      "target": "semiconductors",
+      "members": ["NVDA", "AVGO", "AMD", "TSM"],
+      "state": "TURNING",
+      "direction": "rotation_in",
+      "confidence": 0.61,
+      "horizon_bdays": 30,
+      "evidence": [
+        {"source": "leadership_churn", "value": {"rank_delta": 3}, "note": "semis re-entering top-RS bloc"},
+        {"source": "flow_proxy", "value": {"rvol_z": 1.8}, "note": "SMH relative volume elevated"}
+      ],
+      "falsifier": {
+        "text": "SMH loses relative leadership vs XLK within 30 sessions",
+        "check": {"kind": "rel_return", "subject": "SMH", "benchmark": "XLK", "horizon_bdays": 30, "op": "<", "value": 0.0},
+        "check_by": "2099-02-15"
+      },
+      "first_seen": "2098-12-20",
+      "state_history": [
+        {"date": "2098-12-20", "state": "EARLY"},
+        {"date": "2098-12-29", "state": "TURNING"}
+      ]
+    },
+    {
+      "call_id": "rc-2099-aapl-003",
+      "target_kind": "ticker",
+      "target": "AAPL",
+      "members": null,
+      "state": "CONFIRMED",
+      "direction": "rotation_in",
+      "confidence": 0.74,
+      "horizon_bdays": 20,
+      "evidence": [
+        {"source": "divergence_clue", "value": {"down_day_alpha_bps": 62}, "note": "AAPL positive divergence vs sector on down days"},
+        {"source": "rs_velocity_single", "value": {"gap_bps_day": 4.1}, "note": "AAPL RS-velocity gap vs XLK confirmed"}
+      ],
+      "falsifier": {
+        "text": "AAPL relative return vs XLK turns negative over 20 sessions",
+        "check": {"kind": "rel_return", "subject": "AAPL", "benchmark": "XLK", "horizon_bdays": 20, "op": "<", "value": 0.0},
+        "check_by": "2099-02-01"
+      },
+      "first_seen": "2098-12-15",
+      "state_history": [
+        {"date": "2098-12-15", "state": "EARLY"},
+        {"date": "2098-12-22", "state": "TURNING"},
+        {"date": "2098-12-30", "state": "CONFIRMED"}
+      ]
+    }
+  ]
+}

@@ -124,3 +124,127 @@ def test_append_latest_back_compatible():
     # timing_withhold is a pure predicate, untouched
     assert W.timing_withhold(None) is None
     assert W.timing_withhold({"eq_grade": "weak"}) is not None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ROTATION-IN park lane (additive; the P2 funnel wiring — DORMANT storage layer).
+# Proves the schema extension, the byte-compat legacy read, the separate namespace/caps/TTLs,
+# and that the existing TIMING lane is completely undisturbed by rotation rows.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def test_legacy_row_reads_as_timing_origin():
+    """A row written BEFORE the `origin` field existed (no key) reads back as origin='timing' —
+    the byte-compat legacy-read guarantee. A rotation row reads back as origin='rotation_in'."""
+    legacy = {"ticker": "OLD", "asof": "2026-06-01", "reason": "extended", "state": "watch"}
+    assert W._origin(legacy) == "timing"          # inferred, not stored
+    assert W.origin_of(legacy) == W.ORIGIN_TIMING
+    assert "origin" not in legacy                 # the read never mutated the legacy row
+    # a non-dict / None also collapses to timing (fail to the pre-existing lane)
+    assert W._origin(None) == "timing"
+    assert W._origin({}) == "timing"
+    # an explicit rotation row is read as rotation
+    assert W._origin({"origin": "rotation_in"}) == "rotation_in"
+
+
+def test_append_rotation_stores_schema_fields():
+    """append_rotation writes a rotation-origin row carrying origin + call_id + review_trigger."""
+    ok = W.append_rotation("SMH", "2026-06-22", "rot:semis:2026-06-22",
+                           target="semis", state="watch", confidence=0.42,
+                           thesis="semis bottoming, rotation-in EARLY",
+                           trigger={"kind": "rel_return", "op": ">", "value": 0.0,
+                                    "benchmark": "SPY", "check_by": "2026-07-20"})
+    assert ok is True
+    rows = W.rotation_rows()
+    assert len(rows) == 1
+    r = rows[0]
+    assert r["ticker"] == "SMH"
+    assert W.origin_of(r) == "rotation_in"
+    assert r["call_id"] == "rot:semis:2026-06-22"
+    assert r["review_trigger"]["check_by"] == "2026-07-20"
+    assert r["confidence"] == 0.42
+    assert r["thesis"] == "semis bottoming, rotation-in EARLY"
+    assert r["state"] == "watch"
+    assert r["days_in_state"] == 0
+    # bad inputs → no row (mirrors append's guards)
+    assert W.append_rotation("", "2026-06-22", "cid") is False
+    assert W.append_rotation("X", "", "cid") is False
+    assert W.append_rotation("X", "2026-06-22", "") is False
+
+
+def test_append_rotation_idempotent_per_call_id():
+    """A re-enroll of the same call_id UPDATES the row (state/confidence/trigger) without duplicating
+    or resetting its age — call_id is the immutable join key."""
+    W.append_rotation("SMH", "2026-06-22", "rot:semis", state="watch", confidence=0.4)
+    # advance its age via a state change, then re-enroll the same call
+    W.append_rotation("SMH", "2026-06-25", "rot:semis", state="watch", confidence=0.55,
+                      thesis="strengthening")
+    rows = W.rotation_rows()
+    assert len(rows) == 1                          # not duplicated
+    assert rows[0]["confidence"] == 0.55           # refreshed
+    assert rows[0]["thesis"] == "strengthening"
+    assert rows[0]["days_in_state"] == 0           # age preserved (still 0 here)
+
+
+def test_rotation_namespace_is_separate_from_timing():
+    """Adding MAX_ROTATION_WATCH+ rotation rows NEVER evicts a timing row, and a full timing book
+    NEVER evicts a rotation row — the two lanes have independent caps."""
+    # seed one timing park and run a review so it's a tracked timing state row.
+    W.append("TIME", "2026-06-22", "extended", combined=90.0)
+    W.review("2026-06-23", still_withheld=lambda t: "extended")
+    assert any(r["ticker"] == "TIME" and W.origin_of(r) == "timing"
+               for r in W.state_rows())
+
+    # now overflow the ROTATION cap — the timing row must survive untouched.
+    over = W.MAX_ROTATION_WATCH + 5
+    for i in range(over):
+        W.append_rotation(f"R{i:03d}", "2026-06-23", f"rot:{i}", confidence=float(i))
+    rot_active = W.rotation_rows()
+    assert len(rot_active) == W.MAX_ROTATION_WATCH               # rotation cap enforced
+    # the 5 lowest-confidence rotation rows evicted, timing row present & active
+    survivors = {r["ticker"] for r in rot_active}
+    assert "R000" not in survivors and f"R{over - 1:03d}" in survivors
+    timing_now = [r for r in W.state_rows()
+                  if r.get("ticker") == "TIME" and W.origin_of(r) == "timing"]
+    assert len(timing_now) == 1 and timing_now[0]["state"] != "expired"
+
+    # conversely: a timing MAX_WATCH review never touches the rotation rows.
+    res = W.review("2026-06-24", still_withheld=lambda t: "extended")
+    assert len(W.rotation_rows()) == W.MAX_ROTATION_WATCH        # rotation survives the timing review
+    # rotation rows never appear in the timing review's active/expired/promote lists
+    reviewed = {r.get("ticker") for r in res["active"] + res["expired"] + res["promote"]}
+    assert not any(t.startswith("R0") for t in reviewed)
+
+
+def test_rotation_rows_survive_and_are_not_aged_by_timing_review():
+    """A timing review never ages or expires a rotation row (separate TTLs, separate loop)."""
+    W.append_rotation("QQQ", "2026-06-22", "rot:qqq", confidence=0.5)
+    # run many timing reviews with an always-withheld predicate — a timing row would age & expire.
+    for i in range(W._TTL_ROTATION_WATCH + 5):
+        W.review(f"2026-07-{i + 1:02d}", still_withheld=lambda t: "still bad")
+    rot = W.rotation_rows()
+    assert [r["ticker"] for r in rot] == ["QQQ"]     # still active
+    assert rot[0]["days_in_state"] == 0              # NOT aged by the timing loop
+    assert rot[0]["state"] == "watch"
+
+
+def test_rotation_ttl_constants_are_longer():
+    """The rotation lane's TTLs/cap are documented, longer than the timing lane (bottoming is slow)."""
+    assert W.MAX_ROTATION_WATCH == 20
+    assert W._TTL_ROTATION_WATCH == 30 and W._TTL_ROTATION_WATCH > W._TTL_WATCH
+    assert W._TTL_ROTATION_ARMED == 15 and W._TTL_ROTATION_ARMED > W._TTL_ARMED
+
+
+def test_advance_rotation_hook():
+    """The WATCH→ARMED / ARMED→promote advancement hook moves a rotation row along the ladder and
+    flags a CONFIRMED turn for re-entry into the funnel."""
+    W.append_rotation("AMD", "2026-06-22", "rot:amd", state="watch", confidence=0.4)
+    # WATCH → ARMED on a TURNING/strengthening call
+    r = W._advance_rotation("rot:amd", "2026-06-25", state="armed", confidence=0.6)
+    assert r is not None and r["state"] == "armed"
+    assert [x for x in W.rotation_rows() if x["call_id"] == "rot:amd"][0]["state"] == "armed"
+    # ARMED → promote on CONFIRMED
+    W._advance_rotation("rot:amd", "2026-06-26", promote=True)
+    cands = W.promote_candidates("2026-06-26")
+    assert any(c["ticker"] == "AMD" for c in cands)
+    # a missing call_id is a no-op (None), never raises
+    assert W._advance_rotation("nope", "2026-06-26") is None

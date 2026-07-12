@@ -742,3 +742,31 @@ journal:
   falsifier_window_n:    6      # (unverified-prior) a pinned rule falsifier grades its seat's next-N same-taxonomy calls
   falsifier_min_n:       4      # (unverified-prior) do not judge a falsifier until this many post-pin same-taxonomy calls resolve
   falsifier_fail_rate:   0.5    # (unverified-prior) a pinned rule whose taxonomy KEEPS mis-grading >= this share post-pin auto-unpins
+
+# ---- NEURAL WEB P2 CANDIDACY FUNNEL (brain/neural_web_context.py — P2 rework, DARK) ----
+# Centralized (unverified-prior) constants for the Neural Web candidacy/decision funnel gated by
+# MASTERMIND_NW_DECISION (off|shadow|candidacy|shrink|vote). DECLARATION ONLY this wave: the module
+# currently carries its OWN module-level constants; this block centralizes them so future consumers
+# can read one tunable source. NOT yet rewired — do not treat these as live until the module reads
+# doctrine.yml AND the flag arms on the E8 statistical bar. Every value is a heuristic prior.
+neural_web:
+  entry_shrink:              0.7    # (unverified-prior) NW-conflict entry-size multiplier (shrink mode)
+  conflicts_min:             2      # (unverified-prior) >= this many NW conflicts before the shrink bites
+  contradictions_caution_min: 3     # (unverified-prior) >= this many contradictions raises a caution note
+  scan_cap:                  25     # (unverified-prior) max names scanned per NW candidacy pass
+  candidacy_scores:                 # (unverified-prior) candidacy score by NW verdict label
+    WATCH:      0.35
+    BOTTOMING:  0.5
+    CONFIRMED:  0.5
+
+# ---- ROTATION-IN CANDIDACY (portfolio rotation-in lane — P2 rework, DARK) ----
+# Centralized (unverified-prior) constants for the rotation-in candidacy lane gated by
+# MASTERMIND_ROTATION_IN (off|watch|starter). DECLARATION ONLY — the module owns its live constants
+# today; this centralizes them for a future consumer. Not wired this wave. Heuristic priors.
+rotation:
+  state_scores:                     # (unverified-prior) candidacy score by rotation-in state
+    EARLY:      0.35
+    TURNING:    0.5
+    CONFIRMED:  0.65
+  preignition_size_frac:     0.5    # (unverified-prior) pre-ignition starter size as a fraction of a full starter
+  freshness_sessions:        2      # (unverified-prior) a rotation-in read older than this many sessions is stale

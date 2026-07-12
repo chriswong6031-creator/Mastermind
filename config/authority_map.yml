@@ -193,6 +193,53 @@ flags:
     note: >
       Arms the distilled CatBoost student for cheap-call routing.
 
+  # ── Neural Web / P2 candidacy funnel (DARK — additive buy-source, arm on a statistical bar) ──
+  # These four flags gate the P2 candidacy/decision funnel: the new (dark) paths that let the Neural
+  # Web / rotation / divergence / universe-triage lanes NOMINATE additional buy candidates. Lane-A
+  # ADDITIVE capability (a new buy source, not a shrink) — under the rework governance (roadmap E8)
+  # such a source arms only after it clears a pre-registered statistical bar (forward IC / hit-rate),
+  # exactly like MASTERMIND_NW_CONTEXT dark-ships and arms after N present builds. All four DEFAULT
+  # OFF / inert; every value below is documentation of the ladder, not a machine-checked enum.
+  # Authority A4 (GATE): each flag is an arm/disarm (or off→mode) toggle for whether a candidacy path
+  # is active. Come-back TBD — arming is a Fable decision recorded in the governance ledger BEFORE the
+  # flag is changed, gated on the E8 statistical bar (no arming in this registration).
+  MASTERMIND_NW_DECISION:
+    authority_level: A4
+    allowed_effect: [arm_nw_decision_mode, disarm_nw_decision_mode]
+    note: >
+      Neural Web decision-mode ladder (brain/neural_web_context.nw_decision_mode()).
+      enum: "off" (default — inert, no NW candidacy/decision effect) | "shadow" (compute + ledger
+      only, never nominates) | "candidacy" (NW may nominate additive buy candidates) | "shrink"
+      (NW conflicts/contradictions may shrink an entry) | "vote" (NW joins the decision vote).
+      DARK: default "off" = byte-identical to base. Arm up the ladder only on the E8 statistical bar
+      (a Fable decision, ledgered first). Come-back TBD.
+
+  MASTERMIND_ROTATION_IN:
+    authority_level: A4
+    allowed_effect: [arm_rotation_in_candidacy, disarm_rotation_in_candidacy]
+    note: >
+      Rotation-in candidacy lane. enum: "off" (default — inert) | "watch" (rotation-in names surface
+      as WATCH candidacy only, no live starter) | "starter" (rotation-in may seed a live starter
+      position — LATER, gated on the E8 bar). DARK: default "off". A4 gate; arming to "starter" is a
+      Fable decision recorded in the governance ledger before the flag changes. Come-back TBD.
+
+  MASTERMIND_DIVERGENCE_CLUE:
+    authority_level: A4
+    allowed_effect: [arm_divergence_clue_candidacy, disarm_divergence_clue_candidacy]
+    note: >
+      Single-stock divergence-clue candidacy. bool: "0" (default — inert) | "1" (a per-name
+      divergence clue may nominate an additive buy candidate). DARK: default "0" = no behavior change.
+      Additive buy-source (Lane-A); arm only on the E8 statistical bar, ledgered first. Come-back TBD.
+
+  MASTERMIND_UNIVERSE_TRIAGE:
+    authority_level: A4
+    allowed_effect: [arm_universe_triage_candidacy, disarm_universe_triage_candidacy]
+    note: >
+      Whole-universe triage + cycle-bottoming candidacy. bool: "0" (default — inert) | "1" (a
+      universe-wide triage / cycle-bottoming pass may nominate additive buy candidates). DARK:
+      default "0" = no behavior change. Additive buy-source (Lane-A); arm only on the E8 statistical
+      bar, ledgered first. Come-back TBD.
+
   # ── Portfolio / sizing ────────────────────────────────────────────────────────
   MASTERMIND_ALLOW_FRACTIONAL:
     authority_level: A3

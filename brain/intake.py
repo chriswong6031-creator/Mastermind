@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -208,12 +209,228 @@ def _from_open_theses() -> dict:
         return {}
 
 
+# --------------------------------------------------------------------------- #
+# P2 REWORK FUNNEL WIRING (roadmap docs/design/REWORK_ROADMAP_2026-07-11.md).
+#
+# Four ADDITIONAL candidacy sources that wire already-built, tested leaf modules
+# (rotation_intake / divergence_clue / neural_web_context / regime_frame + universe_triage)
+# into this funnel. THE CARDINAL RULE: with every flag at its default (OFF) each of these
+# returns {} immediately and is BYTE-IDENTICAL to today's behaviour — the source contributes
+# nothing to the merge. Each is fail-soft (any leaf error → {}, never a raise) and emits
+# candidates in the SAME schema as the sources above
+# ({score, reason, lean, confidence?, falsifier?}). Imports are LAZY inside each function
+# (the codebase convention) so importing this module never pulls the leaf import graph.
+#
+# FLAG SPEC (all default OFF / inert):
+#   MASTERMIND_ROTATION_IN     = off|watch|starter  (rotation-in active in {watch,starter})
+#   MASTERMIND_DIVERGENCE_CLUE = 0|1                (via divergence_clue.clue_flag_enabled())
+#   MASTERMIND_NW_DECISION     = off|shadow|candidacy|shrink|vote (NW active at >= candidacy;
+#                                via neural_web_context.nw_decision_mode())
+#   MASTERMIND_UNIVERSE_TRIAGE = 0|1                (cycle-bottoming active when truthy)
+# --------------------------------------------------------------------------- #
+
+# rotation-in candidacy score band by call state (× the call's confidence). Starter-grade
+# priors, never authority — mirror the rotation seam's EARLY→CONFIRMED confidence ladder.
+_ROTATION_IN_STATE_SCORE = {"EARLY": 0.35, "TURNING": 0.50, "CONFIRMED": 0.65}
+
+
+def _flag_on(name: str) -> bool:
+    """True iff env var `name` is set to a truthy 0|1-style token (default OFF). Fail-soft.
+
+    Mirrors neural_web_context.nw_prompts_enabled / divergence_clue.clue_flag_enabled — the
+    canonical truthy set. Used for the 0|1 flags (MASTERMIND_UNIVERSE_TRIAGE); the ladder flags
+    (ROTATION_IN / NW_DECISION) read their own vocabularies below.
+    """
+    try:
+        return os.environ.get(name, "0").strip().lower() in ("1", "true", "yes", "on")
+    except Exception:  # noqa: BLE001 — fail-soft: an env read never sinks the funnel
+        return False
+
+
+def _rotation_in_mode() -> str:
+    """Return the MASTERMIND_ROTATION_IN ladder value (off|watch|starter), default 'off'. Fail-soft.
+
+    Rotation-in candidacy is active when the mode is in {'watch','starter'}; any unrecognized /
+    empty value degrades to 'off' (inert).
+    """
+    try:
+        raw = os.environ.get("MASTERMIND_ROTATION_IN", "off").strip().lower()
+        return raw if raw in ("off", "watch", "starter") else "off"
+    except Exception:  # noqa: BLE001
+        return "off"
+
+
+def _from_rotation_in() -> dict:
+    """Rotation-calls → member-ticker candidacy (roadmap §2, MASTERMIND_ROTATION_IN).
+
+    INERT unless MASTERMIND_ROTATION_IN in {watch, starter}. For each active rotation call
+    (rotation_intake.active_calls), expand it to member rows (rotation_intake.expand) and emit
+    one candidate per member: score = the state band (EARLY 0.35 / TURNING 0.50 / CONFIRMED 0.65)
+    scaled by the call's confidence, lean +1, provenance-tagged with the call_id + state.
+    Fail-soft → {} on any leaf error (the rotation lane is then provably inert this build)."""
+    if _rotation_in_mode() not in ("watch", "starter"):
+        return {}
+    try:
+        from brain import rotation_intake
+        out: dict = {}
+        for call in rotation_intake.active_calls() or []:
+            if not isinstance(call, dict):
+                continue
+            state = call.get("state")
+            base = _ROTATION_IN_STATE_SCORE.get(state)
+            if base is None:                       # terminal / unknown state → not a candidacy read
+                continue
+            conf = _f(call.get("confidence"))
+            score = min(max(base * (conf if conf is not None else 1.0), 0.0), 1.0)
+            cid = call.get("call_id") or call.get("target") or "?"
+            for m in rotation_intake.expand(call) or []:
+                if not isinstance(m, dict):
+                    continue
+                t = _u(m.get("ticker"))
+                if not t or t in out:              # first (highest-ranked) member row wins per name
+                    continue
+                out[t] = {"score": round(score, 3),
+                          "reason": f"rotation_in {cid} {state}",
+                          "lean": 1, "confidence": conf, "falsifier": call.get("falsifier")}
+        return out
+    except Exception as e:  # noqa: BLE001 — fail-soft: never raise into the funnel
+        log.debug("intake: rotation_in source failed (%s)", e)
+        return {}
+
+
+def _from_divergence_clue() -> dict:
+    """Single-stock early-divergence clues → candidacy (roadmap B5, MASTERMIND_DIVERGENCE_CLUE).
+
+    INERT unless divergence_clue.clue_flag_enabled() (reads MASTERMIND_DIVERGENCE_CLUE, default 0).
+    Emits one candidate per scanned clue row carrying the row's own score / sector / safe_haven /
+    falsifier. lean +1 (a clue is a BULLISH diverger by construction). Fail-soft → {}."""
+    try:
+        from brain import divergence_clue
+        if not divergence_clue.clue_flag_enabled():
+            return {}
+        out: dict = {}
+        for row in divergence_clue.scan() or []:
+            if not isinstance(row, dict):
+                continue
+            t = _u(row.get("ticker"))
+            if not t or t in out:
+                continue
+            sector = row.get("sector") or row.get("sector_etf")
+            out[t] = {"score": min(max(_f(row.get("score")) or 0.0, 0.0), 1.0),
+                      "reason": f"divergence_clue {sector} safe_haven={bool(row.get('safe_haven'))}",
+                      "lean": 1, "confidence": None, "falsifier": row.get("falsifier")}
+        return out
+    except Exception as e:  # noqa: BLE001 — fail-soft
+        log.debug("intake: divergence_clue source failed (%s)", e)
+        return {}
+
+
+def _from_neural_web() -> dict:
+    """Neural-Web typed candidacy signals → candidacy (roadmap A5, MASTERMIND_NW_DECISION).
+
+    INERT unless neural_web_context.nw_decision_mode() is at 'candidacy' or above. For each name
+    in the NW candidate_context, ask decision_signals(TICKER) for its typed candidacy signal; when
+    present ({state, score, lean}) emit a candidate carrying that score + lean and the bottom state.
+    The NW reader is itself fully flag-gated (an inert no-op at off/shadow), so this only ever sees
+    a candidacy signal when the ladder is armed. Fail-soft → {}."""
+    try:
+        from brain import neural_web_context as nw
+        if not _mode_ge(nw.nw_decision_mode(), "candidacy"):
+            return {}
+        cc = (nw.context() or {}).get("candidate_context")
+        if not isinstance(cc, dict):
+            return {}
+        out: dict = {}
+        for ticker in cc:
+            t = _u(ticker)
+            if not t or t in out:
+                continue
+            try:
+                sig = nw.decision_signals(ticker)
+            except Exception:  # noqa: BLE001 — a single bad name never sinks the source
+                continue
+            cand = sig.get("candidacy") if isinstance(sig, dict) else None
+            if not isinstance(cand, dict):
+                continue
+            sc = _f(cand.get("score"))
+            if sc is None:
+                continue
+            lean = cand.get("lean")
+            out[t] = {"score": min(max(sc, 0.0), 1.0),
+                      "reason": f"nw bottom={cand.get('state')}",
+                      "lean": lean if isinstance(lean, int) and not isinstance(lean, bool) else None,
+                      "confidence": None, "falsifier": None}
+        return out
+    except Exception as e:  # noqa: BLE001 — fail-soft
+        log.debug("intake: neural_web source failed (%s)", e)
+        return {}
+
+
+# NW decision-ladder order — a local mirror of neural_web_context's ordinal ladder so the
+# ">= candidacy" threshold here does not depend on importing a private constant. Unrecognized /
+# empty modes resolve to rank 0 (off) → inert.
+_NW_MODE_ORDER = {"off": 0, "shadow": 1, "candidacy": 2, "shrink": 3, "vote": 4}
+
+
+def _mode_ge(mode: str, threshold: str) -> bool:
+    """True iff NW decision `mode` is at/above `threshold` on the ladder (unknown → off, inert)."""
+    return _NW_MODE_ORDER.get(mode, 0) >= _NW_MODE_ORDER.get(threshold, 0)
+
+
+def _from_cycles_bottoming() -> dict:
+    """Cycle-bottoming sectors → sector-ETF (+member) candidacy (roadmap A4, MASTERMIND_UNIVERSE_TRIAGE).
+
+    INERT unless MASTERMIND_UNIVERSE_TRIAGE is truthy. From regime_frame.cycles(), every sector that
+    is entry_favored AND turning up (osc_slope > 0) contributes its sector ETF as a starter candidate
+    (score 0.4, lean +1). If universe_triage.favored_sectors() is reachable AND agrees the sector is
+    favored, that corroboration is noted in the reason (the ETF itself is what we surface — a sector
+    call has no per-name membership here). Fail-soft → {}."""
+    if not _flag_on("MASTERMIND_UNIVERSE_TRIAGE"):
+        return {}
+    try:
+        from brain import regime_frame
+        cyc = regime_frame.cycles() or {}
+        if not isinstance(cyc, dict):
+            return {}
+        # optional corroboration: the universe-triage verdict's own favored-sector list.
+        favored_verdict: set[str] = set()
+        try:
+            from brain import universe_triage
+            favored_verdict = {_u(s) for s in (universe_triage.favored_sectors() or [])}
+        except Exception:  # noqa: BLE001 — universe_triage is optional; absence just drops corroboration
+            favored_verdict = set()
+
+        out: dict = {}
+        for sector, row in cyc.items():
+            if not isinstance(row, dict) or not row.get("entry_favored"):
+                continue
+            osc = _f(row.get("osc_slope"))
+            if osc is None or osc <= 0:            # require turning UP — absent slope never fabricates
+                continue
+            etf = _u(sector)
+            if not etf or etf in out:
+                continue
+            corrob = " (triage-favored)" if etf in favored_verdict else ""
+            out[etf] = {"score": 0.4, "reason": f"cycle_bottoming {etf}{corrob}",
+                        "lean": 1, "confidence": None, "falsifier": None}
+        return out
+    except Exception as e:  # noqa: BLE001 — fail-soft
+        log.debug("intake: cycles_bottoming source failed (%s)", e)
+        return {}
+
+
 # simple source name -> loader attribute name. Resolved through module globals at call time
 # (NOT captured here) so a monkeypatch on the loader takes effect and a single failing source
 # never sinks the funnel. Order is display-only; scoring is provenance-blended.
-_SIMPLE_SOURCES = ("standout", "radar", "altdata", "news", "thesis")
+# The four P2 rework sources (rotation_in / divergence_clue / neural_web / cycles_bottoming) are
+# registered here so they participate in the funnel — but each returns {} when its flag is off, so
+# with all flags at default this list contributes exactly nothing (byte-identical to pre-rework).
+_SIMPLE_SOURCES = ("standout", "radar", "altdata", "news", "thesis",
+                   "rotation_in", "divergence_clue", "neural_web", "cycles_bottoming")
 _LOADERS = {"standout": "_from_standouts", "radar": "_from_radar", "altdata": "_from_altdata",
-            "news": "_from_news_surge", "thesis": "_from_open_theses"}
+            "news": "_from_news_surge", "thesis": "_from_open_theses",
+            "rotation_in": "_from_rotation_in", "divergence_clue": "_from_divergence_clue",
+            "neural_web": "_from_neural_web", "cycles_bottoming": "_from_cycles_bottoming"}
 
 
 def build(limit: int = 40) -> dict:
