@@ -294,6 +294,12 @@ flags:
       universe-wide triage / cycle-bottoming pass may nominate additive buy candidates). DARK:
       default "0" = no behavior change. Additive buy-source (Lane-A); arm only on the E8 statistical
       bar, ledgered first. Come-back TBD.
+  MASTERMIND_TREASURY_CONTEXT:
+    authority_level: A4
+    allowed_effect: [arm_treasury_context, disarm_treasury_context]
+    note: >
+      Arms the context-only Treasury/TGA liquidity prompt layer (W-TSY.1);
+      dark-shipped default OFF.
 
   # ── Portfolio / sizing ────────────────────────────────────────────────────────
   MASTERMIND_ALLOW_FRACTIONAL:

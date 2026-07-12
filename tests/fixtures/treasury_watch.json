@@ -1,0 +1,77 @@
+{
+  "schema": "treasury_watch.v1",
+  "as_of": "FIXTURE_DATE",
+  "is_context_only": true,
+  "tga": {
+    "level_bn": 744.637,
+    "asof": "2026-07-09",
+    "chg_1d_bn": -4.607,
+    "chg_5d_bn": -38.5,
+    "chg_20d_bn": -56.447,
+    "quarter_end": {"date": "2026-06-30", "level_bn": 919.145, "chg_since_bn": -174.508},
+    "spark_60d": [
+      ["2026-06-24", 901.845],
+      ["2026-06-25", 871.469],
+      ["2026-06-26", 895.576],
+      ["2026-06-29", 876.961],
+      ["2026-06-30", 919.145],
+      ["2026-07-01", 807.359],
+      ["2026-07-02", 770.587],
+      ["2026-07-03", 776.843],
+      ["2026-07-06", 783.107],
+      ["2026-07-07", 784.964],
+      ["2026-07-08", 749.244],
+      ["2026-07-09", 744.637]
+    ],
+    "spark_points": "0.0,7.9 50.9,18.4 101.8,10.1 152.7,16.5 203.6,2.0 254.5,40.4 305.5,53.1 356.4,50.9 407.3,48.8 458.2,48.1 509.1,60.4 560.0,62.0"
+  },
+  "net_liquidity": {
+    "netliq_bn": 5990.0,
+    "chg_20d_bn": 65.0,
+    "chg_65d_bn": 118.2,
+    "pctile_expanding": 84,
+    "overlay": "expanding",
+    "walcl_bn": 6650.0,
+    "rrp_bn": 4.98
+  },
+  "plumbing": {
+    "headline_state": "stress_liquidity_expansion",
+    "headline_summary_en": "TW_PROSE_SENTINEL_XYZ — builder prose that must never reach a prompt",
+    "headline_summary_zh": null,
+    "rrp_buffer_state": "exhausted",
+    "reserve_scarcity_state": null
+  },
+  "tga_impulse": {
+    "active": true,
+    "direction": "drawdown",
+    "magnitude_bn": -174.508,
+    "days": 7,
+    "since": "2026-06-30",
+    "quarter_end_adjacent": true,
+    "summary_en": "TW_PROSE_SENTINEL_XYZ — impulse prose that must never reach a prompt",
+    "summary_zh": null
+  },
+  "market_context": {
+    "regime_quad": 3,
+    "quad_name": "Deflation",
+    "liquidity_overlay": "tightening",
+    "regime_asof": "2026-07-09"
+  },
+  "events": [
+    {
+      "id": "tw-2026-06-30-tga-release",
+      "published": "2026-07-09",
+      "kind": "tga_release",
+      "banner_title": "Treasury cash drawdown -174.5bn since quarter end",
+      "banner_title_zh": null,
+      "tone": "tailwind",
+      "importance": 78,
+      "live": true,
+      "summary": "TW_PROSE_SENTINEL_XYZ — event summary prose that must never reach a prompt",
+      "analysis": "TW_PROSE_SENTINEL_XYZ — event analysis prose that must never reach a prompt",
+      "unknown_extra_field": {"nested_prose": "TW_PROSE_SENTINEL_XYZ — unknown fields tolerated, never leaked"},
+      "another_unknown": 42
+    }
+  ],
+  "gaps": ["rrp: latest RRP observation lagged 1 day behind TGA"]
+}

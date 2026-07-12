@@ -170,7 +170,22 @@ def _strategist_input(regime: dict | None, asof: str) -> dict:
     except Exception:  # noqa: BLE001 — additive; never break the seat
         pass
 
-    return {
+    # W-TSY.1 — treasury_context payload key (flag-gated; compact snapshot() scalars only).
+    # Mirrors the neural_web_context embed above but the key is ABSENT when the flag is OFF
+    # or the snapshot is absent/stale — flag OFF keeps the payload byte-identical (dark-ship).
+    # snapshot() is a tiny scalar dict (tga/netliq/headline/impulse), never the full artifact,
+    # so the <~6k-token payload budget and the brace-extract JSON parse are unaffected.
+    treasury_ctx: dict | None = None
+    try:
+        from brain import treasury_context as _tsy_mod
+        if _tsy_mod.enabled():
+            _tsy_snap = _tsy_mod.snapshot()
+            if isinstance(_tsy_snap, dict) and _tsy_snap and not _tsy_snap.get("stale"):
+                treasury_ctx = _tsy_snap
+    except Exception:  # noqa: BLE001 — additive; never break the seat
+        pass
+
+    out = {
         "asof": str(asof)[:10],
         "regime": reg,
         "basket_flow": basket_flow,
@@ -184,6 +199,10 @@ def _strategist_input(regime: dict | None, asof: str) -> dict:
         # neural_web_context is absent ({}) when flag OFF or context absent/stale.
         "neural_web_context": neural_web_ctx,
     }
+    # treasury_context key present iff flag ON and snapshot fresh (see W-TSY.1 above).
+    if treasury_ctx is not None:
+        out["treasury_context"] = treasury_ctx
+    return out
 
 
 _STRATEGIST_SYS = (

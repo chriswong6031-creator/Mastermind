@@ -430,6 +430,24 @@ def _build_prompt(payload: dict, directive: str | None = None) -> str:
                 ]
     except Exception:  # noqa: BLE001 — additive; never break the seat
         pass
+    # W-TSY.1 — TREASURY LIQUIDITY block (flag-gated; dark-ship, default OFF).
+    # Mirrors the W-NW.1 block above: bounded TEXT (≤700 chars) appended after it — NO new
+    # top-level payload key (payload JSON is hard-truncated at 9000 chars; the key-order
+    # invariant at test_pm_conviction.py asserting engine_proposed_weights_ADVISORY last is
+    # untouched — this section is text, not a key).  LLM-generated prose is structurally
+    # excluded by seat_prompt_block() (deterministic text only).
+    try:
+        from brain.treasury_context import seat_prompt_block as _tsy_seat, enabled as _tsy_flag
+        if _tsy_flag():
+            _tsy_text = _tsy_seat(max_chars=700)
+            if _tsy_text:
+                lines += [
+                    "## TREASURY LIQUIDITY (context-only, not validated for sizing)",
+                    _tsy_text,
+                    "",
+                ]
+    except Exception:  # noqa: BLE001 — additive; never break the seat
+        pass
     lines += ["BENCHMARK YOU MUST BEAT (risk-off / weakening regimes): "
               f"max(SPY, the defensive basket {', '.join(payload.get('defensive_benchmark') or [])}). "
               "That static defensive book is currently beating every Brain — a book that holds "

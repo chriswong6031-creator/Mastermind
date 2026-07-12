@@ -79,6 +79,39 @@ def _append_nw_context_audit(root: Path, run_id: str, audit_row: dict) -> None:
         pass  # best-effort append; never raise
 
 
+def _append_treasury_context_audit(root: Path, run_id: str, audit_row: dict) -> None:
+    """Append one treasury_context_audit row to the persistent JSONL sidecar.
+
+    Mirrors ``_append_nw_context_audit`` (W-TSY.1 seam) so it can be unit-tested directly.
+    Append-only; best-effort — IOErrors and all other exceptions are swallowed internally,
+    matching the never-raise contract of _rl_log.  The call site also wraps in try/except
+    for defence-in-depth, but this function is safe to call bare.
+
+    Args:
+        root:      repo root Path (used to locate data/brain/treasury_context_audit.jsonl).
+        run_id:    current run identifier string.
+        audit_row: dict with keys {status, asof, age_days, n_events, headline_state} as
+                   returned by treasury_context.audit_row(); a 'ts' field is injected here.
+    """
+    try:
+        import json as _json
+        audit_path = root / "data" / "brain" / "treasury_context_audit.jsonl"
+        audit_path.parent.mkdir(parents=True, exist_ok=True)
+        row = {
+            "ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "run_id": run_id,
+            "status": audit_row.get("status"),
+            "asof": audit_row.get("asof"),
+            "age_days": audit_row.get("age_days"),
+            "n_events": audit_row.get("n_events"),
+            "headline_state": audit_row.get("headline_state"),
+        }
+        with audit_path.open("a", encoding="utf-8") as fh:
+            fh.write(_json.dumps(row, default=str) + "\n")
+    except Exception:
+        pass  # best-effort append; never raise
+
+
 def _conv_theme_id(t: str) -> str:
     """A REAL per-name theme key for the cross-sleeve theme cap. Every conviction name used to share
     the literal 'conviction', so their summed weight tripped the 0.25 book theme-cap every run and
@@ -780,6 +813,32 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
             _nw_plane = _nwc_mod.market_plane()
     except Exception:
         _rl_log(_run_id, "perception", "nw_context", "nw_context unavailable")
+
+    # —— W-TSY.1: Treasury/TGA liquidity context — flag-independent read + audit row ——
+    # Mirrors the W-NW.1 block above: observability always accrues regardless of the
+    # MASTERMIND_TREASURY_CONTEXT flag (dark-ship); only prompt/payload injection
+    # (pm_conviction / strategist) is flag-gated.
+    try:
+        from brain import treasury_context as _tsy_mod
+        _tsy_audit = _tsy_mod.audit_row()
+        _rl_log(_run_id, "perception", "treasury_context",
+                f"status={_tsy_audit.get('status')} asof={_tsy_audit.get('asof')} "
+                f"age_days={_tsy_audit.get('age_days')} n_events={_tsy_audit.get('n_events')} "
+                f"headline_state={_tsy_audit.get('headline_state')}",
+                **_tsy_audit)
+        # Append to the persistent treasury_context_audit.jsonl sidecar.
+        # Delegates to _append_treasury_context_audit so the logic is unit-testable.
+        # Never-raise wrapper kept at the call site per docstring contract.
+        try:
+            _append_treasury_context_audit(
+                Path(__file__).resolve().parent.parent,
+                _run_id,
+                _tsy_audit,
+            )
+        except Exception:
+            pass  # best-effort append; never raise
+    except Exception:
+        _rl_log(_run_id, "perception", "treasury_context", "treasury_context unavailable")
 
     # —— E0.5: perception runlog step — P5: perception logged BEFORE any position decision ——
     # Assemble + PUBLISH THE one market view (P7: data/market_view/latest.json, all books read the

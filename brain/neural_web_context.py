@@ -323,8 +323,12 @@ def candidate(ticker: str) -> dict[str, Any]:
 def market_plane() -> dict[str, Any]:
     """Return a compact dict for the neural_web market_view plane.
 
-    Shape: {verdict, regime, vol, breadth, contradiction_count, asof, stale}
+    Shape: {verdict, regime, vol, breadth, liquidity, contradiction_count, asof, stale}
     Returns an empty-stale dict if context is absent/stale.
+
+    ``liquidity`` is distilled fail-soft from the market lobe's liquidity_plumbing block:
+    {state, netliq_bn, tga_bn, tga_impulse} — every field None (tga_impulse None, not {})
+    when the plumbing block is absent, so the shape is stable for pass-through consumers.
     """
     try:
         c = context()
@@ -352,6 +356,29 @@ def market_plane() -> dict[str, Any]:
         except Exception:  # noqa: BLE001
             pass
 
+        # W-TSY.1 — Treasury/TGA liquidity distillation (additive; stable shape).
+        # Every access .get-chained with isinstance guards; an absent/malformed
+        # liquidity_plumbing block degrades to all-None fields, never raises.
+        _plumb = market.get("liquidity_plumbing")
+        _plumb = _plumb if isinstance(_plumb, dict) else {}
+        _headline = _plumb.get("headline")
+        _headline = _headline if isinstance(_headline, dict) else {}
+        _quantity = _plumb.get("quantity")
+        _quantity = _quantity if isinstance(_quantity, dict) else {}
+        _treasury = _plumb.get("treasury")
+        _treasury = _treasury if isinstance(_treasury, dict) else {}
+        _impulse = _treasury.get("tga_impulse")
+        liquidity = {
+            "state": _headline.get("state"),
+            "netliq_bn": _quantity.get("netliq_bn"),
+            "tga_bn": _treasury.get("tga_bn"),
+            "tga_impulse": ({
+                "direction": _impulse.get("direction"),
+                "magnitude_bn": _impulse.get("magnitude_bn"),
+                "quarter_end_adjacent": _impulse.get("quarter_end_adjacent"),
+            } if isinstance(_impulse, dict) else None),
+        }
+
         return {
             "verdict": verdict_raw,
             "regime": {
@@ -365,6 +392,7 @@ def market_plane() -> dict[str, Any]:
             },
             "vol": vol_raw,
             "breadth": breadth_raw,
+            "liquidity": liquidity,
             "contradiction_count": contr_count,
             "contradiction_summary": contr_summary,
             "asof": asof,
