@@ -1241,6 +1241,111 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
         except Exception:  # noqa: BLE001 — exploration is additive; never break the gate
             return False
 
+    # ── DESK-QUORUM SEATS (once-per-build, memoized) — MASTERMIND_DESK_QUORUM off|shadow|enforce ──
+    #    The other three conjunctive-quorum seats (MACRO STRATEGIST, PM-CONVICTION, PM-GATE OFFICER)
+    #    join the entry-timing TECHNICIAN in the live buy funnel (Ch02 §2.4). They are top-down /
+    #    whole-book seats, so each is run at most ONCE per build and its verdict looked up PER NAME
+    #    (subtract-only). ZERO cost when the mode is "off" (the default): _desk_quorum_mode is read
+    #    once here and every _seat_* helper short-circuits on "off" → nothing is invoked, the buy
+    #    path stays byte-identical. A seat is invoked ONLY in shadow/enforce AND only when its own
+    #    enabled()/LLM is reachable; a seat that CANNOT run (no LLM / infra off) yields a None verdict
+    #    (pass-through, §2.5 row 7 "no LLM → engine decision stands"), while a seat that IS enabled
+    #    but ERRORS yields its fail-conservative withhold value in ENFORCE (never a spurious approve)
+    #    and None in shadow (never changes the book). Memoized in single-element caches so the loop
+    #    can ask per-name without re-invoking the model.
+    _dqm = "off"
+    try:
+        from brain import committee as _committee_mode
+        _dqm = _committee_mode.desk_quorum_mode()
+    except Exception:  # noqa: BLE001 — mode read never blocks the gate
+        _dqm = "off"
+
+    _strategist_cache: dict = {}
+    _gate_cache: dict = {}
+    _pm_cache: dict = {}
+
+    def _seat_strategist_verdict() -> str | None:
+        """MACRO STRATEGIST backdrop verdict for THIS build (name-independent, §2.5 row 1). Returns
+        'hostile' when the top-down backdrop is risk_off (hard withhold), else 'neutral'/'supportive'
+        (pass). None → seat not run (no LLM / off) OR ran-but-failed-in-shadow → committee no-op.
+        In ENFORCE a genuine seat FAILURE returns None too (see caller) — the Strategist is a
+        REQUIRED sign-off, but its withhold value is only synthesised by the caller in enforce."""
+        if _dqm == "off":
+            return None
+        if "v" in _strategist_cache:
+            return _strategist_cache["v"]
+        v = None
+        try:
+            from brain import client as _client, strategist as _strategist
+            if _strategist.enabled() and _client.available():
+                _sv = _strategist.strategist_assess(asof, regime)
+                if _sv is None:                       # seat enabled but produced nothing → error path
+                    _strategist_cache["failed"] = True
+                else:
+                    stance = str(_sv.get("backdrop_stance") or "").strip().lower()
+                    v = "hostile" if stance == "risk_off" else "neutral"
+        except Exception:  # noqa: BLE001 — seat is additive; never block the gate
+            _strategist_cache["failed"] = True
+            v = None
+        _strategist_cache["v"] = v
+        return v
+
+    def _seat_gate_decisions() -> dict:
+        """PM-GATE OFFICER decisions for THIS build, keyed by ticker (whole-book pass, §2.5 rows 4/5).
+        Runs gate_assess ONCE over the confirmed-candidate book. Returns {} when the seat is off / no
+        LLM / fails → every name's gate verdict is None (pass-through). Each entry is the normalised
+        {action: approve|veto|withhold|trim, scale} the caller maps to a nexus gate verdict."""
+        if _dqm == "off":
+            return {}
+        if "d" in _gate_cache:
+            return _gate_cache["d"]
+        out: dict = {}
+        try:
+            from brain import client as _client, gate_officer as _gate
+            if _gate.enabled() and _client.available():
+                book = [{"ticker": c.get("ticker"), "weight": c.get("weight"),
+                         "confluence": c.get("confluence")} for c in sized if c.get("ticker")]
+                res = _gate.gate_assess(book, asof, regime=regime,
+                                        portfolio_ctx={"held_conviction": sorted(_open_conv)})
+                for d in (res or {}).get("decisions") or []:
+                    tk = str(d.get("ticker") or "").upper().strip()
+                    if tk:
+                        out[tk] = {"action": d.get("action"), "scale": d.get("scale")}
+                _gate_cache["ran"] = True
+        except Exception:  # noqa: BLE001 — seat is additive; never block the gate
+            _gate_cache["failed"] = True
+            out = {}
+        _gate_cache["d"] = out
+        return out
+
+    def _seat_pm_champions() -> set | None:
+        """PM-CONVICTION championed-ticker set for THIS build (§2.4 gate 5, §2.5 row 6: no champion →
+        withhold). Runs the armed PM book builder ONCE. Returns a set of championed tickers, or None
+        when the PM seat is off / no LLM / fails — None means 'PM did not run', which the caller reads
+        as 'do not gate on the champion' (pass-through) in shadow and, in enforce, only withholds a
+        name when the PM RAN and did NOT champion it (a failed/absent PM never nukes the whole book)."""
+        if _dqm == "off":
+            return None
+        if "s" in _pm_cache:
+            return _pm_cache["s"]
+        champions = None
+        try:
+            from brain import client as _client, pm_conviction as _pm
+            if _pm.enabled() and _client.available():
+                book = _pm.build_book(sized, _rejected, regime=regime, asof=asof,
+                                      strategist=None, gate_info=gate_info,
+                                      portfolio_ctx={"held_conviction": sorted(_open_conv)})
+                if book and book.get("ran"):
+                    champions = {str(h.get("ticker") or "").upper().strip()
+                                 for h in (book.get("holdings") or []) if h.get("ticker")}
+                else:
+                    _pm_cache["failed"] = True     # enabled but no submission → error/no-op path
+        except Exception:  # noqa: BLE001 — seat is additive; never block the gate
+            _pm_cache["failed"] = True
+            champions = None
+        _pm_cache["s"] = champions
+        return champions
+
     for c in sized:
         t = c["ticker"]
         try:
@@ -1342,65 +1447,126 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
                             scaled = round(scaled * float(cm.get("scale", 1.0)), 4)
                 except Exception:  # noqa: BLE001 — committee is additive; never block the gate
                     committee_block = None
-            # ── DESK-QUORUM TECHNICIAN seat (MASTERMIND_DESK_QUORUM ladder off|shadow|enforce) ──
-            #    The staged admission of the entry-timing TECHNICIAN into the live buy gate. When the
-            #    mode is "off" (the DEFAULT), NONE of this runs — the whole block is guarded on
-            #    `_dqm != "off"` up front, so the gate is BYTE-IDENTICAL to base: the Sonnet seat is
-            #    never invoked (zero cost) and no ledger row is written. In "shadow"/"enforce" the seat
-            #    runs and a pipeline-ledger row is written; only in "enforce" is the verdict APPLIED,
-            #    SUBTRACT-ONLY (wait → park via the EXACT timing-withhold path; staged_starter → cap the
-            #    scale). Fail-soft: a seat/LLM failure degrades to a None verdict (no-op) — a failed seat
-            #    NEVER parks a name; only a real "wait" verdict parks. Never blocks the build.
-            if is_new:
-                _dqm = "off"
+            # ── DESK-QUORUM CONJUNCTIVE FUNNEL (MASTERMIND_DESK_QUORUM ladder off|shadow|enforce) ──
+            #    The full four-seat quorum admits the entry-timing TECHNICIAN plus the MACRO STRATEGIST,
+            #    PM-CONVICTION and PM-GATE OFFICER seats into the live buy gate (Ch02 §2.4). When the
+            #    mode is "off" (the DEFAULT) the whole block is skipped up front on `_dqm != "off"`, so
+            #    the gate is BYTE-IDENTICAL to base: NO seat is invoked (zero cost) and no ledger row is
+            #    written. In "shadow"/"enforce" every wired seat's per-name verdict is collected and run
+            #    through committee.nexus(...) — SUBTRACT-ONLY: the funnel can only park or scale a would-
+            #    be buy down, never escalate. A pipeline-ledger row logging ALL stage verdicts is written;
+            #    only in "enforce" is the synthesised action APPLIED (drop → park via the EXACT timing-
+            #    withhold path; scale<1 → cap the size). Fail-soft: a seat that cannot run degrades to a
+            #    None verdict (nexus no-op, §2.5 row 7 pass-through); a seat that IS armed but ERRORS
+            #    degrades to its withhold value in ENFORCE (never a spurious approve) and None in shadow.
+            if is_new and _dqm != "off":
+                from brain import committee as _committee
+                # TECHNICIAN — per-name entry-timing verdict (unchanged mechanism).
+                _tech_verdict = None
                 try:
-                    from brain import committee as _committee
-                    _dqm = _committee.desk_quorum_mode()
-                except Exception:  # noqa: BLE001 — mode read never blocks the gate
-                    _dqm = "off"
-                if _dqm != "off":
+                    from brain import technician as _technician
+                    _tv = _technician.technician_assess(
+                        _technician.technician_input(
+                            t, entry_signal=_published_entry_signal(t),
+                            tech=_entry_tech_fields(t)),
+                        asof=asof, ticker=t)
+                    _tech_verdict = (_tv or {}).get("verdict")
+                except Exception:  # noqa: BLE001 — seat failure → None verdict (no-op, never parks)
                     _tech_verdict = None
-                    try:
-                        from brain import technician as _technician
-                        _tv = _technician.technician_assess(
-                            _technician.technician_input(
-                                t, entry_signal=_published_entry_signal(t),
-                                tech=_entry_tech_fields(t)),
-                            asof=asof, ticker=t)
-                        _tech_verdict = (_tv or {}).get("verdict")
-                    except Exception:  # noqa: BLE001 — seat failure → None verdict (no-op, never parks)
-                        _tech_verdict = None
-                    _tg = _committee.technician_gate(_dqm, "confirm", 1.0, _tech_verdict)
-                    _final_action = "park" if _tg["park"] else ("trim" if _tg["scale"] < 1.0 else "confirm")
-                    try:
-                        _pipeline_ledger_write({
-                            "asof": asof, "ticker": t,
-                            "forge_confirmed": bool(breakdown.get("confirmed")),
-                            "sentinel_stance": (committee_block or {}).get("sentinel_stance"),
-                            "technician_verdict": _tech_verdict,
-                            "final_action": _final_action, "mode": _dqm,
-                        })
-                    except Exception:  # noqa: BLE001 — ledger is best-effort
-                        pass
-                    if _dqm == "enforce":
-                        if _tg["park"]:
-                            # PARK the name via the EXACT existing timing-withhold path: append to the
-                            # watchlist, emit a shadow weight-0 row, and `continue` (no book entry).
-                            _twreason = "technician: wait"
-                            research_held.append({"ticker": t, "reason": "timing withhold: " + _twreason,
-                                                  **research_block})
-                            _emit_shadow(t, c, breakdown, forge_confirmed=True, weight_prod=0.0,
-                                         committee_block=committee_block, sentinel=_sent, price=px, is_new=is_new)
-                            try:
-                                from portfolio import watchlist as _watchlist
-                                _watchlist.append(t, asof, _twreason, tech=_entry_tech_fields(t),
-                                                  combined=breakdown.get("combined"))
-                            except Exception:  # noqa: BLE001 — watchlist logging never blocks the gate
-                                pass
-                            _rl_log(_run_id, "decision", f"TECHNICIAN WAIT {t}", _twreason, ticker=t)
-                            continue
-                        if _tg["scale"] < 1.0:
-                            scaled = round(scaled * float(_tg["scale"]), 4)
+                # STRATEGIST — top-down backdrop verdict (memoized once per build; name-independent).
+                _strat_verdict = _seat_strategist_verdict()
+                # PM-CONVICTION — champion verdict from the memoized championed-ticker set.
+                _pm_champions = _seat_pm_champions()
+                if _pm_champions is None:
+                    # PM seat couldn't run (off / no-LLM / errored). In ENFORCE this is a REQUIRED
+                    # positive sign-off that is MISSING → the conjunctive quorum is incomplete → withhold
+                    # the NEW name (fail-closed, §2.4 gate 5 / §2.5 row 6-7). This gates new adds ONLY —
+                    # it never touches a held name, so an LLM outage pauses new buys but can't nuke the
+                    # book. In SHADOW it stays pass-through (None) and only logs, never changing the book.
+                    _pm_verdict = "pass" if _dqm == "enforce" else None
+                else:
+                    _pm_verdict = "add" if t.upper() in _pm_champions else "pass"  # §2.5 row 6
+                # GATE OFFICER — final ruling from the memoized whole-book decisions.
+                _gate_dec = _seat_gate_decisions().get(t.upper())
+                _gate_verdict = None
+                _gate_downsize = None
+                if _gate_dec is not None:
+                    _gate_verdict = _gate_dec.get("action")
+                    if _gate_verdict == "trim":
+                        # a trim is an APPROVE-with-downsize (§2.5 row 5 smallest-size-wins): map the
+                        # gate's absolute scale into apply_gate's approve+downsize_to cap.
+                        _gate_downsize = _gate_dec.get("scale")
+                        _gate_verdict = "approve"
+                # FAIL-CONSERVATIVE (ENFORCE only): a REQUIRED sign-off that was armed but errored is
+                # withheld, never approved (§1.5.1). In shadow a failure stays None (never changes the
+                # book). The Strategist + Gate Officer are required positive sign-offs; the PM champion
+                # gate already fails closed above (ran-but-not-championed → "pass") without nuking a book
+                # the PM never ran. A seat that simply had no LLM is None on BOTH ladders (pass-through).
+                if _dqm == "enforce":
+                    if _strat_verdict is None and _strategist_cache.get("failed"):
+                        _strat_verdict = "hostile"
+                    if _gate_verdict is None and _gate_cache.get("failed"):
+                        _gate_verdict = "withhold"
+                # Build the seat-verdict dicts nexus consumes (its _seat_verdict reads these keys).
+                _seat_kwargs = {
+                    "technician": {"verdict": _tech_verdict} if _tech_verdict is not None else None,
+                    "strategist": {"backdrop": _strat_verdict} if _strat_verdict is not None else None,
+                    "pm_conviction": {"proposal": _pm_verdict} if _pm_verdict is not None else None,
+                    "gate": ({"decision": _gate_verdict, "downsize_to": _gate_downsize}
+                             if _gate_verdict is not None else None),
+                }
+                # Synthesise the conjunctive quorum on top of a fresh confirmed base (the SENTINEL/NEXUS
+                # committee pass above already applied its own de-escalation to `scaled`; here the quorum
+                # only ADDS the three new seats' subtract-only caps, so we start from a clean confirm/1.0
+                # and multiply the resulting scale into `scaled`, mirroring the committee-trim path).
+                _quorum = _committee.nexus(
+                    {"confirmed": True, "combined": breakdown.get("combined")}, None,
+                    technician=_seat_kwargs["technician"], strategist=_seat_kwargs["strategist"],
+                    pm_conviction=_seat_kwargs["pm_conviction"], gate=_seat_kwargs["gate"])
+                _q_action = _quorum.get("action")
+                _q_scale = float(_quorum.get("scale", 1.0) or 0.0)
+                # GATE-OFFICER approve-with-downsize (§2.5 row 5 smallest-size-wins) is NOT wired into
+                # nexus's 3-arg apply_gate loop, so apply it here via the SAME pure helper — a min()-cap
+                # that can only lower _q_scale, never raise it. A veto/withhold already dropped above.
+                if _gate_downsize is not None and _q_action != "drop":
+                    _q_action, _q_scale = _committee.apply_gate(
+                        _q_action, _q_scale, "approve", downsize_to=_gate_downsize)
+                    _q_scale = float(_q_scale or 0.0)
+                _final_action = "park" if _q_action == "drop" else ("trim" if _q_scale < 1.0 else "confirm")
+                try:
+                    _pipeline_ledger_write({
+                        "asof": asof, "ticker": t,
+                        "forge_confirmed": bool(breakdown.get("confirmed")),
+                        "sentinel_stance": (committee_block or {}).get("sentinel_stance"),
+                        "strategist_verdict": _strat_verdict,
+                        "technician_verdict": _tech_verdict,
+                        "pm_verdict": _pm_verdict,
+                        "gate_verdict": (_gate_dec or {}).get("action") if _gate_dec else _gate_verdict,
+                        "final_action": _final_action, "final_scale": round(_q_scale, 4),
+                        "mode": _dqm,
+                    })
+                except Exception:  # noqa: BLE001 — ledger is best-effort
+                    pass
+                if _dqm == "enforce":
+                    if _q_action == "drop":
+                        # PARK the name via the EXACT existing timing-withhold path: append to the
+                        # watchlist, emit a shadow weight-0 row, and `continue` (no book entry). The
+                        # reason names the strictest seat that cut (from the nexus rationale tail).
+                        _twreason = "desk-quorum: " + str(_quorum.get("rationale") or "withhold")[:200]
+                        research_held.append({"ticker": t, "reason": "timing withhold: " + _twreason,
+                                              **research_block})
+                        _emit_shadow(t, c, breakdown, forge_confirmed=True, weight_prod=0.0,
+                                     committee_block=committee_block, sentinel=_sent, price=px, is_new=is_new)
+                        try:
+                            from portfolio import watchlist as _watchlist
+                            _watchlist.append(t, asof, _twreason, tech=_entry_tech_fields(t),
+                                              combined=breakdown.get("combined"))
+                        except Exception:  # noqa: BLE001 — watchlist logging never blocks the gate
+                            pass
+                        _rl_log(_run_id, "decision", f"DESK-QUORUM WITHHOLD {t}", _twreason, ticker=t)
+                        continue
+                    if _q_scale < 1.0:
+                        scaled = round(scaled * _q_scale, 4)
             entry = {**c, "weight": scaled, "research": research_block}
             if committee_block:
                 entry["committee"] = committee_block

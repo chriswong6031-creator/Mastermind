@@ -221,35 +221,206 @@ def technician_gate(mode: str, action: str, scale: float,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# MACRO STRATEGIST — subtract-only regime/rotation backdrop ratchet
+# ─────────────────────────────────────────────────────────────────────────────
+# The STRATEGIST answers "is the top-down backdrop supportive for THIS name RIGHT NOW?" (Ch02 §2.2).
+# Its authority is withhold-to-watchlist: OWNS (Ch02 §2.3) — a HOSTILE backdrop is a HARD WITHHOLD
+# (§2.5 row 1, overrides all downstream enthusiasm). Subtract-only: it can only PARK, never buy.
+#   hostile     → 0.0  (park the name — the strongest withhold; §2.5 row 1 hard withhold → watchlist)
+#   neutral     → 1.0  (no cap — a NEUTRAL backdrop passes the quorum arm, §2.4 gate 2)
+#   supportive  → 1.0  (no cap — the seat leaves the action untouched)
+# Like the technician cap, these are min() caps so the seat can only RATCHET DOWN, never up.
+_STRATEGIST_SCALE_CAP = {"hostile": 0.0}
+
+
+def apply_strategist(action: str, scale: float, strategist_verdict: str | None) -> tuple[str, float]:
+    """Apply the MACRO STRATEGIST backdrop verdict to (action, scale) — SUBTRACT-ONLY, pure, total.
+
+      * ``hostile``               → force ``("drop", 0.0)`` — hard withhold, park the name (§2.5 row 1).
+      * ``supportive`` / ``neutral`` / None / unknown → UNCHANGED (backdrop passes; the seat adds
+        nothing, never raises the scale).
+
+    Mirrors ``apply_technician``: a ``None`` (seat not run) verdict is a pure no-op, and the returned
+    scale is always ``<= scale`` (the only cap is 0.0)."""
+    if strategist_verdict is None:
+        return action, scale
+    v = str(strategist_verdict).strip().lower()
+    cap = _STRATEGIST_SCALE_CAP.get(v)
+    if cap is None:                       # supportive/neutral/unknown → no change (no ratchet up)
+        return action, scale
+    new_scale = min(scale, cap)
+    if new_scale <= 0.0:
+        return "drop", 0.0
+    if new_scale < scale:
+        return "trim", round(new_scale, 4)
+    return action, scale
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PM — CONVICTION — the champion. propose-add: OWNS; NO champion → withhold (§2.5 row 6)
+# ─────────────────────────────────────────────────────────────────────────────
+# PM-CONVICTION champions a name into the book. It expresses INTENT only (never sizing authority —
+# NEXUS owns the additive floor). In the CONJUNCTIVE quorum a name needs a champion (§2.4 gate 5); a
+# name with NO champion is FORGE-confirmed-but-quorum-incomplete → WITHHOLD (§2.5 row 6). Subtract-
+# only: the champion can only decline (park), never force a buy or raise size above NEXUS's floor.
+#   pass / no_slot → 0.0  (no champion → withhold to watchlist; §2.5 row 6)
+#   add            → 1.0  (championed — passes the quorum arm; leaves the action untouched)
+_PM_SCALE_CAP = {"pass": 0.0, "no_slot": 0.0, "decline": 0.0}
+
+
+def apply_pm(action: str, scale: float, pm_verdict: str | None) -> tuple[str, float]:
+    """Apply the PM-CONVICTION champion verdict to (action, scale) — SUBTRACT-ONLY, pure, total.
+
+      * ``pass`` / ``no_slot`` / ``decline`` → force ``("drop", 0.0)`` — no champion, withhold the
+        name to the watchlist (§2.5 row 6: FORGE-confirmed but quorum incomplete → withhold).
+      * ``add`` / None / unknown             → UNCHANGED. A champion's ADD is *intent only* (it never
+        raises the scale — NEXUS owns the additive floor); an absent verdict is a pure no-op.
+
+    Mirrors ``apply_technician``: ``None`` is a no-op and the returned scale is always ``<= scale``.
+    Note the *conservative* default is applied by the CALLER (a missing champion in enforce passes the
+    withhold ``pass`` value, not None) — within this pure helper ``None`` is always a no-op."""
+    if pm_verdict is None:
+        return action, scale
+    v = str(pm_verdict).strip().lower()
+    cap = _PM_SCALE_CAP.get(v)
+    if cap is None:                       # add/unknown → no change (intent only; never ratchet up)
+        return action, scale
+    new_scale = min(scale, cap)
+    if new_scale <= 0.0:
+        return "drop", 0.0
+    if new_scale < scale:
+        return "trim", round(new_scale, 4)
+    return action, scale
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PM — GATE OFFICER — final APPROVE/VETO/WITHHOLD. approve/veto/withhold-to-WL: OWNS (§2.3)
+# ─────────────────────────────────────────────────────────────────────────────
+# The Gate Officer holds the ONLY owned APPROVE/VETO/WITHHOLD authority (§2.2, §2.3). SUBTRACT-ONLY on
+# entries (§2.5 row 4: even a full quorum cannot override a veto; §1.5.1: "subtract-only is absolute on
+# entries"). It may reject, park, or DOWNSIZE — never force-add, never raise above PM intent / NEXUS
+# floor (§2.3 footnote 1). Downsize is expressed as a scale cap (§2.5 row 5: the smallest size wins).
+#   veto      → 0.0  (REJECT — hard veto wins over any quorum; §2.5 row 4)
+#   withhold  → 0.0  (park to watchlist — good name, wrong moment; §2.5 row 4 / Ch03 §3.1.3)
+#   approve   → 1.0  (final APPROVE — no cap; passes the quorum arm §2.4 gate 6)
+_GATE_SCALE_CAP = {"veto": 0.0, "withhold": 0.0, "reject": 0.0}
+
+
+def apply_gate(action: str, scale: float, gate_verdict: str | None,
+               downsize_to: float | None = None) -> tuple[str, float]:
+    """Apply the PM-GATE OFFICER final ruling to (action, scale) — SUBTRACT-ONLY, pure, total.
+
+      * ``veto`` / ``reject``   → force ``("drop", 0.0)`` — the hard veto; wins over any quorum (§2.5
+        row 4). subtract-only is absolute on entries.
+      * ``withhold``            → force ``("drop", 0.0)`` — park to watchlist (good name, wrong moment).
+      * ``approve`` / None / unknown → UNCHANGED, EXCEPT an optional ``downsize_to`` cap: on APPROVE the
+        Gate Officer may DOWNSIZE only (§2.3 fn1, §2.5 row 5 smallest-size-wins). ``downsize_to`` is a
+        scale cap in ``[0, 1]``; ``min(scale, downsize_to)`` can only lower the scale, never raise it.
+        A ``None`` / out-of-range ``downsize_to`` is ignored (pure no-op).
+
+    Mirrors ``apply_technician``: ``None`` verdict is a no-op and the returned scale is always
+    ``<= scale``. The downsize path can never escalate (it is a ``min`` cap)."""
+    if gate_verdict is None:
+        # no ruling → seat inert. (An APPROVE with a downsize cap is expressed via gate_verdict="approve".)
+        return action, scale
+    v = str(gate_verdict).strip().lower()
+    cap = _GATE_SCALE_CAP.get(v)
+    if cap is None:
+        # approve / unknown → unchanged, except an optional subtract-only downsize cap on approve.
+        if downsize_to is not None:
+            try:
+                d = float(downsize_to)
+            except (TypeError, ValueError):
+                return action, scale
+            if 0.0 <= d < scale:          # a legal cap that LOWERS the scale (never raises it)
+                new_scale = round(d, 4)
+                return ("drop", 0.0) if new_scale <= 0.0 else ("trim", new_scale)
+        return action, scale
+    new_scale = min(scale, cap)
+    if new_scale <= 0.0:
+        return "drop", 0.0
+    if new_scale < scale:
+        return "trim", round(new_scale, 4)
+    return action, scale
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # NEXUS — deterministic, subtract-only synthesis
 # ─────────────────────────────────────────────────────────────────────────────
-def nexus(breakdown: dict, sentinel: dict | None, *, technician: dict | None = None) -> dict:
-    """Combine FORGE (breakdown) + SENTINEL into a final action. SUBTRACT-ONLY: the committee can
-    confirm, trim, or drop a buy the engine+FORGE already approved — it can NEVER escalate size or
-    rescue a name FORGE did not confirm. Pure function (no LLM) → exhaustively testable.
+# The ORDERED conjunctive quorum (Ch02 §2.4, Ch03 §3.7): each seat is applied SUBTRACT-ONLY on top of
+# the SENTINEL synthesis, in the funnel order STRATEGIST → TECHNICIAN → PM-CONVICTION → GATE OFFICER.
+# Because every step is a min()-style cap (0.0 park / 0.7 starter / downsize), the STRICTEST cut wins
+# regardless of order — but we apply them in canonical funnel order so the recorded rationale mirrors
+# the org chart. A seat passed as None is a pure no-op (byte-identical to it not being wired in).
+_QUORUM_SEATS = (
+    ("strategist", "STRATEGIST", "backdrop", apply_strategist),
+    ("technician", "TECHNICIAN", "verdict", apply_technician),
+    ("pm_conviction", "PM-CONVICTION", "proposal", apply_pm),
+    ("gate", "GATE-OFFICER", "decision", apply_gate),
+)
 
-    ``technician`` (optional, default None) is the entry-timing seat's verdict dict
-    ({"verdict": "now|staged_starter|wait", ...}). When ``None`` the result is BYTE-IDENTICAL to the
-    original 2-arg ``nexus``: the technician ratchet is skipped entirely. When a verdict is passed the
-    final (action, scale) is routed through ``apply_technician`` — SUBTRACT-ONLY, applied on top of the
-    SENTINEL synthesis (both are subtract-only; the STRICTER wins because a cap of 0.0/0.7 can only
-    lower a scale SENTINEL already produced). "now" → no change; "staged_starter" → cap 0.7; "wait" →
-    drop/park (scale 0). The technician can only ratchet DOWN, never up.
 
-    Returns {action: confirm|trim|drop, scale: 0..1, lean, rationale, sentinel_stance}."""
+def _seat_verdict(seat: dict | str | None, key: str):
+    """Extract a seat's scalar verdict: a dict yields ``seat[key]`` (falling back to ``"verdict"``),
+    a bare string is the verdict itself, ``None`` stays ``None`` (seat not run)."""
+    if seat is None:
+        return None
+    if isinstance(seat, dict):
+        return seat.get(key, seat.get("verdict"))
+    return seat
+
+
+def nexus(breakdown: dict, sentinel: dict | None, *, technician: dict | None = None,
+          strategist: dict | None = None, pm_conviction: dict | None = None,
+          gate: dict | None = None) -> dict:
+    """Combine FORGE (breakdown) + SENTINEL + the desk quorum into a final action. SUBTRACT-ONLY: the
+    committee can confirm, trim, or drop a buy the engine+FORGE already approved — it can NEVER escalate
+    size or rescue a name FORGE did not confirm. Pure function (no LLM) → exhaustively testable.
+
+    The four desk-seat kwargs (``technician``, ``strategist``, ``pm_conviction``, ``gate``) each carry a
+    seat verdict dict; each is applied SUBTRACT-ONLY on top of the SENTINEL synthesis via its
+    ``apply_*`` helper, in canonical funnel order STRATEGIST → TECHNICIAN → PM-CONVICTION → GATE-OFFICER
+    (Ch02 §2.4 conjunctive quorum). Because every seat is a min()-cap, the STRICTEST cut wins:
+
+      * STRATEGIST ``hostile``            → drop/park  (§2.5 row 1 hard withhold)
+      * TECHNICIAN ``wait``               → drop/park; ``staged_starter`` → cap 0.7  (§2.5 row 2)
+      * PM-CONVICTION ``pass``/``no_slot``→ drop/park  (no champion → withhold, §2.5 row 6)
+      * GATE-OFFICER ``veto``/``withhold``→ drop/park; ``approve`` may DOWNSIZE only  (§2.5 rows 4,5)
+
+    When ALL four kwargs are ``None`` the result is BYTE-IDENTICAL to the original 2-arg ``nexus``: the
+    quorum layer is skipped entirely (``_nexus_synthesis`` returned verbatim, no mutation). A seat that
+    passes (supportive/neutral/now/add/approve/None/unknown) leaves the action untouched. Every seat can
+    only ratchet DOWN, never up; fail-conservative defaults (a failed seat → its withhold value) are the
+    CALLER's responsibility — within this pure function ``None`` is always a no-op.
+
+    Returns {action: confirm|trim|drop, scale: 0..1, lean, rationale, sentinel_stance, ...}."""
     decision = _nexus_synthesis(breakdown, sentinel)
-    if technician is None:
-        return decision           # BYTE-IDENTICAL to the original 2-arg path — no ratchet, no mutation.
-    verdict = technician.get("verdict") if isinstance(technician, dict) else technician
-    new_action, new_scale = apply_technician(decision["action"], decision["scale"], verdict)
-    if (new_action, new_scale) == (decision["action"], decision["scale"]):
-        return decision           # "now"/unknown/absent verdict — the seat left the action untouched.
+    if technician is None and strategist is None and pm_conviction is None and gate is None:
+        return decision           # BYTE-IDENTICAL to the original 2-arg path — no quorum, no mutation.
+    seats = {"strategist": strategist, "technician": technician,
+             "pm_conviction": pm_conviction, "gate": gate}
+    action, scale = decision["action"], decision["scale"]
+    applied: list[tuple[str, str]] = []       # (LABEL, verdict) for each seat that actually ratcheted
+    for name, label, key, fn in _QUORUM_SEATS:
+        seat = seats[name]
+        if seat is None:
+            continue
+        verdict = _seat_verdict(seat, key)
+        new_action, new_scale = fn(action, scale, verdict)
+        if (new_action, new_scale) != (action, scale):
+            applied.append((label, str(verdict) if verdict is not None else None))
+            action, scale = new_action, new_scale
+    if (action, scale) == (decision["action"], decision["scale"]):
+        return decision           # every wired seat passed — the quorum left the action untouched.
     out = dict(decision)
-    out["action"], out["scale"] = new_action, new_scale
-    out["lean"] = "watch" if new_action == "drop" else out.get("lean")
-    out["technician_verdict"] = str(verdict) if verdict is not None else None
-    out["rationale"] = (f"{out.get('rationale', '')} | TECHNICIAN {verdict}: "
-                        f"{'parked (wait)' if new_action == 'drop' else f'scale capped at {new_scale}'}").strip(" |")
+    out["action"], out["scale"] = action, scale
+    out["lean"] = "watch" if action == "drop" else out.get("lean")
+    if technician is not None:
+        tv = _seat_verdict(technician, "verdict")
+        out["technician_verdict"] = str(tv) if tv is not None else None
+    notes = [f"{label} {verdict}: {'parked' if action == 'drop' else f'scale capped at {scale}'}"
+             for label, verdict in applied]
+    out["rationale"] = (f"{out.get('rationale', '')} | " + " | ".join(notes)).strip(" |")
     return out
 
 
