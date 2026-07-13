@@ -7,13 +7,16 @@ and theses ledger are never read.
 
 Coverage:
   * contract_drift(): [] on absent context (never fabricate drift from missing data);
-    detects graph_conflicts_absent (dead/high) + bottom_state_vocabulary_drift on a
-    WATCH-only, conflict-less candidate set; candidate_context_empty on 0 rows.
+    detects graph_conflicts_absent (dead/high) + fdr_cleared_absent (dead/high, the per-name
+    gate) + bottom_state_vocabulary_drift on a WATCH-only, conflict-less candidate set;
+    candidate_context_empty on 0 rows; >=1 fdr_cleared row silences the fdr claim.
   * coverage(): counts-only join of decided subjects vs candidate rows; absent state.
   * attribution(): honest 'building' below min_n; never raises on garbage; scoring at n>=min_n.
   * context_quality(): accruing when sidecar absent; counts/streak on rows.
   * derive_nudges(): first_seen/builds_seen carried forward from prior latest.json;
-    max_n cap; severity ordering (high < medium < low positions).
+    max_n cap; severity ordering (high < medium < low positions); the coverage nudge
+    requires cov state 'ok' (absence-is-not-drift).
+  * build(): the pre-read _reset_context_cache() call is fail-soft.
   * persist(): writes latest.json + appends history.jsonl keep-first per asof; latest() read-back.
 """
 from __future__ import annotations
@@ -73,7 +76,8 @@ def test_contract_drift_never_raises_when_reader_raises(monkeypatch):
 
 
 def test_contract_drift_detects_dead_graph_conflicts_and_state_drift(monkeypatch):
-    """The 2026-07-13 recon failure class: zero graph_conflicts rows + WATCH-only vocabulary."""
+    """The 2026-07-13 recon failure class: zero graph_conflicts rows + WATCH-only vocabulary
+    + zero fdr_cleared rows (the live artifact is 0/~230 today)."""
     ctx = {
         "candidate_context": {
             "AAA": {"bottom": {"bottom_state": "WATCH"}},
@@ -87,13 +91,20 @@ def test_contract_drift_detects_dead_graph_conflicts_and_state_drift(monkeypatch
     drift = nwr.contract_drift()
     by_code = {d["code"]: d for d in drift}
 
-    assert set(by_code) == {"graph_conflicts_absent", "bottom_state_vocabulary_drift"}
+    assert set(by_code) == {"graph_conflicts_absent", "fdr_cleared_absent",
+                            "bottom_state_vocabulary_drift"}
 
     gc = by_code["graph_conflicts_absent"]
     assert gc["status"] == "dead"
     assert gc["severity"] == "high"
     assert gc["field"] == "candidate_context.graph_conflicts"
     assert "0/3" in gc["detail"]
+
+    fdr = by_code["fdr_cleared_absent"]
+    assert fdr["status"] == "dead"
+    assert fdr["severity"] == "high"
+    assert fdr["field"] == "candidate_context.kernel.fdr_cleared"
+    assert "0/3" in fdr["detail"]
 
     bs = by_code["bottom_state_vocabulary_drift"]
     assert bs["status"] == "partial"
@@ -102,18 +113,62 @@ def test_contract_drift_detects_dead_graph_conflicts_and_state_drift(monkeypatch
 
 
 def test_contract_drift_healthy_context_yields_no_rows(monkeypatch):
-    """A context carrying graph_conflicts + the full state vocabulary produces no drift rows
-    (market plane stale → plane checks stay out of scope)."""
+    """A context carrying graph_conflicts + at least one fdr_cleared row + the full state
+    vocabulary produces no drift rows (market plane stale → plane checks stay out of scope)."""
     ctx = {
         "candidate_context": {
-            "AAA": {"bottom": {"bottom_state": "WATCH"}, "graph_conflicts": []},
-            "BBB": {"bottom": {"bottom_state": "BOTTOMING"}, "graph_conflicts": ["x_vs_y"]},
+            "AAA": {"bottom": {"bottom_state": "WATCH"}, "graph_conflicts": [],
+                    "kernel": {"fdr_cleared": True}},
+            "BBB": {"bottom": {"bottom_state": "BOTTOMING"}, "graph_conflicts": ["x_vs_y"],
+                    "kernel": {"fdr_cleared": False}},
             "CCC": {"bottom": {"bottom_state": "CONFIRMED"}, "graph_conflicts": []},
         },
     }
     monkeypatch.setattr(nwc, "context", lambda: ctx)
     monkeypatch.setattr(nwc, "market_plane", lambda: {"stale": True})
     assert nwr.contract_drift() == []
+
+
+def test_contract_drift_fdr_all_false_is_dead(monkeypatch):
+    """0/n candidate rows fdr_cleared → the whole typed ladder is per-name inert: one
+    dead/high row regardless of every other (healthy) field."""
+    ctx = {
+        "candidate_context": {
+            "AAA": {"bottom": {"bottom_state": "WATCH"}, "graph_conflicts": [],
+                    "kernel": {"fdr_cleared": False}},
+            "BBB": {"bottom": {"bottom_state": "BOTTOMING"}, "graph_conflicts": ["x_vs_y"],
+                    "kernel": {"fdr_cleared": False}},
+            "CCC": {"bottom": {"bottom_state": "CONFIRMED"}, "graph_conflicts": [],
+                    "kernel": {}},                       # missing key counts as not cleared
+        },
+    }
+    monkeypatch.setattr(nwc, "context", lambda: ctx)
+    monkeypatch.setattr(nwc, "market_plane", lambda: {"stale": True})
+    drift = nwr.contract_drift()
+    by_code = {d["code"]: d for d in drift}
+    assert set(by_code) == {"fdr_cleared_absent"}
+    row = by_code["fdr_cleared_absent"]
+    assert row["status"] == "dead"
+    assert row["severity"] == "high"
+    assert row["field"] == "candidate_context.kernel.fdr_cleared"
+    assert "0/3" in row["detail"]
+
+
+def test_contract_drift_fdr_one_true_silences_the_claim(monkeypatch):
+    """>=1 fdr_cleared row → no fdr_cleared_absent claim (the gate can fire somewhere)."""
+    ctx = {
+        "candidate_context": {
+            "AAA": {"bottom": {"bottom_state": "WATCH"}, "graph_conflicts": [],
+                    "kernel": {"fdr_cleared": True}},
+            "BBB": {"bottom": {"bottom_state": "BOTTOMING"}, "graph_conflicts": ["x_vs_y"],
+                    "kernel": {"fdr_cleared": False}},
+            "CCC": {"bottom": {"bottom_state": "CONFIRMED"}, "graph_conflicts": []},
+        },
+    }
+    monkeypatch.setattr(nwc, "context", lambda: ctx)
+    monkeypatch.setattr(nwc, "market_plane", lambda: {"stale": True})
+    codes = {d["code"] for d in nwr.contract_drift()}
+    assert "fdr_cleared_absent" not in codes
 
 
 def test_contract_drift_empty_candidate_context_is_dead(monkeypatch):
@@ -315,7 +370,7 @@ def test_derive_nudges_only_dead_or_partial_drift_emits(tmp_path):
 
 
 def test_derive_nudges_coverage_and_staleness_folds(tmp_path):
-    cov = {"coverage_rate": 0.25, "open_theses_n": 4, "resolved_recent_n": 3,
+    cov = {"state": "ok", "coverage_rate": 0.25, "open_theses_n": 4, "resolved_recent_n": 3,
            "with_context_row_n": 2}
     quality = {"state": "ok", "current_streak": {"status": "stale", "runs": 5},
                "gap_notes_latest": 4}
@@ -324,6 +379,16 @@ def test_derive_nudges_coverage_and_staleness_folds(tmp_path):
     assert by_code["coverage_below_half"]["kind"] == "coverage_gap"
     assert by_code["context_stale_streak"]["severity"] == "high"
     assert by_code["gap_notes_elevated"]["severity"] == "low"
+
+
+def test_derive_nudges_no_coverage_nudge_when_context_absent(tmp_path):
+    """Absence-is-not-drift: a 0.0 rate against an absent context is a staleness story,
+    not a coverage ask — the coverage nudge requires cov state 'ok'."""
+    cov = {"state": "context_absent", "coverage_rate": 0.0, "open_theses_n": 4,
+           "resolved_recent_n": 3, "with_context_row_n": 0}
+    nudges = nwr.derive_nudges([], cov, {}, "2026-07-13")
+    assert all(n["code"] != "coverage_below_half" for n in nudges)
+    assert nudges == []                # nothing else has grounds to fire either
 
 
 def test_derive_nudges_codes_are_public_surface_safe(tmp_path):
@@ -345,6 +410,17 @@ def test_build_report_shape_on_empty_world(tmp_path):
     assert rep["context_quality"]["state"] == "accruing"
     assert rep["nudges"] == []
     assert "generated_at" in rep
+
+
+def test_build_cache_reset_is_fail_soft(tmp_path, monkeypatch):
+    """build() resets the NW context cache before reading (long-lived-process freshness);
+    a raising reset must never take the report down."""
+    monkeypatch.setattr(nwc, "_reset_context_cache",
+                        lambda: (_ for _ in ()).throw(RuntimeError("boom")), raising=True)
+    rep = nwr.build("2026-07-13")
+    assert rep["schema"] == "nw_reflection.v1"
+    assert rep["asof"] == "2026-07-13"
+    assert rep["coverage"]["state"] == "absent"
 
 
 def test_persist_writes_latest_and_history_keep_first_per_asof(tmp_path):

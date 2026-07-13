@@ -129,6 +129,20 @@ def contract_drift() -> list[dict]:
                 "detail": f"{gc_n}/{n} candidate rows carry graph_conflicts",
             })
 
+        # kernel.fdr_cleared — THE per-name gate: decision_signals() is inert for any name
+        # without fdr_cleared=True, so 0/n cleared deadens the ENTIRE typed ladder regardless
+        # of every other field (review finding: the live artifact is 0/~230 today).
+        fdr_n = sum(1 for r in rows
+                    if isinstance(r, dict) and isinstance(r.get("kernel"), dict)
+                    and r["kernel"].get("fdr_cleared") is True)
+        if fdr_n == 0:
+            out.append({
+                "code": "fdr_cleared_absent", "field": "candidate_context.kernel.fdr_cleared",
+                "status": "dead", "severity": "high",
+                "detail": f"0/{n} candidate rows are fdr_cleared — every leg of the typed "
+                          f"decision ladder is per-name inert regardless of other fields",
+            })
+
         # bottom_state vocabulary vs the candidacy priors
         states: dict[str, int] = {}
         for r in rows:
@@ -329,8 +343,12 @@ def derive_nudges(drift: list[dict], cov: dict, quality: dict,
             _emit(d.get("code", "drift"), "contract_drift", d.get("severity", "medium"),
                   d.get("detail", ""))
 
+    # absence-is-not-drift (the contract_drift rule applies here too): a coverage claim is
+    # only honest when the context was actually PRESENT — a stale/absent artifact is a
+    # staleness story, not a coverage ask (review finding, 2026-07-13).
     rate = cov.get("coverage_rate")
-    if isinstance(rate, (int, float)) and cov.get("open_theses_n", 0) + cov.get("resolved_recent_n", 0) >= 5:
+    if (cov.get("state") == "ok" and isinstance(rate, (int, float))
+            and cov.get("open_theses_n", 0) + cov.get("resolved_recent_n", 0) >= 5):
         if rate < 0.5:
             _emit("coverage_below_half", "coverage_gap", "medium",
                   f"only {cov.get('with_context_row_n')} of our decided subjects have a "
@@ -363,6 +381,15 @@ def build(asof: date | str | None = None, *, nudges_max: int | None = None,
     mastermind_ai → nw_reflection, never the reverse)."""
     asof_s = (asof.isoformat() if isinstance(asof, date) else str(asof)) if asof else date.today().isoformat()
     try:
+        # The NW context reader caches for the PROCESS lifetime and nothing else in a dark-flag
+        # deployment ever re-primes it — without this reset a long-lived uvicorn process would
+        # reflect the artifact as it stood at first read for days (review finding, 2026-07-13).
+        # macro_refresh heals the file on disk every 3h; a fresh read is strictly more honest.
+        try:
+            from brain.neural_web_context import _reset_context_cache
+            _reset_context_cache()
+        except Exception:  # noqa: BLE001
+            pass
         drift = contract_drift()
         cov = coverage()
         qual = context_quality()

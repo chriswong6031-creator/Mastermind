@@ -106,6 +106,8 @@ def _coerce(key: str, value: Any) -> Any | None:
             return str(value).strip().lower() in ("1", "true", "yes", "on")
         return None
     if spec[0] is int:
+        if isinstance(value, bool):
+            return None   # int(True)==1 would silently pass bounds — reject bools outright
         try:
             iv = int(value)
         except Exception:  # noqa: BLE001
@@ -231,16 +233,21 @@ def _advance_directive(rid: str, status: str) -> None:
 
 
 def open_directives_for_publish() -> list[dict]:
-    """The rows bridge/nw_feedback ships (queued+published, capped) — marks queued→published."""
+    """The rows bridge/nw_feedback ships (queued+published, capped FIFO).
+
+    Truncates FIRST (oldest-first, so early directives are never starved), then advances
+    queued→published ONLY for rows actually included in the publish payload — a row must
+    never read 'published' unless it shipped (review finding, 2026-07-13)."""
     out: list[dict] = []
     try:
         cap = settings()["directives_max_open"]
-        for d in directives():
-            if d.get("status") in ("queued", "published") and d.get("text"):
-                out.append({"id": d["id"], "created": d.get("ts", "")[:10], "text": d["text"]})
-                if d.get("status") == "queued":
-                    _advance_directive(d["id"], "published")
-        return out[-cap:]
+        open_rows = [d for d in directives()
+                     if d.get("status") in ("queued", "published") and d.get("text")]
+        for d in open_rows[:cap]:   # directives() is ts-ascending → FIFO
+            out.append({"id": d["id"], "created": d.get("ts", "")[:10], "text": d["text"]})
+            if d.get("status") == "queued":
+                _advance_directive(d["id"], "published")
+        return out
     except Exception:  # noqa: BLE001
         return out
 
@@ -249,6 +256,12 @@ def reconcile_ack() -> dict:
     """Advance directive statuses from the macro ack (lobes.mastermind_ai in the NW context)."""
     try:
         from brain import neural_web_context as nwc
+        # The context reader caches for the process lifetime; without a reset a long-lived
+        # process could never observe an ack published after its first read (review finding).
+        try:
+            nwc._reset_context_cache()
+        except Exception:  # noqa: BLE001
+            pass
         lobe = (nwc.context() or {}).get("lobes", {}).get("mastermind_ai") or {}
         ack = lobe.get("ack") or {}
         seen_ids = set(ack.get("directive_ids_seen") or [])
@@ -450,16 +463,22 @@ def _build_review(loop_n: int, cfg: dict) -> dict:
         "agenda_top": _agenda_top(5),
     }
 
-    # optional LLM prose (double-gated: env capability flag AND runtime setting)
+    # optional LLM prose (double-gated: env capability flag AND runtime setting).
+    # reason_sync (reason() is async — a bare call returns a coroutine); allowed_tools=[] so the
+    # model sees ONLY the deterministic counts JSON in the prompt, never the repo/ledgers; and the
+    # output is deny-swept before it lands in reviews.jsonl, which rsyncs to the PUBLIC mirror —
+    # a single pattern hit rejects the whole assessment (review finding, 2026-07-13).
     if llm_review_flag_on() and cfg.get("llm_review"):
         try:
             from brain import cli_bridge
             prompt = ("You are the Mastermind AI reviewing your own self-improvement loop. "
                       "In <=150 words, assess progress honestly (no alpha claims): "
                       + json.dumps({"completed": completed, "assessment": assessment})[:4000])
-            res = cli_bridge.reason(prompt, role="analyst", max_turns=1)
-            if res.get("ok") and res.get("text"):
-                review["llm_assessment"] = str(res["text"])[:2000]
+            res = cli_bridge.reason_sync(prompt, role="analyst", max_turns=1,
+                                         allowed_tools=[], log_run=False)
+            text = str(res.get("text") or "")[:2000] if isinstance(res, dict) and res.get("ok") else ""
+            if text and not any(p.search(text) for p in _DIRECTIVE_DENY):
+                review["llm_assessment"] = text
         except Exception:  # noqa: BLE001
             pass
     return review

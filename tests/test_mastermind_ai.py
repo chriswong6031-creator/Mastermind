@@ -6,13 +6,16 @@ stubs brain.neural_web_context / brain.journal / brain.nw_reflection so nothing 
 written.
 
 Coverage:
-  * settings(): doctrine defaults; update_settings rejects unknown keys + out-of-range values,
-    applies valid (bounded) ones.
+  * settings(): doctrine defaults; update_settings rejects unknown keys + out-of-range values
+    + booleans offered to int keys, applies valid (bounded) ones.
   * add_directive(): intake scrub refuses env names / $ amounts / key-shaped tokens / over-length;
-    accepts clean text; open_directives_for_publish flips queued→published; reconcile_ack flips
-    published→acknowledged off the macro ack lobe.
+    accepts clean text; open_directives_for_publish flips queued→published for SHIPPED rows only,
+    truncating oldest-first at the cap; reconcile_ack flips published→acknowledged off the
+    macro ack lobe.
   * run_cycle(): skipped when MASTERMIND_AI_LOOP=0; with the flag on and review_every_n_loops=2
     two cycles → two loop-log rows, the second carrying a review appended to reviews.jsonl.
+  * _build_review() LLM seam: reason_sync stubbed hermetically; a deny-pattern hit in the text
+    drops the whole llm_assessment; clean text lands; allowed_tools=[] + log_run=False on the call.
   * status()/improvements()/loop_log() read-surface shapes.
 """
 from __future__ import annotations
@@ -95,6 +98,15 @@ def test_update_settings_rejects_out_of_range_values():
     assert res["settings"]["review_every_n_loops"] == 5
 
 
+def test_update_settings_rejects_bool_for_int_key():
+    """int(True)==1 would silently pass the review_every_n_loops bounds — bools offered to
+    int keys are rejected outright."""
+    res = mai.update_settings({"review_every_n_loops": True})
+    assert res["ok"] is True
+    assert res["rejected"] == ["review_every_n_loops"]
+    assert res["settings"]["review_every_n_loops"] == 5   # default untouched
+
+
 def test_update_settings_applies_valid_values_and_persists():
     res = mai.update_settings({"review_every_n_loops": 2, "llm_review": True,
                                "loop_enabled": "yes", "attribution_min_n": 20})
@@ -169,6 +181,32 @@ def test_open_directives_for_publish_flips_queued_to_published():
     assert mai.directives()[0]["status"] == "published"
     # publishing again still ships it (published rows stay on the wire until acked)
     assert [d["id"] for d in mai.open_directives_for_publish()] == [rid]
+
+
+def test_open_directives_for_publish_truncates_fifo_and_publishes_only_shipped():
+    """Truncate-first FIFO at the cap: with 3 queued rows and cap=1 exactly the OLDEST ships,
+    and only the shipped row flips queued→published — the truncated two stay queued."""
+    ids = []
+    for text in ("first clean directive in the queue",
+                 "second clean directive in the queue",
+                 "third clean directive in the queue"):
+        res = mai.add_directive(text)
+        assert res["ok"] is True
+        ids.append(res["directive"]["id"])
+    assert mai.update_settings({"directives_max_open": 1})["ok"]
+
+    out = mai.open_directives_for_publish()
+    assert [d["id"] for d in out] == [ids[0]]          # oldest-first, capped at 1
+
+    status_by_id = {d["id"]: d["status"] for d in mai.directives()}
+    assert status_by_id[ids[0]] == "published"         # shipped → published
+    assert status_by_id[ids[1]] == "queued"            # truncated → NEVER 'published'
+    assert status_by_id[ids[2]] == "queued"
+
+    # republishing keeps shipping the same oldest row (still on the wire until acked)
+    assert [d["id"] for d in mai.open_directives_for_publish()] == [ids[0]]
+    status_by_id = {d["id"]: d["status"] for d in mai.directives()}
+    assert status_by_id[ids[1]] == "queued" and status_by_id[ids[2]] == "queued"
 
 
 def test_reconcile_ack_flips_published_to_acknowledged(monkeypatch):
@@ -255,6 +293,64 @@ def test_run_cycle_never_raises_when_reflection_breaks(monkeypatch):
     assert row["ok"] is True
     assert row["steps"].get("reflection_error") == "RuntimeError"
     assert row["nudges_open"] == 0
+
+
+# ───────────────────────────── the LLM review seam ─────────────────────────────
+
+def _stub_cli_bridge(monkeypatch, result: dict) -> list[dict]:
+    """Install a stub brain.cli_bridge (the real one pulls the bot package + SDK) whose
+    reason_sync records its kwargs and returns `result`. Returns the call log."""
+    import sys
+    import types
+    import brain as brain_pkg
+    calls: list[dict] = []
+    mod = types.ModuleType("brain.cli_bridge")
+
+    def reason_sync(prompt, **kw):
+        calls.append({"prompt": prompt, **kw})
+        return result
+
+    mod.reason_sync = reason_sync
+    monkeypatch.setitem(sys.modules, "brain.cli_bridge", mod)
+    monkeypatch.setattr(brain_pkg, "cli_bridge", mod, raising=False)
+    return calls
+
+
+def _arm_llm_review(monkeypatch):
+    """Both halves of the double gate: env capability flag AND runtime setting."""
+    monkeypatch.setenv("MASTERMIND_AI_REVIEW_LLM", "1")
+    assert mai.update_settings({"llm_review": True})["ok"]
+
+
+def test_build_review_deny_sweep_drops_leaky_llm_assessment(monkeypatch):
+    """reviews.jsonl rsyncs to the PUBLIC mirror — a single _DIRECTIVE_DENY hit in the
+    model text rejects the whole assessment."""
+    _arm_llm_review(monkeypatch)
+    calls = _stub_cli_bridge(monkeypatch, {"ok": True, "text": "MASTERMIND_FOO leaked"})
+    review = mai._build_review(2, mai.settings())
+    assert "llm_assessment" not in review
+    assert review["assessment"]                        # deterministic assessment still present
+    # the seam is locked down: no tools, no run log
+    assert len(calls) == 1
+    assert calls[0]["allowed_tools"] == []
+    assert calls[0]["log_run"] is False
+
+
+def test_build_review_clean_llm_text_lands(monkeypatch):
+    _arm_llm_review(monkeypatch)
+    _stub_cli_bridge(monkeypatch, {"ok": True, "text": "steady progress; no alpha claims"})
+    review = mai._build_review(2, mai.settings())
+    assert review["llm_assessment"] == "steady progress; no alpha claims"
+
+
+def test_build_review_llm_stays_dark_without_env_flag(monkeypatch):
+    """Runtime setting alone must not open the seam — reason_sync is never called."""
+    monkeypatch.delenv("MASTERMIND_AI_REVIEW_LLM", raising=False)
+    assert mai.update_settings({"llm_review": True})["ok"]
+    calls = _stub_cli_bridge(monkeypatch, {"ok": True, "text": "should never be asked"})
+    review = mai._build_review(2, mai.settings())
+    assert "llm_assessment" not in review
+    assert calls == []
 
 
 # ───────────────────────────── read surfaces ─────────────────────────────
