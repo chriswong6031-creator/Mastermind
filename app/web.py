@@ -1337,6 +1337,110 @@ def api_fundamentals() -> JSONResponse:
         return JSONResponse({"status": "unavailable", "error": str(exc)})
 
 
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# MASTERMIND AI (W-AI) — the self-improvement loop's admin surface.
+# GETs are read-only snapshots; the POSTs are non-LLM operator paths registered in
+# app/auth.py _NON_LLM_OPERATOR_PATHS (blocked on the serve-only mirror) and the whole
+# /api/mastermind_ai prefix is denied in app/response_cache.py (always-fresh admin data).
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+
+@router.get("/api/mastermind_ai")
+def api_mastermind_ai() -> JSONResponse:
+    """One-call status snapshot for the admin 'Mastermind AI' section: settings, flags, last
+    loops, latest review, the current NW reflection (nudges/drift/coverage/quality), journal
+    counts, and the operator directive queue."""
+    try:
+        import bot  # noqa: F401
+        from brain import mastermind_ai
+        return JSONResponse(mastermind_ai.status())
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"schema": "mastermind_ai_status.v1", "error": str(exc)})
+
+
+@router.get("/api/mastermind_ai/loop_log")
+def api_mastermind_ai_loop_log(n: int = 50) -> JSONResponse:
+    """The self-improvement loop log (one row per nightly cycle) + the every-N-loop reviews."""
+    try:
+        import bot  # noqa: F401
+        from brain import mastermind_ai
+        n = max(1, min(int(n), 500))
+        return JSONResponse({"loop_log": mastermind_ai.loop_log(limit=n),
+                             "reviews": mastermind_ai.reviews(limit=12)})
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"loop_log": [], "reviews": [], "error": str(exc)})
+
+
+@router.get("/api/mastermind_ai/improvements")
+def api_mastermind_ai_improvements() -> JSONResponse:
+    """What has actually improved: pinned rules (+ their falsifier state), self_tune events,
+    lesson taxonomy counts, and the agenda's current top items."""
+    try:
+        import bot  # noqa: F401
+        from brain import mastermind_ai
+        return JSONResponse(mastermind_ai.improvements())
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"pins": [], "agenda_top": [], "lessons_by_taxonomy": {},
+                             "error": str(exc)})
+
+
+@router.get("/api/mastermind_ai/reflection")
+def api_mastermind_ai_reflection() -> JSONResponse:
+    """The full latest nw_reflection.v1 report (contract drift, coverage, attribution,
+    context quality, nudges)."""
+    try:
+        import bot  # noqa: F401
+        from brain import nw_reflection
+        return JSONResponse(nw_reflection.latest() or {"schema": nw_reflection.SCHEMA,
+                                                       "state": "absent"})
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"state": "absent", "error": str(exc)})
+
+
+class _MMAISettingsReq(BaseModel):
+    settings: dict
+
+
+class _MMAIDirectiveReq(BaseModel):
+    text: str
+
+
+@router.post("/api/mastermind_ai/settings")
+def api_mastermind_ai_settings(req: _MMAISettingsReq) -> JSONResponse:
+    """Operator settings patch — bounded to the known mastermind_ai keys (unknown/out-of-range
+    keys are rejected, never applied)."""
+    try:
+        import bot  # noqa: F401
+        from brain import mastermind_ai
+        return JSONResponse(mastermind_ai.update_settings(req.settings or {}))
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+@router.post("/api/mastermind_ai/directive")
+def api_mastermind_ai_directive(req: _MMAIDirectiveReq) -> JSONResponse:
+    """Queue an operator directive for the NW orchestrator (published on the next macro
+    snapshot push, ingested by the next nightly macro build). Intake-scrubbed: secrets,
+    env names, and $-amounts are refused — this text lands on a public artifact."""
+    try:
+        import bot  # noqa: F401
+        from brain import mastermind_ai
+        return JSONResponse(mastermind_ai.add_directive(req.text))
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+@router.post("/api/mastermind_ai/run")
+def api_mastermind_ai_run() -> JSONResponse:
+    """Run one self-improvement cycle now (non-LLM, observational; same code path as the
+    nightly loop_maintenance step)."""
+    try:
+        import bot  # noqa: F401
+        from brain import mastermind_ai
+        return JSONResponse(mastermind_ai.run_cycle(trigger="manual"))
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
 @router.get("/api/readiness")
 def api_readiness() -> JSONResponse:
     """Forward-proof readiness — which thresholds have crossed (calibration left cold-start,

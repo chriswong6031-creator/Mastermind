@@ -1,10 +1,10 @@
-"""NW feedback artifact v2 — machine-readable governance summary for NW.
+"""NW feedback artifact v3 — machine-readable governance summary for NW.
 
 Writes site/mastermind/nw_feedback.json as a sibling of mastermind_snapshot.json.
 The file is pushed to the PUBLIC macro repo and treated as fully public — it MUST
 NOT contain dollar amounts, position sizes, API keys, or secrets of any kind.
 
-Schema: mastermind_nw_feedback.v2
+Schema: mastermind_nw_feedback.v3
 
 Contents (per-book governance snapshot):
   - gate_failures: guardrail event counts (by severity/guard) from
@@ -24,6 +24,14 @@ v2 additions (counts-only, FB-R11):
   - context_audit: context engagement counts from nw_context_audit.jsonl
     (present/stale/absent runs), context_seen_rate, n_runs_total
   - metric_families: live + blocked family registry (FB-R9)
+
+v3 additions (W-AI — the Mastermind AI ↔ orchestrator dialogue; all counts/codes-only):
+  - reflection: contract-drift codes + coverage/attribution/context-quality counts from
+    data/nw_reflection/latest.json (brain/nw_reflection.py)
+  - nudges: ≤10 coded, severity-ranked asks to the NW orchestrator (no tickers, no prose
+    from any ledger — codes + template count strings only)
+  - operator_directives: ≤10 operator-authored, intake-scrubbed instructions from
+    data/mastermind_ai/directives.jsonl (brain/mastermind_ai.py owns the scrub + cap)
 
 Public-surface hard constraints (tested in tests/test_nw_feedback.py):
   1. No dollar amounts / numeric values that look like $ amounts
@@ -50,7 +58,14 @@ from pathlib import Path
 from typing import Any
 
 _ROOT = Path(__file__).resolve().parent.parent
-SCHEMA = "mastermind_nw_feedback.v2"
+SCHEMA = "mastermind_nw_feedback.v3"
+
+# v3 caps (mirror brain/mastermind_ai + brain/nw_reflection bounds)
+_MAX_NUDGES = 10
+_MAX_DIRECTIVES = 10
+_NUDGE_CODE_RE = re.compile(r'^[a-z0-9_]{1,60}$')
+_NUDGE_DETAIL_MAX = 160
+_DIRECTIVE_TEXT_MAX = 280
 
 # How many days of run_events to include in the gate-failure window.
 _EVENT_WINDOW_DAYS = 14
@@ -434,11 +449,113 @@ def _context_audit(window_days: int) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# v3: reflection / nudges / operator_directives (W-AI dialogue blocks)
+# ---------------------------------------------------------------------------
+
+def _reflection_path() -> Path:
+    return _ROOT / "data" / "nw_reflection" / "latest.json"
+
+
+def _reflection_block() -> dict:
+    """Whitelist-extract the reflection report. Codes/counts only — details dropped here;
+    the orchestrator gets the coded rows via the nudges block. Never raises."""
+    try:
+        p = _reflection_path()
+        if not p.exists():
+            return {"state": "absent"}
+        rep = json.loads(p.read_text())
+        if not isinstance(rep, dict):
+            return {"state": "absent"}
+        drift = [
+            {"code": _sanitize_key(str(d.get("code", "other"))),
+             "status": _sanitize_key(str(d.get("status", "unknown"))),
+             "severity": _sanitize_key(str(d.get("severity", "low")))}
+            for d in (rep.get("contract_drift") or []) if isinstance(d, dict)
+        ][:_MAX_NUDGES]
+        cov = rep.get("coverage") or {}
+        qual = rep.get("context_quality") or {}
+        attr = rep.get("attribution") or {}
+        return {
+            "state": "ok",
+            "asof": str(rep.get("asof", ""))[:10],
+            "contract_drift": drift,
+            "coverage": {
+                "open_theses_n": int(cov.get("open_theses_n") or 0),
+                "resolved_recent_n": int(cov.get("resolved_recent_n") or 0),
+                "with_context_row_n": int(cov.get("with_context_row_n") or 0),
+                "coverage_rate": cov.get("coverage_rate"),
+            },
+            "context_quality": {
+                "window_runs": int(qual.get("window_runs") or 0),
+                "n_present": int(qual.get("n_present") or 0),
+                "n_stale": int(qual.get("n_stale") or 0),
+                "n_absent": int(qual.get("n_absent") or 0),
+                "seen_rate": qual.get("seen_rate"),
+            },
+            "attribution": {
+                "state": _sanitize_key(str(attr.get("state", "building"))),
+                "n_resolved": int(attr.get("n_resolved") or 0),
+                "joinable_n": int(attr.get("joinable_n") or 0),
+            },
+        }
+    except Exception:
+        return {"state": "absent"}
+
+
+def _nudges_block() -> list[dict]:
+    """≤10 coded nudges for the orchestrator. Detail strings are bot-authored count
+    templates (brain/nw_reflection.derive_nudges) — length-capped here and swept by
+    _redact_secrets as defence-in-depth. Never raises."""
+    try:
+        p = _reflection_path()
+        if not p.exists():
+            return []
+        rep = json.loads(p.read_text())
+        out: list[dict] = []
+        for n in (rep.get("nudges") or []):
+            if not isinstance(n, dict):
+                continue
+            code = str(n.get("code", ""))
+            if not _NUDGE_CODE_RE.match(code):
+                code = "other"
+            out.append({
+                "code": code,
+                "kind": _sanitize_key(str(n.get("kind", "other"))),
+                "severity": _sanitize_key(str(n.get("severity", "low"))),
+                "detail": str(n.get("detail", ""))[:_NUDGE_DETAIL_MAX],
+                "first_seen": str(n.get("first_seen", ""))[:10],
+                "builds_seen": int(n.get("builds_seen") or 0),
+            })
+        return out[:_MAX_NUDGES]
+    except Exception:
+        return []
+
+
+def _operator_directives_block() -> list[dict]:
+    """Operator-authored directives for the orchestrator (intake-scrubbed by
+    brain/mastermind_ai.add_directive; re-capped here). Never raises."""
+    try:
+        from brain import mastermind_ai
+        rows = mastermind_ai.open_directives_for_publish() or []
+        out = []
+        for d in rows:
+            text = str(d.get("text", ""))[:_DIRECTIVE_TEXT_MAX]
+            rid = str(d.get("id", ""))[:16]
+            if not text or not re.match(r'^[0-9a-f]{6,16}$', rid):
+                continue
+            out.append({"id": rid, "created": str(d.get("created", ""))[:10], "text": text})
+        return out[:_MAX_DIRECTIVES]
+    except Exception:
+        return []
+
+
+# ---------------------------------------------------------------------------
 # v2: metric_families registry (FB-R9, frozen)
 # ---------------------------------------------------------------------------
 
 _METRIC_FAMILIES: dict = {
-    "live": ["context_engagement", "decision_flow", "outcome_mix"],
+    "live": ["context_engagement", "decision_flow", "outcome_mix",
+             "nw_reflection", "orchestrator_dialogue"],
     "blocked": [
         {
             "name": "fill_slippage_by_context",
@@ -453,7 +570,7 @@ _METRIC_FAMILIES: dict = {
 
 
 def build(window_days: int = _EVENT_WINDOW_DAYS) -> dict:
-    """Return the mastermind_nw_feedback.v2 payload. Never raises."""
+    """Return the mastermind_nw_feedback.v3 payload. Never raises."""
     try:
         events = _load_events(window_days)
 
@@ -477,10 +594,16 @@ def build(window_days: int = _EVENT_WINDOW_DAYS) -> dict:
             "outcome_mix": _outcome_mix(window_days),
             "context_audit": _context_audit(window_days),
             "metric_families": _METRIC_FAMILIES,
+            # v3 additions — the Mastermind AI ↔ orchestrator dialogue (W-AI)
+            "reflection": _reflection_block(),
+            "nudges": _nudges_block(),
+            "operator_directives": _operator_directives_block(),
             "note": (
                 "Machine-readable governance summary for NW integration. "
                 "Contains counts only — no position sizes, no notional values, no secrets. "
-                "v2 adds decision_flow, outcome_mix, context_audit (all counts-only, FB-R11)."
+                "v2 adds decision_flow, outcome_mix, context_audit (all counts-only, FB-R11). "
+                "v3 adds reflection, nudges, operator_directives (W-AI dialogue; codes + "
+                "operator-authored scrubbed text only)."
             ),
         }
         return payload

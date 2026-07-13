@@ -747,6 +747,16 @@ def _run_loop_maintenance_steps():
     except Exception as exc:  # noqa: BLE001
         _step_failed_event("loop_maintenance", "", "attribution.persist", exc)
 
+    # 4. MASTERMIND AI self-improvement cycle (W-AI) — journal drafting/pins + NW reflection +
+    #    loop-log row (+ every-N-loops review). Purely observational: writes files under
+    #    data/mastermind_ai/ + data/nw_reflection/ only, never touches a book/flag/prompt.
+    #    Flag-gated MASTERMIND_AI_LOOP (default ON) inside run_cycle itself.
+    try:
+        from brain import mastermind_ai as _mastermind_ai
+        _mastermind_ai.run_cycle(asof, trigger="cron")
+    except Exception as exc:  # noqa: BLE001
+        _step_failed_event("loop_maintenance", "", "mastermind_ai.run_cycle", exc)
+
 
 # The books that the deterministic/Brain builders mark only on their OWN run day. flagship marks
 # on its build (and on its carried-forward sweep), each Brain book on its run — but a book that

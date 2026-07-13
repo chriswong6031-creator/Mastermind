@@ -62,6 +62,9 @@ KNOWN_FLAGS: list[str] = [
     "MASTERMIND_STANDOUT_UNGATED",  # bool 0|1 (default 0): admit gate_go=false board names as candidacy
     "MASTERMIND_BOARD_LEARNING",    # bool 0|1 (default 0): shrink standout scores by the board's forward edge
     "MASTERMIND_TREASURY_CONTEXT",
+    # Mastermind AI self-improvement loop (W-AI — observational, files-only; no book authority)
+    "MASTERMIND_AI_LOOP",           # bool, default ON: the nightly reflection/loop-log cycle
+    "MASTERMIND_AI_REVIEW_LLM",     # bool, default OFF: capability gate for LLM prose on reviews
     # Portfolio / sizing
     "MASTERMIND_ALLOW_FRACTIONAL",
     "MASTERMIND_CAUTION_GROSS",

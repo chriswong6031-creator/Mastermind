@@ -127,6 +127,10 @@ _NON_LLM_OPERATOR_PATHS: frozenset[str] = frozenset({
     "/api/self_directed/order",
     "/api/self_directed/thesis",
     "/api/self_directed/cancel",
+    # Mastermind AI admin section (W-AI) — settings/directives/manual cycle
+    "/api/mastermind_ai/settings",
+    "/api/mastermind_ai/directive",
+    "/api/mastermind_ai/run",
 })
 
 #: Union — all operator-tier paths.

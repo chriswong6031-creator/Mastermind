@@ -53,7 +53,7 @@ def test_build_schema_fields_present(monkeypatch, tmp_path):
     """build() returns all required top-level schema fields."""
     _patch_events(monkeypatch, tmp_path, [])
     result = nw_feedback.build()
-    assert result["schema"] == "mastermind_nw_feedback.v2"
+    assert result["schema"] == nw_feedback.SCHEMA
     assert "generated_at" in result
     assert "window_days" in result
     assert "thesis_counts" in result
@@ -277,7 +277,7 @@ def test_write_redacts_mastermind_env_var_in_event_err(monkeypatch, tmp_path):
         "write() must scan and redact via _redact_secrets() before writing."
     )
     # The artifact is valid — schema and books are present
-    assert payload["schema"] == "mastermind_nw_feedback.v2"
+    assert payload["schema"] == nw_feedback.SCHEMA
     assert "books" in payload
 
 
@@ -303,7 +303,7 @@ def test_write_redacts_dollar_amount_in_payload(monkeypatch, tmp_path):
         "Dollar-amount string was NOT redacted from the published JSON. "
         "write() must redact via _redact_secrets() before writing."
     )
-    assert payload["schema"] == "mastermind_nw_feedback.v2"
+    assert payload["schema"] == nw_feedback.SCHEMA
 
 
 def test_write_redacts_hex_token_in_payload(monkeypatch, tmp_path):
@@ -329,7 +329,7 @@ def test_write_redacts_hex_token_in_payload(monkeypatch, tmp_path):
         "48-char hex token was NOT redacted from the published JSON. "
         "write() must redact via _redact_secrets() before writing."
     )
-    assert payload["schema"] == "mastermind_nw_feedback.v2"
+    assert payload["schema"] == nw_feedback.SCHEMA
 
 
 # ---------------------------------------------------------------------------
@@ -344,7 +344,7 @@ def test_build_never_raises_on_missing_data(monkeypatch, tmp_path):
     # Also break the registry import
     with patch("bridge.nw_feedback._thesis_counts", side_effect=RuntimeError("broken")):
         result = nw_feedback.build()
-    assert result["schema"] == "mastermind_nw_feedback.v2"
+    assert result["schema"] == nw_feedback.SCHEMA
     assert "books" in result
 
 
@@ -355,7 +355,7 @@ def test_build_never_raises_on_corrupt_events(monkeypatch, tmp_path):
     p.write_text("not json\n{broken\n{}\n")
     monkeypatch.setattr(nw_feedback, "_run_events_path", lambda: p)
     result = nw_feedback.build()
-    assert result["schema"] == "mastermind_nw_feedback.v2"
+    assert result["schema"] == nw_feedback.SCHEMA
 
 
 def test_write_returns_path(monkeypatch, tmp_path):
@@ -367,7 +367,7 @@ def test_write_returns_path(monkeypatch, tmp_path):
     assert out == dest / "mastermind" / "nw_feedback.json"
     assert out.exists()
     payload = json.loads(out.read_text())
-    assert payload["schema"] == "mastermind_nw_feedback.v2"
+    assert payload["schema"] == nw_feedback.SCHEMA
 
 
 # ---------------------------------------------------------------------------
@@ -614,7 +614,7 @@ def test_v2_schema_field_present(monkeypatch, tmp_path):
     monkeypatch.setattr(nw_feedback, "_nw_context_audit_path",
                         lambda: tmp_path / "brain" / "nw_context_audit.jsonl")
     result = nw_feedback.build()
-    assert result["schema"] == "mastermind_nw_feedback.v2"
+    assert result["schema"] == nw_feedback.SCHEMA
     assert "decision_flow" in result
     assert "outcome_mix" in result
     assert "context_audit" in result
@@ -1173,3 +1173,201 @@ def test_redact_secrets_key_collision_sums_numeric(tmp_path):
     assert counts["<redacted>"] == 8, (
         f"Colliding redacted numeric keys must be summed (expected 8, got {counts.get('<redacted>')})"
     )
+
+
+# ===========================================================================
+# v3 tests — W-AI dialogue blocks: reflection, nudges, operator_directives
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Isolation for the v3 seams: mastermind_ai's directive queue is a WRITE path
+# (open_directives_for_publish marks queued→published on every build()), so it
+# must never point at the real data/ tree during tests.
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _isolate_mastermind_ai_store(tmp_path, monkeypatch):
+    try:
+        from brain import mastermind_ai as mai
+        d = tmp_path / "_mastermind_ai"
+        monkeypatch.setattr(mai, "_DIR", d, raising=False)
+        monkeypatch.setattr(mai, "_SETTINGS", d / "settings.json", raising=False)
+        monkeypatch.setattr(mai, "_DIRECTIVES", d / "directives.jsonl", raising=False)
+        monkeypatch.setattr(mai, "_doctrine_block", lambda: {}, raising=False)
+    except Exception:
+        pass
+
+
+def _write_reflection_latest(tmp_path: Path, rep: dict) -> Path:
+    """Plant a synthetic data/nw_reflection/latest.json under a tmp _ROOT."""
+    p = tmp_path / "data" / "nw_reflection" / "latest.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(rep))
+    return p
+
+
+_NUDGE_CODE_OK = re.compile(r'^[a-z0-9_]{1,60}$')
+
+
+def test_v3_schema_constant():
+    assert nw_feedback.SCHEMA == "mastermind_nw_feedback.v3"
+
+
+def test_v3_build_contains_dialogue_blocks(monkeypatch, tmp_path):
+    """build() payload carries the three W-AI dialogue keys with sane empty defaults."""
+    _patch_events(monkeypatch, tmp_path, [])
+    monkeypatch.setattr(nw_feedback, "_ROOT", tmp_path)   # no reflection artifact under tmp
+    result = nw_feedback.build()
+    assert result["schema"] == "mastermind_nw_feedback.v3"
+    assert "reflection" in result
+    assert "nudges" in result
+    assert "operator_directives" in result
+    assert result["reflection"] == {"state": "absent"}
+    assert result["nudges"] == []
+    assert result["operator_directives"] == []
+
+
+def test_v3_reflection_block_whitelist_extraction(monkeypatch, tmp_path):
+    """_reflection_block whitelists codes/counts only — drift details are dropped here."""
+    monkeypatch.setattr(nw_feedback, "_ROOT", tmp_path)
+    _write_reflection_latest(tmp_path, {
+        "schema": "nw_reflection.v1", "asof": "2026-07-13T00:00:00",
+        "contract_drift": [
+            {"code": "graph_conflicts_absent", "status": "dead", "severity": "high",
+             "detail": "0/7 candidate rows carry graph_conflicts — SHOULD NOT SHIP HERE"},
+            {"code": "Bad Code!", "status": "weird status!", "severity": "HIGH!"},
+        ],
+        "coverage": {"open_theses_n": 4, "resolved_recent_n": 9, "with_context_row_n": 3,
+                     "coverage_rate": 0.231, "context_rows_n": 7},
+        "context_quality": {"window_runs": 30, "n_present": 25, "n_stale": 3, "n_absent": 2,
+                            "seen_rate": 0.833},
+        "attribution": {"state": "building", "n_resolved": 9, "joinable_n": 0},
+        "nudges": [],
+    })
+    block = nw_feedback._reflection_block()
+    assert block["state"] == "ok"
+    assert block["asof"] == "2026-07-13"
+    drift = block["contract_drift"]
+    assert drift[0] == {"code": "graph_conflicts_absent", "status": "dead", "severity": "high"}
+    # unsafe strings sanitised, and the drift rows carry NO detail key
+    assert drift[1] == {"code": "other", "status": "other", "severity": "other"}
+    for d in drift:
+        assert "detail" not in d
+    assert block["coverage"]["with_context_row_n"] == 3
+    assert block["context_quality"]["seen_rate"] == 0.833
+    assert block["attribution"] == {"state": "building", "n_resolved": 9, "joinable_n": 0}
+
+
+def test_v3_nudges_block_caps_at_10_and_codes_are_safe(monkeypatch, tmp_path):
+    """≤10 nudges on the wire; every emitted code matches ^[a-z0-9_]{1,60}$ (bad codes → 'other')."""
+    monkeypatch.setattr(nw_feedback, "_ROOT", tmp_path)
+    nudges = [{"code": f"drift_code_{i:02d}", "kind": "contract_drift", "severity": "medium",
+               "detail": f"row {i}", "first_seen": "2026-07-01", "builds_seen": i + 1}
+              for i in range(12)]
+    nudges += [
+        {"code": "Has Spaces And Caps", "kind": "staleness", "severity": "low", "detail": "x"},
+        {"code": "UPPER_ONLY", "kind": "coverage_gap", "severity": "low", "detail": "y"},
+        {"code": "a" * 61, "kind": "staleness", "severity": "low", "detail": "z"},
+    ]
+    _write_reflection_latest(tmp_path, {"nudges": nudges})
+
+    result = nw_feedback.build()
+    out = result["nudges"]
+    assert len(out) <= 10, f"nudges block must cap at 10, got {len(out)}"
+    for n in out:
+        assert _NUDGE_CODE_OK.match(n["code"]), f"unsafe nudge code shipped: {n['code']!r}"
+        assert set(n) == {"code", "kind", "severity", "detail", "first_seen", "builds_seen"}
+        assert len(n["detail"]) <= 160
+        assert isinstance(n["builds_seen"], int)
+
+    # _nudges_block directly: the three malformed codes normalise to 'other'
+    block = nw_feedback._nudges_block()
+    assert all(_NUDGE_CODE_OK.match(n["code"]) for n in block)
+
+
+def test_v3_nudge_detail_length_capped(monkeypatch, tmp_path):
+    monkeypatch.setattr(nw_feedback, "_ROOT", tmp_path)
+    _write_reflection_latest(tmp_path, {"nudges": [
+        {"code": "long_detail", "kind": "contract_drift", "severity": "high",
+         "detail": "d" * 500, "first_seen": "2026-07-01", "builds_seen": 1},
+    ]})
+    block = nw_feedback._nudges_block()
+    assert len(block) == 1
+    assert len(block[0]["detail"]) == 160
+
+
+def test_v3_nudges_missing_artifact_is_empty(monkeypatch, tmp_path):
+    monkeypatch.setattr(nw_feedback, "_ROOT", tmp_path)
+    assert nw_feedback._nudges_block() == []
+    assert nw_feedback._reflection_block() == {"state": "absent"}
+
+
+def test_v3_operator_directives_block_ships_scrubbed_rows(monkeypatch, tmp_path):
+    """A clean queued directive ships {id, created, text} and flips to published."""
+    from brain import mastermind_ai as mai
+    added = mai.add_directive("prefer confirmed bottom states over watch-only candidates")
+    assert added["ok"] is True
+    rid = added["directive"]["id"]
+
+    _patch_events(monkeypatch, tmp_path, [])
+    monkeypatch.setattr(nw_feedback, "_ROOT", tmp_path)
+    result = nw_feedback.build()
+    ods = result["operator_directives"]
+    assert len(ods) == 1
+    assert ods[0]["id"] == rid
+    assert set(ods[0]) == {"id", "created", "text"}
+    assert len(ods) <= 10
+    # the publish marked the row published in the (isolated) queue
+    assert mai.directives()[0]["status"] == "published"
+
+
+def test_v3_operator_directives_block_degrades_empty(monkeypatch, tmp_path):
+    _patch_events(monkeypatch, tmp_path, [])
+    monkeypatch.setattr(nw_feedback, "_ROOT", tmp_path)
+    result = nw_feedback.build()
+    assert result["operator_directives"] == []
+
+
+def test_v3_public_surface_guard_covers_new_blocks(monkeypatch, tmp_path):
+    """The standing no-secrets sweep holds over the v3 blocks with a realistic reflection."""
+    _patch_events(monkeypatch, tmp_path, [])
+    monkeypatch.setattr(nw_feedback, "_ROOT", tmp_path)
+    _write_reflection_latest(tmp_path, {
+        "asof": "2026-07-13",
+        "contract_drift": [{"code": "graph_conflicts_absent", "status": "dead",
+                            "severity": "high", "detail": "0/7 rows"}],
+        "coverage": {"open_theses_n": 4, "resolved_recent_n": 9, "with_context_row_n": 3,
+                     "coverage_rate": 0.231},
+        "context_quality": {"window_runs": 30, "n_present": 25, "n_stale": 3, "n_absent": 2,
+                            "seen_rate": 0.833},
+        "attribution": {"state": "building", "n_resolved": 9, "joinable_n": 0},
+        "nudges": [{"code": "graph_conflicts_absent", "kind": "contract_drift",
+                    "severity": "high", "detail": "0/7 candidate rows carry graph_conflicts",
+                    "first_seen": "2026-07-01", "builds_seen": 4}],
+    })
+    result = nw_feedback.build()
+    serialized = json.dumps(result)
+    for pat in _SECRET_PATTERNS:
+        assert not pat.findall(serialized)
+    assert "$" not in serialized
+
+
+def test_v3_write_redacts_poisoned_nudge_detail(monkeypatch, tmp_path):
+    """Defence-in-depth: secret-shaped strings planted in the reflection artifact must be
+    redacted by write() even though the producer should never emit them."""
+    _patch_events(monkeypatch, tmp_path, [])
+    monkeypatch.setattr(nw_feedback, "_ROOT", tmp_path)
+    _write_reflection_latest(tmp_path, {"nudges": [
+        {"code": "poisoned_env", "kind": "staleness", "severity": "high",
+         "detail": "leaked MASTERMIND_SECRET_FLAG value", "first_seen": "2026-07-01",
+         "builds_seen": 1},
+        {"code": "poisoned_dollars", "kind": "staleness", "severity": "low",
+         "detail": "book at $9,999 notional", "first_seen": "2026-07-01", "builds_seen": 1},
+    ]})
+    dest = tmp_path / "site"
+    out = nw_feedback.write(dest)
+    payload = json.loads(out.read_text())
+    serialized = json.dumps(payload)
+    assert "MASTERMIND_SECRET_FLAG" not in serialized
+    assert "$9,999" not in serialized
+    assert payload["schema"] == nw_feedback.SCHEMA

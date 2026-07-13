@@ -789,3 +789,17 @@ board_learning:
   edge:                 # (unverified-prior) edge_verdict thresholds (applied only once n >= min_n)
     strong_win_rate:   0.55   # (unverified-prior) win_rate >= this AND avg_return > 0 → strong
     negative_win_rate: 0.40   # (unverified-prior) avg_return <= 0 OR win_rate < this → negative
+
+# ---- MASTERMIND AI SELF-IMPROVEMENT LOOP (brain/mastermind_ai.py + brain/nw_reflection.py, W-AI) ----
+# The observational self-improvement cycle: journal drafting/pins + NW reflection + loop log +
+# every-N-loops review, riding the nightly loop_maintenance job. NO book authority — files only.
+# Runtime overrides live in data/mastermind_ai/settings.json (operator-editable via the admin API,
+# bounded to these keys). Deliberately NOT tagged (unverified-prior): process cadence is not a
+# market prior and must stay outside the self_tune surface.
+mastermind_ai:
+  loop_enabled:          true   # soft switch inside the MASTERMIND_AI_LOOP env gate
+  review_every_n_loops:  5      # the every-N-loops roll-up review + progress assessment
+  nudges_max:            10     # cap on coded nudges published to the NW orchestrator
+  attribution_min_n:     12     # graded-outcome floor before NW attribution may score (P3)
+  llm_review:            false  # runtime half of the LLM-review double gate (env: MASTERMIND_AI_REVIEW_LLM)
+  directives_max_open:   10     # queued+published operator directives the publisher may carry

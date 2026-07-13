@@ -72,6 +72,7 @@ CLASS_LIFECYCLE = "book-lifecycle"          # W6/T2 — probation/retire book re
 CLASS_COST = "cost-guard"
 CLASS_DEPLOY = "deploy-lag"
 CLASS_MODEL = "student-drift"
+CLASS_NW = "nw-context-drift"               # W-AI — NW reflection nudges (contract drift / coverage / staleness)
 
 # ranking weights per class — a coarse severity prior (P3: evidence strength, not vibes). The final
 # rank is (base_weight × class) + per-item severity bump, so a matured experiment or an un-armed gate
@@ -83,6 +84,7 @@ _CLASS_WEIGHT = {
     CLASS_EXPERIMENT: 86,
     CLASS_JOURNAL: 80,
     CLASS_CALIBRATION: 74,
+    CLASS_NW: 72,                  # a dead decision-policy field is a perception hole, not cosmetics
     CLASS_SHADOW: 68,
     CLASS_BENCHMARK: 64,
     CLASS_MODEL: 58,
@@ -807,6 +809,62 @@ def _from_model_drift(asof: date) -> list[dict]:
 # dedup / carry-forward against prior agendas
 # ─────────────────────────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+# SOURCE 10 — NW reflection nudges (W-AI; lazy-imported, degrades absent)
+# ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+def _from_nw_reflection(asof: date) -> list[dict]:
+    """High/medium-severity nudges from the Mastermind AI reflection engine become agenda items.
+
+    A 'dead' decision-policy field (e.g. graph_conflicts absent from every live candidate row)
+    is a perception hole the bot cannot fix alone — the fix is a macro-side publication change,
+    so the item lands owner=opus-session with the nudge code as its stable dedup key. Coverage
+    and staleness nudges are experiments/ops items. Degrades to [] when the reflection artifact
+    is absent (charter P2)."""
+    try:
+        from brain import nw_reflection
+        rep = nw_reflection.latest() or {}
+        items: list[dict] = []
+        for n in (rep.get("nudges") or []):
+            if not isinstance(n, dict) or n.get("severity") not in ("high", "medium"):
+                continue
+            code = str(n.get("code", "other"))
+            kind = str(n.get("kind", "other"))
+            sev = 0.8 if n.get("severity") == "high" else 0.4
+            evidence = [
+                f"nw_reflection {rep.get('asof')}: {str(n.get('detail', ''))[:200]}",
+                f"first seen {n.get('first_seen')}, observed in {n.get('builds_seen')} build(s)",
+            ]
+            if kind == "contract_drift":
+                fix = ("Macro-side: publish the missing field/vocabulary into "
+                       "mastermind_context.v1 (engine/neuralweb/mastermind_context.py), or "
+                       "bot-side: retire the dead decision-policy leg in "
+                       "brain/neural_web_context.py. The nudge is already on the wire in "
+                       "nw_feedback.v3 — check the orchestrator ack first.")
+                fix_type, owner = FIX_CODE, OWNER_OPUS
+                impact = "revives a dead leg of the NW decision ladder (or removes false comfort)"
+            elif kind == "coverage_gap":
+                fix = ("Widen the macro candidate universe or accept the gap deliberately; "
+                       "grade decisions-without-context vs decisions-with once the outcome "
+                       "cohort matures.")
+                fix_type, owner = FIX_EXPERIMENT, OWNER_OPUS
+                impact = "more of the book's names get NW context at decision time"
+            else:  # staleness / lobe_request
+                fix = "Ops: check the macro publish lane / vendor refresh for this artifact."
+                fix_type, owner = FIX_CODE, OWNER_OPUS
+                impact = "restores fresh context to the seats"
+            items.append(_item(
+                f"nw:{code}", CLASS_NW,
+                f"NW context: {code.replace('_', ' ')}",
+                evidence=evidence, suggested_fix=fix, fix_type=fix_type,
+                expected_impact=impact, owner=owner, severity=sev,
+                extra={"nudge_code": code, "nudge_kind": kind},
+            ))
+        return items
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def _prior_agenda(asof: date) -> dict:
     """The most recent agenda JSON strictly before `asof` (for carry-forward age tracking)."""
     try:
@@ -881,6 +939,7 @@ def build(asof: date | None = None, *, cio_rep: dict | None = None) -> dict:
         lambda: _from_cost_guard(asof),
         lambda: _from_deploy_lag(asof),
         lambda: _from_model_drift(asof),
+        lambda: _from_nw_reflection(asof),
     ):
         try:
             items.extend(fn() or [])

@@ -27,7 +27,8 @@ _MAX_ENTRIES = 512
 
 # Never cache: live per-request lookups keyed off user-supplied query text, and the interactive
 # Portfolio Desk (/api/pfolio/*) where a just-added position must show immediately (not after the TTL).
-_DENY_PREFIXES = ("/api/self_directed/search", "/api/self_directed/quote", "/api/pfolio/")
+_DENY_PREFIXES = ("/api/self_directed/search", "/api/self_directed/quote", "/api/pfolio/",
+                  "/api/mastermind_ai")  # W-AI admin surface — always fresh, never mirror-cached
 
 
 def _ttl() -> float:
