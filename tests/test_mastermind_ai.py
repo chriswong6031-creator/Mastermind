@@ -79,6 +79,7 @@ def test_settings_defaults():
         "llm_review": False,
         "directives_max_open": 10,
         "directive_expiry_days": 14,
+        "auto_act_on_findings": False,
     }
 
 
@@ -625,3 +626,98 @@ def test_flag_helpers_defaults(monkeypatch):
     assert mai.llm_review_flag_on() is False     # LLM review defaults OFF
     monkeypatch.setenv("MASTERMIND_AI_LOOP", "0")
     assert mai.loop_flag_on() is False
+
+
+# ───────────────────────────── auto_act_on_findings ─────────────────────────────
+
+def test_auto_act_on_findings_default_is_false():
+    """auto_act_on_findings must default OFF — the loop must not draft without operator grant."""
+    assert mai.settings()["auto_act_on_findings"] is False
+
+
+def test_update_settings_accepts_auto_act_on_findings_bool():
+    """Round-trip: True persists correctly; False restores it."""
+    res = mai.update_settings({"auto_act_on_findings": True})
+    assert res["ok"] is True
+    assert res["rejected"] == []
+    assert res["settings"]["auto_act_on_findings"] is True
+    on_disk = json.loads(mai._SETTINGS.read_text())
+    assert on_disk["auto_act_on_findings"] is True
+    res2 = mai.update_settings({"auto_act_on_findings": False})
+    assert res2["settings"]["auto_act_on_findings"] is False
+
+
+def test_update_settings_rejects_junk_type_for_auto_act():
+    """_coerce for bool: a plain dict is not a string/int/bool — must be rejected."""
+    res = mai.update_settings({"auto_act_on_findings": {"not": "coercible"}})
+    assert "auto_act_on_findings" in res["rejected"]
+    assert mai.settings()["auto_act_on_findings"] is False
+
+
+def test_update_settings_coerces_string_true_for_auto_act():
+    """_coerce for bool accepts '1'/'true' strings — assert the actual contract."""
+    res = mai.update_settings({"auto_act_on_findings": "true"})
+    assert res["ok"] is True and res["rejected"] == []
+    assert res["settings"]["auto_act_on_findings"] is True
+
+
+def _make_persist_stub(nudges: list[dict]):
+    """Return a nwr.persist stub that writes nudges into the isolated _LATEST and returns them.
+
+    run_cycle calls persist() in step 2, overwriting whatever _plant_nudges wrote; this stub
+    makes step 2 produce the desired nudge list so the auto-draft step in the same tick sees
+    them — matching the production ordering where step 2 persists tonight's fresh reflection
+    and step 3+ reads it."""
+    def _stub(asof=None, **kw):
+        rep = {"schema": "nw_reflection.v1", "asof": str(asof or ""), "nudges": nudges}
+        nwr._OUT_DIR.mkdir(parents=True, exist_ok=True)
+        nwr._LATEST.write_text(json.dumps(rep))
+        return rep
+    return _stub
+
+
+def test_run_cycle_does_not_auto_draft_when_setting_off(monkeypatch):
+    """Default OFF: even with open nudges, run_cycle must not queue any directive."""
+    monkeypatch.setenv("MASTERMIND_AI_LOOP", "1")
+    monkeypatch.setattr(nwr, "persist", _make_persist_stub([_nudge("fdr_cleared_absent")]))
+    row = mai.run_cycle("2026-07-14")
+    assert row["ok"] is True
+    assert "auto_draft" not in row["steps"]
+    assert mai.directives() == []
+
+
+def test_run_cycle_auto_drafts_when_setting_on(monkeypatch):
+    """Standing grant ON: cycle queues one directive per open nudge with source 'nudge:<code>'."""
+    monkeypatch.setenv("MASTERMIND_AI_LOOP", "1")
+    assert mai.update_settings({"auto_act_on_findings": True})["ok"]
+    nudges = [_nudge("fdr_cleared_absent"), _nudge("graph_conflicts_absent", "medium")]
+    monkeypatch.setattr(nwr, "persist", _make_persist_stub(nudges))
+    row = mai.run_cycle("2026-07-14")
+    assert row["ok"] is True
+    ad = row["steps"].get("auto_draft")
+    assert ad is not None
+    assert ad["queued_n"] == 2
+    assert ad["skipped_n"] == 0
+    rows = mai.directives()
+    sources = {d["source"] for d in rows}
+    assert sources == {"nudge:fdr_cleared_absent", "nudge:graph_conflicts_absent"}
+    # summary clause present when queued_n > 0
+    assert "2 directives auto-drafted" in row["summary"]
+
+
+def test_run_cycle_auto_draft_dedup_second_cycle(monkeypatch):
+    """Second cycle with the same open nudges queues nothing new (dedup on open source)."""
+    monkeypatch.setenv("MASTERMIND_AI_LOOP", "1")
+    assert mai.update_settings({"auto_act_on_findings": True})["ok"]
+    monkeypatch.setattr(nwr, "persist", _make_persist_stub([_nudge("fdr_cleared_absent")]))
+    mai.run_cycle("2026-07-14")   # first cycle — drafts one directive
+    row2 = mai.run_cycle("2026-07-15")
+    assert row2["ok"] is True
+    ad = row2["steps"].get("auto_draft")
+    assert ad is not None
+    assert ad["queued_n"] == 0
+    assert ad["skipped_n"] == 1
+    # no extra directive: still only one row in the ledger
+    assert len(mai.directives()) == 1
+    # no auto-drafted clause in summary when queued_n == 0
+    assert "directives auto-drafted" not in row2["summary"]

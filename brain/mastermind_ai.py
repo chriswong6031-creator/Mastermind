@@ -52,6 +52,7 @@ _DEFAULTS: dict[str, Any] = {
     "llm_review": False,           # runtime half of the LLM-review double gate
     "directives_max_open": 10,     # queued+published directives the publisher may carry
     "directive_expiry_days": 14,   # published-but-never-acknowledged directives expire after N days
+    "auto_act_on_findings": False, # standing grant: run_cycle drafts directives from open nudges
 }
 # bounds enforced on operator writes — a settings API must never widen its own surface
 _BOUNDS: dict[str, tuple] = {
@@ -62,6 +63,7 @@ _BOUNDS: dict[str, tuple] = {
     "llm_review": (bool,),
     "directives_max_open": (int, 1, 10),
     "directive_expiry_days": (int, 3, 60),
+    "auto_act_on_findings": (bool,),
 }
 
 _DIRECTIVE_MAX_CHARS = 280
@@ -300,8 +302,10 @@ def _directive_text_for_nudge(code: str, detail: str) -> str:
 
 
 def draft_directives_from_nudges(codes: list[str] | None = None) -> dict:
-    """Draft directives from the currently open reflection nudges — operator ONE-CLICK bulk
-    authoring. The click IS the authority: the loop never calls this on its own.
+    """Draft directives from the currently open reflection nudges — operator bulk authoring.
+    Authority is operator-granted: per-click via the API, or as a STANDING grant via the
+    auto_act_on_findings setting. The loop calls this only under that standing grant; without
+    it, authority still requires an explicit operator click.
 
     codes missing/empty means all currently open nudges. Returns
     {ok, queued: [{id, code, text}], skipped: [{code, reason}], open_slots}."""
@@ -601,6 +605,23 @@ def run_cycle(asof: date | str | None = None, trigger: str = "manual") -> dict:
     steps["ack"] = reconcile_ack()
     steps["directive_expiry"] = expire_stale_published()
 
+    # auto-draft: runs AFTER ack+expiry so any slots freed this tick are immediately usable.
+    # Requires an explicit operator standing grant (auto_act_on_findings); the loop still
+    # never originates directives without that grant — authority is operator-granted, per-click
+    # via the API or as a standing grant via this setting.
+    if cfg.get("auto_act_on_findings"):
+        try:
+            res = draft_directives_from_nudges()  # no codes = all open nudges
+            if res.get("ok"):
+                steps["auto_draft"] = {
+                    "queued_n": len(res.get("queued") or []),
+                    "skipped_n": len(res.get("skipped") or []),
+                }
+            else:
+                steps["auto_draft"] = {"error": str(res.get("error") or type(res).__name__)}
+        except Exception as exc:  # noqa: BLE001
+            steps["auto_draft"] = {"error": type(exc).__name__}
+
     # 4. state snapshots for the log
     jc = _journal_counts()
     steps["journal"] = jc
@@ -617,7 +638,9 @@ def run_cycle(asof: date | str | None = None, trigger: str = "manual") -> dict:
                f"{jc['pending']} lessons pending, {jc['pins_active']} pinned rules, "
                f"{nudges_open} open nudges to the orchestrator"
                + (f", {steps['ack']['directives_acknowledged']} directives acknowledged"
-                  if steps.get("ack", {}).get("directives_acknowledged") else ""))
+                  if steps.get("ack", {}).get("directives_acknowledged") else "")
+               + (f", {steps['auto_draft']['queued_n']} directives auto-drafted"
+                  if steps.get("auto_draft", {}).get("queued_n") else ""))
     # one honest clause when nobody has been listening — the loop must not read as healthy
     # dialogue while every publish lands in the void
     try:

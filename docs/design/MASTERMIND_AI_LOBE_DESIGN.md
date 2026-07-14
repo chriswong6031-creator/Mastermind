@@ -197,3 +197,22 @@ The frozen judge (`loop/harness.py`) and the self_tune denylist are untouched.
   amount / key-shaped token / credential assignment), never echo the matched text.
 - **loop_n continuity** — derived from the last row's counter (fallback row-count+1), immune to
   log truncation/rotation.
+
+## 8. Auto-act on findings (2026-07-14)
+
+- **Setting**: `auto_act_on_findings` (bool, default `False`). Bounded in `_BOUNDS`; hot-adjustable
+  via the settings API without restart.
+- **Doctrine amendment**: the W-AI.1 law "the click IS the authority — the loop never calls this on
+  its own" is amended to "authority is operator-granted: per-click via the API, or as a STANDING
+  grant via the `auto_act_on_findings` setting." The loop still never originates directives without
+  an operator grant; the authority boundary is otherwise unchanged.
+- **Placement in run_cycle**: the auto-draft step runs AFTER ack reconciliation and directive expiry
+  (step 3), so any slots freed in the same tick are immediately available to the new drafts. Step 2
+  has already persisted the fresh reflection, so `draft_directives_from_nudges()` reads tonight's
+  nudges — step ordering must not change.
+- **Unchanged machinery**: dedup on `source nudge:<code>` (an open directive for a code is skipped),
+  the `directives_max_open` slot cap, the full `_DIRECTIVE_DENY` + 280-char intake scrub, and
+  directive expiry are all identical to the operator-click path — no scrub exemption for auto-draft.
+- **Loop-log row**: `steps["auto_draft"]` carries counts only (`queued_n`, `skipped_n`; or
+  `{"error": "<ExcName>"}` on failure). Directive texts are never logged here; loop_log.jsonl
+  rsyncs to the public mirror.

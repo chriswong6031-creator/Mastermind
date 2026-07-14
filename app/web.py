@@ -1436,8 +1436,9 @@ def api_mastermind_ai_directive(req: _MMAIDirectiveReq) -> JSONResponse:
 @router.post("/api/mastermind_ai/act_on_nudges")
 def api_mastermind_ai_act_on_nudges(req: _MMAIActNudgesReq) -> JSONResponse:
     """Bulk-draft directives from the currently open reflection nudges (all of them when
-    codes is empty/omitted). The operator click IS the authority — the loop never queues
-    these on its own, and every drafted text passes the same intake scrub as a typed one."""
+    codes is empty/omitted). Authority is operator-granted: per-click via this endpoint, or
+    as a standing grant via the auto_act_on_findings setting (in which case run_cycle drafts
+    them automatically). Every drafted text passes the same intake scrub as a typed one."""
     try:
         import bot  # noqa: F401
         from brain import mastermind_ai
