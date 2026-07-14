@@ -15,17 +15,24 @@ Report schema ``nw_reflection.v1``::
      attribution:    {state: building|scoring, n_resolved, joinable_n, note},
      context_quality:{window_runs, n_present, n_stale, n_absent, seen_rate,
                       current_streak, gap_notes_latest, asof_lag_days_latest},
-     nudges:         [{code, kind, severity, detail, first_seen, builds_seen}]}
+     nudges:         [{code, kind, severity, detail, first_seen, builds_seen}],
+     nudges_dropped_n: int  (candidates cut by the max_n cap — dropped, never 'resolved'),
+     nudges_resolved_recent: [{code, resolved_on}]  (<=5 newest tombstones from the registry)}
 
 Charter law: P2 everywhere — every block degrades to an honest empty/'unknown' state, never raises,
 never fabricates a grade (attribution stays 'building' at n<min_n). All nudge codes and details are
 public-surface safe by construction: codes match ^[a-z0-9_]{1,60}$, details are template strings
 with counts only — no tickers, no prose from any ledger, no env names.
 
-Persistence (both under data/nw_reflection/ — auto-rsynced to the public mirror, so the same
+Persistence (all under data/nw_reflection/ — auto-rsynced to the public mirror, so the same
 counts-only discipline binds):
-  * latest.json    — the full current report.
-  * history.jsonl  — one line per asof (keep-first), for trend reads.
+  * latest.json      — the full current report.
+  * history.jsonl    — one line per asof (latest-wins: a same-asof re-run replaces its row, so a
+                       morning run's worse numbers never freeze for the day), for trend reads.
+  * nudge_state.json — the nudge lifecycle registry (nw_nudge_state.v1): per-code
+                       first_seen/last_seen/builds_seen/status/resolved_on. Counters survive a
+                       skipped build; resolution is a dated tombstone judged on the PRE-CAP
+                       candidate set, and only when the code's detector actually ran (W-AI.1).
 """
 from __future__ import annotations
 
@@ -39,8 +46,10 @@ _ROOT = Path(__file__).resolve().parent.parent
 _OUT_DIR = _ROOT / "data" / "nw_reflection"
 _LATEST = _OUT_DIR / "latest.json"
 _HISTORY = _OUT_DIR / "history.jsonl"
+_NUDGE_STATE = _OUT_DIR / "nudge_state.json"
 
 SCHEMA = "nw_reflection.v1"
+_NUDGE_STATE_SCHEMA = "nw_nudge_state.v1"
 
 # rolling window over the nw_context_audit sidecar
 _AUDIT_WINDOW_RUNS = 30
@@ -48,6 +57,10 @@ _AUDIT_WINDOW_RUNS = 30
 _ATTRIBUTION_MIN_N = 12
 # hard cap on emitted nudges (mirrors the public artifact bound)
 _NUDGES_MAX = 10
+# coverage-nudge hysteresis: fires below the floor, and once open clears only at the ceiling —
+# the live rate flapped at exactly 0.5, and a knife-edge nudge is noise, not a signal
+_COVERAGE_NUDGE_FLOOR = 0.5
+_COVERAGE_NUDGE_CLEAR = 0.55
 
 _CODE_RE = re.compile(r"^[a-z0-9_]{1,60}$")
 
@@ -312,8 +325,18 @@ def context_quality(window: int = _AUDIT_WINDOW_RUNS) -> dict:
 # nudges — the structured asks to the orchestrator
 # ─────────────────────────────────────────────────────────────────────────────
 
+# every non-drift nudge code is fixed vocabulary; anything else was minted by contract_drift()
+_KIND_BY_CODE = {"coverage_below_half": "coverage_gap", "context_stale_streak": "staleness",
+                 "context_absent_streak": "staleness", "gap_notes_elevated": "staleness"}
+
+
+def _code_kind(code: str) -> str:
+    return _KIND_BY_CODE.get(code, "contract_drift")
+
+
 def _prior_nudges() -> dict[str, dict]:
-    """{code: nudge} from the last persisted report — carries first_seen/builds_seen forward."""
+    """{code: nudge} from the last persisted report — one-time legacy counter seed for codes
+    that predate nudge_state.json (the registry owns the counters from then on)."""
     try:
         if _LATEST.exists():
             prev = json.loads(_LATEST.read_text())
@@ -323,20 +346,71 @@ def _prior_nudges() -> dict[str, dict]:
     return {}
 
 
-def derive_nudges(drift: list[dict], cov: dict, quality: dict,
-                  asof: str, max_n: int = _NUDGES_MAX) -> list[dict]:
-    """Fold the report blocks into ≤max_n coded nudges, carrying seen-counters forward."""
-    prior = _prior_nudges()
+def _read_nudge_state() -> dict:
+    try:
+        if _NUDGE_STATE.exists():
+            v = json.loads(_NUDGE_STATE.read_text())
+            if isinstance(v, dict) and isinstance(v.get("codes"), dict):
+                return v
+    except Exception:  # noqa: BLE001
+        pass
+    return {"schema": _NUDGE_STATE_SCHEMA, "codes": {}}
+
+
+def _write_nudge_state(state: dict) -> None:
+    try:
+        _OUT_DIR.mkdir(parents=True, exist_ok=True)
+        _NUDGE_STATE.write_text(json.dumps(state, indent=2, default=str))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _update_nudge_registry(candidates: list[dict], asof: str, ran_kinds: set[str]) -> dict:
+    """Advance nudge_state.json from the PRE-CAP candidate set; returns the codes map.
+
+    Lifecycle law: a candidate code is open (builds_seen counted once per asof — a same-asof
+    re-run never double-counts); an open code absent from the candidates resolves with a dated
+    tombstone ONLY when its detector actually ran this build (ran_kinds) — an absent context
+    can never claim a drift code was fixed. A resolved code that reappears reopens keeping its
+    original first_seen. Writes are P2 fail-soft."""
+    state = _read_nudge_state()
+    codes: dict = state.setdefault("codes", {})
+    candidate_codes = {c["code"] for c in candidates}
+    legacy: dict | None = None
+    for code in candidate_codes:
+        ent = codes.get(code)
+        if not isinstance(ent, dict):
+            if legacy is None:
+                legacy = _prior_nudges()
+            p = legacy.get(code) or {}
+            codes[code] = {"first_seen": p.get("first_seen") or asof, "last_seen": asof,
+                           "builds_seen": int(p.get("builds_seen") or 0) + 1,
+                           "status": "open", "resolved_on": None}
+            continue
+        if ent.get("last_seen") != asof:
+            ent["builds_seen"] = int(ent.get("builds_seen") or 0) + 1
+        ent["last_seen"] = asof
+        ent["status"] = "open"
+        ent["resolved_on"] = None
+    for code, ent in codes.items():
+        if code in candidate_codes or not isinstance(ent, dict) or ent.get("status") != "open":
+            continue
+        if _code_kind(code) not in ran_kinds:
+            continue  # detector never ran — "vanished" is not "fixed"
+        ent["status"] = "resolved"
+        ent["resolved_on"] = asof
+    _write_nudge_state(state)
+    return codes
+
+
+def _nudge_candidates(drift: list[dict], cov: dict, quality: dict) -> list[dict]:
+    """The FULL pre-cap candidate list {code, kind, severity, detail} — the registry update and
+    the resolution judgement both run against this set, never the capped emission."""
     out: list[dict] = []
 
     def _emit(code: str, kind: str, severity: str, detail: str) -> None:
-        code = _safe_code(code)
-        p = prior.get(code) or {}
-        out.append({
-            "code": code, "kind": kind, "severity": severity, "detail": detail,
-            "first_seen": p.get("first_seen") or asof,
-            "builds_seen": int(p.get("builds_seen") or 0) + 1,
-        })
+        out.append({"code": _safe_code(code), "kind": kind, "severity": severity,
+                    "detail": detail})
 
     for d in drift:
         if d.get("status") in ("dead", "partial"):
@@ -349,10 +423,16 @@ def derive_nudges(drift: list[dict], cov: dict, quality: dict,
     rate = cov.get("coverage_rate")
     if (cov.get("state") == "ok" and isinstance(rate, (int, float))
             and cov.get("open_theses_n", 0) + cov.get("resolved_recent_n", 0) >= 5):
-        if rate < 0.5:
+        # hysteresis: an already-open nudge keeps firing until the rate CLEARS the band —
+        # the live rate sat at exactly 0.5 and flapped the nudge on alternating builds
+        reg = _read_nudge_state().get("codes", {}).get("coverage_below_half") or {}
+        threshold = (_COVERAGE_NUDGE_CLEAR if isinstance(reg, dict)
+                     and reg.get("status") == "open" else _COVERAGE_NUDGE_FLOOR)
+        if rate < threshold:
             _emit("coverage_below_half", "coverage_gap", "medium",
                   f"only {cov.get('with_context_row_n')} of our decided subjects have a "
-                  f"candidate_context row (rate {rate})")
+                  f"candidate_context row (rate {rate}; fires <{_COVERAGE_NUDGE_FLOOR}, "
+                  f"clears at >={_COVERAGE_NUDGE_CLEAR})")
 
     if quality.get("state") == "ok":
         streak = quality.get("current_streak") or {}
@@ -363,10 +443,41 @@ def derive_nudges(drift: list[dict], cov: dict, quality: dict,
         if isinstance(gaps, int) and gaps >= 3:
             _emit("gap_notes_elevated", "staleness", "low",
                   f"latest build carries {gaps} producer gap notes")
+    return out
 
+
+def _derive_nudges_state(drift: list[dict], cov: dict, quality: dict, asof: str,
+                         max_n: int, drift_ran: bool | None) -> tuple[list[dict], int, dict]:
+    """(emitted, candidates_n, registry_codes) — the full fold behind derive_nudges; build()
+    uses the extras for the honest dropped/resolved accounting."""
+    candidates = _nudge_candidates(drift, cov, quality)
+    if drift_ran is None:
+        # contract_drift() returns [] for BOTH a healthy and an absent context — without the
+        # caller's word only a non-empty drift list proves the detector ran (conservative:
+        # never resolve on ambiguity).
+        drift_ran = bool(drift)
+    ran_kinds: set[str] = set()
+    if drift_ran:
+        ran_kinds.add("contract_drift")
+    if cov.get("state") == "ok":
+        ran_kinds.add("coverage_gap")
+    if quality.get("state") == "ok":
+        ran_kinds.add("staleness")
+    codes = _update_nudge_registry(candidates, asof, ran_kinds)
+    out: list[dict] = []
+    for c in candidates:
+        ent = codes.get(c["code"]) or {}
+        out.append({**c, "first_seen": ent.get("first_seen") or asof,
+                    "builds_seen": int(ent.get("builds_seen") or 1)})
     sev_rank = {"high": 0, "medium": 1, "low": 2}
     out.sort(key=lambda x: (sev_rank.get(x.get("severity"), 3), x.get("code", "")))
-    return out[:max_n]
+    return out[:max_n], len(candidates), codes
+
+
+def derive_nudges(drift: list[dict], cov: dict, quality: dict, asof: str,
+                  max_n: int = _NUDGES_MAX, *, drift_ran: bool | None = None) -> list[dict]:
+    """Fold the report blocks into ≤max_n coded nudges, counters from the lifecycle registry."""
+    return _derive_nudges_state(drift, cov, quality, asof, max_n, drift_ran)[0]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -375,7 +486,8 @@ def derive_nudges(drift: list[dict], cov: dict, quality: dict,
 
 def build(asof: date | str | None = None, *, nudges_max: int | None = None,
           attribution_min_n: int | None = None) -> dict:
-    """Assemble the full nw_reflection.v1 report. Pure read; never raises.
+    """Assemble the full nw_reflection.v1 report + advance the nudge lifecycle registry.
+    Never raises.
 
     Optional overrides come from brain.mastermind_ai settings (one-way import direction:
     mastermind_ai → nw_reflection, never the reverse)."""
@@ -394,7 +506,20 @@ def build(asof: date | str | None = None, *, nudges_max: int | None = None,
         cov = coverage()
         qual = context_quality()
         attr = attribution(min_n=attribution_min_n or _ATTRIBUTION_MIN_N)
-        nudges = derive_nudges(drift, cov, qual, asof_s, max_n=nudges_max or _NUDGES_MAX)
+        # contract_drift() returns [] for both a healthy and an absent artifact — resolution
+        # honesty needs to know whether the detector actually ran (context present).
+        try:
+            from brain import neural_web_context as nwc
+            drift_ran = bool(drift) or bool(nwc.context())
+        except Exception:  # noqa: BLE001
+            drift_ran = bool(drift)
+        nudges, candidates_n, reg_codes = _derive_nudges_state(
+            drift, cov, qual, asof_s, nudges_max or _NUDGES_MAX, drift_ran)
+        resolved = sorted(
+            ({"code": k, "resolved_on": v.get("resolved_on")}
+             for k, v in reg_codes.items()
+             if isinstance(v, dict) and v.get("status") == "resolved" and v.get("resolved_on")),
+            key=lambda r: (str(r["resolved_on"]), str(r["code"])), reverse=True)
         return {
             "schema": SCHEMA,
             "asof": asof_s,
@@ -404,31 +529,47 @@ def build(asof: date | str | None = None, *, nudges_max: int | None = None,
             "attribution": attr,
             "context_quality": qual,
             "nudges": nudges,
+            "nudges_dropped_n": max(0, candidates_n - len(nudges)),
+            "nudges_resolved_recent": resolved[:5],
         }
     except Exception:  # noqa: BLE001
         return {"schema": SCHEMA, "asof": asof_s, "generated_at": _now_iso(),
                 "contract_drift": [], "coverage": {"state": "absent"},
                 "attribution": {"state": "building", "n_resolved": 0, "joinable_n": 0},
-                "context_quality": {"state": "accruing", "window_runs": 0}, "nudges": []}
+                "context_quality": {"state": "accruing", "window_runs": 0}, "nudges": [],
+                "nudges_dropped_n": 0, "nudges_resolved_recent": []}
 
 
 def persist(asof: date | str | None = None, *, nudges_max: int | None = None,
             attribution_min_n: int | None = None) -> dict:
-    """build() + write latest.json + append history.jsonl (keep-first per asof). Never raises."""
+    """build() + write latest.json + upsert history.jsonl (latest-wins per asof). Never raises."""
     rep = build(asof, nudges_max=nudges_max, attribution_min_n=attribution_min_n)
     try:
         _OUT_DIR.mkdir(parents=True, exist_ok=True)
         _LATEST.write_text(json.dumps(rep, indent=2, default=str))
-        seen = {r.get("asof") for r in _read_jsonl(_HISTORY)}
-        if rep.get("asof") not in seen:
-            compact = {
-                "asof": rep["asof"], "generated_at": rep["generated_at"],
-                "drift_n": len(rep.get("contract_drift") or []),
-                "nudges_n": len(rep.get("nudges") or []),
-                "coverage_rate": (rep.get("coverage") or {}).get("coverage_rate"),
-                "seen_rate": (rep.get("context_quality") or {}).get("seen_rate"),
-                "attribution_state": (rep.get("attribution") or {}).get("state"),
-            }
+        compact = {
+            "asof": rep["asof"], "generated_at": rep["generated_at"],
+            "drift_n": len(rep.get("contract_drift") or []),
+            "nudges_n": len(rep.get("nudges") or []),
+            "coverage_rate": (rep.get("coverage") or {}).get("coverage_rate"),
+            "seen_rate": (rep.get("context_quality") or {}).get("seen_rate"),
+            "attribution_state": (rep.get("attribution") or {}).get("state"),
+        }
+        rows = _read_jsonl(_HISTORY)
+        if any(r.get("asof") == rep.get("asof") for r in rows):
+            # latest-wins per asof: the file is ~1 line/day so a full rewrite is fine — and it
+            # fixes the day-one divergence where a morning run's worse numbers froze for the day
+            replaced = False
+            kept: list[dict] = []
+            for r in rows:
+                if r.get("asof") == rep.get("asof"):
+                    if not replaced:
+                        kept.append(compact)
+                        replaced = True
+                    continue
+                kept.append(r)
+            _HISTORY.write_text("".join(json.dumps(r, default=str) + "\n" for r in kept))
+        else:
             with _HISTORY.open("a") as fh:
                 fh.write(json.dumps(compact, default=str) + "\n")
     except Exception:  # noqa: BLE001

@@ -130,6 +130,7 @@ _NON_LLM_OPERATOR_PATHS: frozenset[str] = frozenset({
     # Mastermind AI admin section (W-AI) — settings/directives/manual cycle
     "/api/mastermind_ai/settings",
     "/api/mastermind_ai/directive",
+    "/api/mastermind_ai/act_on_nudges",
     "/api/mastermind_ai/run",
 })
 

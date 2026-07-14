@@ -13,11 +13,13 @@ Coverage:
   * coverage(): counts-only join of decided subjects vs candidate rows; absent state.
   * attribution(): honest 'building' below min_n; never raises on garbage; scoring at n>=min_n.
   * context_quality(): accruing when sidecar absent; counts/streak on rows.
-  * derive_nudges(): first_seen/builds_seen carried forward from prior latest.json;
-    max_n cap; severity ordering (high < medium < low positions); the coverage nudge
-    requires cov state 'ok' (absence-is-not-drift).
+  * derive_nudges(): first_seen/builds_seen carried forward (registry, legacy-seeded from a
+    prior latest.json); max_n cap; severity ordering (high < medium < low positions); the
+    coverage nudge requires cov state 'ok' (absence-is-not-drift) + the 0.5/0.55 hysteresis band.
+  * nudge lifecycle registry (W-AI.1): counters survive a skipped build; resolution tombstones
+    (pre-cap judged, detector-ran gated); same-asof re-runs never double-count.
   * build(): the pre-read _reset_context_cache() call is fail-soft.
-  * persist(): writes latest.json + appends history.jsonl keep-first per asof; latest() read-back.
+  * persist(): writes latest.json + history.jsonl latest-wins per asof; latest() read-back.
 """
 from __future__ import annotations
 
@@ -41,6 +43,7 @@ def _isolate_reflection(tmp_path, monkeypatch):
     monkeypatch.setattr(nwr, "_OUT_DIR", out, raising=True)
     monkeypatch.setattr(nwr, "_LATEST", out / "latest.json", raising=True)
     monkeypatch.setattr(nwr, "_HISTORY", out / "history.jsonl", raising=True)
+    monkeypatch.setattr(nwr, "_NUDGE_STATE", out / "nudge_state.json", raising=True)
     # hermetic defaults — individual tests override
     monkeypatch.setattr(nwc, "context", lambda: {}, raising=True)
     monkeypatch.setattr(nwc, "market_plane", lambda: {"stale": True, "asof": None}, raising=True)
@@ -396,6 +399,135 @@ def test_derive_nudges_codes_are_public_surface_safe(tmp_path):
     nudges = nwr.derive_nudges(drift, {}, {}, "2026-07-13")
     for n in nudges:
         assert nwr._CODE_RE.match(n["code"]), n["code"]
+
+
+# ───────────────────────────── nudge lifecycle registry (W-AI.1) ─────────────────────────────
+
+# 1 WATCH-only row → 3 drift codes: graph_conflicts_absent, fdr_cleared_absent,
+# bottom_state_vocabulary_drift
+_DRIFT_CTX = {"candidate_context": {"AAA": {"bottom": {"bottom_state": "WATCH"}}}}
+# full vocabulary + graph_conflicts + one fdr_cleared row → zero drift, detector RAN
+_HEALTHY_CTX = {
+    "candidate_context": {
+        "AAA": {"bottom": {"bottom_state": "WATCH"}, "graph_conflicts": [],
+                "kernel": {"fdr_cleared": True}},
+        "BBB": {"bottom": {"bottom_state": "BOTTOMING"}, "graph_conflicts": ["x_vs_y"]},
+        "CCC": {"bottom": {"bottom_state": "CONFIRMED"}, "graph_conflicts": []},
+    },
+}
+
+
+def _registry_codes() -> dict:
+    return json.loads(nwr._NUDGE_STATE.read_text())["codes"]
+
+
+def test_registry_resolution_tombstone_and_recent_surface(monkeypatch):
+    """A code absent from the candidates while its detector RAN resolves with a dated
+    tombstone, and the report surfaces it in nudges_resolved_recent."""
+    monkeypatch.setattr(nwc, "context", lambda: _DRIFT_CTX)
+    rep1 = nwr.persist("2026-07-13")
+    assert {n["code"] for n in rep1["nudges"]} >= {"fdr_cleared_absent"}
+    monkeypatch.setattr(nwc, "context", lambda: _HEALTHY_CTX)   # the artifact healed
+    rep2 = nwr.persist("2026-07-14")
+    assert rep2["nudges"] == []
+    resolved = {r["code"]: r["resolved_on"] for r in rep2["nudges_resolved_recent"]}
+    assert resolved.get("fdr_cleared_absent") == "2026-07-14"
+    assert len(rep2["nudges_resolved_recent"]) <= 5
+    ent = _registry_codes()["fdr_cleared_absent"]
+    assert ent["status"] == "resolved"
+    assert ent["resolved_on"] == "2026-07-14"
+    assert ent["first_seen"] == "2026-07-13"                    # tombstone keeps the history
+
+
+def test_registry_carries_across_absent_build(monkeypatch):
+    """A code that misses one build because the CONTEXT went absent keeps first_seen and
+    cumulative builds_seen — absence says nothing about whether the drift was fixed."""
+    monkeypatch.setattr(nwc, "context", lambda: _DRIFT_CTX)
+    nwr.persist("2026-07-13")
+    monkeypatch.setattr(nwc, "context", lambda: {})             # artifact gone
+    rep2 = nwr.persist("2026-07-14")
+    assert rep2["nudges"] == []
+    assert rep2["nudges_resolved_recent"] == []                 # detector never ran — no resolve
+    assert _registry_codes()["fdr_cleared_absent"]["status"] == "open"
+    monkeypatch.setattr(nwc, "context", lambda: _DRIFT_CTX)     # artifact back, still drifting
+    rep3 = nwr.persist("2026-07-15")
+    n3 = {n["code"]: n for n in rep3["nudges"]}["fdr_cleared_absent"]
+    assert n3["first_seen"] == "2026-07-13"                     # never reset by the gap
+    assert n3["builds_seen"] == 2                               # 07-13 + 07-15; the gap didn't count
+
+
+def test_registry_resolved_code_reappears_with_original_first_seen(monkeypatch):
+    monkeypatch.setattr(nwc, "context", lambda: _DRIFT_CTX)
+    nwr.persist("2026-07-13")
+    monkeypatch.setattr(nwc, "context", lambda: _HEALTHY_CTX)
+    nwr.persist("2026-07-14")                                   # resolves everything
+    monkeypatch.setattr(nwc, "context", lambda: _DRIFT_CTX)
+    rep3 = nwr.persist("2026-07-15")                            # the regression returns
+    n3 = {n["code"]: n for n in rep3["nudges"]}["fdr_cleared_absent"]
+    assert n3["first_seen"] == "2026-07-13"
+    assert n3["builds_seen"] == 2
+    ent = _registry_codes()["fdr_cleared_absent"]
+    assert ent["status"] == "open" and ent["resolved_on"] is None
+
+
+def test_cap_dropped_candidate_not_resolved_and_dropped_counted(monkeypatch):
+    """Resolution is judged on the PRE-CAP candidate set: a nudge cut by nudges_max is
+    dropped from the wire (and counted), never declared fixed."""
+    monkeypatch.setattr(nwc, "context", lambda: _DRIFT_CTX)
+    rep1 = nwr.persist("2026-07-13", nudges_max=1)
+    assert len(rep1["nudges"]) == 1
+    assert rep1["nudges_dropped_n"] == 2
+    assert rep1["nudges_resolved_recent"] == []
+    rep2 = nwr.persist("2026-07-14", nudges_max=1)
+    assert rep2["nudges_resolved_recent"] == []                 # the cut candidates never resolved
+    codes = _registry_codes()
+    assert set(codes) == {"graph_conflicts_absent", "fdr_cleared_absent",
+                          "bottom_state_vocabulary_drift"}
+    assert all(v["status"] == "open" and v["builds_seen"] == 2 for v in codes.values())
+
+
+def test_same_asof_rerun_does_not_double_increment(monkeypatch):
+    monkeypatch.setattr(nwc, "context", lambda: _DRIFT_CTX)
+    nwr.persist("2026-07-13")
+    rep = nwr.persist("2026-07-13")                             # afternoon re-run, same asof
+    n = {x["code"]: x for x in rep["nudges"]}["fdr_cleared_absent"]
+    assert n["builds_seen"] == 1
+    assert _registry_codes()["fdr_cleared_absent"]["builds_seen"] == 1
+
+
+def _cov(rate: float) -> dict:
+    return {"state": "ok", "coverage_rate": rate, "open_theses_n": 4, "resolved_recent_n": 3,
+            "with_context_row_n": 2}
+
+
+def test_coverage_hysteresis_band(tmp_path):
+    """<0.5 arms the nudge; once open it clears only at >=0.55 (the live rate flapped at
+    exactly 0.5 and toggled the nudge on alternating builds)."""
+    n1 = nwr.derive_nudges([], _cov(0.49), {}, "2026-07-13")
+    assert [n["code"] for n in n1] == ["coverage_below_half"]
+    assert "0.55" in n1[0]["detail"]                            # the band is stated, not implied
+    n2 = nwr.derive_nudges([], _cov(0.52), {}, "2026-07-14")    # open → 0.52 still fires
+    assert [n["code"] for n in n2] == ["coverage_below_half"]
+    n3 = nwr.derive_nudges([], _cov(0.56), {}, "2026-07-15")    # >=0.55 clears + resolves
+    assert n3 == []
+    ent = _registry_codes()["coverage_below_half"]
+    assert ent["status"] == "resolved" and ent["resolved_on"] == "2026-07-15"
+    n4 = nwr.derive_nudges([], _cov(0.52), {}, "2026-07-16")    # re-armed: fresh 0.52 stays quiet
+    assert n4 == []
+
+
+def test_persist_same_asof_history_latest_wins(monkeypatch):
+    """A same-asof re-persist REPLACES the history row — the morning run's worse numbers
+    must not freeze for the day."""
+    monkeypatch.setattr(nwc, "context", lambda: _DRIFT_CTX)
+    nwr.persist("2026-07-13")
+    rows = [json.loads(l) for l in nwr._HISTORY.read_text().strip().splitlines()]
+    assert len(rows) == 1 and rows[0]["nudges_n"] == 3
+    monkeypatch.setattr(nwc, "context", lambda: _HEALTHY_CTX)   # afternoon: the world improved
+    nwr.persist("2026-07-13")
+    rows = [json.loads(l) for l in nwr._HISTORY.read_text().strip().splitlines()]
+    assert len(rows) == 1                                       # still one row per asof
+    assert rows[0]["nudges_n"] == 0                             # ...carrying the LATEST numbers
 
 
 # ───────────────────────────── build + persist ─────────────────────────────

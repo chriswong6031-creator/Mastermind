@@ -8,10 +8,13 @@ written.
 Coverage:
   * settings(): doctrine defaults; update_settings rejects unknown keys + out-of-range values
     + booleans offered to int keys, applies valid (bounded) ones.
-  * add_directive(): intake scrub refuses env names / $ amounts / key-shaped tokens / over-length;
-    accepts clean text; open_directives_for_publish flips queued→published for SHIPPED rows only,
+  * add_directive(): intake scrub refuses env names / $ amounts / key-shaped tokens / over-length
+    (rejections name the CATEGORY, never the matched text); accepts clean text; source provenance
+    validated; open_directives_for_publish flips queued→published for SHIPPED rows only,
     truncating oldest-first at the cap; reconcile_ack flips published→acknowledged off the
-    macro ack lobe.
+    macro ack lobe + persists last_ack.json.
+  * W-AI.1: draft_directives_from_nudges (dedup/slot-cap/unknown-code skips, template scrub),
+    expire_stale_published, dialogue_health, loop_n continuity across log truncation.
   * run_cycle(): skipped when MASTERMIND_AI_LOOP=0; with the flag on and review_every_n_loops=2
     two cycles → two loop-log rows, the second carrying a review appended to reviews.jsonl.
   * _build_review() LLM seam: reason_sync stubbed hermetically; a deny-pattern hit in the text
@@ -21,6 +24,7 @@ Coverage:
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -40,6 +44,7 @@ def _isolate_ai(tmp_path, monkeypatch):
     monkeypatch.setattr(mai, "_LOOP_LOG", d / "loop_log.jsonl", raising=True)
     monkeypatch.setattr(mai, "_REVIEWS", d / "reviews.jsonl", raising=True)
     monkeypatch.setattr(mai, "_DIRECTIVES", d / "directives.jsonl", raising=True)
+    monkeypatch.setattr(mai, "_LAST_ACK", d / "last_ack.json", raising=True)
     monkeypatch.setattr(mai, "_doctrine_block", lambda: {}, raising=True)
     # reflection engine writes under tmp too (run_cycle step 2 + _build_review history read)
     out = tmp_path / "data" / "nw_reflection"
@@ -47,6 +52,7 @@ def _isolate_ai(tmp_path, monkeypatch):
     monkeypatch.setattr(nwr, "_OUT_DIR", out, raising=True)
     monkeypatch.setattr(nwr, "_LATEST", out / "latest.json", raising=True)
     monkeypatch.setattr(nwr, "_HISTORY", out / "history.jsonl", raising=True)
+    monkeypatch.setattr(nwr, "_NUDGE_STATE", out / "nudge_state.json", raising=True)
     # journal store isolated; drafting/pinning stubbed to fast no-ops (degrade-safe by design,
     # but they write under data/journal/ when exercised for real)
     monkeypatch.setattr(journal, "_JOURNAL", tmp_path / "data" / "journal", raising=False)
@@ -72,6 +78,7 @@ def test_settings_defaults():
         "attribution_min_n": 12,
         "llm_review": False,
         "directives_max_open": 10,
+        "directive_expiry_days": 14,
     }
 
 
@@ -229,6 +236,209 @@ def test_reconcile_ack_flips_published_to_acknowledged(monkeypatch):
 def test_reconcile_ack_absent_lobe_is_honest_noop():
     res = mai.reconcile_ack()
     assert res == {"state": "absent", "directives_acknowledged": 0, "nudge_codes_seen_n": 0}
+
+
+# ───────────────────────────── act on nudges (W-AI.1) ─────────────────────────────
+
+def _plant_nudges(nudges: list[dict]) -> None:
+    """Write an isolated nw_reflection latest.json carrying the given open nudges."""
+    nwr._OUT_DIR.mkdir(parents=True, exist_ok=True)
+    nwr._LATEST.write_text(json.dumps({"schema": "nw_reflection.v1", "nudges": nudges}))
+
+
+def _nudge(code: str, severity: str = "high", first_seen: str = "2026-07-01",
+           detail: str = "0/9 rows carry it") -> dict:
+    return {"code": code, "kind": "contract_drift", "severity": severity,
+            "detail": detail, "first_seen": first_seen, "builds_seen": 3}
+
+
+def test_draft_directives_from_nudges_happy_path():
+    _plant_nudges([_nudge("fdr_cleared_absent"), _nudge("graph_conflicts_absent", "medium")])
+    res = mai.draft_directives_from_nudges()
+    assert res["ok"] is True
+    # highest severity first; queued rows carry {id, code, text}
+    assert [q["code"] for q in res["queued"]] == ["fdr_cleared_absent", "graph_conflicts_absent"]
+    assert res["skipped"] == []
+    assert res["open_slots"] == 8                       # 10-cap minus the 2 just queued
+    rows = {d["source"]: d for d in mai.directives()}
+    assert set(rows) == {"nudge:fdr_cleared_absent", "nudge:graph_conflicts_absent"}
+    for d in rows.values():
+        assert d["status"] == "queued"
+        assert "(auto-drafted" in d["text"]
+
+
+def test_draft_directives_dedup_skips_existing_open():
+    _plant_nudges([_nudge("fdr_cleared_absent")])
+    assert mai.draft_directives_from_nudges()["queued"]
+    res = mai.draft_directives_from_nudges()
+    assert res["queued"] == []
+    assert res["skipped"] == [{"code": "fdr_cleared_absent",
+                               "reason": "open directive already exists for this nudge"}]
+
+
+def test_draft_directives_slot_cap_skips_remainder():
+    assert mai.update_settings({"directives_max_open": 1})["ok"]
+    _plant_nudges([_nudge("fdr_cleared_absent"), _nudge("graph_conflicts_absent", "medium")])
+    res = mai.draft_directives_from_nudges()
+    assert [q["code"] for q in res["queued"]] == ["fdr_cleared_absent"]
+    assert res["skipped"] == [{"code": "graph_conflicts_absent",
+                               "reason": "no open directive slots"}]
+    assert res["open_slots"] == 0
+
+
+def test_draft_directives_unknown_code_skipped():
+    _plant_nudges([_nudge("fdr_cleared_absent")])
+    res = mai.draft_directives_from_nudges(codes=["not_a_nudge"])
+    assert res["queued"] == []
+    assert res["skipped"] == [{"code": "not_a_nudge", "reason": "no such open nudge"}]
+    assert res["open_slots"] == 10
+
+
+def test_draft_directives_generic_fallback_truncates():
+    long_detail = "only 3 of 41 rows carry the field over the window; " * 10   # 510 chars
+    _plant_nudges([_nudge("brand_new_code", detail=long_detail)])
+    res = mai.draft_directives_from_nudges()
+    assert len(res["queued"]) == 1
+    text = res["queued"][0]["text"]
+    assert len(text) <= 280
+    assert text.startswith("Address reflection finding brand_new_code:")
+    assert text.endswith("(auto-drafted)")
+
+
+def test_nudge_directive_templates_all_pass_the_deny_scrub():
+    """Every canned template must clear add_directive's own gate — the auto-draft path gets
+    NO scrub exemption (and the 10 templates fit exactly inside the default open cap)."""
+    for code, text in mai._NUDGE_DIRECTIVE_TEMPLATES.items():
+        assert len(text) <= 280, code
+        res = mai.add_directive(text, source=f"nudge:{code}")
+        assert res["ok"] is True, f"{code}: {res.get('error')}"
+        assert res["directive"]["source"] == f"nudge:{code}"
+
+
+def test_add_directive_invalid_source_degrades_to_operator():
+    res = mai.add_directive("clean directive text", source="nudge:Bad Code!")
+    assert res["ok"] is True
+    assert res["directive"]["source"] == "operator"
+    res2 = mai.add_directive("another clean directive")
+    assert res2["directive"]["source"] == "operator"
+
+
+def test_add_directive_deny_errors_name_the_category():
+    assert "deny pattern (env-flag name)" in mai.add_directive("arm MASTERMIND_FOO now")["error"]
+    assert "deny pattern (dollar amount)" in mai.add_directive("cap at $1,000")["error"]
+    assert "deny pattern (key-shaped token)" in mai.add_directive("key " + "Ab3" * 15)["error"]
+    assert "deny pattern (credential assignment)" in mai.add_directive("set api_key: xyz")["error"]
+    # the matched text itself is never echoed back
+    assert "MASTERMIND_FOO" not in mai.add_directive("arm MASTERMIND_FOO now")["error"]
+
+
+# ───────────────────────────── directive expiry (W-AI.1) ─────────────────────────────
+
+def test_expire_stale_published_flips_only_stale_and_frees_cap():
+    assert mai.update_settings({"directives_max_open": 2})["ok"]
+    a = mai.add_directive("first clean directive")["directive"]["id"]
+    b = mai.add_directive("second clean directive")["directive"]["id"]
+    assert [d["id"] for d in mai.open_directives_for_publish()] == [a, b]
+    # backdate ONE publish transition past the 14-day default expiry
+    old_ts = (datetime.now(timezone.utc) - timedelta(days=20)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    lines = []
+    for line in mai._DIRECTIVES.read_text().splitlines():
+        row = json.loads(line)
+        if row.get("id") == a and row.get("status") == "published":
+            row["ts"] = old_ts
+        lines.append(json.dumps(row))
+    mai._DIRECTIVES.write_text("\n".join(lines) + "\n")
+
+    res = mai.expire_stale_published()
+    assert res["expired"] == 1
+    status_by_id = {d["id"]: d["status"] for d in mai.directives()}
+    assert status_by_id[a] == "expired"                # only the stale row flipped
+    assert status_by_id[b] == "published"
+    # expired rows leave the publish wire and free the open cap
+    assert [d["id"] for d in mai.open_directives_for_publish()] == [b]
+    assert mai.add_directive("third clean directive")["ok"] is True
+    # idempotent — a second sweep finds nothing newly stale
+    assert mai.expire_stale_published()["expired"] == 0
+
+
+# ───────────────────────────── dialogue health (W-AI.1) ─────────────────────────────
+
+def test_reconcile_ack_writes_last_ack_snapshot(monkeypatch):
+    monkeypatch.setattr(nwc, "context", lambda: {
+        "lobes": {"mastermind_ai": {"ack": {
+            "directive_ids_seen": ["a" * 16, "b" * 16],
+            "nudge_codes_seen": ["graph_conflicts_absent", "BAD CODE!"]}}},
+    })
+    res = mai.reconcile_ack()
+    assert res["state"] == "ok"
+    snap = json.loads(mai._LAST_ACK.read_text())
+    assert snap["nudge_codes_seen"] == ["graph_conflicts_absent"]   # invalid code filtered out
+    assert snap["directive_ids_seen_n"] == 2
+    assert "ts" in snap
+
+
+def test_dialogue_health_never_acked(monkeypatch):
+    monkeypatch.setenv("MASTERMIND_AI_LOOP", "1")
+    mai.run_cycle("2026-07-13")
+    dh = mai.dialogue_health()
+    assert dh["counterparty"] == "absent"
+    assert dh["ack_seen_ever"] is False
+    assert dh["loops_since_ack"] is None
+    assert dh["last_ack"] is None
+    assert dh["published_open_n"] == 0 and dh["queued_n"] == 0 and dh["expired_n"] == 0
+    assert dh["oldest_published_age_days"] is None
+
+
+def test_dialogue_health_after_ack(monkeypatch):
+    monkeypatch.setenv("MASTERMIND_AI_LOOP", "1")
+    rid = mai.add_directive("track the tga drawdown into quarter end")["directive"]["id"]
+    mai.open_directives_for_publish()                   # queued → published
+    monkeypatch.setattr(nwc, "context", lambda: {
+        "lobes": {"mastermind_ai": {"ack": {"directive_ids_seen": [],
+                                            "nudge_codes_seen": []}}}})
+    mai.run_cycle("2026-07-13")                         # ack state ok recorded in the loop row
+    monkeypatch.setattr(nwc, "context", lambda: {})
+    mai.run_cycle("2026-07-14")                         # counterparty gone again
+    dh = mai.dialogue_health()
+    assert dh["counterparty"] == "live"                 # once seen, ever live
+    assert dh["ack_seen_ever"] is True
+    assert dh["loops_since_ack"] == 1
+    assert dh["last_ack"] is not None
+    assert dh["published_open_n"] == 1                  # rid still unacknowledged
+    assert dh["oldest_published_age_days"] == 0
+    assert rid in {d["id"] for d in mai.directives()}
+
+
+def test_run_cycle_summary_flags_absent_counterparty(monkeypatch):
+    monkeypatch.setenv("MASTERMIND_AI_LOOP", "1")
+    row1 = mai.run_cycle("2026-07-11")
+    assert "macro ack absent" not in row1["summary"]    # 1 silent loop is not a pattern yet
+    mai.run_cycle("2026-07-12")
+    row3 = mai.run_cycle("2026-07-13")
+    assert "macro ack absent 3 loops" in row3["summary"]
+
+
+def test_build_review_carries_dialogue_line():
+    review = mai._build_review(2, mai.settings())
+    assert any("orchestrator dialogue" in a for a in review["assessment"])
+
+
+def test_loop_n_continuity_after_log_truncation(monkeypatch):
+    monkeypatch.setenv("MASTERMIND_AI_LOOP", "1")
+    mai.run_cycle("2026-07-13")
+    mai.run_cycle("2026-07-14")
+    lines = mai._LOOP_LOG.read_text().strip().splitlines()
+    mai._LOOP_LOG.write_text(lines[-1] + "\n")          # rotation kept only the last row
+    row = mai.run_cycle("2026-07-15")
+    assert row["loop_n"] == 3                           # continues the counter, not row-count+1
+
+
+def test_status_contains_dialogue_block():
+    st = mai.status()
+    dh = st["dialogue"]
+    assert set(dh) == {"counterparty", "ack_seen_ever", "loops_since_ack", "published_open_n",
+                       "queued_n", "expired_n", "oldest_published_age_days", "last_ack"}
+    assert dh["counterparty"] == "absent"
 
 
 # ───────────────────────────── run_cycle ─────────────────────────────

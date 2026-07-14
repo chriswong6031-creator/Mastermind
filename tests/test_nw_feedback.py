@@ -1371,3 +1371,48 @@ def test_v3_write_redacts_poisoned_nudge_detail(monkeypatch, tmp_path):
     assert "MASTERMIND_SECRET_FLAG" not in serialized
     assert "$9,999" not in serialized
     assert payload["schema"] == nw_feedback.SCHEMA
+
+
+# ---------------------------------------------------------------------------
+# v3 / W-AI.1 — expired directives stay off the wire, source never ships,
+# nudges_dropped_n passes through
+# ---------------------------------------------------------------------------
+
+def test_v3_expired_directive_never_publishes(monkeypatch, tmp_path):
+    """An expired directive leaves the publish wire — only queued|published rows ship."""
+    from brain import mastermind_ai as mai
+    a = mai.add_directive("first clean directive")["directive"]["id"]
+    b = mai.add_directive("second clean directive")["directive"]["id"]
+    mai._advance_directive(a, "published")
+    mai._advance_directive(a, "expired")
+    _patch_events(monkeypatch, tmp_path, [])
+    monkeypatch.setattr(nw_feedback, "_ROOT", tmp_path)
+    result = nw_feedback.build()
+    assert [d["id"] for d in result["operator_directives"]] == [b]
+
+
+def test_v3_directive_source_field_never_ships(monkeypatch, tmp_path):
+    """The provenance tag stays in the private queue — published rows are id/created/text only."""
+    from brain import mastermind_ai as mai
+    added = mai.add_directive("prefer confirmed bottom states over watch-only candidates",
+                              source="nudge:bottom_state_vocabulary_drift")
+    assert added["ok"] is True
+    assert added["directive"]["source"] == "nudge:bottom_state_vocabulary_drift"
+    _patch_events(monkeypatch, tmp_path, [])
+    monkeypatch.setattr(nw_feedback, "_ROOT", tmp_path)
+    result = nw_feedback.build()
+    assert len(result["operator_directives"]) == 1
+    assert set(result["operator_directives"][0]) == {"id", "created", "text"}
+
+
+def test_v3_reflection_block_ships_nudges_dropped_n_when_present(monkeypatch, tmp_path):
+    monkeypatch.setattr(nw_feedback, "_ROOT", tmp_path)
+    _write_reflection_latest(tmp_path, {
+        "asof": "2026-07-13", "contract_drift": [], "coverage": {}, "context_quality": {},
+        "attribution": {}, "nudges": [], "nudges_dropped_n": 3,
+    })
+    block = nw_feedback._reflection_block()
+    assert block["nudges_dropped_n"] == 3
+    # absent from the producer → absent on the wire (no fabricated zero from an old report)
+    _write_reflection_latest(tmp_path, {"asof": "2026-07-13", "nudges": []})
+    assert "nudges_dropped_n" not in nw_feedback._reflection_block()

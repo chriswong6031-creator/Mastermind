@@ -803,3 +803,4 @@ mastermind_ai:
   attribution_min_n:     12     # graded-outcome floor before NW attribution may score (P3)
   llm_review:            false  # runtime half of the LLM-review double gate (env: MASTERMIND_AI_REVIEW_LLM)
   directives_max_open:   10     # queued+published operator directives the publisher may carry
+  directive_expiry_days: 14     # published-but-never-acknowledged directives expire after N days

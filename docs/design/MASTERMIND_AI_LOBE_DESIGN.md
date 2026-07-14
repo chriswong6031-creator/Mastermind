@@ -163,3 +163,37 @@ The frozen judge (`loop/harness.py`) and the self_tune denylist are untouched.
   from it (else fold it into the daily brief).
 - Attribution stays `building` until ≥12 joinable graded outcomes; if after the 07-17 cohort + 4
   weeks the join rate is <50%, stamp NW candidacy into decision provenance (follow-up item).
+
+## 7. W-AI.1 hardening (2026-07-13)
+
+- **Nudge lifecycle registry** — `data/nw_reflection/nudge_state.json` (`nw_nudge_state.v1`):
+  per-code `first_seen/last_seen/builds_seen/status/resolved_on`. Counters survive a skipped
+  build (kills the fragile prior-latest.json carry, which legacy-seeds it once). Resolution is a
+  dated tombstone judged on the PRE-CAP candidate set — a nudge cut by `nudges_max` is dropped,
+  never "resolved" — and only when the code's detector actually ran (an absent context resolves
+  nothing: vanished ≠ fixed). A resolved code that reappears reopens with its original first_seen.
+- **Coverage hysteresis** — `coverage_below_half` fires at rate <0.5 and, once open, clears only
+  at ≥0.55 (the live rate sat at exactly 0.5 and flapped the nudge). The band is stated in the
+  detail string.
+- **Latest-wins history** — `history.jsonl` re-persists for the same asof replace the row in
+  place, so a morning run's worse numbers never freeze for the day. Report gains
+  `nudges_dropped_n` + `nudges_resolved_recent` (≤5, codes+dates only); the v3 bridge ships
+  `nudges_dropped_n` when present.
+- **Dialogue health + last_ack** — `reconcile_ack` persists `data/mastermind_ai/last_ack.json`
+  (validated codes + id count) on every ack sighting; `dialogue_health()` (in the status payload
+  as `dialogue`) reports counterparty live/absent, loops since ack, queued/published/expired
+  counts, oldest published age. The cycle summary and the N-loop review say so out loud when the
+  macro side has been silent ≥3 loops.
+- **Directive expiry** — new bounded setting `directive_expiry_days` (3..60, default 14):
+  published rows never acknowledged in the window get an `expired` delta (new status), leave the
+  publish wire, and free the open cap. Swept in `run_cycle` right after `reconcile_ack`.
+- **act_on_nudges** — POST `/api/mastermind_ai/act_on_nudges` `{codes?}` →
+  `draft_directives_from_nudges`: operator ONE-CLICK bulk authoring of directives from open
+  nudges (templated text per known code, truncated generic fallback). The authority boundary is
+  unchanged — the loop still never acts on its own; a human click authors the directives, and
+  every auto-drafted text passes the same intake scrub. Rows carry `source: nudge:<code>`
+  (dedup key; never published). Registered in `_NON_LLM_OPERATOR_PATHS`.
+- **Deny-category errors** — intake rejections name the pattern category (env-flag name / dollar
+  amount / key-shaped token / credential assignment), never echo the matched text.
+- **loop_n continuity** — derived from the last row's counter (fallback row-count+1), immune to
+  log truncation/rotation.

@@ -15,12 +15,15 @@ FLAGS
                             (capability gate; the runtime setting llm_review must ALSO be on).
 
 DATA LAYOUT (data/mastermind_ai/ — rsynced to the public mirror: counts/codes only, no prompts,
-no sizes, no secrets; directive text is operator-authored and scrubbed on intake)
+no sizes, no secrets; directive text is operator-authored OR auto-drafted from a nudge template,
+both scrubbed on intake)
   settings.json    — operator overrides for the doctrine `mastermind_ai:` block (bounded keys).
   loop_log.jsonl   — one row per cycle {ts, asof, run_id, trigger, loop_n, steps, nudges_open,
                      summary, review?}.
   reviews.jsonl    — one row per N-loop review {ts, asof, loop_n, window, completed, assessment}.
-  directives.jsonl — operator directives {id, ts, text, status: queued|published|acknowledged}.
+  directives.jsonl — operator directives {id, ts, text, source: operator|nudge:<code>,
+                     status: queued|published|acknowledged|expired}.
+  last_ack.json    — the last macro ack observed {ts, nudge_codes_seen, directive_ids_seen_n}.
 """
 from __future__ import annotations
 
@@ -28,7 +31,7 @@ import json
 import hashlib
 import os
 import re
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +41,7 @@ _SETTINGS = _DIR / "settings.json"
 _LOOP_LOG = _DIR / "loop_log.jsonl"
 _REVIEWS = _DIR / "reviews.jsonl"
 _DIRECTIVES = _DIR / "directives.jsonl"
+_LAST_ACK = _DIR / "last_ack.json"
 
 # ── settings (doctrine defaults + bounded operator overrides) ────────────────────────────────
 _DEFAULTS: dict[str, Any] = {
@@ -47,6 +51,7 @@ _DEFAULTS: dict[str, Any] = {
     "attribution_min_n": 12,       # cold-start guard for NW attribution
     "llm_review": False,           # runtime half of the LLM-review double gate
     "directives_max_open": 10,     # queued+published directives the publisher may carry
+    "directive_expiry_days": 14,   # published-but-never-acknowledged directives expire after N days
 }
 # bounds enforced on operator writes — a settings API must never widen its own surface
 _BOUNDS: dict[str, tuple] = {
@@ -56,16 +61,61 @@ _BOUNDS: dict[str, tuple] = {
     "attribution_min_n": (int, 6, 100),
     "llm_review": (bool,),
     "directives_max_open": (int, 1, 10),
+    "directive_expiry_days": (int, 3, 60),
 }
 
 _DIRECTIVE_MAX_CHARS = 280
-# intake refusal patterns (public artifact downstream): secrets, env names, $ amounts, key-shaped
-_DIRECTIVE_DENY = [
-    re.compile(r"MASTERMIND_[A-Z_]+"),
-    re.compile(r"\$[\d,]+"),
-    re.compile(r"(?i)\b[A-Za-z0-9+/]{40,}\b"),
-    re.compile(r"(?i)(api[_-]?key|token|secret|password)\s*[:=]"),
+# intake refusal patterns (public artifact downstream): secrets, env names, $ amounts, key-shaped.
+# Each carries its category label — rejections name the CATEGORY, never echo the matched text.
+_DIRECTIVE_DENY: list[tuple[str, re.Pattern]] = [
+    ("env-flag name", re.compile(r"MASTERMIND_[A-Z_]+")),
+    ("dollar amount", re.compile(r"\$[\d,]+")),
+    ("key-shaped token", re.compile(r"(?i)\b[A-Za-z0-9+/]{40,}\b")),
+    ("credential assignment", re.compile(r"(?i)(api[_-]?key|token|secret|password)\s*[:=]")),
 ]
+
+_NUDGE_CODE_RE = re.compile(r"^[a-z0-9_]{1,60}$")
+_DIRECTIVE_SOURCE_RE = re.compile(r"^(operator|nudge:[a-z0-9_]{1,60})$")
+
+# nudge code -> auto-drafted directive text (draft_directives_from_nudges). Public-surface law:
+# every template must clear _DIRECTIVE_DENY and the 280 cap — add_directive re-gates them anyway
+# (no scrub exemption for the auto-draft path; tested in tests/test_mastermind_ai.py).
+_NUDGE_DIRECTIVE_TEMPLATES: dict[str, str] = {
+    "fdr_cleared_absent": (
+        "Restore kernel.fdr_cleared production in candidate_context — zero rows currently clear, "
+        "which deadens the bot's entire typed decision ladder. "
+        "(auto-drafted from nudge fdr_cleared_absent)"),
+    "bottom_state_vocabulary_drift": (
+        "Publish BOTTOMING/CONFIRMED bottom states when detected — the artifact only ever shows "
+        "WATCH, so candidacy priors above WATCH can never fire. "
+        "(auto-drafted from nudge bottom_state_vocabulary_drift)"),
+    "graph_conflicts_sparse": (
+        "Raise graph_conflicts coverage in candidate_context — almost no rows carry it, keeping "
+        "conflict-aware entry logic dark. (auto-drafted from nudge graph_conflicts_sparse)"),
+    "graph_conflicts_absent": (
+        "Populate graph_conflicts in candidate_context — no rows carry it, so the entry-shrink "
+        "and clean-in-conflicted legs can never fire. "
+        "(auto-drafted from nudge graph_conflicts_absent)"),
+    "liquidity_plumbing_absent": (
+        "Populate the market lobe liquidity block — it ships all-null, so liquidity context is "
+        "unusable. (auto-drafted from nudge liquidity_plumbing_absent)"),
+    "candidate_context_empty": (
+        "candidate_context published with zero rows — restore candidate production. "
+        "(auto-drafted from nudge candidate_context_empty)"),
+    "coverage_below_half": (
+        "Fewer than half of the bot's decided names have a candidate_context row — widen "
+        "candidate coverage toward the bot's active universe. "
+        "(auto-drafted from nudge coverage_below_half)"),
+    "context_stale_streak": (
+        "The NW context artifact has been stale for 3+ consecutive bot runs — check the publish "
+        "lane. (auto-drafted from nudge context_stale_streak)"),
+    "context_absent_streak": (
+        "The NW context artifact has been absent for 3+ consecutive bot runs — check the publish "
+        "lane. (auto-drafted from nudge context_absent_streak)"),
+    "gap_notes_elevated": (
+        "The context audit reports elevated gap notes — review the gaps list in the latest "
+        "audit. (auto-drafted from nudge gap_notes_elevated)"),
+}
 
 
 def loop_flag_on() -> bool:
@@ -186,33 +236,113 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _parse_ts(s: str) -> datetime | None:
+    """Parse a _now_iso timestamp; None on failure (P2 — an unparseable ts never expires)."""
+    try:
+        return datetime.strptime(str(s), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 # ── directives (operator → orchestrator) ─────────────────────────────────────────────────────
 
-def add_directive(text: str) -> dict:
-    """Queue a scrubbed operator directive for the next feedback publish. Returns {ok,...}."""
+def add_directive(text: str, source: str | None = None) -> dict:
+    """Queue a scrubbed operator directive for the next feedback publish. Returns {ok,...}.
+
+    source tags provenance ('operator' or 'nudge:<code>'; anything else degrades to
+    'operator'). Auto-drafted texts pass the EXACT same gate as operator-typed ones."""
     try:
         t = str(text or "").strip()
         if not t:
             return {"ok": False, "error": "empty"}
         if len(t) > _DIRECTIVE_MAX_CHARS:
             return {"ok": False, "error": f"too long (max {_DIRECTIVE_MAX_CHARS} chars)"}
-        for pat in _DIRECTIVE_DENY:
+        for cat, pat in _DIRECTIVE_DENY:
             if pat.search(t):
+                # name the category only — echoing the match would republish the very
+                # string the pattern exists to keep off the public artifact
                 return {"ok": False,
-                        "error": "directive matches a public-surface deny pattern "
-                                 "(secrets / env names / $ amounts are not publishable)"}
-        open_n = sum(1 for d in _read_jsonl(_DIRECTIVES)
+                        "error": f"directive matches a public-surface deny pattern ({cat})"}
+        # cap on the FOLDED latest-status view — raw rows would double-count a directive's
+        # queued row + its published delta, and an expired/acked row must free its slot
+        open_n = sum(1 for d in directives(limit=500)
                      if d.get("status") in ("queued", "published"))
         if open_n >= settings()["directives_max_open"]:
             return {"ok": False, "error": "too many open directives — wait for acknowledgement"}
+        src = source if isinstance(source, str) and _DIRECTIVE_SOURCE_RE.match(source) else "operator"
         row = {
             "id": hashlib.sha256(f"{_now_iso()}|{t}".encode()).hexdigest()[:16],
             "ts": _now_iso(),
             "text": t,
+            "source": src,
             "status": "queued",
         }
         _append_jsonl(_DIRECTIVES, row)
         return {"ok": True, "directive": row}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": type(exc).__name__}
+
+
+def _directive_text_for_nudge(code: str, detail: str) -> str:
+    """Template text for a known nudge code; unknown codes get the truncated generic form."""
+    t = _NUDGE_DIRECTIVE_TEMPLATES.get(code)
+    if t:
+        return t
+    head = f"Address reflection finding {code}: "
+    tail = ". (auto-drafted)"
+    room = max(0, _DIRECTIVE_MAX_CHARS - len(head) - len(tail))
+    return head + str(detail or "").strip()[:room] + tail
+
+
+def draft_directives_from_nudges(codes: list[str] | None = None) -> dict:
+    """Draft directives from the currently open reflection nudges — operator ONE-CLICK bulk
+    authoring. The click IS the authority: the loop never calls this on its own.
+
+    codes missing/empty means all currently open nudges. Returns
+    {ok, queued: [{id, code, text}], skipped: [{code, reason}], open_slots}."""
+    try:
+        from brain import nw_reflection
+        open_nudges: dict[str, dict] = {}
+        for n in (nw_reflection.latest().get("nudges") or []):
+            if isinstance(n, dict) and n.get("code"):
+                open_nudges.setdefault(str(n["code"]), n)
+        skipped: list[dict] = []
+        wanted: list[str] = []
+        for c in ([str(c) for c in codes] if codes else list(open_nudges)):
+            if c in wanted:
+                continue
+            if c not in open_nudges:
+                skipped.append({"code": c[:60], "reason": "no such open nudge"})
+                continue
+            wanted.append(c)
+        # highest-severity first, oldest first within a severity — the slots should go to
+        # the longest-standing asks
+        sev_rank = {"high": 0, "medium": 1, "low": 2}
+        wanted.sort(key=lambda c: (sev_rank.get(open_nudges[c].get("severity"), 3),
+                                   str(open_nudges[c].get("first_seen") or ""), c))
+        view = directives(limit=500)
+        open_sources = {d.get("source") for d in view
+                        if d.get("status") in ("queued", "published")}
+        slots = max(0, settings()["directives_max_open"]
+                    - sum(1 for d in view if d.get("status") in ("queued", "published")))
+        queued: list[dict] = []
+        for c in wanted:
+            if f"nudge:{c}" in open_sources:
+                skipped.append({"code": c, "reason": "open directive already exists for this nudge"})
+                continue
+            if slots <= 0:
+                skipped.append({"code": c, "reason": "no open directive slots"})
+                continue
+            res = add_directive(_directive_text_for_nudge(c, str(open_nudges[c].get("detail") or "")),
+                                source=f"nudge:{c}")
+            if res.get("ok"):
+                d = res["directive"]
+                queued.append({"id": d["id"], "code": c, "text": d["text"]})
+                open_sources.add(f"nudge:{c}")
+                slots -= 1
+            else:
+                skipped.append({"code": c, "reason": str(res.get("error") or "rejected")})
+        return {"ok": True, "queued": queued, "skipped": skipped, "open_slots": slots}
     except Exception as exc:  # noqa: BLE001
         return {"ok": False, "error": type(exc).__name__}
 
@@ -252,6 +382,21 @@ def open_directives_for_publish() -> list[dict]:
         return out
 
 
+def _write_last_ack(seen_codes: set, seen_ids: set) -> None:
+    """Persist the ack sighting for dialogue_health. Fail-soft; codes re-validated —
+    this file lands on the public mirror."""
+    try:
+        codes = sorted(c for c in seen_codes if isinstance(c, str) and _NUDGE_CODE_RE.match(c))
+        _DIR.mkdir(parents=True, exist_ok=True)
+        _LAST_ACK.write_text(json.dumps({
+            "ts": _now_iso(),
+            "nudge_codes_seen": codes,
+            "directive_ids_seen_n": len(seen_ids),
+        }, indent=2))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def reconcile_ack() -> dict:
     """Advance directive statuses from the macro ack (lobes.mastermind_ai in the NW context)."""
     try:
@@ -266,6 +411,8 @@ def reconcile_ack() -> dict:
         ack = lobe.get("ack") or {}
         seen_ids = set(ack.get("directive_ids_seen") or [])
         seen_codes = set(ack.get("nudge_codes_seen") or [])
+        if ack:
+            _write_last_ack(seen_codes, seen_ids)
         advanced = 0
         for d in directives():
             if d.get("status") == "published" and d.get("id") in seen_ids:
@@ -276,6 +423,77 @@ def reconcile_ack() -> dict:
                 "nudge_codes_seen_n": len(seen_codes)}
     except Exception:  # noqa: BLE001
         return {"state": "absent", "directives_acknowledged": 0, "nudge_codes_seen_n": 0}
+
+
+def expire_stale_published() -> dict:
+    """Expire published directives never acknowledged within directive_expiry_days.
+
+    Judged on the LAST transition to published; appends 'expired' delta rows so the fold
+    drops them from the publish wire and the open cap. Never raises."""
+    out = {"expired": 0}
+    try:
+        days = int(settings()["directive_expiry_days"])
+        cut = datetime.now(timezone.utc) - timedelta(days=days)
+        last_pub: dict[str, str] = {}
+        for row in _read_jsonl(_DIRECTIVES):
+            if row.get("id") and row.get("status") == "published":
+                last_pub[row["id"]] = row.get("ts", "")
+        for d in directives(limit=500):
+            if d.get("status") != "published":
+                continue
+            ts = _parse_ts(last_pub.get(d.get("id"), ""))
+            if ts is not None and ts < cut:
+                _advance_directive(d["id"], "expired")
+                out["expired"] += 1
+    except Exception:  # noqa: BLE001
+        pass
+    return out
+
+
+def dialogue_health() -> dict:
+    """The bot↔orchestrator dialogue health block for status() (W-AI.1 contract).
+
+    counterparty is 'live' once ANY macro ack has ever been observed (loop-log ack state 'ok'
+    or a persisted last_ack.json) — 'absent' means we have only ever spoken into the void."""
+    out: dict[str, Any] = {"counterparty": "absent", "ack_seen_ever": False,
+                           "loops_since_ack": None, "published_open_n": 0, "queued_n": 0,
+                           "expired_n": 0, "oldest_published_age_days": None, "last_ack": None}
+    try:
+        rows = _read_jsonl(_LOOP_LOG)
+        for i, r in enumerate(rows):
+            if ((r.get("steps") or {}).get("ack") or {}).get("state") == "ok":
+                out["ack_seen_ever"] = True
+                out["loops_since_ack"] = len(rows) - 1 - i
+        try:
+            if _LAST_ACK.exists():
+                v = json.loads(_LAST_ACK.read_text())
+                if isinstance(v, dict):
+                    out["last_ack"] = v
+                    out["ack_seen_ever"] = True
+        except Exception:  # noqa: BLE001
+            pass
+        out["counterparty"] = "live" if out["ack_seen_ever"] else "absent"
+        last_pub: dict[str, str] = {}
+        for row in _read_jsonl(_DIRECTIVES):
+            if row.get("id") and row.get("status") == "published":
+                last_pub[row["id"]] = row.get("ts", "")
+        oldest: datetime | None = None
+        for d in directives(limit=500):
+            st = d.get("status")
+            if st == "queued":
+                out["queued_n"] += 1
+            elif st == "published":
+                out["published_open_n"] += 1
+                ts = _parse_ts(last_pub.get(d.get("id"), ""))
+                if ts is not None and (oldest is None or ts < oldest):
+                    oldest = ts
+            elif st == "expired":
+                out["expired_n"] += 1
+        if oldest is not None:
+            out["oldest_published_age_days"] = max(0, (datetime.now(timezone.utc) - oldest).days)
+    except Exception:  # noqa: BLE001
+        pass
+    return out
 
 
 # ── the cycle ─────────────────────────────────────────────────────────────────────────────────
@@ -363,8 +581,9 @@ def run_cycle(asof: date | str | None = None, trigger: str = "manual") -> dict:
         steps["reflection_error"] = type(exc).__name__
         nudges_open = 0
 
-    # 3. ack reconciliation (macro → bot half of the dialogue)
+    # 3. ack reconciliation (macro → bot half of the dialogue) + directive expiry
     steps["ack"] = reconcile_ack()
+    steps["directive_expiry"] = expire_stale_published()
 
     # 4. state snapshots for the log
     jc = _journal_counts()
@@ -372,12 +591,30 @@ def run_cycle(asof: date | str | None = None, trigger: str = "manual") -> dict:
     steps["self_tune"] = _self_tune_state()
     steps["agenda_top"] = _agenda_top()
 
-    loop_n = len(_read_jsonl(_LOOP_LOG)) + 1
+    loop_rows = _read_jsonl(_LOOP_LOG)
+    # loop_n survives log truncation/rotation: continue the last recorded counter, not row count
+    try:
+        loop_n = (int(loop_rows[-1].get("loop_n")) if loop_rows else 0) + 1
+    except Exception:  # noqa: BLE001
+        loop_n = len(loop_rows) + 1
     summary = (f"loop {loop_n}: {steps.get('journal_drafts_added', 0)} new journal drafts, "
                f"{jc['pending']} lessons pending, {jc['pins_active']} pinned rules, "
                f"{nudges_open} open nudges to the orchestrator"
                + (f", {steps['ack']['directives_acknowledged']} directives acknowledged"
                   if steps.get("ack", {}).get("directives_acknowledged") else ""))
+    # one honest clause when nobody has been listening — the loop must not read as healthy
+    # dialogue while every publish lands in the void
+    try:
+        if (steps.get("ack") or {}).get("state") != "ok":
+            absent = 1
+            for r in reversed(loop_rows):
+                if ((r.get("steps") or {}).get("ack") or {}).get("state") == "ok":
+                    break
+                absent += 1
+            if absent >= 3:
+                summary += f"; macro ack absent {absent} loops"
+    except Exception:  # noqa: BLE001
+        pass
 
     row: dict[str, Any] = {
         "ts": _now_iso(), "asof": asof_s, "trigger": trigger, "loop_n": loop_n,
@@ -456,6 +693,15 @@ def _build_review(loop_n: int, cfg: dict) -> dict:
     st = _self_tune_state()
     assessment.append(f"self_tune: {'ARMED' if st['armed'] else 'dark'}, "
                       f"{st['families_n']} families tracked, {len(st['locked'])} locked proposal-only")
+    dh = dialogue_health()
+    if dh["counterparty"] == "absent":
+        assessment.append(f"orchestrator dialogue: no macro ack ever seen — "
+                          f"{dh['published_open_n']} directives published into the void, "
+                          f"{dh['expired_n']} expired unacknowledged")
+    else:
+        assessment.append(f"orchestrator dialogue: counterparty live "
+                          f"({dh['loops_since_ack']} loops since last ack), "
+                          f"{dh['published_open_n']} published open, {dh['expired_n']} expired")
 
     review = {
         "ts": _now_iso(), "loop_n": loop_n, "window_loops": n,
@@ -477,7 +723,7 @@ def _build_review(loop_n: int, cfg: dict) -> dict:
             res = cli_bridge.reason_sync(prompt, role="analyst", max_turns=1,
                                          allowed_tools=[], log_run=False)
             text = str(res.get("text") or "")[:2000] if isinstance(res, dict) and res.get("ok") else ""
-            if text and not any(p.search(text) for p in _DIRECTIVE_DENY):
+            if text and not any(p.search(text) for _, p in _DIRECTIVE_DENY):
                 review["llm_assessment"] = text
         except Exception:  # noqa: BLE001
             pass
@@ -542,4 +788,5 @@ def status() -> dict:
         },
         "journal": _journal_counts(),
         "directives": directives(limit=20),
+        "dialogue": dialogue_health(),
     }

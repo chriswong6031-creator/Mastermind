@@ -475,7 +475,7 @@ def _reflection_block() -> dict:
         cov = rep.get("coverage") or {}
         qual = rep.get("context_quality") or {}
         attr = rep.get("attribution") or {}
-        return {
+        block = {
             "state": "ok",
             "asof": str(rep.get("asof", ""))[:10],
             "contract_drift": drift,
@@ -498,6 +498,12 @@ def _reflection_block() -> dict:
                 "joinable_n": int(attr.get("joinable_n") or 0),
             },
         }
+        # W-AI.1: candidates cut by the nudge cap — shipped only when the producer reports it
+        # (no fabricated zero from a pre-W-AI.1 report)
+        dropped = rep.get("nudges_dropped_n")
+        if isinstance(dropped, int) and not isinstance(dropped, bool):
+            block["nudges_dropped_n"] = dropped
+        return block
     except Exception:
         return {"state": "absent"}
 

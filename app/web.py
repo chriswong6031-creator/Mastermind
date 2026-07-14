@@ -1404,6 +1404,10 @@ class _MMAIDirectiveReq(BaseModel):
     text: str
 
 
+class _MMAIActNudgesReq(BaseModel):
+    codes: list[str] | None = None    # missing/empty = all currently open nudges
+
+
 @router.post("/api/mastermind_ai/settings")
 def api_mastermind_ai_settings(req: _MMAISettingsReq) -> JSONResponse:
     """Operator settings patch — bounded to the known mastermind_ai keys (unknown/out-of-range
@@ -1425,6 +1429,19 @@ def api_mastermind_ai_directive(req: _MMAIDirectiveReq) -> JSONResponse:
         import bot  # noqa: F401
         from brain import mastermind_ai
         return JSONResponse(mastermind_ai.add_directive(req.text))
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+@router.post("/api/mastermind_ai/act_on_nudges")
+def api_mastermind_ai_act_on_nudges(req: _MMAIActNudgesReq) -> JSONResponse:
+    """Bulk-draft directives from the currently open reflection nudges (all of them when
+    codes is empty/omitted). The operator click IS the authority — the loop never queues
+    these on its own, and every drafted text passes the same intake scrub as a typed one."""
+    try:
+        import bot  # noqa: F401
+        from brain import mastermind_ai
+        return JSONResponse(mastermind_ai.draft_directives_from_nudges(req.codes))
     except Exception as exc:  # noqa: BLE001
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
