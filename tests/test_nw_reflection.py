@@ -456,6 +456,23 @@ def test_registry_carries_across_absent_build(monkeypatch):
     assert n3["builds_seen"] == 2                               # 07-13 + 07-15; the gap didn't count
 
 
+def test_registry_empty_candidate_context_does_not_resolve_siblings(monkeypatch):
+    """Present-but-empty candidate_context fires candidate_context_empty but leaves the sibling
+    drift codes OPEN — their row-level sub-detectors never ran (0 rows), so the night the
+    artifact got WORSE must never stamp fdr/graph/bottom_state 'resolved' (per-CODE evaluability,
+    not per-kind — the exact false-tombstone class W-AI.1 guards against)."""
+    monkeypatch.setattr(nwc, "context", lambda: _DRIFT_CTX)
+    nwr.persist("2026-07-13")                                   # opens the 3 sibling drift codes
+    monkeypatch.setattr(nwc, "context", lambda: {"candidate_context": {}})
+    rep2 = nwr.persist("2026-07-14")                            # candidate rows vanish
+    assert "candidate_context_empty" in {n["code"] for n in rep2["nudges"]}   # the regression fires
+    assert rep2["nudges_resolved_recent"] == []                 # nothing falsely resolved
+    reg = _registry_codes()
+    assert reg["fdr_cleared_absent"]["status"] == "open"        # sub-detector never evaluated
+    assert reg["graph_conflicts_absent"]["status"] == "open"
+    assert reg["bottom_state_vocabulary_drift"]["status"] == "open"
+
+
 def test_registry_resolved_code_reappears_with_original_first_seen(monkeypatch):
     monkeypatch.setattr(nwc, "context", lambda: _DRIFT_CTX)
     nwr.persist("2026-07-13")
@@ -555,13 +572,13 @@ def test_build_cache_reset_is_fail_soft(tmp_path, monkeypatch):
     assert rep["coverage"]["state"] == "absent"
 
 
-def test_persist_writes_latest_and_history_keep_first_per_asof(tmp_path):
+def test_persist_writes_latest_and_history_one_row_per_asof(tmp_path):
     rep1 = nwr.persist("2026-07-13")
     assert nwr._LATEST.exists()
     assert json.loads(nwr._LATEST.read_text())["asof"] == "2026-07-13"
     assert len(nwr._HISTORY.read_text().strip().splitlines()) == 1
 
-    # same asof again → latest rewritten, history NOT re-appended (keep-first)
+    # same asof again → latest rewritten, history stays one row (latest-wins, not appended)
     nwr.persist("2026-07-13")
     assert len(nwr._HISTORY.read_text().strip().splitlines()) == 1
 

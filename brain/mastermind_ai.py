@@ -291,7 +291,12 @@ def _directive_text_for_nudge(code: str, detail: str) -> str:
     head = f"Address reflection finding {code}: "
     tail = ". (auto-drafted)"
     room = max(0, _DIRECTIVE_MAX_CHARS - len(head) - len(tail))
-    return head + str(detail or "").strip()[:room] + tail
+    body = str(detail or "").strip()
+    # deny-scan the FULL detail before truncating — [:room] could cut a >=40-char key-shaped
+    # run below the pattern floor and slip a credential prefix past add_directive's gate
+    if any(p.search(body) for _, p in _DIRECTIVE_DENY):
+        body = "detail withheld by the public-surface deny filter"
+    return head + body[:room] + tail
 
 
 def draft_directives_from_nudges(codes: list[str] | None = None) -> dict:
@@ -354,7 +359,9 @@ def directives(limit: int = 50) -> list[dict]:
         rid = row.get("id")
         if rid:
             by_id[rid] = {**by_id.get(rid, {}), **row}
-    rows = sorted(by_id.values(), key=lambda r: r.get("ts", ""))
+    # str() the key — a corrupt hand-edited ts (e.g. an int) must degrade the ordering,
+    # never raise a TypeError up through status() and blank the whole admin snapshot
+    rows = sorted(by_id.values(), key=lambda r: str(r.get("ts", "")))
     return rows[-limit:]
 
 
@@ -534,10 +541,19 @@ def _journal_counts() -> dict:
 
 
 def _agenda_top(n: int = 3) -> list[str]:
+    # Titles land in loop_log.jsonl / reviews.jsonl, which rsync to the public mirror. Scrub
+    # them like the LLM assessment: today every title is a code-authored count template, but a
+    # future agenda source must not leak a secret / env name / $ amount through this seam.
     try:
         from brain import improvement_agenda as agenda
         rep = agenda.latest() or {}
-        return [str(it.get("title", ""))[:120] for it in (rep.get("items") or [])[:n]]
+        out: list[str] = []
+        for it in (rep.get("items") or [])[:n]:
+            title = str(it.get("title", ""))[:120]
+            if any(p.search(title) for _, p in _DIRECTIVE_DENY):
+                title = "agenda item withheld by the public-surface deny filter"
+            out.append(title)
+        return out
     except Exception:  # noqa: BLE001
         return []
 
