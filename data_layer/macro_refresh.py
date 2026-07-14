@@ -76,6 +76,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
@@ -214,6 +215,45 @@ def _run(args: list[str], cwd: Path | None = None, timeout: int = 240):
                           capture_output=True, text=True, timeout=timeout)
 
 
+# A bot process that dies mid-pull can orphan .git/index.lock; every later `git reset --hard`
+# then fails ("Unable to create ... index.lock: File exists") while `git fetch` — which takes
+# no index lock — keeps succeeding, freezing the checkout silently (the 2026-07-11→14 incident:
+# 3 days of stale reads until the NW context tipped absent). Any legitimate git op on this
+# checkout finishes in seconds, so a lock older than an hour is orphaned.
+_LOCK_STALE_S = 3600
+
+
+def _gitdir_in_use() -> bool:
+    """True when any live process holds files under the vendored gitdir open (via lsof).
+    When lsof is unavailable or errors, returns True — never remove a lock we cannot prove
+    is orphaned."""
+    try:
+        r = _run(["lsof", "-t", "+D", str(_SRC / ".git")], timeout=60)
+        return bool((r.stdout or "").strip())
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def _clear_stale_lock(log=print) -> None:
+    """Self-heal an orphaned .git/index.lock so the pull legs can proceed.
+
+    Removes the lock only when it is older than _LOCK_STALE_S AND no live process has the
+    gitdir open; a fresh lock (a live git op may hold it) is always left alone. Never raises.
+    """
+    lock = _SRC / ".git" / "index.lock"
+    try:
+        if not lock.exists():
+            return
+        age = time.time() - lock.stat().st_mtime
+        if age < _LOCK_STALE_S or _gitdir_in_use():
+            return
+        lock.unlink()
+        log(f"[macro_refresh] removed stale index.lock (age {int(age)}s) — "
+            f"a prior git op died mid-pull; proceeding with the refresh")
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def ensure_clone() -> bool:
     """Create the sparse checkout (site/ + data/regime) if it is missing. Returns whether site/
     is present."""
@@ -318,20 +358,31 @@ def _sync_r2(log=print) -> None:
             log(f"[macro_refresh] R2 sync failed for {d}/ — keeping last-good mirror")
 
 
-def refresh() -> str | None:
+def refresh(log=print) -> str | None:
     """Pull the latest data from origin/main (== the live site) + the R2 data plane. Returns the
     data `asof` on success, or None on failure — leaving the last-good cached checkout intact.
     Never raises."""
     try:
         if not ensure_clone():
             return None
+        _clear_stale_lock(log=log)
         f = _run(["git", "fetch", "--depth", "1", "origin", "main"], cwd=_SRC)
         if f.returncode != 0:
             return None                                  # network down -> keep last-good data
-        _run(["git", "reset", "--hard", "origin/main"], cwd=_SRC)
+        r = _run(["git", "reset", "--hard", "origin/main"], cwd=_SRC)
+        if r.returncode != 0:
+            # A failed reset means the tree never advanced — callers must see the refresh as
+            # FAILED, not read last-good data as fresh-pulled (the 2026-07-11→14 silent freeze:
+            # only the fetch returncode was checked, so an orphaned index.lock made every
+            # 3-hourly refresh "succeed" for 3 days while the checkout stood still).
+            log(f"[macro_refresh] git reset --hard failed: {(r.stderr or '').strip()}")
+            return None
         # `set` (not `reapply`) so pre-existing clones self-migrate to the current sparse set
-        _run(["git", "sparse-checkout", "set", *_SPARSE_PATHS], cwd=_SRC)
-        _sync_r2()                                       # the stores git no longer carries
+        s = _run(["git", "sparse-checkout", "set", *_SPARSE_PATHS], cwd=_SRC)
+        if s.returncode != 0:
+            log(f"[macro_refresh] git sparse-checkout set failed: {(s.stderr or '').strip()}")
+            return None
+        _sync_r2(log=log)                                # the stores git no longer carries
         return asof()
     except Exception:
         return None
@@ -593,7 +644,7 @@ def check_and_warn(*, block: bool = False, log=print) -> dict:
 def refresh_and_check(log=print) -> dict:
     """Build entry point: pull fresh macro data, then run the staleness tripwire. `block` on stale
     is opt-in via MACRO_STALE_BLOCK=1. Never raises unless blocking is enabled AND data is stale."""
-    new_asof = refresh()
+    new_asof = refresh(log=log)
     if new_asof:
         log(f"[macro_refresh] vendored macro data refreshed to asof={new_asof}")
     else:

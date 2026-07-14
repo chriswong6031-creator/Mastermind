@@ -1,6 +1,6 @@
 """The vendored-macro freshness guard: staleness math + the tripwire (no network).
 
-Tests are grouped into three sections:
+Tests are grouped into four sections:
   A. Original tests — preserved verbatim (is_stale thresholds, check_and_warn smoke).
   B. New anchor-hardening tests — tmp_path fake checkouts covering the W0 rewrite:
        all-anchors-present, one-missing, all-missing, stale-oldest-wins,
@@ -8,11 +8,16 @@ Tests are grouped into three sections:
   C. R2-leg tests — the _sync_r2_dir mirror of the stores git no longer carries
        (manifest mode, index fallback, prune, ETag fast-path, failure keeps last-good),
        with _fetch monkeypatched as the single network seam.
+  D. refresh() hardening (2026-07-14 silent-freeze incident) — failed reset/sparse-checkout
+       legs fail the refresh instead of reporting last-good as fresh-pulled, and the
+       orphaned-index.lock self-heal (stale lock removed, fresh/held lock left alone).
 
 All tests use tmp_path or monkeypatch to stay network-free.
 """
 import datetime
 import json
+import os
+import time
 from pathlib import Path
 
 import pytest
@@ -306,7 +311,7 @@ def test_anchors_report_included_in_check_and_warn(monkeypatch, tmp_path):
 
 def test_refresh_and_check_return_keys_present(monkeypatch):
     """refresh_and_check() always returns the original keys (add, never remove)."""
-    monkeypatch.setattr(mr, "refresh", lambda: "2026-07-01")
+    monkeypatch.setattr(mr, "refresh", lambda log=print: "2026-07-01")
     monkeypatch.setattr(mr, "check_and_warn",
                         lambda **kw: {"asof": "2026-07-01", "stale": False,
                                       "max_age_days": 2, "data_gaps": [],
@@ -533,3 +538,125 @@ def test_sparse_paths_contains_required_set():
         f"Required paths missing from _SPARSE_PATHS: {sorted(missing)}. "
         "Each missing path causes a silent data outage."
     )
+
+
+# ---------------------------------------------------------------------------
+# Section D — refresh() hardening (2026-07-14 silent-freeze incident)
+#
+# 2026-07-11→14: a bot process died mid-pull, orphaning .git/index.lock. Every later
+# `git reset --hard` failed while `git fetch` (no index lock) kept succeeding — and since
+# refresh() checked only the fetch returncode, it reported last-good data as fresh-pulled
+# for 3 days until the NW context tipped absent (_STALE_DAYS=4).
+# ---------------------------------------------------------------------------
+
+def _patch_run(monkeypatch, *, fail_leg: str | None = None, stderr: str = ""):
+    """Replace mr._run with a fake that succeeds everywhere except the git leg whose argv
+    contains `fail_leg` (e.g. 'reset', 'sparse-checkout'). Returns the recorded call list."""
+    import types
+    calls: list[list[str]] = []
+
+    def fake(args, cwd=None, timeout=240):
+        calls.append(list(args))
+        failed = fail_leg is not None and fail_leg in args
+        return types.SimpleNamespace(returncode=1 if failed else 0,
+                                     stdout="", stderr=stderr if failed else "")
+
+    monkeypatch.setattr(mr, "_run", fake)
+    return calls
+
+
+# --- D1: failed reset/sparse-checkout legs fail the refresh -------------------
+
+def test_refresh_reset_failure_returns_none(monkeypatch, tmp_path):
+    """A failed `git reset --hard` must fail the refresh (None) and log the stderr — the
+    incident shape: fetch succeeds, reset dies on the orphaned index.lock."""
+    _patch_src(monkeypatch, tmp_path / "macro_src")
+    monkeypatch.setattr(mr, "ensure_clone", lambda: True)
+    _patch_run(monkeypatch, fail_leg="reset",
+               stderr="fatal: Unable to create '.git/index.lock': File exists.")
+    synced: list[bool] = []
+    monkeypatch.setattr(mr, "_sync_r2", lambda log=print: synced.append(True))
+    msgs: list[str] = []
+    assert mr.refresh(log=msgs.append) is None
+    assert not synced, "a failed reset must not proceed to the R2 leg"
+    assert any("reset" in m and "index.lock" in m for m in msgs), \
+        "the reset stderr must surface in the [macro_refresh] log"
+
+
+def test_refresh_sparse_checkout_failure_returns_none(monkeypatch, tmp_path):
+    """A failed `git sparse-checkout set` must also fail the refresh, not read last-good
+    as fresh-pulled."""
+    _patch_src(monkeypatch, tmp_path / "macro_src")
+    monkeypatch.setattr(mr, "ensure_clone", lambda: True)
+    _patch_run(monkeypatch, fail_leg="sparse-checkout",
+               stderr="fatal: this operation must be run in a work tree")
+    synced: list[bool] = []
+    monkeypatch.setattr(mr, "_sync_r2", lambda log=print: synced.append(True))
+    msgs: list[str] = []
+    assert mr.refresh(log=msgs.append) is None
+    assert not synced, "a failed sparse-checkout must not proceed to the R2 leg"
+    assert any("sparse-checkout" in m for m in msgs)
+
+
+# --- D2: orphaned-lock self-heal ----------------------------------------------
+
+def test_stale_lock_removed_and_pull_proceeds(monkeypatch, tmp_path):
+    """An index.lock older than an hour with no live holder is removed, logged, and the
+    refresh completes normally."""
+    src = tmp_path / "macro_src"
+    lock = src / ".git" / "index.lock"
+    lock.parent.mkdir(parents=True)
+    lock.touch()                                   # zero-byte, as the dead pull left it
+    two_h_ago = time.time() - 7200
+    os.utime(lock, (two_h_ago, two_h_ago))
+    _patch_src(monkeypatch, src)
+    monkeypatch.setattr(mr, "ensure_clone", lambda: True)
+    monkeypatch.setattr(mr, "_gitdir_in_use", lambda: False)
+    _patch_run(monkeypatch)                        # every git leg succeeds
+    monkeypatch.setattr(mr, "_sync_r2", lambda log=print: None)
+    monkeypatch.setattr(mr, "asof", lambda: "2026-07-14")
+    msgs: list[str] = []
+    assert mr.refresh(log=msgs.append) == "2026-07-14"
+    assert not lock.exists(), "the stale lock must be removed so the git legs can run"
+    assert any("removed stale index.lock" in m for m in msgs)
+
+
+def test_fresh_lock_left_alone(monkeypatch, tmp_path):
+    """A fresh index.lock (a live git op may hold it) is NEVER removed — even when no
+    process currently has the gitdir open."""
+    src = tmp_path / "macro_src"
+    lock = src / ".git" / "index.lock"
+    lock.parent.mkdir(parents=True)
+    lock.touch()                                   # mtime = now
+    _patch_src(monkeypatch, src)
+    monkeypatch.setattr(mr, "_gitdir_in_use", lambda: False)
+    msgs: list[str] = []
+    mr._clear_stale_lock(log=msgs.append)
+    assert lock.exists(), "a fresh lock must be left alone"
+    assert not msgs
+
+
+def test_old_lock_with_live_holder_left_alone(monkeypatch, tmp_path):
+    """Even an hour-old lock is left alone while a live process holds the gitdir open."""
+    src = tmp_path / "macro_src"
+    lock = src / ".git" / "index.lock"
+    lock.parent.mkdir(parents=True)
+    lock.touch()
+    two_h_ago = time.time() - 7200
+    os.utime(lock, (two_h_ago, two_h_ago))
+    _patch_src(monkeypatch, src)
+    monkeypatch.setattr(mr, "_gitdir_in_use", lambda: True)
+    msgs: list[str] = []
+    mr._clear_stale_lock(log=msgs.append)
+    assert lock.exists(), "a held lock must be left alone regardless of age"
+    assert not msgs
+
+
+def test_no_lock_is_a_noop(monkeypatch, tmp_path):
+    """No index.lock present -> _clear_stale_lock does nothing and never raises."""
+    src = tmp_path / "macro_src"
+    (src / ".git").mkdir(parents=True)
+    _patch_src(monkeypatch, src)
+    msgs: list[str] = []
+    mr._clear_stale_lock(log=msgs.append)
+    assert not msgs
