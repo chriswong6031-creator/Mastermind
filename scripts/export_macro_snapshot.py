@@ -145,17 +145,28 @@ def _commit_and_push(root: Path) -> bool:
     except Exception as _exc:
         print(f"[export_macro_snapshot] nw_feedback stage skipped (non-fatal): {_exc}")
     # Stage cost_summary.json — best-effort: absent/error must never abort the snapshot push.
+    # data/mastermind/ paths sit OUTSIDE the vendored clone's cone-mode sparse
+    # checkout (cone = data/{china_regime,regime,risk_radar,yahoo} + engine/lib/site),
+    # so a plain `git add -f` silently refuses to stage them and _git() does not
+    # raise on rc!=0 — cost_summary.json never reached origin/main until the
+    # `--sparse` flag was added here.  Keep the rc check loud.
     try:
         cost_path = root / _COST_REL_PATH
         if cost_path.exists():
-            _git(root, "add", "-f", _COST_REL_PATH)
+            _r = _git(root, "add", "--sparse", "-f", _COST_REL_PATH)
+            if _r.returncode != 0:
+                print(f"[export_macro_snapshot] cost_summary stage FAILED rc={_r.returncode}: "
+                      f"{(_r.stderr or '').strip()[:200]}")
     except Exception as _exc:
         print(f"[export_macro_snapshot] cost_summary stage skipped (non-fatal): {_exc}")
     # Stage key_events.jsonl — best-effort: absent/error must never abort the snapshot push.
     try:
         ke_path = root / _KEY_EVENTS_REL_PATH
         if ke_path.exists():
-            _git(root, "add", "-f", _KEY_EVENTS_REL_PATH)
+            _r = _git(root, "add", "--sparse", "-f", _KEY_EVENTS_REL_PATH)
+            if _r.returncode != 0:
+                print(f"[export_macro_snapshot] key_events stage FAILED rc={_r.returncode}: "
+                      f"{(_r.stderr or '').strip()[:200]}")
     except Exception as _exc:
         print(f"[export_macro_snapshot] key_events stage skipped (non-fatal): {_exc}")
     staged = _git(root, "diff", "--cached", "--quiet")
