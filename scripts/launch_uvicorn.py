@@ -40,13 +40,34 @@ def load_env():
         return env
 
 
+# launchd's default PATH (/usr/bin:/bin:/usr/sbin:/sbin) lacks the claude CLI
+# (~/.local/bin) and homebrew (node, git-lfs, …).  Without these, cli_bridge
+# .available() is False and EVERY brain seat silently skips — observed live
+# 2026-07-17 09:00Z hk_daily (run_id null, "claude CLI not installed").
+_PATH_PREPEND = [
+    "/Users/chriswong/.local/bin",
+    "/opt/homebrew/bin",
+]
+
+
+def _fix_path() -> None:
+    parts = os.environ.get("PATH", "").split(os.pathsep)
+    for p in reversed(_PATH_PREPEND):
+        if p not in parts:
+            parts.insert(0, p)
+    os.environ["PATH"] = os.pathsep.join(parts)
+
+
 def main():
     os.chdir(REPO)
     env = load_env()
     os.environ.update(env)
+    _fix_path()
     if os.environ.get("MM_LAUNCH_DRYRUN"):
-        print("DRYRUN_OK env_keys=%d require_auth_present=%s argv=%s"
-              % (len(env), "MASTERMIND_REQUIRE_AUTH" in env, " ".join(ARGV)),
+        from shutil import which
+        print("DRYRUN_OK env_keys=%d require_auth_present=%s claude_on_path=%s argv=%s"
+              % (len(env), "MASTERMIND_REQUIRE_AUTH" in env,
+                 bool(which("claude")), " ".join(ARGV)),
               flush=True)
         return
     os.execv(PYTHON, ARGV)
