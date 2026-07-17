@@ -316,3 +316,72 @@ Stop work and contact Fable if any of the following occur:
 - The benchmark ledger shows a book underperforming its defensive bogey by more than
   5pp over 30 days (data/benchmark/<latest>.json `leaderboard` field)
 - Any code change touches the denylist items from section 2
+
+---
+
+## OAuth key pool / rotation
+
+### How it works
+
+`brain/key_rotor.py` manages a pool of up to 7 numbered OAuth tokens
+(`CLAUDE_CODE_OAUTH_TOKEN_1..7`) plus the legacy bare `CLAUDE_CODE_OAUTH_TOKEN`.
+Before each `reason()` call, the rotation layer calls `candidates()` which returns
+numbered slots ordered by: non-cooling first (ascending 5h-window load then slot
+number), cooling ones appended last as emergency fallback.  The legacy bare token
+is included **only** when zero numbered slots are present (macro V11 suppression rule).
+
+`reason()` iterates over candidates.  If the SDK or subprocess returns a result whose
+text or error field matches a key-failure pattern, `mark_cooling()` is called for that
+key_id and the loop moves to the next candidate.  Non-key failures (network errors,
+tool errors) break the loop immediately.
+
+`chat_stream()` picks the first healthy candidate for the stream (no mid-stream
+rotation), then runs `classify_failure()` on the first 600 chars of streamed text
+after the stream ends, marking the key cooling if it matched.
+
+REDLINE: token VALUES never appear in logs, ledger rows, or return values.  Only
+key_id strings (e.g. `claude_code_oauth_3`) and env-var NAMES are stored.
+
+### Cooling kinds and TTLs
+
+| Kind    | Trigger                                               | Default TTL   | Cleared by              |
+|---------|-------------------------------------------------------|---------------|-------------------------|
+| window  | 429 / "usage limit reached" / "rate limit" / 529     | 5 hours       | reset_hint passage only |
+| weekly  | "weekly usage limit" / "limit reached ... week"      | 7 days        | reset_hint passage only |
+| auth    | 401 / 403 / "disabled claude subscription access"    | 24 hours      | later ok row OR TTL     |
+
+### Ledger path
+
+`data/metabolism/key_ledger.jsonl` — append-only JSONL, schema `metabolism.key_ledger.v1`.
+Each row: `{schema, ts, key_id, cycle_id, stage, est_tokens, outcome, [cool_kind], [reset_hint]}`.
+
+The ledger is stateless-cattle: any process resumes from disk state.  All public
+functions are NEVER-RAISE — a pool failure never aborts a trading lane.
+
+A filtered copy of the ledger (last 14 days, max 20 000 rows) is exported to the macro
+repo as `data/mastermind/key_events.jsonl` on each snapshot push, where it is surfaced
+in the macro admin AI Cost tab.
+
+### How to add a key
+
+1. Obtain a new Claude Code OAuth token (from a second account or subscription).
+2. Add it to `.env` as `CLAUDE_CODE_OAUTH_TOKEN_N` where N is the next free slot (3..7).
+3. Add the slot number to `METAB_KEYS_ENABLED` (comma-separated, e.g. `3,4,5`).
+4. Restart the app — the new slot is discovered automatically on the next `reason()` call.
+5. Verify: `data/metabolism/key_ledger.jsonl` should show `claude_code_oauth_N` rows
+   after the first successful session.
+
+The macro admin AI Cost tab shows key pool status once `data/mastermind/key_events.jsonl`
+has been published by the next snapshot push.
+
+### METAB_KEYS_ENABLED
+
+Controls which numbered slots are eligible.  Set in `.env`:
+
+```
+METAB_KEYS_ENABLED=3,4,5,6,7
+```
+
+Digits → `claude_code_oauth_N`; the literal string `legacy` → bare legacy token.
+If the filter would remove ALL present slots, the filter is ignored (fail-open, R-V10-3).
+Absent/empty → all present slots enabled.

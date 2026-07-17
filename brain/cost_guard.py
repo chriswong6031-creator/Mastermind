@@ -245,7 +245,8 @@ def cap() -> float:
 def record(book: str, usd, asof: str | None = None, *,
            seat: str | None = None, model: str | None = None,
            input_tokens: int = 0, output_tokens: int = 0,
-           cache_read_tokens: int = 0, cache_creation_tokens: int = 0) -> None:
+           cache_read_tokens: int = 0, cache_creation_tokens: int = 0,
+           key_id: str | None = None) -> None:
     """Add ``usd`` to ``book``'s running spend for ``asof`` (default today).
 
     Optional keyword args enable per-seat, per-model, and per-token-type granularity:
@@ -255,6 +256,11 @@ def record(book: str, usd, asof: str | None = None, *,
       output_tokens         — completion token count for this call
       cache_read_tokens     — cache-read token count for this call
       cache_creation_tokens — cache-write token count for this call
+      key_id                — OAuth pool key id (e.g. 'claude_code_oauth_3'); when set,
+                              accumulates under a "keys" sub-dict at book level parallel
+                              to "seats".  Shape: {key_id: {usd, input_tokens,
+                              output_tokens, calls}}.  Never leaks token values — only
+                              the key_id name string is stored.
 
     A None / non-numeric / non-positive cost is ignored (the USD accumulation is skipped, but
     token counts ARE recorded so the ledger stays accurate even when cost is unavailable).
@@ -312,6 +318,24 @@ def record(book: str, usd, asof: str | None = None, *,
             se["output_tokens"] = int(se.get("output_tokens") or 0) + otok
             se["calls"] = int(se.get("calls") or 0) + 1
             seats[s] = se
+
+        # per-key attribution (additive; parallel to "seats"; REDLINE: name only, no values)
+        if key_id:
+            _kid = str(key_id).strip()
+            if _kid:
+                keys = bk.setdefault("keys", {})
+                if not isinstance(keys, dict):
+                    keys = {}
+                    bk["keys"] = keys
+                ke = keys.get(_kid) or {}
+                if not isinstance(ke, dict):
+                    ke = {}
+                if amt > 0:
+                    ke["usd"] = round(float(ke.get("usd") or 0.0) + amt, 6)
+                ke["input_tokens"] = int(ke.get("input_tokens") or 0) + itok
+                ke["output_tokens"] = int(ke.get("output_tokens") or 0) + otok
+                ke["calls"] = int(ke.get("calls") or 0) + 1
+                keys[_kid] = ke
 
         cur[b] = bk
         _DIR.mkdir(parents=True, exist_ok=True)
@@ -475,6 +499,18 @@ def build_cost_summary(asof: str | None = None) -> dict:
                                     "output_tokens": int(sv.get("output_tokens") or 0),
                                     "calls": int(sv.get("calls") or 0),
                                 }
+                    # per-key attribution sub-dict (additive; parallel to seats)
+                    keys_raw = bk_val.get("keys") or {}
+                    keys_bk: dict[str, dict] = {}
+                    if isinstance(keys_raw, dict):
+                        for kn, kv in keys_raw.items():
+                            if isinstance(kv, dict):
+                                keys_bk[kn] = {
+                                    "usd": float(kv.get("usd") or 0.0),
+                                    "input_tokens": int(kv.get("input_tokens") or 0),
+                                    "output_tokens": int(kv.get("output_tokens") or 0),
+                                    "calls": int(kv.get("calls") or 0),
+                                }
                     day_books[bk_name] = {
                         "usd": float(bk_val.get("usd") or 0.0),
                         "input_tokens": int(bk_val.get("input_tokens") or 0),
@@ -482,6 +518,7 @@ def build_cost_summary(asof: str | None = None) -> dict:
                         "cache_read_tokens": int(bk_val.get("cache_read_tokens") or 0),
                         "calls": int(bk_val.get("calls") or 0),
                         "seats": seats,
+                        "keys": keys_bk,
                     }
                 else:
                     continue
@@ -496,6 +533,7 @@ def build_cost_summary(asof: str | None = None) -> dict:
         tot_out = 0
         by_book: dict[str, float] = {}
         by_seat: dict[str, float] = {}
+        by_key: dict[str, float] = {}
         for day_books in days_data.values():
             for bk_name, bk in day_books.items():
                 u = float(bk.get("usd") or 0.0)
@@ -506,6 +544,9 @@ def build_cost_summary(asof: str | None = None) -> dict:
                 for sn, sv in (bk.get("seats") or {}).items():
                     su = float(sv.get("usd") or 0.0) if isinstance(sv, dict) else 0.0
                     by_seat[sn] = round(by_seat.get(sn, 0.0) + su, 6)
+                for kn, kv in (bk.get("keys") or {}).items():
+                    ku = float(kv.get("usd") or 0.0) if isinstance(kv, dict) else 0.0
+                    by_key[kn] = round(by_key.get(kn, 0.0) + ku, 6)
 
         out["totals_30d"] = {
             "usd": round(tot_usd, 4),
@@ -513,6 +554,7 @@ def build_cost_summary(asof: str | None = None) -> dict:
             "output_tokens": tot_out,
             "by_book": by_book,
             "by_seat": by_seat,
+            "by_key": by_key,
         }
     except Exception:  # noqa: BLE001 — never raise; return safe partial
         pass

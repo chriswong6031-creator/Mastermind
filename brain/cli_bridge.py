@@ -82,15 +82,18 @@ def _abs_dirs(dirs: list[str]) -> list[str]:
     return [str((_ROOT / d).resolve()) for d in dirs]
 
 
-def _subscription_env() -> dict:
+def _subscription_env(env_name: str | None = None) -> dict:
     """Env for the spawned claude. To use the SUBSCRIPTION (not the metered API) we must
     NOT expose ANTHROPIC_API_KEY — it wins over the subscription login in the credential
     resolution order. Strip it (and ANTHROPIC_AUTH_TOKEN) when prefer_subscription.
 
-    Token pool selector: the macro-side operator deprecated the bare CLAUDE_CODE_OAUTH_TOKEN
-    in favour of a numbered pool (_1.._7; slots 3..7 are currently valid, 1..2 are stale).
-    When the env contains numbered slots but no bare token, inject the first non-empty slot
-    (preferring 3..7 over 1..2) as CLAUDE_CODE_OAUTH_TOKEN in the subprocess env copy only.
+    When env_name is given (a specific slot env var name like "CLAUDE_CODE_OAUTH_TOKEN_3"),
+    override CLAUDE_CODE_OAUTH_TOKEN with that slot's value regardless of what the bare var
+    holds — the bare CLAUDE_CODE_OAUTH_TOKEN in .env may be the dead legacy token; an
+    explicit rotation-chosen slot must always win.
+
+    When env_name is None, fall back to the original pool-selector behaviour: prefer slots
+    3..7 (valid), then 1..2 (stale fallback), over the bare CLAUDE_CODE_OAUTH_TOKEN.
     Keychain login is unchanged — no token wins over keychain when the env var is absent.
     """
     e = dict(os.environ)
@@ -98,14 +101,22 @@ def _subscription_env() -> dict:
         e.pop("ANTHROPIC_API_KEY", None)
         e.pop("ANTHROPIC_AUTH_TOKEN", None)
 
-    # Pool selector: prefer slots 3..7 (valid), then 1..2 (stale fallback), over bare var.
-    # Only inject when the bare var is absent or empty — don't override an explicit setting.
-    if not e.get("CLAUDE_CODE_OAUTH_TOKEN"):
-        for slot in (3, 4, 5, 6, 7, 1, 2):
-            val = os.environ.get(f"CLAUDE_CODE_OAUTH_TOKEN_{slot}", "")
-            if val:
-                e["CLAUDE_CODE_OAUTH_TOKEN"] = val
-                break
+    if env_name is not None:
+        # Rotation has chosen a specific slot — inject it unconditionally.
+        # REDLINE: we read os.environ[env_name] here (the value), but it is only placed
+        # into the subprocess env dict and never logged, returned, or persisted.
+        slot_val = os.environ.get(env_name, "")
+        if slot_val:
+            e["CLAUDE_CODE_OAUTH_TOKEN"] = slot_val
+    else:
+        # Pool selector: prefer slots 3..7 (valid), then 1..2 (stale fallback), over bare var.
+        # Only inject when the bare var is absent or empty — don't override an explicit setting.
+        if not e.get("CLAUDE_CODE_OAUTH_TOKEN"):
+            for slot in (3, 4, 5, 6, 7, 1, 2):
+                val = os.environ.get(f"CLAUDE_CODE_OAUTH_TOKEN_{slot}", "")
+                if val:
+                    e["CLAUDE_CODE_OAUTH_TOKEN"] = val
+                    break
 
     return e
 
@@ -122,12 +133,21 @@ async def reason(prompt: str, *, role: str = "pm", model: str | None = None,
     dashboard + write conclusions back) + WebSearch/WebFetch and runs a multi-turn research loop.
     Pass `mcp_servers` (with a matching `allowed_tools`) to arm a CUSTOM tool surface — e.g. the
     autonomous desk's free-form trade tools — instead of the default gated bot server. Returns
-    {ok, text, model, role, armed, tools_used, cost_usd, session_id, usage, backend, error}.
+    {ok, text, model, role, armed, tools_used, cost_usd, session_id, usage, backend, error,
+     key_id}.
 
     book: when the caller will record cost against cost_guard themselves (e.g. bot/autonomous.py
     which knows its exact PORTFOLIO_ID book name), pass the book name here so cli_bridge skips
     its own _record_cli_cost call and avoids the double-count. When book=None (the default)
-    cli_bridge records exactly once under the role-inferred book (flagship / system)."""
+    cli_bridge records exactly once under the role-inferred book (flagship / system).
+
+    Key rotation: iterates over key_rotor.candidates() (non-cooling keys first).  If a
+    candidate's result text or error matches a key-failure pattern (org-disabled / 429 / etc.),
+    that key is cooled and the next candidate is tried.  Non-key failures (network errors,
+    tool errors) break the loop immediately — they are not key failures and burning other keys
+    on them is harmful.  When all candidates are exhausted, returns ok=False with the pool freeze
+    message.  If candidates() returns [] (no pool configured), runs once with legacy behaviour.
+    """
     c = _cfg()
     rc = c.get("reasoning", {})
     if arm:
@@ -164,55 +184,214 @@ async def reason(prompt: str, *, role: str = "pm", model: str | None = None,
         except Exception:
             pass
 
-    if _SDK:
-        try:
-            result = await _via_sdk(prompt, mdl, role, system, append_system, tools, dirs, turns, workdir,
-                                    rc.get("permission_mode", "default"), mcp_servers, resume, arm,
-                                    run_id=_run_id)
-            # close the run
-            try:
-                from brain import runlog as _rl
-                if _run_id:
-                    _rl.end_run(_run_id,
-                                summary=str(result.get("text") or "")[:200],
-                                cost_usd=result.get("cost_usd"))
-            except Exception:
-                pass
-            if _run_id:
-                result["run_id"] = _run_id
-            # record cost + token usage in the cost guard (best-effort; never raises)
-            # skip when the caller passed book= and will record themselves (avoid double-count)
-            try:
-                _record_cli_cost(result, role=role, model=mdl, book=book)
-            except Exception:
-                pass
-            return result
-        except Exception as e:           # fall through to the CLI subprocess (non-armed only)
-            base["sdk_error"] = repr(e)[:200]
-            try:
-                from brain import runlog as _rl
-                if _run_id:
-                    _rl.log_step(_run_id, "reasoning", "sdk error", repr(e)[:500])
-            except Exception:
-                pass
+    # ── key-rotation candidate loop ──────────────────────────────────────────
+    # Import lazily so tests can monkeypatch before first use.
+    try:
+        from brain import key_rotor as _kr
+        _pool = _kr.candidates()
+    except Exception:
+        _pool = []
 
-    if arm:
+    # Empty pool → single pass with legacy behaviour (no env_name override).
+    _cands_to_try = _pool if _pool else [None]
+    result: dict | None = None
+    used_key_id: str | None = None
+
+    for _cand in _cands_to_try:
+        _key_id: str | None = _cand["key_id"] if _cand is not None else None
+        _env_name: str | None = _cand["env_name"] if _cand is not None else None
+
+        _sdk_exc_repr: str | None = None
+
+        if _SDK:
+            try:
+                result = await _via_sdk(
+                    prompt, mdl, role, system, append_system, tools, dirs, turns, workdir,
+                    rc.get("permission_mode", "default"), mcp_servers, resume, arm,
+                    run_id=_run_id, env_name=_env_name,
+                )
+                # THE CRUX: classify the result TEXT — org-disabled banners arrive as
+                # ok-looking results whose text contains the subscription-disabled message.
+                _classified = None
+                if _pool and _key_id is not None:
+                    # Check error field first (loose match), then text (strict banner
+                    # phrases only — the text check is the crux per spec, but a short
+                    # legitimate answer mentioning "rate limit" must not cool a key)
+                    for _check, _src in ((result.get("error"), "error"),
+                                         (result.get("text"), "text")):
+                        _classified = _kr.classify_failure(_check, source=_src)
+                        if _classified:
+                            break
+
+                if _classified and _pool and _key_id is not None:
+                    _kind, _reason = _classified
+                    _kr.mark_cooling(_key_id, cool_kind=_kind)
+                    try:
+                        from brain import runlog as _rl
+                        if _run_id:
+                            _rl.log_step(_run_id, "key rotation",
+                                         f"{_key_id} cooled ({_kind}: {_reason}) — trying next key",
+                                         "")
+                    except Exception:
+                        pass
+                    continue  # try next candidate
+
+                # Not a key failure — this is the final result (success or non-key error)
+                used_key_id = _key_id
+                break
+
+            except Exception as e:
+                _sdk_exc_repr = repr(e)[:200]
+                # Classify the exception representation for key failures
+                _classified = None
+                if _pool and _key_id is not None:
+                    try:
+                        _classified = _kr.classify_failure(_sdk_exc_repr)
+                    except Exception:
+                        pass
+
+                if _classified and _pool and _key_id is not None:
+                    _kind, _reason = _classified
+                    _kr.mark_cooling(_key_id, cool_kind=_kind)
+                    try:
+                        from brain import runlog as _rl
+                        if _run_id:
+                            _rl.log_step(_run_id, "key rotation",
+                                         f"{_key_id} cooled ({_kind}: {_reason}) — trying next key",
+                                         "")
+                    except Exception:
+                        pass
+                    # For armed mode, SDK-only; don't fall through to subprocess on key failure
+                    if arm:
+                        continue
+                    # Non-armed: try subprocess with SAME candidate (same env, same key)
+                    # but only if exception was NOT classified as a key failure.
+                    # Since it IS classified, skip subprocess and try next candidate.
+                    continue
+                else:
+                    # Not a key failure — fall through to subprocess or surface error
+                    base["sdk_error"] = _sdk_exc_repr or ""
+                    try:
+                        from brain import runlog as _rl
+                        if _run_id:
+                            _rl.log_step(_run_id, "reasoning", "sdk error",
+                                         (_sdk_exc_repr or "")[:500])
+                    except Exception:
+                        pass
+
+                    if arm:
+                        # Armed requires SDK; no subprocess fallback
+                        result = {**base, "ok": False, "backend": "none", "text": None,
+                                  "error": _sdk_exc_repr or "armed research needs the Agent SDK + a subscription credential"}
+                        used_key_id = _key_id
+                        break
+
+                    # Fall through to subprocess for non-armed, non-key-failure SDK errors
+                    result = await _via_subprocess(
+                        prompt, mdl, role, system, append_system, tools, dirs, turns, workdir,
+                        rc.get("permission_mode", "default"), base, env_name=_env_name,
+                    )
+                    # Classify subprocess result for key failure too
+                    _classified2 = None
+                    if _pool and _key_id is not None:
+                        try:
+                            for _check2, _src2 in ((result.get("error"), "error"),
+                                                   (result.get("text"), "text")):
+                                _classified2 = _kr.classify_failure(_check2, source=_src2)
+                                if _classified2:
+                                    break
+                        except Exception:
+                            pass
+                    if _classified2 and _pool and _key_id is not None:
+                        _kind2, _reason2 = _classified2
+                        _kr.mark_cooling(_key_id, cool_kind=_kind2)
+                        try:
+                            from brain import runlog as _rl
+                            if _run_id:
+                                _rl.log_step(_run_id, "key rotation",
+                                             f"{_key_id} cooled ({_kind2}: {_reason2}) — trying next key",
+                                             "")
+                        except Exception:
+                            pass
+                        continue
+                    used_key_id = _key_id
+                    break
+
+        elif not _SDK:
+            # No SDK at all — subprocess only
+            if arm:
+                result = {**base, "ok": False, "backend": "none", "text": None,
+                          "error": "armed research needs the Agent SDK + a subscription credential"}
+                used_key_id = _key_id
+                break
+            result = await _via_subprocess(
+                prompt, mdl, role, system, append_system, tools, dirs, turns, workdir,
+                rc.get("permission_mode", "default"), base, env_name=_env_name,
+            )
+            _classified3 = None
+            if _pool and _key_id is not None:
+                try:
+                    for _check3, _src3 in ((result.get("error"), "error"),
+                                           (result.get("text"), "text")):
+                        _classified3 = _kr.classify_failure(_check3, source=_src3)
+                        if _classified3:
+                            break
+                except Exception:
+                    pass
+            if _classified3 and _pool and _key_id is not None:
+                _kind3, _reason3 = _classified3
+                _kr.mark_cooling(_key_id, cool_kind=_kind3)
+                try:
+                    from brain import runlog as _rl
+                    if _run_id:
+                        _rl.log_step(_run_id, "key rotation",
+                                     f"{_key_id} cooled ({_kind3}: {_reason3}) — trying next key",
+                                     "")
+                except Exception:
+                    pass
+                continue
+            used_key_id = _key_id
+            break
+    else:
+        # All candidates exhausted without a usable result
+        try:
+            _freeze = _kr.all_cooling_info()
+        except Exception:
+            _freeze = {"all_cooling": True, "earliest_reset": ""}
+        _err_msg = (f"all pool keys cooling/dead; "
+                    f"earliest_reset={_freeze.get('earliest_reset', 'unknown')}")
         try:
             from brain import runlog as _rl
             if _run_id:
-                _rl.end_run(_run_id, summary="armed research failed — SDK not available")
+                _rl.log_step(_run_id, "key rotation", "pool exhausted", _err_msg)
         except Exception:
             pass
-        return {**base, "ok": False, "backend": "none", "text": None,
-                "error": base.get("sdk_error") or "armed research needs the Agent SDK + a subscription credential",
-                "run_id": _run_id}
+        result = {**base, "ok": False, "backend": "none", "text": None,
+                  "error": _err_msg, "freeze_info": _freeze}
 
-    result = await _via_subprocess(prompt, mdl, role, system, append_system, tools, dirs, turns, workdir,
-                                   rc.get("permission_mode", "default"), base)
+    if result is None:
+        result = {**base, "ok": False, "backend": "none", "text": None,
+                  "error": "internal: rotation loop produced no result"}
+
+    # ── Post-loop bookkeeping ────────────────────────────────────────────────
+    if used_key_id is not None:
+        result["key_id"] = used_key_id
+
+    # Record a successful session in the key ledger
+    if result.get("ok") and used_key_id and _pool:
+        try:
+            _usg = result.get("usage") or {}
+            _est_tokens = int((_usg.get("input_tokens") or 0) + (_usg.get("output_tokens") or 0))
+            _kr.record_session(used_key_id, est_tokens=_est_tokens,
+                               cycle_id=str(_run_id or ""), stage=role, outcome="ok")
+        except Exception:
+            pass
+
+    # Close the run-log
     try:
         from brain import runlog as _rl
         if _run_id:
-            _rl.log_step(_run_id, "reasoning", "subprocess result",
+            _rl.log_step(_run_id, "reasoning", "subprocess result" if result.get("backend") == "cli" else "result",
                          str(result.get("text") or "")[:1000])
             _rl.end_run(_run_id,
                         summary=str(result.get("text") or "")[:200],
@@ -220,19 +399,20 @@ async def reason(prompt: str, *, role: str = "pm", model: str | None = None,
             result["run_id"] = _run_id
     except Exception:
         pass
-    # record cost + token usage in the cost guard (best-effort; never raises)
-    # skip when the caller passed book= and will record themselves (avoid double-count)
+
+    # Record cost + token usage in the cost guard (best-effort; never raises)
     try:
-        _record_cli_cost(result, role=role, model=mdl, book=book)
+        _record_cli_cost(result, role=role, model=mdl, book=book, key_id=used_key_id)
     except Exception:
         pass
     return result
 
 
 async def _via_sdk(prompt, mdl, role, system, append_system, tools, dirs, turns, workdir, perm,
-                   mcp_servers, resume, arm, run_id: str | None = None) -> dict:
+                   mcp_servers, resume, arm, run_id: str | None = None,
+                   env_name: str | None = None) -> dict:
     opts = _Options(model=mdl, allowed_tools=tools, add_dirs=dirs, cwd=workdir,
-                    max_turns=turns, permission_mode=perm, env=_subscription_env())
+                    max_turns=turns, permission_mode=perm, env=_subscription_env(env_name))
     if mcp_servers:
         opts.mcp_servers = mcp_servers
     if resume:
@@ -300,7 +480,8 @@ async def _via_sdk(prompt, mdl, role, system, append_system, tools, dirs, turns,
             "usage": _as_dict(usage), "backend": "sdk"}
 
 
-async def _via_subprocess(prompt, mdl, role, system, append_system, tools, dirs, turns, workdir, perm, base) -> dict:
+async def _via_subprocess(prompt, mdl, role, system, append_system, tools, dirs, turns, workdir, perm, base,
+                          env_name: str | None = None) -> dict:
     argv = ["claude", "-p", "--output-format", "json", "--model", mdl,
             "--permission-mode", perm, "--max-turns", str(turns)]
     if tools:
@@ -313,7 +494,7 @@ async def _via_subprocess(prompt, mdl, role, system, append_system, tools, dirs,
         argv += ["--append-system-prompt", append_system]
     proc = await asyncio.create_subprocess_exec(
         *argv, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE, cwd=workdir, env=_subscription_env())
+        stderr=asyncio.subprocess.PIPE, cwd=workdir, env=_subscription_env(env_name))
     out, err = await proc.communicate(prompt.encode())
     try:
         j = json.loads(out.decode() or "{}")
@@ -347,13 +528,16 @@ _ROLE_BOOK: dict[str, str] = {
 
 
 def _record_cli_cost(result: dict, *, role: str | None = None, model: str | None = None,
-                     book: str | None = None) -> None:
+                     book: str | None = None, key_id: str | None = None) -> None:
     """Record CLI-bridge call cost + tokens in cost_guard. Best-effort; never raises.
 
     When book is not None the caller (a bot-level _run_brain site) will record against
     cost_guard themselves using the correct per-book PORTFOLIO_ID — so we skip here to
     avoid the double-count.  When book is None we record once under the role-inferred
     book (see _ROLE_BOOK).  Seat is the resolved role name.
+
+    key_id: when provided (a key_id string like "claude_code_oauth_3"), passed to
+    cost_guard.record() for per-key attribution in the "keys" sub-dict.
     """
     if book is not None:
         # caller records; we are the secondary path — skip to avoid double-count
@@ -371,6 +555,7 @@ def _record_cli_cost(result: dict, *, role: str | None = None, model: str | None
             output_tokens=int(usage.get("output_tokens") or 0),
             cache_read_tokens=int(usage.get("cache_read_input_tokens") or 0),
             cache_creation_tokens=int(usage.get("cache_creation_input_tokens") or 0),
+            key_id=key_id,
         )
     except Exception:  # noqa: BLE001
         pass
@@ -399,6 +584,12 @@ async def chat_stream(prompt: str, *, resume: str | None = None,
         {"type": "tool_result"}                       # a tool returned (chip can settle)
         {"type": "done", "session_id", "cost_usd", "tools_used"}
         {"type": "error", "error": str}
+
+    Key rotation for chat_stream: no mid-stream rotation (the stream cannot be re-wound).
+    Picks the FIRST non-cooling candidate from key_rotor.candidates() and uses its env
+    for the stream.  After the stream ends (or errors), run classify_failure on the first
+    ~600 chars of streamed text + any error event to detect key failure and mark_cooling
+    so the NEXT chat turn rotates to a healthy key.
     """
     if not _SDK:
         yield {"type": "error", "error": "reasoning needs the Claude Agent SDK + a subscription credential"}
@@ -410,6 +601,20 @@ async def chat_stream(prompt: str, *, resume: str | None = None,
     from brain import bot_mcp
     rc = _cfg().get("reasoning", {})
     mdl = resolve_model(role)
+
+    # Pick first healthy candidate for this stream turn
+    _stream_key_id: str | None = None
+    _stream_env_name: str | None = None
+    try:
+        from brain import key_rotor as _kr
+        _pool = _kr.candidates()
+        if _pool:
+            _first = _pool[0]
+            _stream_key_id = _first["key_id"]
+            _stream_env_name = _first["env_name"]
+    except Exception:
+        _pool = []
+
     opts = _Options(
         model=mdl,
         allowed_tools=bot_mcp.armed_allowed_tools(),
@@ -417,7 +622,7 @@ async def chat_stream(prompt: str, *, resume: str | None = None,
         cwd=str(_ROOT),
         max_turns=max_turns or rc.get("research_max_turns", 16),
         permission_mode=rc.get("permission_mode", "default"),
-        env=_subscription_env(),
+        env=_subscription_env(_stream_env_name),
     )
     opts.mcp_servers = {bot_mcp.SERVER_NAME: bot_mcp.build_server()}
     if resume:
@@ -426,6 +631,9 @@ async def chat_stream(prompt: str, *, resume: str | None = None,
         opts.append_system_prompt = append_system
 
     sid, cost, used = resume, None, []
+    # Buffer the first ~600 chars of streamed text for post-stream key-failure detection
+    _text_buffer = ""
+    _error_buffer = ""
 
     def _result_event(raw):
         """A tool result -> a 'paper' event if it carries the marker, else 'tool_result'."""
@@ -442,6 +650,7 @@ async def chat_stream(prompt: str, *, resume: str | None = None,
         return {"type": "tool_result"}
 
     emitted_text = False
+    _stream_error: str | None = None
     try:
         async for msg in _sdk_query(prompt=prompt, options=opts):
             if hasattr(msg, "result"):                         # ResultMessage (end of turn)
@@ -453,6 +662,8 @@ async def chat_stream(prompt: str, *, resume: str | None = None,
                 final = getattr(msg, "result", None)
                 if not emitted_text and final:
                     emitted_text = True
+                    if len(_text_buffer) < 600:
+                        _text_buffer += str(final)[:600]
                     yield {"type": "text", "text": final}
                 continue
             blocks = getattr(msg, "content", None)
@@ -461,7 +672,10 @@ async def chat_stream(prompt: str, *, resume: str | None = None,
                     bt = _block_kind(b)
                     if bt == "text" and getattr(b, "text", ""):
                         emitted_text = True
-                        yield {"type": "text", "text": b.text}
+                        chunk = b.text
+                        if len(_text_buffer) < 600:
+                            _text_buffer += chunk
+                        yield {"type": "text", "text": chunk}
                     elif bt == "tool_use":
                         name = getattr(b, "name", "?")
                         used.append(name)
@@ -472,10 +686,29 @@ async def chat_stream(prompt: str, *, resume: str | None = None,
                 yield _result_event(getattr(msg, "content", "") or "")
             elif isinstance(blocks, str) and blocks:           # bare-string assistant text
                 emitted_text = True
+                if len(_text_buffer) < 600:
+                    _text_buffer += blocks
                 yield {"type": "text", "text": blocks}
     except Exception as e:                                      # surface, don't crash the stream
+        _stream_error = repr(e)[:600]
+        _error_buffer = _stream_error
         yield {"type": "error", "error": repr(e)[:300]}
-        return
+
+    # Post-stream key-failure detection — mark_cooling so the NEXT turn rotates.
+    # Always scan the TRUNCATED buffer: the final chunk can push it past 600 chars
+    # and the banner (short by nature) sits at the front — never skip the scan.
+    if _stream_key_id and _pool:
+        try:
+            _check_text = _text_buffer[:600] if _text_buffer else None
+            _check_err = _error_buffer[:600] if _error_buffer else None
+            for _check, _src in ((_check_err, "error"), (_check_text, "text")):
+                _cls = _kr.classify_failure(_check, source=_src)
+                if _cls:
+                    _kind, _reason = _cls
+                    _kr.mark_cooling(_stream_key_id, cool_kind=_kind)
+                    break
+        except Exception:
+            pass
 
     yield {"type": "done", "session_id": sid, "cost_usd": cost, "tools_used": used}
 

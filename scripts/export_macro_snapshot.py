@@ -35,6 +35,14 @@ _REL_PATH = "site/mastermind/mastermind_snapshot.json"
 _NW_REL_PATH = "site/mastermind/nw_feedback.json"
 # Cost summary — lives in data/ (NOT site/) so it is NOT served publicly.
 _COST_REL_PATH = "data/mastermind/cost_summary.json"
+# Key events — filtered copy of the key ledger for the macro AI Cost admin tab.
+_KEY_EVENTS_REL_PATH = "data/mastermind/key_events.jsonl"
+# Ledger source path relative to Mastermind root
+_KEY_LEDGER_REL = "data/metabolism/key_ledger.jsonl"
+# Rolling window for key events export (days)
+_KEY_EVENTS_WINDOW_DAYS = 14
+# Max rows to export (most-recent)
+_KEY_EVENTS_MAX_ROWS = 20_000
 
 # Bot identity for the snapshot commit (matches the macro daily.yml convention).
 _GIT_NAME = "mastermind-bot"
@@ -58,6 +66,62 @@ def _git(root: Path, *args: str, check: bool = False) -> subprocess.CompletedPro
 
 def _current_branch(root: Path) -> str:
     return _git(root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+
+
+def _write_key_events(macro_root: Path) -> None:
+    """Write a filtered copy of the key ledger to <macro_root>/data/mastermind/key_events.jsonl.
+
+    Filters to rows with parseable ts within the last 14 days, capped at 20 000 most-recent
+    rows.  Skips silently (logs one line) when the ledger is missing or empty.  Never raises.
+    """
+    import json as _json
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+    try:
+        ledger_path = _ROOT / _KEY_LEDGER_REL
+        if not ledger_path.exists():
+            print("[export_macro_snapshot] key ledger absent — key_events export skipped.")
+            return
+        raw = ledger_path.read_text(encoding="utf-8").splitlines()
+        if not raw:
+            print("[export_macro_snapshot] key ledger empty — key_events export skipped.")
+            return
+
+        cutoff = _dt.now(_tz.utc) - _td(days=_KEY_EVENTS_WINDOW_DAYS)
+        kept: list[str] = []
+        for line in raw:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = _json.loads(line)
+            except Exception:
+                continue
+            ts_raw = row.get("ts", "")
+            try:
+                if ts_raw.endswith("Z"):
+                    ts_raw = ts_raw[:-1] + "+00:00"
+                ts = _dt.fromisoformat(ts_raw).astimezone(_tz.utc)
+            except Exception:
+                continue  # unparseable ts → drop
+            if ts >= cutoff:
+                kept.append(line)
+
+        if not kept:
+            print("[export_macro_snapshot] key ledger has no rows within the last "
+                  f"{_KEY_EVENTS_WINDOW_DAYS} days — key_events export skipped.")
+            return
+
+        # Cap at most-recent _KEY_EVENTS_MAX_ROWS rows
+        if len(kept) > _KEY_EVENTS_MAX_ROWS:
+            kept = kept[-_KEY_EVENTS_MAX_ROWS:]
+
+        dest = macro_root / _KEY_EVENTS_REL_PATH
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text("\n".join(kept) + "\n", encoding="utf-8")
+        print(f"[export_macro_snapshot] wrote key_events ({len(kept)} rows) to {dest}")
+    except Exception as exc:
+        print(f"[export_macro_snapshot] key_events write skipped (non-fatal): {exc}")
 
 
 def _commit_and_push(root: Path) -> bool:
@@ -87,6 +151,13 @@ def _commit_and_push(root: Path) -> bool:
             _git(root, "add", "-f", _COST_REL_PATH)
     except Exception as _exc:
         print(f"[export_macro_snapshot] cost_summary stage skipped (non-fatal): {_exc}")
+    # Stage key_events.jsonl — best-effort: absent/error must never abort the snapshot push.
+    try:
+        ke_path = root / _KEY_EVENTS_REL_PATH
+        if ke_path.exists():
+            _git(root, "add", "-f", _KEY_EVENTS_REL_PATH)
+    except Exception as _exc:
+        print(f"[export_macro_snapshot] key_events stage skipped (non-fatal): {_exc}")
     staged = _git(root, "diff", "--cached", "--quiet")
     if staged.returncode == 0:
         print("[export_macro_snapshot] no snapshot changes to commit.")
@@ -145,6 +216,10 @@ def run(no_push: bool = False, dest: str | Path | None = None) -> Path | None:
                 print(f"[export_macro_snapshot] wrote cost summary {written}")
     except Exception as _ce:
         print(f"[export_macro_snapshot] cost summary write skipped (non-fatal): {_ce}")
+
+    # Write key events (filtered ledger copy) into macro data/mastermind/.
+    if push and root is not None:
+        _write_key_events(root)
 
     if not push:
         if no_push:
