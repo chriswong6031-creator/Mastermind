@@ -154,10 +154,20 @@ git checkout master
 git pull origin master            # or rebase if dirty
 # Confirm tests pass:
 pytest -q --tb=short 2>&1 | tail -20
-# Restart the bot (coordinate with any other active session first):
-pkill -f "uvicorn app.main"       # or systemctl restart mastermind if systemd
-uvicorn app.main:app --host 0.0.0.0 --port 8001 &
+# Restart the bot (coordinate with any other active session first).
+# Production (Mac) runs under launchd — com.mastermind.bot, KeepAlive — so
+# kickstart it; NEVER background uvicorn by hand (orphans don't survive reboot):
+launchctl kickstart -k gui/$UID/com.mastermind.bot
+# On the VPS: systemctl restart mastermind
+# Verify:
+curl -s http://127.0.0.1:8000/health   # {"status":"ok",...,"version":"<new HEAD sha>"}
 ```
+
+The launchd agent spawns `scripts/launch_uvicorn.py` with python3 **directly** —
+launchd-spawned `/bin/bash` is TCC-blocked from reading `~/Documents` (probed
+2026-07-17), so a bash entrypoint dies at `source .env` after every reboot; the
+miniconda python3 binary holds the Documents grant. Bot serves on
+`127.0.0.1:8000`; launchd log at `data/uvicorn.launchd.log`.
 
 **Coordinate restarts.** If another session is in the middle of a build, a restart
 kills the in-flight LLM call.  Check `data/portfolio/nav_history.jsonl` —

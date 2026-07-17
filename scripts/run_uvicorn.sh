@@ -1,6 +1,9 @@
 #!/bin/bash
-# Production launcher for the Mastermind bot — invoked by launchd
-# (com.mastermind.bot). Sources .env (auth + flags), execs uvicorn.
+# Terminal-session launcher for the Mastermind bot. NOT the launchd
+# entrypoint: launchd-spawned /bin/bash is TCC-blocked from reading
+# ~/Documents (probed 2026-07-17), so com.mastermind.bot spawns
+# scripts/launch_uvicorn.py with python3 directly instead.
+# Sources .env (auth + flags), execs uvicorn.
 # Incident 2026-07-06: never launch this from an agent-session shell —
 # sandbox provenance on files created by that tree broke the sqlite
 # jobstore hours later. launchd is the only supported production launcher.
