@@ -545,6 +545,7 @@ def build_book(sized: list[dict], rejected: list[dict], *, regime: dict | None, 
             mcp_servers=autonomous_mcp.build_servers(),
             allowed_tools=autonomous_mcp.allowed_tools(),
             max_turns=int(os.environ.get("FLAGSHIP_PM_MAX_TURNS", "30")),
+            book="flagship",         # pm_conviction records directly; skip bridge double-count
         )
         # cli_bridge.reason is a coroutine; run it on a fresh loop (or a thread if one is live).
         _res = _run_coro(coro)
@@ -553,7 +554,19 @@ def build_book(sized: list[dict], rejected: list[dict], *, regime: dict | None, 
         # or the cap is OFF; never raises.
         try:
             from brain import cost_guard
-            cost_guard.record("flagship", (_res or {}).get("cost_usd"), asof)
+            _r = _res or {}
+            _usg = _r.get("usage") or {}
+            cost_guard.record(
+                "flagship",
+                _r.get("cost_usd"),
+                asof,
+                seat="flagship_pm",
+                model=_r.get("model"),
+                input_tokens=int(_usg.get("input_tokens") or 0),
+                output_tokens=int(_usg.get("output_tokens") or 0),
+                cache_read_tokens=int(_usg.get("cache_read_input_tokens") or 0),
+                cache_creation_tokens=int(_usg.get("cache_creation_input_tokens") or 0),
+            )
         except Exception:  # noqa: BLE001 — additive; never break the build
             pass
     except Exception:  # noqa: BLE001 — the seat is additive; never break the build

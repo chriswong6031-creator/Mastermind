@@ -73,6 +73,48 @@ def call_model(system: str, user: str, *, role: str = "pm", max_tokens: int = 15
         if getattr(resp, "stop_reason", None) == "refusal":
             return None, "stop_refusal"
         text = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
+        # record cost + tokens via cost_guard (best-effort; never raises into the caller)
+        try:
+            _record_api_cost(resp, role=role, model=t["model"])
+        except Exception:
+            pass
         return (text or None), (None if text else "empty_reply")
     except Exception:
         return None, "llm_error"
+
+
+def _record_api_cost(resp, *, role: str | None = None, model: str | None = None) -> None:
+    """Record Messages-API call cost + tokens in cost_guard. Best-effort; never raises.
+
+    ``resp`` is an anthropic.types.Message.  Cost is estimated from resp.usage via the
+    PRICING table in cost_guard (the API path does not always return a cost field).
+
+    Book attribution uses the same _ROLE_BOOK mapping as cli_bridge so that the same
+    logical seat records to the same book regardless of which backend is active.
+    """
+    try:
+        from brain import cost_guard as _cg
+        from brain.cli_bridge import _ROLE_BOOK
+        _book = _ROLE_BOOK.get(str(role or "").lower(), "flagship")
+        usage = getattr(resp, "usage", None) or {}
+        if hasattr(usage, "__dict__"):
+            usage = usage.__dict__
+        if not isinstance(usage, dict):
+            usage = {}
+        itok = int(usage.get("input_tokens") or 0)
+        otok = int(usage.get("output_tokens") or 0)
+        crtok = int(usage.get("cache_read_input_tokens") or 0)
+        cctok = int(usage.get("cache_creation_input_tokens") or 0)
+        mdl = str(model or getattr(resp, "model", None) or "")
+        usd = _cg.estimate_cost(mdl, itok, otok, crtok, cctok)
+        _cg.record(
+            _book, usd,
+            seat=str(role or "unknown"),
+            model=mdl,
+            input_tokens=itok,
+            output_tokens=otok,
+            cache_read_tokens=crtok,
+            cache_creation_tokens=cctok,
+        )
+    except Exception:  # noqa: BLE001
+        pass

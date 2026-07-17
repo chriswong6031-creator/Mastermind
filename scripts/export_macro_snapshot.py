@@ -33,6 +33,8 @@ from bridge import nw_feedback as _nw_feedback
 _ROOT = Path(__file__).resolve().parent.parent
 _REL_PATH = "site/mastermind/mastermind_snapshot.json"
 _NW_REL_PATH = "site/mastermind/nw_feedback.json"
+# Cost summary — lives in data/ (NOT site/) so it is NOT served publicly.
+_COST_REL_PATH = "data/mastermind/cost_summary.json"
 
 # Bot identity for the snapshot commit (matches the macro daily.yml convention).
 _GIT_NAME = "mastermind-bot"
@@ -78,6 +80,13 @@ def _commit_and_push(root: Path) -> bool:
             _git(root, "add", "-f", _NW_REL_PATH)
     except Exception as _exc:
         print(f"[export_macro_snapshot] nw_feedback stage skipped (non-fatal): {_exc}")
+    # Stage cost_summary.json — best-effort: absent/error must never abort the snapshot push.
+    try:
+        cost_path = root / _COST_REL_PATH
+        if cost_path.exists():
+            _git(root, "add", "-f", _COST_REL_PATH)
+    except Exception as _exc:
+        print(f"[export_macro_snapshot] cost_summary stage skipped (non-fatal): {_exc}")
     staged = _git(root, "diff", "--cached", "--quiet")
     if staged.returncode == 0:
         print("[export_macro_snapshot] no snapshot changes to commit.")
@@ -122,6 +131,20 @@ def run(no_push: bool = False, dest: str | Path | None = None) -> Path | None:
     except Exception as exc:
         print(f"[export_macro_snapshot] snapshot build/write failed (non-fatal): {exc}")
         return None
+
+    # Write cost summary into data/mastermind/ (NOT site/ — never publicly served).
+    try:
+        from brain import cost_guard as _cg
+        cost_dest = (root / _COST_REL_PATH) if (push and root is not None) else None
+        if cost_dest is None:
+            # dry-run / custom dest: write alongside the snapshot for debugging but skip commit
+            cost_dest = (Path(dest).parent.parent / _COST_REL_PATH) if dest else None
+        if cost_dest is not None:
+            written = _cg.write_cost_summary(cost_dest)
+            if written:
+                print(f"[export_macro_snapshot] wrote cost summary {written}")
+    except Exception as _ce:
+        print(f"[export_macro_snapshot] cost summary write skipped (non-fatal): {_ce}")
 
     if not push:
         if no_push:

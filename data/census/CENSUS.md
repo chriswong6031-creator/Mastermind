@@ -1,12 +1,12 @@
 # Mastermind System Census
 
 > GENERATED — do not hand-edit; architecture docs must cite this file. (R10)  
-> Generated at: `2026-07-12T05:17:36.456095+00:00`  
-> Git SHA: `92f264e`
+> Generated at: `2026-07-16T23:46:57.358909+00:00`  
+> Git SHA: `131290a`
 
 ## A. Scheduled Jobs
 
-**21 jobs registered** in `app/scheduler.py`
+**22 jobs registered** in `app/scheduler.py`
 
 | id | cron_spec | hour | minute | day_of_week | timezone |
 |---|---|---|---|---|---|
@@ -31,6 +31,7 @@
 | `experiment_maturity` | `50 23 * * mon-fri` | 23 | 50 | mon-fri | UTC |
 | `portfolio_risk_compose` | `0 13-20 * * mon-fri` | 13-20 | 0 | mon-fri | UTC |
 | `portfolio_risk_daily` | `5 15 * * mon-fri` | 15 | 5 | mon-fri | UTC |
+| `prewarm_marks` | `*/2 1-9,13-21 * * mon-fri` | 1-9,13-21 | */2 | mon-fri | UTC |
 
 ## B. Portfolio Books
 
@@ -50,12 +51,12 @@
 
 **0 flags currently set** in environment:
 
-**54 known flags NOT set:**  
-`MASTERMIND_ALLOW_FRACTIONAL`, `MASTERMIND_AUTH_TOKEN`, `MASTERMIND_BRIDGE_PROGRAM`, `MASTERMIND_CAUTION_GROSS`, `MASTERMIND_CAUTION_SCORE`, `MASTERMIND_CHAIN_CAP`, `MASTERMIND_CHARTER_V`, `MASTERMIND_COMMITTEE`, `MASTERMIND_CONTROL_PLANE_MASTERPLAN`, `MASTERMIND_COOKIE_SECURE`, `MASTERMIND_DERISK_THEME_DROP`, `MASTERMIND_DIVERGENCE_CLUE`, `MASTERMIND_DWELL`, `MASTERMIND_EXPLORE_EPS`, `MASTERMIND_EXPLORE_WEIGHT`, `MASTERMIND_FAST_DERISK`, `MASTERMIND_FIRM_CAPS`, `MASTERMIND_FIRM_CLUSTER_CAP`, `MASTERMIND_FIRM_NAME_CAP`, `MASTERMIND_FIX_MASTERPLAN`, `MASTERMIND_FLAGSHIP_JUDGMENT`, `MASTERMIND_GATE_OFFICER`, `MASTERMIND_HW_FIRM_UNIVERSE`, `MASTERMIND_HW_MIN_FUNDABLE`, `MASTERMIND_JOBSTORE`, `MASTERMIND_LEARNING_DESIGN`, `MASTERMIND_MACRO_RISK`, `MASTERMIND_MIN_POSITION_FRAC`, `MASTERMIND_MIN_TRADE_FRAC`, `MASTERMIND_NIGHTLY_USD_CAP`, `MASTERMIND_NO_TRADE_BAND_FRAC`, `MASTERMIND_NW_CONTEXT`, `MASTERMIND_NW_DECISION`, `MASTERMIND_PACKET_GATE`, `MASTERMIND_PASSWORD`, `MASTERMIND_POSTURE_ADAPT`, `MASTERMIND_POSTURE_DECIDER`, `MASTERMIND_REPUTATION_WEIGHTING`, `MASTERMIND_REQUIRE_AUTH`, `MASTERMIND_RESEARCH_LLM`, `MASTERMIND_RISKOFF_GROSS`, `MASTERMIND_RISKOFF_SCORE`, `MASTERMIND_RISK_GOVERNOR`, `MASTERMIND_RISK_OFFICER`, `MASTERMIND_ROTATION_IN`, `MASTERMIND_SELECTION_EXPLORE`, `MASTERMIND_SELF_MIRROR`, `MASTERMIND_SELF_TUNE`, `MASTERMIND_SERVE_ONLY`, `MASTERMIND_SESSION_DAYS`, `MASTERMIND_STUDENT`, `MASTERMIND_TIMING_GATE`, `MASTERMIND_UNIVERSE_TRIAGE`, `MASTERMIND_V`
+**61 known flags NOT set:**  
+`MASTERMIND_AI_LOOP`, `MASTERMIND_AI_REVIEW_LLM`, `MASTERMIND_ALLOW_FRACTIONAL`, `MASTERMIND_AUTH_TOKEN`, `MASTERMIND_BOARD_LEARNING`, `MASTERMIND_BRIDGE_PROGRAM`, `MASTERMIND_CAUTION_GROSS`, `MASTERMIND_CAUTION_SCORE`, `MASTERMIND_CHAIN_CAP`, `MASTERMIND_CHARTER_V`, `MASTERMIND_COMMITTEE`, `MASTERMIND_CONTROL_PLANE_MASTERPLAN`, `MASTERMIND_COOKIE_SECURE`, `MASTERMIND_DERISK_THEME_DROP`, `MASTERMIND_DESK_QUORUM`, `MASTERMIND_DIVERGENCE_CLUE`, `MASTERMIND_DWELL`, `MASTERMIND_EXPLORE_EPS`, `MASTERMIND_EXPLORE_WEIGHT`, `MASTERMIND_FAST_DERISK`, `MASTERMIND_FIRM_CAPS`, `MASTERMIND_FIRM_CLUSTER_CAP`, `MASTERMIND_FIRM_NAME_CAP`, `MASTERMIND_FIX_MASTERPLAN`, `MASTERMIND_FLAGSHIP_JUDGMENT`, `MASTERMIND_GATE_OFFICER`, `MASTERMIND_HW_FIRM_UNIVERSE`, `MASTERMIND_HW_MIN_FUNDABLE`, `MASTERMIND_JOBSTORE`, `MASTERMIND_LEARNING_DESIGN`, `MASTERMIND_MACRO_RISK`, `MASTERMIND_MIN_POSITION_FRAC`, `MASTERMIND_MIN_TRADE_FRAC`, `MASTERMIND_NIGHTLY_USD_CAP`, `MASTERMIND_NO_TRADE_BAND_FRAC`, `MASTERMIND_NW_CONTEXT`, `MASTERMIND_NW_DECISION`, `MASTERMIND_PACKET_GATE`, `MASTERMIND_PASSWORD`, `MASTERMIND_POSTURE_ADAPT`, `MASTERMIND_POSTURE_DECIDER`, `MASTERMIND_REPUTATION_WEIGHTING`, `MASTERMIND_REQUIRE_AUTH`, `MASTERMIND_RESEARCH_LLM`, `MASTERMIND_RISKOFF_GROSS`, `MASTERMIND_RISKOFF_SCORE`, `MASTERMIND_RISK_GOVERNOR`, `MASTERMIND_RISK_OFFICER`, `MASTERMIND_ROTATION_IN`, `MASTERMIND_SELECTION_EXPLORE`, `MASTERMIND_SELF_MIRROR`, `MASTERMIND_SELF_TUNE`, `MASTERMIND_SERVE_ONLY`, `MASTERMIND_SESSION_DAYS`, `MASTERMIND_STANDOUT_UNGATED`, `MASTERMIND_STUDENT`, `MASTERMIND_TECHNICIAN`, `MASTERMIND_TIMING_GATE`, `MASTERMIND_TREASURY_CONTEXT`, `MASTERMIND_UNIVERSE_TRIAGE`, `MASTERMIND_V`
 
 ## D. API Endpoints
 
-**71 routes** across `app/main.py` + `app/web.py` + `app/auth.py`
+**79 routes** across `app/main.py` + `app/web.py` + `app/auth.py`
 
 | method | path | open | LLM |
 |---|---|---|---|
@@ -114,6 +115,14 @@
 | GET | `/api/engine_backtest` | auth |  |
 | GET | `/api/factor_zoo` | auth |  |
 | GET | `/api/fundamentals` | auth |  |
+| GET | `/api/mastermind_ai` | auth |  |
+| GET | `/api/mastermind_ai/loop_log` | auth |  |
+| GET | `/api/mastermind_ai/improvements` | auth |  |
+| GET | `/api/mastermind_ai/reflection` | auth |  |
+| POST | `/api/mastermind_ai/settings` | auth |  |
+| POST | `/api/mastermind_ai/directive` | auth |  |
+| POST | `/api/mastermind_ai/act_on_nudges` | auth |  |
+| POST | `/api/mastermind_ai/run` | auth |  |
 | GET | `/api/readiness` | auth |  |
 | GET | `/api/macro` | auth |  |
 | GET | `/api/activity` | auth |  |
@@ -193,8 +202,8 @@ _(no artifact paths detected)_
 
 **15 construction site(s):**
 
-- `bridge/nw_feedback.py:521` — `failed` — _result = GuardrailResult.failed(_
-- `data_layer/macro_refresh.py:570` — `failed` — _GuardrailResult.failed(_
+- `bridge/nw_feedback.py:650` — `failed` — _result = GuardrailResult.failed(_
+- `data_layer/macro_refresh.py:621` — `failed` — _GuardrailResult.failed(_
 - `portfolio/firm_exposure.py:657` — `failed` — _result = GuardrailResult.failed(_
 - `portfolio/sleeves.py:325` — `failed` — _GuardrailResult.failed(_
 - `portfolio/marks.py:69` — `failed` — _GuardrailResult.failed(_
@@ -202,9 +211,9 @@ _(no artifact paths detected)_
 - `bot/derisk.py:725` — `failed` — _GuardrailResult.failed(_
 - `bot/heavyweight.py:327` — `failed` — _GuardrailResult.failed(_
 - `bot/etf.py:94` — `failed` — _GuardrailResult.failed(_
-- `bot/settle.py:100` — `failed` — _GuardrailResult.failed(_
-- `bot/settle.py:118` — `failed` — _GuardrailResult.failed(_
-- `bot/settle.py:284` — `failed` — _GuardrailResult.failed(_
+- `bot/settle.py:105` — `failed` — _GuardrailResult.failed(_
+- `bot/settle.py:123` — `failed` — _GuardrailResult.failed(_
+- `bot/settle.py:289` — `failed` — _GuardrailResult.failed(_
 - `bot/autonomous.py:61` — `failed` — _GuardrailResult.failed(_
-- `bot/phase2.py:194` — `failed` — _GuardrailResult.failed(_
-- `bot/phase2.py:252` — `failed` — _GuardrailResult.failed(_
+- `bot/phase2.py:433` — `failed` — _GuardrailResult.failed(_
+- `bot/phase2.py:491` — `failed` — _GuardrailResult.failed(_

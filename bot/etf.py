@@ -138,6 +138,23 @@ def run_etf(asof: str | None = None, *, force: bool = False, armed: bool = True,
             brain = _run_brain(asof, inaugural, directive=directive) if directive else _run_brain(asof, inaugural)
         except Exception as e:                       # noqa: BLE001
             brain = {"ok": False, "error": repr(e)[:300]}
+        # record cost in the ledger under the ETF book (best-effort; never raises)
+        try:
+            from brain import cost_guard as _cg
+            _usg = brain.get("usage") or {}
+            _cg.record(
+                PORTFOLIO_ID,
+                brain.get("cost_usd"),
+                asof=asof,
+                seat="etf_brain",
+                model=str(brain.get("model") or ""),
+                input_tokens=int(_usg.get("input_tokens") or 0),
+                output_tokens=int(_usg.get("output_tokens") or 0),
+                cache_read_tokens=int(_usg.get("cache_read_input_tokens") or 0),
+                cache_creation_tokens=int(_usg.get("cache_creation_input_tokens") or 0),
+            )
+        except Exception:  # noqa: BLE001
+            pass
     out["brain"] = {k: brain.get(k) for k in ("ok", "cost_usd", "tools_used", "error", "run_id", "model")}
 
     # 2. read the submitted book — then RE-ENFORCE the ETF-only allowlist in the trusted layer: drop
@@ -496,6 +513,7 @@ def _run_brain(asof: str, inaugural: bool, directive: str | None = None) -> dict
         mcp_servers=etf_mcp.build_servers(),
         allowed_tools=etf_mcp.allowed_tools(),
         max_turns=_MAX_TURNS,
+        book=PORTFOLIO_ID,           # bot records against cost_guard; skip bridge double-count
     )
     return _run_coro(coro)
 

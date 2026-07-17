@@ -111,8 +111,17 @@ def run_autonomous(asof: str | None = None, *, force: bool = False, armed: bool 
             brain = _run_brain(asof, inaugural, directive=directive) if directive else _run_brain(asof, inaugural)
         except Exception as e:                       # noqa: BLE001
             brain = {"ok": False, "error": repr(e)[:300]}
-        # record this seat's known cost against the nightly per-book ledger (no-op when unknown).
-        cost_guard.record(PORTFOLIO_ID, brain.get("cost_usd"), asof)
+        # record this seat's known cost + token usage against the nightly per-book ledger.
+        _usg = brain.get("usage") or {}
+        cost_guard.record(
+            PORTFOLIO_ID, brain.get("cost_usd"), asof,
+            seat="autonomous_brain",
+            model=str(brain.get("model") or ""),
+            input_tokens=int(_usg.get("input_tokens") or 0),
+            output_tokens=int(_usg.get("output_tokens") or 0),
+            cache_read_tokens=int(_usg.get("cache_read_input_tokens") or 0),
+            cache_creation_tokens=int(_usg.get("cache_creation_input_tokens") or 0),
+        )
     out["brain"] = {k: brain.get(k) for k in ("ok", "cost_usd", "tools_used", "error", "run_id", "model")}
 
     # 2. read the submitted book
@@ -325,6 +334,7 @@ def _run_brain(asof: str, inaugural: bool, directive: str | None = None) -> dict
         mcp_servers=autonomous_mcp.build_servers(),
         allowed_tools=autonomous_mcp.allowed_tools(),
         max_turns=_MAX_TURNS,
+        book=PORTFOLIO_ID,           # bot records against cost_guard; skip bridge double-count
     )
     return _run_coro(coro)
 

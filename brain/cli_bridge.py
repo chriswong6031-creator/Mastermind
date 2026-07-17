@@ -85,11 +85,28 @@ def _abs_dirs(dirs: list[str]) -> list[str]:
 def _subscription_env() -> dict:
     """Env for the spawned claude. To use the SUBSCRIPTION (not the metered API) we must
     NOT expose ANTHROPIC_API_KEY — it wins over the subscription login in the credential
-    resolution order. Strip it (and ANTHROPIC_AUTH_TOKEN) when prefer_subscription."""
+    resolution order. Strip it (and ANTHROPIC_AUTH_TOKEN) when prefer_subscription.
+
+    Token pool selector: the macro-side operator deprecated the bare CLAUDE_CODE_OAUTH_TOKEN
+    in favour of a numbered pool (_1.._7; slots 3..7 are currently valid, 1..2 are stale).
+    When the env contains numbered slots but no bare token, inject the first non-empty slot
+    (preferring 3..7 over 1..2) as CLAUDE_CODE_OAUTH_TOKEN in the subprocess env copy only.
+    Keychain login is unchanged — no token wins over keychain when the env var is absent.
+    """
     e = dict(os.environ)
     if _cfg().get("reasoning", {}).get("prefer_subscription", True):
         e.pop("ANTHROPIC_API_KEY", None)
         e.pop("ANTHROPIC_AUTH_TOKEN", None)
+
+    # Pool selector: prefer slots 3..7 (valid), then 1..2 (stale fallback), over bare var.
+    # Only inject when the bare var is absent or empty — don't override an explicit setting.
+    if not e.get("CLAUDE_CODE_OAUTH_TOKEN"):
+        for slot in (3, 4, 5, 6, 7, 1, 2):
+            val = os.environ.get(f"CLAUDE_CODE_OAUTH_TOKEN_{slot}", "")
+            if val:
+                e["CLAUDE_CODE_OAUTH_TOKEN"] = val
+                break
+
     return e
 
 
@@ -99,12 +116,18 @@ async def reason(prompt: str, *, role: str = "pm", model: str | None = None,
                  max_turns: int | None = None, cwd: str | None = None,
                  arm: bool = False, resume: str | None = None,
                  mcp_servers: dict | None = None,
-                 log_run: bool = True) -> dict:
+                 log_run: bool = True,
+                 book: str | None = None) -> dict:
     """Run a headless Claude Code reasoning pass. With arm=True, attaches MCP tools (read the
     dashboard + write conclusions back) + WebSearch/WebFetch and runs a multi-turn research loop.
     Pass `mcp_servers` (with a matching `allowed_tools`) to arm a CUSTOM tool surface — e.g. the
     autonomous desk's free-form trade tools — instead of the default gated bot server. Returns
-    {ok, text, model, role, armed, tools_used, cost_usd, session_id, usage, backend, error}."""
+    {ok, text, model, role, armed, tools_used, cost_usd, session_id, usage, backend, error}.
+
+    book: when the caller will record cost against cost_guard themselves (e.g. bot/autonomous.py
+    which knows its exact PORTFOLIO_ID book name), pass the book name here so cli_bridge skips
+    its own _record_cli_cost call and avoids the double-count. When book=None (the default)
+    cli_bridge records exactly once under the role-inferred book (flagship / system)."""
     c = _cfg()
     rc = c.get("reasoning", {})
     if arm:
@@ -157,6 +180,12 @@ async def reason(prompt: str, *, role: str = "pm", model: str | None = None,
                 pass
             if _run_id:
                 result["run_id"] = _run_id
+            # record cost + token usage in the cost guard (best-effort; never raises)
+            # skip when the caller passed book= and will record themselves (avoid double-count)
+            try:
+                _record_cli_cost(result, role=role, model=mdl, book=book)
+            except Exception:
+                pass
             return result
         except Exception as e:           # fall through to the CLI subprocess (non-armed only)
             base["sdk_error"] = repr(e)[:200]
@@ -189,6 +218,12 @@ async def reason(prompt: str, *, role: str = "pm", model: str | None = None,
                         summary=str(result.get("text") or "")[:200],
                         cost_usd=result.get("cost_usd"))
             result["run_id"] = _run_id
+    except Exception:
+        pass
+    # record cost + token usage in the cost guard (best-effort; never raises)
+    # skip when the caller passed book= and will record themselves (avoid double-count)
+    try:
+        _record_cli_cost(result, role=role, model=mdl, book=book)
     except Exception:
         pass
     return result
@@ -296,6 +331,49 @@ def _as_dict(usage):
         return usage
     return {k: getattr(usage, k) for k in ("input_tokens", "output_tokens",
             "cache_read_input_tokens", "cache_creation_input_tokens") if hasattr(usage, k)}
+
+
+# Role -> book mapping for cost_guard recording.  Roles used from the outside:
+# "pm"/"deep" = flagship + autonomous (no single book known here); "analyst"/"scout" = system
+# utility (translation, loop review).  We use a heuristic "system" book for utility roles and
+# "flagship" as the default for heavyweight reasoning roles.  Per-book callers (bot/etf.py etc.)
+# that know their book call cost_guard.record directly instead.
+_ROLE_BOOK: dict[str, str] = {
+    "pm":       "flagship",
+    "deep":     "flagship",
+    "analyst":  "system",
+    "scout":    "system",
+}
+
+
+def _record_cli_cost(result: dict, *, role: str | None = None, model: str | None = None,
+                     book: str | None = None) -> None:
+    """Record CLI-bridge call cost + tokens in cost_guard. Best-effort; never raises.
+
+    When book is not None the caller (a bot-level _run_brain site) will record against
+    cost_guard themselves using the correct per-book PORTFOLIO_ID — so we skip here to
+    avoid the double-count.  When book is None we record once under the role-inferred
+    book (see _ROLE_BOOK).  Seat is the resolved role name.
+    """
+    if book is not None:
+        # caller records; we are the secondary path — skip to avoid double-count
+        return
+    try:
+        from brain import cost_guard as _cg
+        usd = result.get("cost_usd")
+        usage = result.get("usage") or {}
+        _book = _ROLE_BOOK.get(str(role or "").lower(), "flagship")
+        _cg.record(
+            _book, usd,
+            seat=str(role or "unknown"),
+            model=str(model or resolve_model(role)),
+            input_tokens=int(usage.get("input_tokens") or 0),
+            output_tokens=int(usage.get("output_tokens") or 0),
+            cache_read_tokens=int(usage.get("cache_read_input_tokens") or 0),
+            cache_creation_tokens=int(usage.get("cache_creation_input_tokens") or 0),
+        )
+    except Exception:  # noqa: BLE001
+        pass
 
 
 async def research(prompt: str, *, role: str = "deep", max_turns: int | None = None,

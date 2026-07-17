@@ -1,7 +1,7 @@
 {
   "_meta": {
-    "generated_at": "2026-07-06T08:52:51.136712+00:00",
-    "git_sha": "b40e1ae",
+    "generated_at": "2026-07-16T23:46:57.358909+00:00",
+    "git_sha": "131290a",
     "notice": "GENERATED \u2014 do not hand-edit; architecture docs must cite this file.",
     "ruling": "R10"
   },
@@ -24,10 +24,10 @@
     },
     {
       "id": "daily_loop",
-      "cron_spec": "40 22 * * *",
+      "cron_spec": "40 22 * * mon-fri",
       "hour": "22",
       "minute": "40",
-      "day_of_week": null,
+      "day_of_week": "mon-fri",
       "timezone": "UTC"
     },
     {
@@ -112,9 +112,17 @@
     },
     {
       "id": "publish_macro_snapshot",
-      "cron_spec": "25 12,22 * * *",
+      "cron_spec": "25 12,22 * * mon-fri",
       "hour": "12,22",
       "minute": "25",
+      "day_of_week": "mon-fri",
+      "timezone": "UTC"
+    },
+    {
+      "id": "vps_state_sync",
+      "cron_spec": "*/15 * * * *",
+      "hour": null,
+      "minute": "*/15",
       "day_of_week": null,
       "timezone": "UTC"
     },
@@ -147,6 +155,30 @@
       "cron_spec": "50 23 * * mon-fri",
       "hour": "23",
       "minute": "50",
+      "day_of_week": "mon-fri",
+      "timezone": "UTC"
+    },
+    {
+      "id": "portfolio_risk_compose",
+      "cron_spec": "0 13-20 * * mon-fri",
+      "hour": "13-20",
+      "minute": "0",
+      "day_of_week": "mon-fri",
+      "timezone": "UTC"
+    },
+    {
+      "id": "portfolio_risk_daily",
+      "cron_spec": "5 15 * * mon-fri",
+      "hour": "15",
+      "minute": "5",
+      "day_of_week": "mon-fri",
+      "timezone": "UTC"
+    },
+    {
+      "id": "prewarm_marks",
+      "cron_spec": "*/2 1-9,13-21 * * mon-fri",
+      "hour": "1-9,13-21",
+      "minute": "*/2",
       "day_of_week": "mon-fri",
       "timezone": "UTC"
     }
@@ -230,8 +262,11 @@
   "flags": {
     "set": {},
     "known_not_set": [
+      "MASTERMIND_AI_LOOP",
+      "MASTERMIND_AI_REVIEW_LLM",
       "MASTERMIND_ALLOW_FRACTIONAL",
       "MASTERMIND_AUTH_TOKEN",
+      "MASTERMIND_BOARD_LEARNING",
       "MASTERMIND_BRIDGE_PROGRAM",
       "MASTERMIND_CAUTION_GROSS",
       "MASTERMIND_CAUTION_SCORE",
@@ -241,6 +276,8 @@
       "MASTERMIND_CONTROL_PLANE_MASTERPLAN",
       "MASTERMIND_COOKIE_SECURE",
       "MASTERMIND_DERISK_THEME_DROP",
+      "MASTERMIND_DESK_QUORUM",
+      "MASTERMIND_DIVERGENCE_CLUE",
       "MASTERMIND_DWELL",
       "MASTERMIND_EXPLORE_EPS",
       "MASTERMIND_EXPLORE_WEIGHT",
@@ -253,6 +290,7 @@
       "MASTERMIND_GATE_OFFICER",
       "MASTERMIND_HW_FIRM_UNIVERSE",
       "MASTERMIND_HW_MIN_FUNDABLE",
+      "MASTERMIND_JOBSTORE",
       "MASTERMIND_LEARNING_DESIGN",
       "MASTERMIND_MACRO_RISK",
       "MASTERMIND_MIN_POSITION_FRAC",
@@ -260,6 +298,8 @@
       "MASTERMIND_NIGHTLY_USD_CAP",
       "MASTERMIND_NO_TRADE_BAND_FRAC",
       "MASTERMIND_NW_CONTEXT",
+      "MASTERMIND_NW_DECISION",
+      "MASTERMIND_PACKET_GATE",
       "MASTERMIND_PASSWORD",
       "MASTERMIND_POSTURE_ADAPT",
       "MASTERMIND_POSTURE_DECIDER",
@@ -270,12 +310,18 @@
       "MASTERMIND_RISKOFF_SCORE",
       "MASTERMIND_RISK_GOVERNOR",
       "MASTERMIND_RISK_OFFICER",
+      "MASTERMIND_ROTATION_IN",
       "MASTERMIND_SELECTION_EXPLORE",
       "MASTERMIND_SELF_MIRROR",
       "MASTERMIND_SELF_TUNE",
+      "MASTERMIND_SERVE_ONLY",
       "MASTERMIND_SESSION_DAYS",
+      "MASTERMIND_STANDOUT_UNGATED",
       "MASTERMIND_STUDENT",
+      "MASTERMIND_TECHNICIAN",
       "MASTERMIND_TIMING_GATE",
+      "MASTERMIND_TREASURY_CONTEXT",
+      "MASTERMIND_UNIVERSE_TRIAGE",
       "MASTERMIND_V"
     ]
   },
@@ -667,6 +713,62 @@
     },
     {
       "method": "GET",
+      "path": "/api/mastermind_ai",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/mastermind_ai/loop_log",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/mastermind_ai/improvements",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/api/mastermind_ai/reflection",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "POST",
+      "path": "/api/mastermind_ai/settings",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "POST",
+      "path": "/api/mastermind_ai/directive",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "POST",
+      "path": "/api/mastermind_ai/act_on_nudges",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "POST",
+      "path": "/api/mastermind_ai/run",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
       "path": "/api/readiness",
       "open": false,
       "llm_triggering": false,
@@ -696,13 +798,6 @@
     {
       "method": "GET",
       "path": "/api/runlog",
-      "open": false,
-      "llm_triggering": false,
-      "source": "web.py"
-    },
-    {
-      "method": "GET",
-      "path": "/api/competitors",
       "open": false,
       "llm_triggering": false,
       "source": "web.py"
@@ -751,6 +846,13 @@
     },
     {
       "method": "GET",
+      "path": "/api/firm_allocator",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
       "path": "/api/desk/experiments",
       "open": false,
       "llm_triggering": false,
@@ -758,24 +860,24 @@
     },
     {
       "method": "GET",
-      "path": "/login",
-      "open": true,
+      "path": "/api/scheduler",
+      "open": false,
       "llm_triggering": false,
-      "source": "auth.py"
-    },
-    {
-      "method": "POST",
-      "path": "/login",
-      "open": true,
-      "llm_triggering": false,
-      "source": "auth.py"
+      "source": "web.py"
     },
     {
       "method": "GET",
-      "path": "/logout",
-      "open": true,
+      "path": "/api/provenance",
+      "open": false,
       "llm_triggering": false,
-      "source": "auth.py"
+      "source": "web.py"
+    },
+    {
+      "method": "GET",
+      "path": "/portfolio_desk",
+      "open": false,
+      "llm_triggering": false,
+      "source": "web.py"
     }
   ],
   "artifacts": [
@@ -856,5 +958,96 @@
       "artifact_paths": []
     }
   ],
-  "guardrails": []
+  "guardrails": [
+    {
+      "file": "bridge/nw_feedback.py",
+      "line": 650,
+      "kind": "failed",
+      "snippet": "result = GuardrailResult.failed("
+    },
+    {
+      "file": "data_layer/macro_refresh.py",
+      "line": 621,
+      "kind": "failed",
+      "snippet": "GuardrailResult.failed("
+    },
+    {
+      "file": "portfolio/firm_exposure.py",
+      "line": 657,
+      "kind": "failed",
+      "snippet": "result = GuardrailResult.failed("
+    },
+    {
+      "file": "portfolio/sleeves.py",
+      "line": 325,
+      "kind": "failed",
+      "snippet": "GuardrailResult.failed("
+    },
+    {
+      "file": "portfolio/marks.py",
+      "line": 69,
+      "kind": "failed",
+      "snippet": "GuardrailResult.failed("
+    },
+    {
+      "file": "portfolio/paper_account.py",
+      "line": 603,
+      "kind": "failed",
+      "snippet": "GuardrailResult.failed("
+    },
+    {
+      "file": "bot/derisk.py",
+      "line": 725,
+      "kind": "failed",
+      "snippet": "GuardrailResult.failed("
+    },
+    {
+      "file": "bot/heavyweight.py",
+      "line": 327,
+      "kind": "failed",
+      "snippet": "GuardrailResult.failed("
+    },
+    {
+      "file": "bot/etf.py",
+      "line": 94,
+      "kind": "failed",
+      "snippet": "GuardrailResult.failed("
+    },
+    {
+      "file": "bot/settle.py",
+      "line": 105,
+      "kind": "failed",
+      "snippet": "GuardrailResult.failed("
+    },
+    {
+      "file": "bot/settle.py",
+      "line": 123,
+      "kind": "failed",
+      "snippet": "GuardrailResult.failed("
+    },
+    {
+      "file": "bot/settle.py",
+      "line": 289,
+      "kind": "failed",
+      "snippet": "GuardrailResult.failed("
+    },
+    {
+      "file": "bot/autonomous.py",
+      "line": 61,
+      "kind": "failed",
+      "snippet": "GuardrailResult.failed("
+    },
+    {
+      "file": "bot/phase2.py",
+      "line": 433,
+      "kind": "failed",
+      "snippet": "GuardrailResult.failed("
+    },
+    {
+      "file": "bot/phase2.py",
+      "line": 491,
+      "kind": "failed",
+      "snippet": "GuardrailResult.failed("
+    }
+  ]
 }

@@ -8,6 +8,8 @@ The safety contract under test:
   * SUMMARY SHAPE — summary() reports cap/enabled/total/per-book spent+over;
   * NEVER RAISES — missing data, garbage costs, and bad input all degrade to safe defaults;
   * the gating helper returns the engine fallback when over budget (judgment_book.build).
+  * ESTIMATE_COST model normalizer — provider prefixes, bracket/colon suffixes, longest-prefix
+    match, and unknown/None/empty models all return 0.0.
 """
 from __future__ import annotations
 
@@ -133,6 +135,58 @@ def test_spent_and_summary_default_asof_today(guard):
     guard.record("autonomous", 0.9)
     assert guard.spent("autonomous") == pytest.approx(0.9)
     assert guard.summary()["total"] == pytest.approx(0.9)
+
+
+# ── estimate_cost model normalizer ───────────────────────────────────────────
+
+def test_estimate_cost_empty_string_returns_zero():
+    import brain.cost_guard as cg
+    assert cg.estimate_cost("", 1_000_000, 1_000_000) == 0.0
+
+
+def test_estimate_cost_none_returns_zero():
+    import brain.cost_guard as cg
+    assert cg.estimate_cost(None, 1_000_000, 1_000_000) == 0.0
+
+
+def test_estimate_cost_exact_key():
+    import brain.cost_guard as cg
+    # claude-opus-4-8: $5/MTok in, $25/MTok out = $30/MTok combined
+    cost = cg.estimate_cost("claude-opus-4-8", 1_000_000, 1_000_000)
+    assert cost == pytest.approx(30.0)
+
+
+def test_estimate_cost_bracket_suffix_stripped():
+    """'claude-opus-4-8[1m]' should resolve identically to 'claude-opus-4-8'."""
+    import brain.cost_guard as cg
+    cost_plain = cg.estimate_cost("claude-opus-4-8", 1_000_000, 0)
+    cost_bracket = cg.estimate_cost("claude-opus-4-8[1m]", 1_000_000, 0)
+    assert cost_bracket == pytest.approx(cost_plain)
+    assert cost_bracket > 0.0
+
+
+def test_estimate_cost_provider_prefix_stripped():
+    """'us.anthropic.claude-opus-4-8' should resolve identically to 'claude-opus-4-8'."""
+    import brain.cost_guard as cg
+    cost_plain = cg.estimate_cost("claude-opus-4-8", 1_000_000, 0)
+    cost_prefix = cg.estimate_cost("us.anthropic.claude-opus-4-8", 1_000_000, 0)
+    assert cost_prefix == pytest.approx(cost_plain)
+    assert cost_prefix > 0.0
+
+
+def test_estimate_cost_date_suffix_longest_prefix_match():
+    """'claude-sonnet-4-6-20990101' (date-versioned) maps to 'claude-sonnet-4-6' via longest prefix."""
+    import brain.cost_guard as cg
+    cost_plain = cg.estimate_cost("claude-sonnet-4-6", 1_000_000, 0)
+    cost_dated = cg.estimate_cost("claude-sonnet-4-6-20990101", 1_000_000, 0)
+    assert cost_dated == pytest.approx(cost_plain)
+    assert cost_dated > 0.0
+
+
+def test_estimate_cost_unknown_model_returns_zero():
+    """An unknown model id returns 0.0 (never falls through to a default rate)."""
+    import brain.cost_guard as cg
+    assert cg.estimate_cost("gpt-x", 1_000_000, 1_000_000) == 0.0
 
 
 # ── the gating helper falls back to the engine book when over budget ──────────
