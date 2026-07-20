@@ -95,8 +95,12 @@ def _uncleared_row(state: str, conflicts: int) -> dict:
 
 class TestDecisionModeLadder:
     def test_default_off(self, monkeypatch):
+        # W8 (2026-07-19): ABSENT env → the operator-ordered default 'shrink'; explicit off works;
+        # a PRESENT-but-garbled value stays inert ('off'), never escalates to the default.
         import brain.neural_web_context as NWC
         monkeypatch.delenv("MASTERMIND_NW_DECISION", raising=False)
+        assert NWC.nw_decision_mode() == "shrink"
+        monkeypatch.setenv("MASTERMIND_NW_DECISION", "off")
         assert NWC.nw_decision_mode() == "off"
 
     def test_each_mode_parses(self, monkeypatch):
@@ -140,7 +144,7 @@ class TestDecisionModeLadder:
         """MASTERMIND_NW_DECISION and MASTERMIND_NW_CONTEXT are separate."""
         import brain.neural_web_context as NWC
         monkeypatch.setenv("MASTERMIND_NW_DECISION", "candidacy")
-        monkeypatch.delenv("MASTERMIND_NW_CONTEXT", raising=False)
+        monkeypatch.setenv("MASTERMIND_NW_CONTEXT", "0")   # W8: default flipped ON; pin off
         assert NWC.nw_decision_mode() == "candidacy"
         assert NWC.nw_prompts_enabled() is False  # text flag unaffected
 
@@ -157,7 +161,7 @@ class TestModeOffNoOp:
         f = _write_fixture(tmp_path, candidate_context=rows,
                            contradiction_records=[{"s": 1}, {"s": 2}, {"s": 3}, {"s": 4}])
         _patch_path(monkeypatch, f)
-        monkeypatch.delenv("MASTERMIND_NW_DECISION", raising=False)  # default off
+        monkeypatch.setenv("MASTERMIND_NW_DECISION", "off")  # W8: default is shrink; pin off
 
         sig = NWC.decision_signals("NVDA")
         assert sig == {

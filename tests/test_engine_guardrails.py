@@ -54,7 +54,9 @@ def test_leadership_gate_blocks_lagging_sector():
 def test_leadership_gate_allows_leader():
     """Same fundamentals in a LEADING sector -> a clean buy."""
     rows = [_row("valuation", "bull"), _row("quality", "bull"), _row("growth", "bull"),
-            _row("asymmetry", "bull"), _row("sector_rs", "bull"), _row("flows_13f", "bull")]
+            _row("asymmetry", "bull"), _row("sector_rs", "bull"), _row("flows_13f", "bull"),
+            # W8: padded with independent lenses to clear the _MIN_VOTES_FOR_UP evidence floor
+            _row("trend", "bull"), _row("narrative", "bull"), _row("options", "bull")]
     s = lenses.synthesize({"rows": rows})
     assert s["sector_lagging"] is False and s["leadership_ok"] is True
     assert s["size_authority"] == "up"

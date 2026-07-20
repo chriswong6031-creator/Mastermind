@@ -71,7 +71,10 @@ _DECISION_MODE_ORDER: dict[str, int] = {
     "shrink": 3,
     "vote": 4,
 }
-_DECISION_MODE_DEFAULT = "off"
+# W8 (2026-07-19, operator-ordered): default 'shrink' — candidacy sourcing (NW may ADD candidates
+# for the gate to filter) + subtract-only entry shrink on graph-conflict density. 'vote' stays
+# opt-in. Opt out with MASTERMIND_NW_DECISION=off.
+_DECISION_MODE_DEFAULT = "shrink"
 
 # --------------------------------------------------------------------------- #
 # process-level cache — reset via _reset_context_cache() for tests
@@ -98,7 +101,11 @@ def nw_prompts_enabled() -> bool:
     section) and is fully independent of MASTERMIND_NW_DECISION (see nw_decision_mode),
     which owns the typed decision-signal chokepoint.
     """
-    return os.environ.get("MASTERMIND_NW_CONTEXT", "0").strip().lower() in ("1", "true", "yes")
+    # W8 (2026-07-19): default flipped ON — the W-NW.1 arming condition (≥5 consecutive builds with
+    # nw_context status=present) matured on schedule (come-back date 2026-07-19) and the operator
+    # ordered the NW connection as part of the Flagship v2 program. Text-only prompt injection;
+    # opt out with MASTERMIND_NW_CONTEXT=0.
+    return os.environ.get("MASTERMIND_NW_CONTEXT", "1").strip().lower() in ("1", "true", "yes")
 
 
 # --------------------------------------------------------------------------- #
@@ -121,10 +128,15 @@ def nw_decision_mode() -> str:
     prompt injection. Unrecognized / empty values fail-soft to 'off'.
     """
     try:
-        raw = os.environ.get("MASTERMIND_NW_DECISION", _DECISION_MODE_DEFAULT).strip().lower()
-        return raw if raw in _DECISION_MODE_ORDER else _DECISION_MODE_DEFAULT
+        raw = os.environ.get("MASTERMIND_NW_DECISION")
+        if raw is None:
+            return _DECISION_MODE_DEFAULT          # ABSENT → the W8 default ('shrink')
+        raw = raw.strip().lower()
+        # PRESENT but empty/unrecognized → 'off' (inert), NOT the default: a garbled value must
+        # never ESCALATE authority (fail-soft means unknown input is inert, W8 default included).
+        return raw if raw in _DECISION_MODE_ORDER else "off"
     except Exception:  # noqa: BLE001 — fail-soft: never raise
-        return _DECISION_MODE_DEFAULT
+        return "off"
 
 
 def _mode_ge(mode: str, threshold: str) -> bool:

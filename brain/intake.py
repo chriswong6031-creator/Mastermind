@@ -323,7 +323,8 @@ def _rotation_in_mode() -> str:
     empty value degrades to 'off' (inert).
     """
     try:
-        raw = os.environ.get("MASTERMIND_ROTATION_IN", "off").strip().lower()
+        # W8 (2026-07-19): default 'watch' — mirrors bot.phase2._rotation_in_mode verbatim.
+        raw = os.environ.get("MASTERMIND_ROTATION_IN", "watch").strip().lower()
         return raw if raw in ("off", "watch", "starter") else "off"
     except Exception:  # noqa: BLE001
         return "off"

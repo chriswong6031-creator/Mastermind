@@ -8,6 +8,31 @@ import bot  # noqa: F401
 from bot import phase2
 from data_layer import store
 
+# ── W8 legacy-contract pin (2026-07-19): this file tests pre-W8 phase2 mechanics; the v2
+# entry/context gates + feeds are covered by tests/test_flagship_v2_replay.py and
+# tests/test_entry_context_engines.py. Pinned OFF here for deterministic legacy contracts.
+import pytest as _pytest_w8
+
+
+@_pytest_w8.fixture(autouse=True)
+def _w8_legacy_env(monkeypatch):
+    monkeypatch.setenv("MASTERMIND_ENTRY_GATE", "0")
+    monkeypatch.setenv("MASTERMIND_PROPHET_FEED", "0")
+    monkeypatch.setenv("MASTERMIND_ROTATION_IN", "off")
+    monkeypatch.setenv("MASTERMIND_NW_DECISION", "off")
+    try:
+        from portfolio import prophet_feed as _pf
+        _pf._reset_cache()
+    except Exception:
+        pass
+    yield
+    try:
+        from portfolio import prophet_feed as _pf
+        _pf._reset_cache()
+    except Exception:
+        pass
+
+
 # NOTE: the store DB is isolated to a tmp file per test by the autouse `_isolate_bot_db`
 # conftest fixture, which monkeypatches `store._DB`. `_fresh()` therefore reads `store._DB`
 # at call time (not a frozen module constant) so its wipe hits the SAME isolated DB that
@@ -85,9 +110,13 @@ def test_store_roundtrip():
     con = store.connect()
     # With stockdata present, conviction entries join the 4 leadership legs (>=5 rows).
     # Without it, the fail-closed gate freezes new conviction adds — leadership only (>=4).
-    _min_rows = 5 if _HAS_STOCKDATA else 4
-    assert con.execute("SELECT count(*) FROM positions").fetchone()[0] >= _min_rows
-    if _HAS_STOCKDATA:  # theses are authored for conviction entries; none exist under the freeze
+    # W8 (2026-07-19): the un-flagged n_scored evidence floor makes conviction adds data-
+    # dependent (a thin-vote name holds instead of entering), so the guaranteed floor is the
+    # leadership sleeve. The roundtrip subject (write -> read back) is unchanged.
+    _min_rows = 4
+    _npos = con.execute("SELECT count(*) FROM positions").fetchone()[0]
+    assert _npos >= _min_rows
+    if _HAS_STOCKDATA and _npos > 4:  # theses exist only when a conviction entry actually landed
         assert con.execute("SELECT count(*) FROM theses").fetchone()[0] >= 1
     _fresh()
 

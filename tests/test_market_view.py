@@ -400,6 +400,14 @@ class TestMissingFileNoOp:
         absent = tmp_path / "nonexistent.json"
         monkeypatch.setitem(RF._REGION_PATHS, "us", absent)
         monkeypatch.setattr(RF, "_CYCLES_PATH", tmp_path / "no_cycles.json", raising=False)
+        # W8: complete the isolation — the NW reader is flag-independent, and the anticipation /
+        # rotation-tensor organs read persisted repo-state a prior (green) replay run may have
+        # seeded. This test's subject is EVERY-plane-absent no-raise, so stub them all absent.
+        import brain.neural_web_context as _NWC
+        monkeypatch.setattr(_NWC, "context", lambda: {})
+        monkeypatch.setattr(_NWC, "market_plane", lambda: {"stale": True, "asof": None})
+        monkeypatch.setattr(MV, "_ANTICIPATION_DIR", tmp_path / "no_anticipation", raising=False)
+        monkeypatch.setattr(MV, "_ROTATION_TENSOR_PATH", tmp_path / "no_rt.json", raising=False)
         v = MV.view("us")   # must not raise
         assert v["schema_version"] == "market_view.v1"
         assert v["asof"] is None

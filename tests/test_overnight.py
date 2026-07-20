@@ -13,6 +13,30 @@ import pytest
 
 from portfolio import paper_account, registry
 
+# ── W8 legacy-contract pin (2026-07-19): this file exercises pre-W8 build/book mechanics; the v2
+# gates are covered by tests/test_flagship_v2_replay.py + tests/test_entry_context_engines.py.
+import pytest as _pytest_w8
+
+
+@_pytest_w8.fixture(autouse=True)
+def _w8_legacy_env(monkeypatch):
+    monkeypatch.setenv("MASTERMIND_ENTRY_GATE", "0")
+    monkeypatch.setenv("MASTERMIND_PROPHET_FEED", "0")
+    monkeypatch.setenv("MASTERMIND_ROTATION_IN", "off")
+    monkeypatch.setenv("MASTERMIND_NW_DECISION", "off")
+    try:
+        from portfolio import prophet_feed as _pf
+        _pf._reset_cache()
+    except Exception:
+        pass
+    yield
+    try:
+        from portfolio import prophet_feed as _pf
+        _pf._reset_cache()
+    except Exception:
+        pass
+
+
 
 @pytest.fixture
 def iso(tmp_path, monkeypatch):

@@ -242,7 +242,10 @@ class TestAuditRow:
 class TestFlagHelper:
     def test_default_off(self, monkeypatch):
         import brain.neural_web_context as NWC
+        # W8 (2026-07-19): the DEFAULT is now ON (operator-ordered); explicit off still works.
         monkeypatch.delenv("MASTERMIND_NW_CONTEXT", raising=False)
+        assert NWC.nw_prompts_enabled() is True
+        monkeypatch.setenv("MASTERMIND_NW_CONTEXT", "0")
         assert NWC.nw_prompts_enabled() is False
 
     def test_on_when_set_to_1(self, monkeypatch):
@@ -375,7 +378,7 @@ class TestPmConvictionNwBlock:
         """With MASTERMIND_NW_CONTEXT unset (OFF), prompt must not contain NW section header."""
         import brain.pm_conviction as P
         import brain.neural_web_context as NWC
-        monkeypatch.delenv("MASTERMIND_NW_CONTEXT", raising=False)
+        monkeypatch.setenv("MASTERMIND_NW_CONTEXT", "0")   # W8: default flipped ON; pin off
         fresh_file = _fresh_fixture(tmp_path)
         _patch_path(monkeypatch, fresh_file)
         # Silence posture_decider to isolate
@@ -439,7 +442,7 @@ class TestPmConvictionNwBlock:
         fresh_file = _fresh_fixture(tmp_path)
         monkeypatch.setattr(P, "_read_market_view", lambda: None, raising=False)
 
-        monkeypatch.delenv("MASTERMIND_NW_CONTEXT", raising=False)
+        monkeypatch.setenv("MASTERMIND_NW_CONTEXT", "0")   # W8: default flipped ON; pin off
         NWC._reset_context_cache()
         _patch_path(monkeypatch, fresh_file)
         payload_off = self._build_payload()

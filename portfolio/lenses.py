@@ -371,10 +371,16 @@ def _trend_row(d) -> dict:
     r5 = _recent_return(tkr, 5)
     r10 = _recent_return(tkr, 10)
     falling_fast = (r5 is not None and r5 <= _FALL_5D) or (r10 is not None and r10 <= _FALL_10D)
-    # CONFIRMED UPTREND (bull): above both MAs, MACD+, healthy (not overbought) RSI, near the high
-    # AND not in a fresh freefall.
+    # CONFIRMED UPTREND (bull): above both MAs, MACD+, healthy (not overbought) RSI, not in a
+    # fresh freefall. W8 D1 FIX (research/FLAGSHIP_V2_DECISION_CORE.md §2.4): the old
+    # `offhi > -12` leg made PROXIMITY-TO-THE-52W-HIGH a *requirement* of trend confirmation —
+    # the gate's best entry was literally the top of the range (the buy-high mechanism, encoded).
+    # Nearness to the high is ENTRY evidence and belongs to portfolio/entry_engine (which treats
+    # it as extension risk, the correct sign); trend confirmation is the MA/MACD/RSI structure
+    # alone. A name 20% off its high in a repaired uptrend now reads bull here and lets the entry
+    # engine decide whether NOW is the moment.
     uptrend = (a50 is True and a200 is True and macd is True
-               and (rsi is None or 45 <= rsi <= 75) and (offhi is None or offhi > -12)
+               and (rsi is None or 45 <= rsi <= 75)
                and not falling_fast)
     notes = []
     if a200 is False:
@@ -973,6 +979,11 @@ def _divergences(rows: list[dict]) -> list[dict]:
 _FUND_BLOC = {"valuation", "quality", "growth", "solvency", "asymmetry"}   # the value/quality story
 _MACRO_BLOC = {"macro_risk", "fed_path", "cross_asset", "rate_inflation", "vol_regime"}  # the shared regime story
 
+# W8 D3: minimum scored-vote breadth for a NEW-entry 'up' authorization. (unverified-prior; a full
+# healthy row set produces 8-12 scored directions, so 5 demands real multi-sided evidence without
+# starving legitimate names.) Held names are unaffected — hysteresis keys on confluence, not 'up'.
+_MIN_VOTES_FOR_UP = 5
+
 # ── self-calibrating gate: weight each lens vote by its EMPIRICAL reliability ──────────────────────
 # The confluence below is no longer a flat vote COUNT — each effective vote is scaled by how often
 # that lens actually PREDICTED on resolved theses (brain.outcome_ledger.lens_weights, fed by the
@@ -1092,6 +1103,14 @@ def synthesize(matrix: dict) -> dict:
     # and NEM (gold miner -21% off its high while gold is in a bear market). A healthy pullback in
     # an uptrend reads trend=neutral, not bear, so genuine dip-buys (AVGO) are NOT blocked.
     price_downtrend = trend_dir == "bear"
+    # W8 D3 FIX (thin-vote confluence inflation): (bull−bear)/n on a HANDFUL of votes manufactures
+    # perfect-looking conviction — RF entered 2026-07-16 at confluence 1.00 on THREE votes (3 bull /
+    # 0 bear → engine_score 100). A 'up' authorization now additionally requires a minimum breadth
+    # of scored evidence (n ≥ _MIN_VOTES_FOR_UP). Below the floor the name is 'hold', NOT blocked:
+    # held names are untouched (the hysteresis path keys on confluence, not on 'up'), and the name
+    # re-qualifies the moment more lenses produce real directions. This is deliberately NOT the
+    # data_degraded fail-closed floor (n<2, stockdata absent) — that stays its own, harder state.
+    thin_evidence = n < _MIN_VOTES_FOR_UP
     if vetoes:
         size_authority = "blocked"
     elif data_degraded:
@@ -1101,7 +1120,7 @@ def synthesize(matrix: dict) -> dict:
         # HELD name as a FREEZE (retain, don't churn) — the inverse-disaster guard — but a degraded
         # NEW name (sa != 'up') simply cannot enter.
         size_authority = "insufficient_data"
-    elif (confluence > 0.3 and leadership_ok and not price_downtrend
+    elif (confluence > 0.3 and not thin_evidence and leadership_ok and not price_downtrend
           and not price_falling_fast and not weak_asymmetry):
         size_authority = "up"
     elif confluence < -0.3:
@@ -1116,6 +1135,7 @@ def synthesize(matrix: dict) -> dict:
             "price_downtrend": price_downtrend, "price_falling_fast": price_falling_fast,
             "weak_asymmetry": weak_asymmetry, "asym_ratio": asym_ratio,
             "data_degraded": data_degraded, "stockdata_present": bool(stockdata_present),
+            "thin_evidence": thin_evidence,
             "size_authority": size_authority}
 
 

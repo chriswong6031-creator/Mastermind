@@ -76,7 +76,9 @@ def test_weak_asymmetry_blocks_buy():
 
 def test_strong_asymmetry_allows_buy():
     rows = [_row("valuation", "bull"), _row("sector_rs", "bull"), _row("flows_13f", "bull"),
-            _row("asymmetry", "bull", {"upside_downside": 2.0})]
+            _row("asymmetry", "bull", {"upside_downside": 2.0}),
+            # W8: padded to clear the _MIN_VOTES_FOR_UP evidence floor
+            _row("trend", "bull"), _row("narrative", "bull"), _row("options", "bull")]
     s = lenses.synthesize({"rows": rows})
     assert s["weak_asymmetry"] is False
     assert s["size_authority"] == "up"
@@ -84,7 +86,9 @@ def test_strong_asymmetry_allows_buy():
 
 def test_missing_asymmetry_does_not_block():
     """No cone data -> degrade gracefully (do not block), same as before the gate existed."""
-    rows = [_row("valuation", "bull"), _row("sector_rs", "bull"), _row("flows_13f", "bull")]
+    rows = [_row("valuation", "bull"), _row("sector_rs", "bull"), _row("flows_13f", "bull"),
+            # W8: padded to clear the _MIN_VOTES_FOR_UP evidence floor
+            _row("trend", "bull"), _row("narrative", "bull"), _row("options", "bull")]
     s = lenses.synthesize({"rows": rows})
     assert s["asym_ratio"] is None and s["weak_asymmetry"] is False
     assert s["size_authority"] == "up"

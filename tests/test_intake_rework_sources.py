@@ -41,6 +41,9 @@ def _flags_off(monkeypatch):
     Flag-on tests re-set the specific flag they exercise (a later setenv wins)."""
     for f in _REWORK_FLAGS:
         monkeypatch.delenv(f, raising=False)
+    # W8 (2026-07-19): MASTERMIND_ROTATION_IN defaults to 'watch' now — the inert baseline these
+    # tests pin requires the explicit off value.
+    monkeypatch.setenv("MASTERMIND_ROTATION_IN", "off")
 
 
 # =========================================================================== #

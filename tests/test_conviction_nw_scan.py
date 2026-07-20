@@ -49,8 +49,11 @@ def _arm_candidacy(monkeypatch, *, ctx: dict, qualifying: set[str]):
 # 1. OFF (default) → byte-identical no-op
 # --------------------------------------------------------------------------- #
 def test_scan_empty_when_flag_unset(monkeypatch):
-    """Default (MASTERMIND_NW_DECISION unset) → nw_decision_mode() == 'off' < candidacy → scan is []."""
+    """W8 (2026-07-19): the DEFAULT is now 'shrink' (candidacy armed, operator-ordered). The
+    explicit-off contract remains: MASTERMIND_NW_DECISION=off → scan is []."""
     monkeypatch.delenv("MASTERMIND_NW_DECISION", raising=False)
+    assert nwc.nw_decision_mode() == "shrink"          # W8 default
+    monkeypatch.setenv("MASTERMIND_NW_DECISION", "off")
     assert nwc.nw_decision_mode() == "off"
     assert conviction.nw_universe_scan() == []
 
@@ -109,6 +112,9 @@ def test_scan_respects_manual_exclude(monkeypatch):
 # 3. candidates() unchanged when the scan is empty (byte-identical)
 # --------------------------------------------------------------------------- #
 def test_candidates_byte_identical_when_scan_empty(monkeypatch):
+    monkeypatch.setenv("MASTERMIND_NW_DECISION", "off")          # W8: default flipped; pin legacy
+    monkeypatch.setenv("MASTERMIND_PROPHET_FEED", "0")            # W8: prophet source off for byte-identity
+    from portfolio import prophet_feed as _pf; _pf._reset_cache()
     """The union guard: when nw_universe_scan() == [] the candidates() output is IDENTICAL to what it
     would be with the scan removed entirely. Force the scan empty (default-off surrogate) and compare
     against the real candidates() computed with the same underlying sources."""

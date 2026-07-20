@@ -35,7 +35,10 @@ def test_universe_triage_flag_off_tokens(monkeypatch, val):
 
 
 def test_rotation_in_mode_default_off(monkeypatch):
+    # W8 (2026-07-19): the DEFAULT is now 'watch' (rotation-in enrollment armed, operator-ordered).
     monkeypatch.delenv("MASTERMIND_ROTATION_IN", raising=False)
+    assert phase2._rotation_in_mode() == "watch"
+    monkeypatch.setenv("MASTERMIND_ROTATION_IN", "off")
     assert phase2._rotation_in_mode() == "off"
 
 

@@ -18,6 +18,30 @@ from fastapi.responses import JSONResponse
 
 from app import web
 
+# ── W8 legacy-contract pin (2026-07-19): this file exercises pre-W8 build/book mechanics; the v2
+# gates are covered by tests/test_flagship_v2_replay.py + tests/test_entry_context_engines.py.
+import pytest as _pytest_w8
+
+
+@_pytest_w8.fixture(autouse=True)
+def _w8_legacy_env(monkeypatch):
+    monkeypatch.setenv("MASTERMIND_ENTRY_GATE", "0")
+    monkeypatch.setenv("MASTERMIND_PROPHET_FEED", "0")
+    monkeypatch.setenv("MASTERMIND_ROTATION_IN", "off")
+    monkeypatch.setenv("MASTERMIND_NW_DECISION", "off")
+    try:
+        from portfolio import prophet_feed as _pf
+        _pf._reset_cache()
+    except Exception:
+        pass
+    yield
+    try:
+        from portfolio import prophet_feed as _pf
+        _pf._reset_cache()
+    except Exception:
+        pass
+
+
 
 def _body(resp):
     """Decode a JSONResponse body back into a Python object."""
@@ -189,7 +213,12 @@ def test_watchlist_dedups_latest(desk_data):
     assert rows["AAA"]["reason"] == "parked"
 
 
-def test_watchlist_empty_when_absent(desk_data):
+def test_watchlist_empty_when_absent(desk_data, monkeypatch, tmp_path):
+    # W8: earlier suite tests may legitimately park names into the repo-root watchlist; this
+    # test's subject is ABSENCE, so point the module at an empty dir.
+    from portfolio import watchlist as _wl
+    monkeypatch.setattr(_wl, "_WATCHLIST", tmp_path / "watchlist.jsonl", raising=False)
+    monkeypatch.setattr(_wl, "_STATE", tmp_path / "watchlist_state.jsonl", raising=False)
     body = _body(web.api_desk_watchlist())
     assert body["watchlist"] == []
     assert body["book"] == "flagship"

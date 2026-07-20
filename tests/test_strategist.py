@@ -150,7 +150,7 @@ def test_neural_web_context_key_is_market_plane_not_raw_artifact(monkeypatch):
 
 def test_neural_web_context_key_empty_when_flag_off(monkeypatch):
     """With MASTERMIND_NW_CONTEXT unset (OFF), neural_web_context key must be {}."""
-    monkeypatch.delenv("MASTERMIND_NW_CONTEXT", raising=False)
+    monkeypatch.setenv("MASTERMIND_NW_CONTEXT", "0")   # W8: default flipped ON; pin off
     monkeypatch.setattr(S, "_load", _fake_load)
 
     payload = S._strategist_input({"quad": 1, "quad_name": "Goldilocks"}, "2026-07-05")

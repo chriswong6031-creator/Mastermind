@@ -670,7 +670,9 @@ def _rotation_in_mode() -> str:
     unrecognized / empty value degrades to 'off' (inert → the enrollment block is a no-op, so the
     build is byte-identical to today). Mirrors brain.intake._rotation_in_mode verbatim."""
     try:
-        raw = os.environ.get("MASTERMIND_ROTATION_IN", "off").strip().lower()
+        # W8 (2026-07-19): default 'watch' — rotation-in enrollment armed (the base-turn positive
+        # path, design §2.5); 'starter' sizing stays opt-in. Opt out with MASTERMIND_ROTATION_IN=off.
+        raw = os.environ.get("MASTERMIND_ROTATION_IN", "watch").strip().lower()
         return raw if raw in ("off", "watch", "starter") else "off"
     except Exception:  # noqa: BLE001
         return "off"
@@ -1039,6 +1041,57 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
                 f"dropped={sorted(_reduce_secs)} kept={[s['ticker'] for s in leaders]} "
                 f"weight_each={lw} freed_to_cash={round(lw * len(_reduce_secs), 4)}",
                 sleeve="leadership")
+
+    # ── W8 §2.6 LEADERSHIP SECOND PASS (entry + context, subtract-only, held-exempt) ─────────────
+    # Top-RS selection is backward-looking, so the mechanical sleeve buys the MOST-extended leaders
+    # at their tops (2026-07-14: SMH with its origin complex broken, XLK downstream of it, MTUM
+    # mid-unwind, QUAL rolling over). Each genuinely NEW leadership leg must now also clear the
+    # ENTRY engine (buyable / unknown) and the CONTEXT gate (not blocked). A failed leg is DROPPED
+    # — `lw` stays computed on len(_leaders_pre) so the freed budget lands in CASH (the exact
+    # triage-brake invariant), the ETF is PARKED on the watchlist with promotion triggers, and a
+    # runlog row says why. HELD legs are exempt (never suppressed — entry is an entry brake).
+    # Fail-open: an assessor error keeps the leg (`MASTERMIND_ENTRY_GATE` off ⇒ block inert).
+    try:
+        from portfolio import conviction as _conv_flag  # _entry_gate_enabled lives there
+        if _conv_flag._entry_gate_enabled() and leaders:
+            from portfolio import context_gate as _ctxg
+            from portfolio import entry_engine as _eeng
+            from portfolio import watchlist as _wl8
+            try:
+                _held_lead_w8 = {hp["ticker"].upper() for hp in position_log.open_positions()
+                                 if hp.get("sleeve") == "leadership"}
+            except Exception:  # noqa: BLE001
+                _held_lead_w8 = set()
+            _kept_leaders = []
+            for s in leaders:
+                _lt = (s.get("ticker") or "").upper()
+                if not _lt or _lt in _held_lead_w8:
+                    _kept_leaders.append(s)
+                    continue
+                try:
+                    _erep = _eeng.assess(_lt, as_of=asof)
+                    _crep = _ctxg.assess(_lt, entry_verdict=_erep.get("verdict"),
+                                         is_etf=True, as_of=asof)
+                except Exception:  # noqa: BLE001 — fail-open: keep the leg on assessor error
+                    _kept_leaders.append(s)
+                    continue
+                _ebad = (not _erep.get("buyable")) and _erep.get("verdict") != "unknown"
+                _cbad = _crep.get("verdict") == "blocked"
+                if _ebad or _cbad:
+                    _wnotes = (_erep.get("notes") or []) + (_crep.get("reasons") or [])
+                    _wreason = (f"leadership entry {_erep.get('verdict')}" if _ebad
+                                else "leadership context blocked")
+                    _wl8.append(_lt, asof, _wreason + (f" — {_wnotes[0]}" if _wnotes else ""),
+                                tech=_entry_tech_fields(_lt), combined=None)
+                    _rl_log(_run_id, "decision", f"leadership withheld {_lt}",
+                            f"entry={_erep.get('verdict')} context={_crep.get('verdict')} "
+                            f"freed_to_cash={lw} notes={'; '.join(_wnotes[:2])[:200]}",
+                            ticker=_lt, sleeve="leadership")
+                else:
+                    _kept_leaders.append(s)
+            leaders = _kept_leaders
+    except Exception:  # noqa: BLE001 — the second pass is subtract-only; failure changes nothing
+        pass
     book = []
 
     _rl_log(_run_id, "book_step", "leadership sleeve selected",
@@ -1137,7 +1190,43 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
                 conv_budget = round(conv_budget * _app, 6)
         except Exception:  # noqa: BLE001
             pass
-    _build_result = conviction.build(conv_budget, name_cap=cfg["caps"]["name_cap"], held=_held_conv)
+    # ── W8 §2.8 CORE-PATH WATCHLIST RE-REVIEW (was judgment-flag-gated → parked names never
+    # promoted on the default path). Runs every build: the composed predicate re-checks the L3
+    # timing fields AND the entry engine AND the context gate, so a parked name promotes the
+    # moment its actual withhold reason clears (tier flips fresh, range retreats, rollover ends,
+    # contagion clears, unwind ends). Promoted names re-enter ONLY as candidates — the full gate
+    # still decides. review() is idempotent per (ticker, asof) so the judgment layer's own later
+    # review (when armed) cannot double-age. Best-effort; never breaks the build.
+    _w8_promoted: list[str] = []
+    try:
+        from portfolio import watchlist as _wl_core
+        if conviction._entry_gate_enabled():
+            from portfolio import context_gate as _ctxg_core
+            from portfolio import entry_engine as _eeng_core
+
+            def _w8_still_withheld(_t: str):
+                try:
+                    _r = _wl_core.timing_withhold(_entry_tech_fields(_t))
+                    if _r:
+                        return _r
+                    _r = _eeng_core.still_withheld_reason(_t)
+                    if _r:
+                        return _r
+                    return _ctxg_core.still_blocked_reason(_t)
+                except Exception:  # noqa: BLE001 — predicate failure keeps the name parked
+                    return "re-check unavailable"
+
+            _wl_core.review(asof, still_withheld=_w8_still_withheld)
+            _w8_promoted = [c["ticker"] for c in _wl_core.promote_candidates(asof)
+                            if c.get("ticker")]
+            if _w8_promoted:
+                _rl_log(_run_id, "decision", "watchlist promotions",
+                        f"cleared_for_reentry={_w8_promoted}", sleeve="conviction")
+    except Exception:  # noqa: BLE001 — the re-review is additive; never break the build
+        _w8_promoted = []
+
+    _build_result = conviction.build(conv_budget, name_cap=cfg["caps"]["name_cap"], held=_held_conv,
+                                     asof=asof, extra_candidates=_w8_promoted)
     # conviction.build returns (sized_list, rejected_list) as a tuple
     if isinstance(_build_result, tuple) and len(_build_result) == 2:
         sized, _rejected = _build_result
@@ -1145,6 +1234,34 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
         # legacy: single list returned
         sized = list(_build_result)
         _rejected = []
+
+    # ── W8 PARK ENROLLMENT: conviction rejections carrying a `park` record (entry/context) go on
+    # the watchlist TIMING lane; `rotation_candidate` rows (base_turn below the confluence bar) go
+    # on the ROTATION lane (WATCH → ARMED as confirmation builds). Both idempotent; never raise.
+    try:
+        from portfolio import watchlist as _wl_park
+        for _rj in _rejected:
+            _pt = (_rj.get("ticker") or "").upper()
+            if not _pt:
+                continue
+            if _rj.get("park"):
+                _wl_park.append(_pt, asof, _rj.get("reason") or "parked (entry/context)",
+                                tech=_entry_tech_fields(_pt), combined=None)
+                _rl_log(_run_id, "decision", f"PARKED {_pt}",
+                        f"reason={_rj.get('reason')}", ticker=_pt, sleeve="conviction")
+            elif _rj.get("rotation_candidate"):
+                _er = _rj.get("entry_report") or {}
+                _wl_park.append_rotation(
+                    _pt, asof, f"w8-base-turn-{_pt}",
+                    confidence=float(_er.get("entry_score") or 50.0) / 100.0,
+                    thesis=f"base turning (entry {_er.get('verdict')}, "
+                           f"confluence {_rj.get('confluence')})",
+                    trigger={"advance_on": "tier T1/T2 fresh + confluence > 0.30"})
+                _rl_log(_run_id, "decision", f"ROTATION-PARKED {_pt}",
+                        f"entry_score={_er.get('entry_score')} "
+                        f"confluence={_rj.get('confluence')}", ticker=_pt, sleeve="conviction")
+    except Exception:  # noqa: BLE001 — enrollment is additive; never break the build
+        pass
 
 
     _rl_log(_run_id, "book_step", "conviction gate evaluated",
@@ -1360,9 +1477,20 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
         paper = None if is_new else rpaper.latest_for(t)      # carried names reuse their paper
         paper_existed = paper is not None                     # a stored paper we are genuinely carrying
         if paper is None:
+            # W8 §2.7: the paper receives the deterministic ENTRY/CONTEXT evidence + the Prophet
+            # plan line so its quality read is weather-aware (sections 17/18 engage with them).
+            _w8_prophet_line = None
+            try:
+                from portfolio import prophet_feed as _pfeed
+                _w8_prophet_line = _pfeed.summary_line(t) or None
+            except Exception:  # noqa: BLE001
+                _w8_prophet_line = None
             paper = rpaper.generate(t, asof=asof, confluence=c["confluence"], rows=_rows,
                                     vetoes=_syn.get("vetoes", []), price=px, regime=regime,
-                                    armed=(_armed_ok and is_new))
+                                    armed=(_armed_ok and is_new),
+                                    entry_report=c.get("entry_report"),
+                                    context_report=c.get("context_report"),
+                                    prophet_line=_w8_prophet_line)
             rpaper.save_paper(paper)
             rpaper.write_feed_note(paper)
         # held-hysteresis (lower confirm bar) applies ONLY to a name we are CARRYING with its prior
@@ -1413,6 +1541,32 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
                     except Exception:  # noqa: BLE001 — watchlist logging never blocks the gate
                         pass
                     _rl_log(_run_id, "decision", f"TIMING WITHHOLD {t}", _twreason, ticker=t)
+                    continue
+            # ── W8 §2.7 RESEARCH ENTRY DE-ESCALATION (LLM may only DE-escalate, never rescue) ──
+            # The redigest's entry_agreement='disagree' on a NEW, deterministically-BUYABLE entry
+            # downgrades it (apply_entry_deescalation), and the name takes the EXACT timing-withhold
+            # path: parked with its paper's note, re-reviewed daily. An 'agree' can never upgrade a
+            # blocked entry (that path never reaches here). Fail-soft: absent report/field → no-op.
+            if is_new and c.get("entry_report"):
+                try:
+                    _de = rpaper.apply_entry_deescalation(c.get("entry_report"),
+                                                          breakdown.get("entry_agreement"))
+                except Exception:  # noqa: BLE001
+                    _de = None
+                if isinstance(_de, dict) and _de.get("deescalated"):
+                    _dereason = ("research disagrees with entry — "
+                                 + (str(breakdown.get("entry_note") or "no note"))[:160])
+                    research_held.append({"ticker": t, "reason": _dereason, **research_block})
+                    _emit_shadow(t, c, breakdown, forge_confirmed=True, weight_prod=0.0,
+                                 committee_block=None, sentinel=None, price=px, is_new=is_new)
+                    try:
+                        from portfolio import watchlist as _watchlist_de
+                        _watchlist_de.append(t, asof, _dereason, tech=_entry_tech_fields(t),
+                                             combined=breakdown.get("combined"))
+                    except Exception:  # noqa: BLE001
+                        pass
+                    _rl_log(_run_id, "decision", f"RESEARCH ENTRY DE-ESCALATION {t}",
+                            _dereason, ticker=t)
                     continue
             scaled = round(min(name_cap, c["weight"] * breakdown["size_mult"]), 4)
             # ── blind adversarial committee (SENTINEL → NEXUS): a NEW buy FORGE confirmed gets an
@@ -2460,6 +2614,34 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
         _rl_log(_run_id, "decision", "readiness check error", f"{_e!r}"[:160])
 
     store.record_run(con, asof, True, decision["triggers"], sig, datetime.now(timezone.utc).isoformat())
+
+    # ── W8 PUBLISH COMPACTION: the full entry/context reports are IN-MEMORY evidence (research
+    # prompt injection, park enrollment, provenance) — the published artifact gets a compact,
+    # schema-stable summary instead. This keeps latest.json / the site snapshot from inheriting
+    # deep nested report objects (every in-process consumer has already run by this point).
+    def _w8_compact(row: dict) -> None:
+        try:
+            er = row.pop("entry_report", None)
+            cr = row.pop("context_report", None)
+            if isinstance(er, dict):
+                row["entry_check"] = {"verdict": er.get("verdict"),
+                                      "score": er.get("entry_score"),
+                                      "note": (er.get("notes") or [None])[0]}
+            if isinstance(cr, dict):
+                row["context_check"] = {"verdict": cr.get("verdict"),
+                                        "score": cr.get("context_score"),
+                                        "note": (cr.get("reasons") or [None])[0]}
+            pk = row.get("park")
+            if isinstance(pk, dict):
+                row["park"] = {"entry_verdict": pk.get("entry_verdict"),
+                               "context_verdict": pk.get("context_verdict")}
+        except Exception:  # noqa: BLE001 — compaction is cosmetic; never break the publish
+            pass
+
+    for _row in book:
+        _w8_compact(_row)
+    for _row in _rejected:
+        _w8_compact(_row)
 
     payload = {
         "as_of": asof, "gross": gross, "cash": cash,

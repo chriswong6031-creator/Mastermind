@@ -8,6 +8,32 @@ import bot  # noqa: F401
 
 from brain import intake
 
+# ── W8 legacy-contract pin (2026-07-19): this file tests pre-W8 mechanics (design
+# research/FLAGSHIP_V2_DECISION_CORE.md). The v2 entry/context gates + feeds are exercised by
+# tests/test_flagship_v2_replay.py + tests/test_entry_context_engines.py; here they are pinned
+# OFF so the legacy contracts stay deterministic under a live vendor checkout.
+import pytest as _pytest_w8
+
+
+@_pytest_w8.fixture(autouse=True)
+def _w8_legacy_env(monkeypatch):
+    monkeypatch.setenv("MASTERMIND_ENTRY_GATE", "0")
+    monkeypatch.setenv("MASTERMIND_PROPHET_FEED", "0")
+    monkeypatch.setenv("MASTERMIND_ROTATION_IN", "off")
+    monkeypatch.setenv("MASTERMIND_NW_DECISION", "off")
+    try:
+        from portfolio import prophet_feed as _pf
+        _pf._reset_cache()
+    except Exception:
+        pass
+    yield
+    try:
+        from portfolio import prophet_feed as _pf
+        _pf._reset_cache()
+    except Exception:
+        pass
+
+
 
 def _patch(monkeypatch, files: dict):
     """Make intake._read(rel) return files[rel] (or None) regardless of disk."""

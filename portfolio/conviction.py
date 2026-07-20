@@ -435,25 +435,53 @@ def candidates() -> list[str]:
     # `set() | ...` leaves the union unchanged), deduped by ticker (set union), and still subject to
     # the _MANUAL_EXCLUDE hold-out below like every other source.
     nw_scan = set(nw_universe_scan())
-    return sorted((seed | set(universe()) | proposed | fed_in | nw_scan) - _MANUAL_EXCLUDE)
+    # W8 §2.3: the US PROPHET feed — entry-endorsed trade plans (entry/trigger/invalidation
+    # geometry, tier-gated upstream) as an ADDITIVE candidate source. Inert ([]) when the flag is
+    # off / the artifact is absent or stale; the gate still decides like for every other source.
+    try:
+        from portfolio import prophet_feed
+        prophet = set(prophet_feed.candidate_tickers())
+    except Exception:  # noqa: BLE001 — additive source; a feed failure contributes nothing
+        prophet = set()
+    return sorted((seed | set(universe()) | proposed | fed_in | nw_scan | prophet)
+                  - _MANUAL_EXCLUDE)
+
+
+def _entry_gate_enabled() -> bool:
+    """W8 master flag: the binding ENTRY + CONTEXT gates on NEW conviction/leadership entries
+    (research/FLAGSHIP_V2_DECISION_CORE.md §2.5-2.6). DEFAULT ON per the 2026-07-19 operator
+    order; opt out with MASTERMIND_ENTRY_GATE in {0, false, no, off}. Subtract-only: OFF restores
+    the pre-W8 buy path exactly (assessments not even computed)."""
+    import os
+    return os.environ.get("MASTERMIND_ENTRY_GATE", "1").strip().lower() not in (
+        "0", "false", "no", "off", "")
 
 
 def build(budget: float, name_cap: float = 0.08,
-          held: set | None = None) -> tuple[list[dict], list[dict]]:
+          held: set | None = None, asof: str | None = None,
+          extra_candidates: list[str] | None = None) -> tuple[list[dict], list[dict]]:
     """Return (sized_positions, rejected) where rejected contains every evaluated name
     that did NOT make the size gate, with the veto/bear detail that kept it out.
 
     `held` = tickers already open in the conviction book; they get priority in the sector cap
     (hysteresis) so a name isn't churned in/out across builds when a marginally-higher new name
-    appears. Sizing behaviour is otherwise unchanged.
+    appears. `asof` (additive, optional) stamps the W8 entry/context reports; `extra_candidates`
+    (additive, optional) carries watchlist promotions back into the pool. Sizing behaviour is
+    otherwise unchanged.
     """
     held = {h.upper() for h in (held or set())}
+    _w8 = _entry_gate_enabled()
     passed = []
     rejected: list[dict] = []
     n_evaluated = 0
     n_degraded = 0
 
-    for t in candidates():
+    # W8 §2.8: watchlist promotions union in HERE (not inside candidates(), whose zero-arg
+    # signature is a monkeypatch surface for a dozen tests). Additive; the gate still decides.
+    _pool = list(candidates())
+    _promoted = {str(x).upper().strip() for x in (extra_candidates or []) if x}
+    _pool = sorted(set(_pool) | (_promoted - _MANUAL_EXCLUDE))
+    for t in _pool:
         try:
             full = lenses.full(t, "name")
             syn = full["synthesis"]
@@ -492,6 +520,57 @@ def build(budget: float, name_cap: float = 0.08,
         held_frozen = is_held and degraded and not hard_exit
         hold_ok = held_frozen or (is_held and not hard_exit and confluence > _EXIT_CONFLUENCE_FLOOR)
 
+        # ── W8 ENTRY + CONTEXT gates (NEW entries only; held names NEVER touched here) ──────────
+        # The buy triad's second and third axes (design §2.2): a quality-gate passer must ALSO be
+        # at a buyable ENTRY (not chase/late_leg/rollover/extended/knife/plan-exhausted) in
+        # weather that is not BLOCKED for its cohort. Failing either does not discard the name —
+        # it goes to `rejected` carrying a `park` record so phase2 enrolls it on the watchlist
+        # with promotion triggers (patience, not forfeit). Fail-open: verdict 'unknown' and any
+        # assessor error withhold nothing (charter P2 — the data-health breaker owns outages).
+        entry_rep = ctx_rep = None
+        ctx_mult = 1.0
+        if _w8 and entry_ok and not is_held:
+            try:
+                from portfolio import context_gate as _ctxg
+                from portfolio import entry_engine as _eeng
+                entry_rep = _eeng.assess(t, as_of=asof)
+                ctx_rep = _ctxg.assess(
+                    t, entry_verdict=entry_rep.get("verdict"),
+                    entry_tier_ok=bool(entry_rep.get("metrics", {}).get("tier_fresh")
+                                       or entry_rep.get("metrics", {}).get("tier_eligible")),
+                    as_of=asof)
+                ctx_mult = float(ctx_rep.get("entry_mult", 1.0) or 1.0)
+            except Exception:  # noqa: BLE001 — assessors are subtract-only; failure = no brake
+                entry_rep = ctx_rep = None
+                ctx_mult = 1.0
+            _entry_bad = bool(entry_rep) and not entry_rep.get("buyable") \
+                and entry_rep.get("verdict") != "unknown"
+            _ctx_blocked = bool(ctx_rep) and ctx_rep.get("verdict") == "blocked"
+            if _entry_bad or _ctx_blocked:
+                _why = []
+                if _entry_bad:
+                    _why.append(f"entry {entry_rep.get('verdict')}")
+                if _ctx_blocked:
+                    _why.append("context blocked")
+                _notes = (entry_rep or {}).get("notes", []) + (ctx_rep or {}).get("reasons", [])
+                rejected.append({
+                    "ticker": t,
+                    "reason": "Parked — " + " + ".join(_why)
+                              + (f" ({_notes[0]})" if _notes else ""),
+                    "vetoes": [],
+                    "bear": _notes[:4],
+                    "confluence": round(confluence, 3),
+                    "park": {
+                        "asof": asof,
+                        "entry_verdict": (entry_rep or {}).get("verdict"),
+                        "context_verdict": (ctx_rep or {}).get("verdict"),
+                        "triggers": ((entry_rep or {}).get("park_triggers")
+                                     or (ctx_rep or {}).get("park_triggers")),
+                    },
+                    "entry_report": entry_rep, "context_report": ctx_rep,
+                })
+                continue
+
         if entry_ok or hold_ok:
             # full-size confirmation: a confirmed leader (price + sector leadership) OR a genuine
             # leading theme. Everything else that clears the gate is sized at INITIAL only.
@@ -515,8 +594,14 @@ def build(budget: float, name_cap: float = 0.08,
             _entry = {"ticker": t, "confluence": _conf,
                       "bull": syn["bull"], "bear": syn["bear"],
                       "retained": bool(hold_ok and not entry_ok), "confirmed": confirmed,
-                      "ext_mult": _emult,
+                      "ext_mult": _emult, "ctx_mult": ctx_mult,
                       "divergences": [d["pattern"] for d in syn.get("divergences", [])]}
+            # W8: the entry/context reports ride on the position so theses/provenance/research
+            # can say WHY NOW (design §2.5). Held names carry none (never assessed).
+            if entry_rep is not None:
+                _entry["entry_report"] = entry_rep
+            if ctx_rep is not None:
+                _entry["context_report"] = ctx_rep
             if held_frozen:
                 _entry["retained_reason"] = "data_degraded_freeze"
                 _entry["data_degraded"] = True
@@ -542,6 +627,34 @@ def build(budget: float, name_cap: float = 0.08,
                 reason = f"Negative confluence ({confluence:+.2f})"
             else:
                 reason = f"Insufficient confluence ({confluence:+.2f}, need >0.30)"
+
+            # ── W8 §2.5 ROTATION-CANDIDATE marking (the D7 positive path) ────────────────────────
+            # A strength-rewarding gate structurally under-scores a BOTTOMING name (XLE fell to
+            # confluence ~0 at its low). A name that fails ONLY the confluence bar — no veto, no
+            # downtrend, non-negative confluence — but whose ENTRY read says base_turn in weather
+            # that is not blocked, is marked for the watchlist ROTATION lane (phase2 enrolls it;
+            # WATCH→ARMED as tier/stage confirmation builds). ADDITIVE SOURCING ONLY: the mark
+            # never sizes; a promoted name still re-runs the full gate on a later build.
+            _rot_probe_ok = (_w8 and not is_held and not vetoes and sa not in ("blocked",)
+                             and not syn.get("price_downtrend") and not degraded
+                             and confluence >= 0.0 and reason.startswith("Insufficient"))
+            if _rot_probe_ok:
+                try:
+                    from portfolio import context_gate as _ctxg
+                    from portfolio import entry_engine as _eeng
+                    _probe = _eeng.assess(t, as_of=asof)
+                    if _probe.get("verdict") == "base_turn":
+                        _pctx = _ctxg.assess(t, entry_verdict="base_turn", as_of=asof)
+                        if _pctx.get("verdict") != "blocked":
+                            rejected.append({
+                                "ticker": t, "reason": reason, "vetoes": [],
+                                "bear": [], "confluence": round(confluence, 3),
+                                "rotation_candidate": True,
+                                "entry_report": _probe, "context_report": _pctx,
+                            })
+                            continue
+                except Exception:  # noqa: BLE001 — the probe is additive; failure marks nothing
+                    pass
 
             # Extract bear bullets from the matrix rows (cap at 4).
             bear_pts: list[str] = []
@@ -700,21 +813,28 @@ def build(budget: float, name_cap: float = 0.08,
 
 
 def _apply_extension_brake(sized: list[dict]) -> None:
-    """Terminal graded-extension subtract (in place). For each position, multiply its FINAL weight by
-    its stored ``ext_mult`` (1.0 for held / un-extended names → no-op; _INITIAL_SIZE_FRACTION for a
-    NEW add in the moderate band). This runs AFTER vol-sizing + the sector cap precisely so the
-    renorm-to-budget inside ``risk_sizing.apply`` cannot silently undo the haircut (the NEW-SIZE-1
-    erasure). Subtract-only: it can only reduce a weight; the freed weight is left in cash, never
-    redistributed to other names. The 0.0 (no-add) band is already handled upstream (weight zeroed +
-    filtered out), so here ext_mult is effectively in (0, 1]."""
+    """Terminal graded entry-brake subtract (in place). For each position, multiply its FINAL weight
+    by its stored ``ext_mult`` (1.0 for held / un-extended names; _INITIAL_SIZE_FRACTION for a NEW
+    add in the moderate band) AND — W8 — its ``ctx_mult`` (1.0 unless the context gate said
+    'against', then 0.6: a new entry into adverse weather takes reduced size). Both run AFTER
+    vol-sizing precisely so the renorm-to-budget inside ``risk_sizing.apply`` cannot silently undo
+    the haircut (the NEW-SIZE-1 erasure). Subtract-only: each can only reduce a weight; the freed
+    weight is left in cash, never redistributed. The 0.0 (no-add) band is handled upstream, so here
+    each multiplier is effectively in (0, 1]."""
     for p in sized:
         em = p.get("ext_mult", 1.0)
-        if not isinstance(em, (int, float)) or em >= 1.0:
+        cm = p.get("ctx_mult", 1.0)
+        em = em if isinstance(em, (int, float)) else 1.0
+        cm = cm if isinstance(cm, (int, float)) else 1.0
+        mult = max(0.0, min(1.0, em)) * max(0.0, min(1.0, cm))
+        if mult >= 1.0:
             continue
-        p["weight"] = round(max(0.0, float(p.get("weight", 0.0))) * em, 4)
+        p["weight"] = round(max(0.0, float(p.get("weight", 0.0))) * mult, 4)
         if 0.0 < em < 1.0:
             p["size_stage"] = "initial"
             p["ext_braked"] = True
+        if 0.0 < cm < 1.0:
+            p["ctx_braked"] = True
 
 
 def _apply_sector_cap(sized: list[dict], budget: float,
