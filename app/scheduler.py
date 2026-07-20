@@ -119,6 +119,208 @@ def _skip_event(job: str, book: str):
 
 
 # ---------------------------------------------------------------------------
+# RETRY-AT-EARLIEST-RESET ("don't miss decision days")
+# ---------------------------------------------------------------------------
+#
+# When a Brain-armed book job completes with an all-pool-cooling no-decision (every OAuth
+# key cooling/dead), cli_bridge writes a well-known ``brain_pool_exhausted`` run-event (the
+# job's return value is discarded and cli_bridge never raises, so this marker is the only
+# signal).  After the book job's wrapper returns, we look for that marker and — via the pure
+# ``brain.retry_policy.decide_retry`` — schedule a ONE-SHOT re-run of the SAME job function at
+# the pool's earliest reset (+5..10 min jitter), guarded so it lands before the job's next
+# scheduled run and capped at 2 retries per job per calendar day.
+#
+# The retry counter lives in memory (the jobstore is memory in production anyway; a process
+# restart resetting the counter is acceptable per the charter).
+
+_BRAIN_RETRY_COUNTS: dict[tuple[str, str], int] = {}
+
+# The book jobs eligible for retry-at-reset, mapped job_id -> book id.  (Verified idempotent:
+# each re-runs the Brain after a no-decision and safely re-settles after a success — the Brain
+# books clear+re-decide, flagship's deterministic book carries/rebuilds identically under the
+# gate.  None is excluded.)
+_BRAIN_RETRY_JOBS: dict[str, str] = {
+    "daily_loop":        "flagship",
+    "autonomous_daily":  "autonomous",
+    "heavyweight_daily": "heavyweight",
+    "china_daily":       "china",
+    "hk_daily":          "hk",
+    "etf_daily":         "etf",
+}
+
+
+def _today_iso_utc() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+def _job_func_for(job_id: str):
+    """Return the scheduler job function for job_id (module global), or None."""
+    return {
+        "daily_loop":        _job,
+        "autonomous_daily":  _autonomous_job,
+        "heavyweight_daily": _heavyweight_job,
+        "china_daily":       _china_job,
+        "hk_daily":          _hk_job,
+        "etf_daily":         _etf_job,
+    }.get(job_id)
+
+
+def _read_pool_exhausted_since(book: str, since_ts):
+    """Return the freshest brain_pool_exhausted marker for `book` at/after `since_ts`, or None.
+
+    Reads the tail of data/governance/run_events.jsonl.  `since_ts` is an aware UTC datetime
+    (the run's start) — only markers written during/after this run count, so a stale marker from
+    an earlier run never triggers a spurious retry.  Never raises.
+    """
+    from datetime import datetime, timezone
+    import json as _json
+    try:
+        from control_plane.run_events import _ledger_path
+        p = _ledger_path()
+        if not p.exists():
+            return None
+        best = None
+        best_ts = None
+        for line in p.read_text().splitlines()[-2000:]:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                ev = _json.loads(line)
+            except Exception:  # noqa: BLE001
+                continue
+            if ev.get("kind") != "brain_pool_exhausted":
+                continue
+            if str(ev.get("book") or "") != str(book):
+                continue
+            ts_raw = str(ev.get("ts", ""))
+            try:
+                s = ts_raw[:-1] + "+00:00" if ts_raw.endswith("Z") else ts_raw
+                ev_ts = datetime.fromisoformat(s)
+                if ev_ts.tzinfo is None:
+                    ev_ts = ev_ts.replace(tzinfo=timezone.utc)
+                ev_ts = ev_ts.astimezone(timezone.utc)
+            except Exception:  # noqa: BLE001
+                continue
+            if ev_ts < since_ts:
+                continue
+            if best_ts is None or ev_ts >= best_ts:
+                best, best_ts = ev, ev_ts
+        return best
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _next_scheduled_run(job_id: str):
+    """The job's next cron fire time (aware UTC datetime), or None.  Never raises."""
+    from datetime import timezone
+    try:
+        global _scheduler
+        if _scheduler is None:
+            return None
+        job = _scheduler.get_job(job_id)
+        if job is None or job.next_run_time is None:
+            return None
+        nrt = job.next_run_time
+        return nrt.astimezone(timezone.utc) if nrt.tzinfo else nrt.replace(tzinfo=timezone.utc)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _brain_retry_run(job_id: str):
+    """One-shot retry target: log a retry_run event, then invoke the original job function.
+
+    A retry is a full re-run of the same book job (it takes its own per-book lock, re-attempts
+    the Brain, and safely re-settles).  Never raises into the scheduler."""
+    book = _BRAIN_RETRY_JOBS.get(job_id, "")
+    try:
+        from control_plane import run_events
+        run_events.append({
+            "kind": "run_event",
+            "job": job_id,
+            "book": book,
+            "step": "brain_retry",
+            "status": "retry_run",
+            "severity": "ADVISORY_ONLY",
+            "actor": "system",
+        })
+    except Exception:  # noqa: BLE001
+        pass
+    fn = _job_func_for(job_id)
+    if fn is None:
+        return
+    try:
+        fn()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("brain retry-run for %s failed: %s", job_id, exc)
+
+
+def _maybe_schedule_brain_retry(job_id: str, book: str, since_ts) -> None:
+    """After a book job returns, schedule a one-shot retry if the run hit an all-pool-cooling
+    no-decision AND the pure policy says a retry fits before the next scheduled run.
+
+    Uses brain.retry_policy.decide_retry for the decision (guards + jitter live there).  Persists
+    a per-(job, calendar-day) counter in memory (max 2).  Logs retry_scheduled on success.  Never
+    raises into the scheduler."""
+    from datetime import datetime, timezone
+    try:
+        marker = _read_pool_exhausted_since(book, since_ts)
+        if marker is None:
+            return  # no all-cooling failure this run — nothing to retry
+        extra = marker.get("extra") or {}
+        from brain.retry_policy import decide_retry, BrainFailure
+        failure = BrainFailure(
+            all_cooling=bool(extra.get("all_cooling", True)),
+            earliest_reset=str(extra.get("earliest_reset") or ""),
+        )
+        day = _today_iso_utc()
+        count = _BRAIN_RETRY_COUNTS.get((job_id, day), 0)
+        now = datetime.now(timezone.utc)
+        retry_at = decide_retry(failure, now, count, _next_scheduled_run(job_id))
+        if retry_at is None:
+            return
+
+        global _scheduler
+        if _scheduler is None:
+            return
+        try:
+            from apscheduler.triggers.date import DateTrigger
+        except Exception:  # noqa: BLE001
+            return
+        retry_job_id = f"{job_id}__brain_retry_{day}_{count + 1}"
+        _scheduler.add_job(
+            _brain_retry_run, DateTrigger(run_date=retry_at, timezone="UTC"),
+            args=[job_id], id=retry_job_id, replace_existing=True,
+            misfire_grace_time=3600, coalesce=True,
+        )
+        _BRAIN_RETRY_COUNTS[(job_id, day)] = count + 1
+
+        try:
+            from control_plane import run_events
+            run_events.append({
+                "kind": "run_event",
+                "job": job_id,
+                "book": book,
+                "step": "brain_retry",
+                "status": "retry_scheduled",
+                "severity": "ADVISORY_ONLY",
+                "actor": "system",
+                "extra": {
+                    "retry_at": retry_at.isoformat(),
+                    "attempt": count + 1,
+                    "earliest_reset": failure.earliest_reset,
+                },
+            })
+        except Exception:  # noqa: BLE001
+            pass
+        log.info("brain retry-at-reset scheduled for %s at %s (attempt %d)",
+                 job_id, retry_at.isoformat(), count + 1)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("_maybe_schedule_brain_retry(%s) failed: %s", job_id, exc)
+
+
+# ---------------------------------------------------------------------------
 # per-book book-id lookup (used by lock names)
 # ---------------------------------------------------------------------------
 #
@@ -131,6 +333,8 @@ def _skip_event(job: str, book: str):
 
 def _job():
     """Flagship daily loop: gated book build (Mon–Fri after close)."""
+    from datetime import datetime, timezone
+    _started = datetime.now(timezone.utc)
     handle = _ledger_start("daily_loop", book="flagship", trigger="cron")
     try:
         from control_plane import locks
@@ -143,6 +347,7 @@ def _job():
             from bot.daily import run_daily
             run_daily()
         _ledger_end(handle, "ok")
+        _maybe_schedule_brain_retry("daily_loop", "flagship", _started)
     except Exception as exc:  # noqa: BLE001
         _ledger_end(handle, "error")
         log.warning("daily_loop failed: %s", exc)
@@ -150,6 +355,8 @@ def _job():
 
 def _autonomous_job():
     """The free-form Opus-Brain book: researches + rebalances itself once per trading day."""
+    from datetime import datetime, timezone
+    _started = datetime.now(timezone.utc)
     handle = _ledger_start("autonomous_daily", book="autonomous", trigger="cron")
     try:
         from control_plane import locks
@@ -162,6 +369,7 @@ def _autonomous_job():
             from bot.autonomous import run_autonomous
             run_autonomous()
         _ledger_end(handle, "ok")
+        _maybe_schedule_brain_retry("autonomous_daily", "autonomous", _started)
     except Exception as exc:  # noqa: BLE001
         _ledger_end(handle, "error")
         log.warning("autonomous_daily failed: %s", exc)
@@ -170,6 +378,8 @@ def _autonomous_job():
 def _heavyweight_job():
     """The concentrated Opus-Brain book: studies Flagship's book and presses its best ideas. Runs
     AFTER flagship + autonomous so it constrains against a fresh Flagship book."""
+    from datetime import datetime, timezone
+    _started = datetime.now(timezone.utc)
     handle = _ledger_start("heavyweight_daily", book="heavyweight", trigger="cron")
     try:
         from control_plane import locks
@@ -182,6 +392,7 @@ def _heavyweight_job():
             from bot.heavyweight import run_heavyweight
             run_heavyweight()
         _ledger_end(handle, "ok")
+        _maybe_schedule_brain_retry("heavyweight_daily", "heavyweight", _started)
     except Exception as exc:  # noqa: BLE001
         _ledger_end(handle, "error")
         log.warning("heavyweight_daily failed: %s", exc)
@@ -190,6 +401,8 @@ def _heavyweight_job():
 def _china_job():
     """The free-form China A-share Opus-Brain book: researches the China desks + rebalances itself
     once per Asia trading day, after the mainland A-share close (~07:00 UTC)."""
+    from datetime import datetime, timezone
+    _started = datetime.now(timezone.utc)
     handle = _ledger_start("china_daily", book="china", trigger="cron")
     try:
         from control_plane import locks
@@ -202,6 +415,7 @@ def _china_job():
             from bot.china import run_china
             run_china()
         _ledger_end(handle, "ok")
+        _maybe_schedule_brain_retry("china_daily", "china", _started)
     except Exception as exc:  # noqa: BLE001
         _ledger_end(handle, "error")
         log.warning("china_daily failed: %s", exc)
@@ -210,6 +424,8 @@ def _china_job():
 def _hk_job():
     """The free-form Hong-Kong Opus-Brain book (HK listings only, HKD): researches the China desks +
     rebalances itself once per Asia trading day, after the HK close (~08:00 UTC)."""
+    from datetime import datetime, timezone
+    _started = datetime.now(timezone.utc)
     handle = _ledger_start("hk_daily", book="hk", trigger="cron")
     try:
         from control_plane import locks
@@ -222,6 +438,7 @@ def _hk_job():
             from bot.hk import run_hk
             run_hk()
         _ledger_end(handle, "ok")
+        _maybe_schedule_brain_retry("hk_daily", "hk", _started)
     except Exception as exc:  # noqa: BLE001
         _ledger_end(handle, "error")
         log.warning("hk_daily failed: %s", exc)
@@ -230,6 +447,8 @@ def _hk_job():
 def _etf_job():
     """The free-form ETF Opus-Brain book: rotates across US-listed ETFs (index/sector/factor/duration/
     cash) under an ETF-adapted doctrine + risk guardrails, once per US trading day after the close."""
+    from datetime import datetime, timezone
+    _started = datetime.now(timezone.utc)
     handle = _ledger_start("etf_daily", book="etf", trigger="cron")
     try:
         from control_plane import locks
@@ -242,6 +461,7 @@ def _etf_job():
             from bot.etf import run_etf
             run_etf()
         _ledger_end(handle, "ok")
+        _maybe_schedule_brain_retry("etf_daily", "etf", _started)
     except Exception as exc:  # noqa: BLE001
         _ledger_end(handle, "error")
         log.warning("etf_daily failed: %s", exc)

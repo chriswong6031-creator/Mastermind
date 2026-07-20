@@ -149,7 +149,10 @@ def run_daily_research(asof: str | None = None, *, max_turns: int | None = None)
     prompt += _intake_brief()             # stage-1 salience pre-context (degrade-safe)
     if not cli_bridge.available():
         return {"ok": False, "error": "claude CLI/SDK not available", "asof": asof}
-    return cli_bridge.research_sync(prompt, role="deep", max_turns=max_turns)
+    # book="flagship": attribute an all-pool-cooling marker to the flagship job so the
+    # scheduler's retry-at-reset can key on it (the flagship BOOK is deterministic and never
+    # blocked by cooling — only this research-ingest leg is skipped when the pool is exhausted).
+    return cli_bridge.research_sync(prompt, role="deep", max_turns=max_turns, book="flagship")
 
 
 def _clamp(lean: str, subject: str, blocked: set[str]) -> tuple[str, str]:

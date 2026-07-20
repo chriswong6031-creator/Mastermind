@@ -737,3 +737,244 @@ class TestKeyEventsExport:
         key_events_path = macro_root / "data" / "mastermind" / "key_events.jsonl"
         rows = [l for l in key_events_path.read_text().splitlines() if l.strip()]
         assert len(rows) == 10, f"Expected 10 rows (capped), got {len(rows)}"
+
+
+# ---------------------------------------------------------------------------
+# 7. Macro federation (FEDERATION DOWN) — candidates() reorders/skips on macro health
+# ---------------------------------------------------------------------------
+
+def _macro_metab_dir(root: Path) -> Path:
+    """The vendored macro metabolism dir under a test root (mirrors _macro_vendor_root)."""
+    d = root / "vendor" / "macro" / "data" / "metabolism"
+    d.parent.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _write_macro_budget(root: Path, per_key: dict, *, ts: datetime | None = None) -> None:
+    d = _macro_metab_dir(root)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "key_budget_status.json").write_text(json.dumps({
+        "schema": "metab_budget_status.v1",
+        "ts": _ts(ts or _now()),
+        "per_key": per_key,
+    }))
+
+
+def _write_macro_ledger(root: Path, rows: list[dict]) -> None:
+    d = _macro_metab_dir(root)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "key_ledger.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+
+
+class TestMacroFederation:
+    @pytest.fixture(autouse=True)
+    def _import(self):
+        from brain import key_rotor as _kr
+        self.kr = _kr
+
+    def _present(self, monkeypatch, *slots: int):
+        monkeypatch.delenv("METAB_KEYS_ENABLED", raising=False)
+        for n in range(1, 8):
+            monkeypatch.delenv(f"CLAUDE_CODE_OAUTH_TOKEN_{n}", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+        for n in slots:
+            monkeypatch.setenv(f"CLAUDE_CODE_OAUTH_TOKEN_{n}", f"tok{n}")
+
+    def test_missing_macro_data_fail_open_identical(self, tmp_path, monkeypatch):
+        """No macro dir → ordering identical to bot-only (fail-open invariant P2)."""
+        self._present(monkeypatch, 3, 5)
+        # slot 3 higher load than 5 → bot-only order is 5,3
+        ledger = tmp_path / "data" / "metabolism" / "key_ledger.jsonl"
+        for _ in range(3):
+            _write_row(ledger, {"schema": "metabolism.key_ledger.v1",
+                                "ts": _ts(_now() - timedelta(minutes=5)),
+                                "key_id": "claude_code_oauth_3", "cycle_id": "",
+                                "stage": "pm", "est_tokens": 1, "outcome": "ok"})
+        health = self.kr._macro_key_health(root=tmp_path)
+        assert health["fresh"] is False
+        cands = self.kr.candidates(root=tmp_path)
+        assert [c["key_id"] for c in cands] == ["claude_code_oauth_5", "claude_code_oauth_3"]
+
+    def test_pct_weekly_ascending_order(self, tmp_path, monkeypatch):
+        """Fresh macro: non-cooling keys order by pct_weekly ascending."""
+        self._present(monkeypatch, 2, 3, 5)
+        _write_macro_budget(tmp_path, {
+            "5": {"pct_weekly": 12.0}, "2": {"pct_weekly": 45.0}, "3": {"pct_weekly": 70.0}})
+        cands = self.kr.candidates(root=tmp_path)
+        assert [c["key_id"] for c in cands] == [
+            "claude_code_oauth_5", "claude_code_oauth_2", "claude_code_oauth_3"]
+
+    def test_95pct_soft_demoted_not_dropped(self, tmp_path, monkeypatch):
+        """A key at >=95% pct_weekly goes to the BACK of non-cooling but is NOT dropped."""
+        self._present(monkeypatch, 3, 5)
+        _write_macro_budget(tmp_path, {
+            "3": {"pct_weekly": 97.0}, "5": {"pct_weekly": 50.0}})
+        cands = self.kr.candidates(root=tmp_path)
+        ids = [c["key_id"] for c in cands]
+        assert ids == ["claude_code_oauth_5", "claude_code_oauth_3"]  # 3 demoted, still present
+
+    def test_all_demoted_still_present(self, tmp_path, monkeypatch):
+        """If ALL keys are >=95%, none is dropped — all still tried (soft demotion)."""
+        self._present(monkeypatch, 3, 5)
+        _write_macro_budget(tmp_path, {
+            "3": {"pct_weekly": 99.0}, "5": {"pct_weekly": 96.0}})
+        cands = self.kr.candidates(root=tmp_path)
+        assert set(c["key_id"] for c in cands) == {"claude_code_oauth_3", "claude_code_oauth_5"}
+
+    def test_auth_dead_dropped(self, tmp_path, monkeypatch):
+        """A key with a recent uncleared macro auth-death is DROPPED from candidates."""
+        self._present(monkeypatch, 3, 4, 5)
+        _write_macro_budget(tmp_path, {
+            "3": {"pct_weekly": 10.0}, "4": {"pct_weekly": 10.0}, "5": {"pct_weekly": 10.0}})
+        _write_macro_ledger(tmp_path, [{
+            "schema": "metabolism.key_ledger.v1", "ts": _ts(_now() - timedelta(hours=3)),
+            "key_id": "4", "stage": "cooling", "outcome": "auth_failed",
+            "cool_kind": "auth", "reset_hint": _ts(_now() + timedelta(hours=24))}])
+        cands = self.kr.candidates(root=tmp_path)
+        ids = [c["key_id"] for c in cands]
+        assert "claude_code_oauth_4" not in ids
+        assert "claude_code_oauth_3" in ids and "claude_code_oauth_5" in ids
+
+    def test_auth_dead_cleared_by_later_ok_not_dropped(self, tmp_path, monkeypatch):
+        """A later macro ok row after the auth-death → NOT dropped (recovered server-side)."""
+        self._present(monkeypatch, 4, 5)
+        _write_macro_budget(tmp_path, {"4": {"pct_weekly": 10.0}, "5": {"pct_weekly": 20.0}})
+        _write_macro_ledger(tmp_path, [
+            {"schema": "metabolism.key_ledger.v1", "ts": _ts(_now() - timedelta(hours=5)),
+             "key_id": "4", "stage": "cooling", "outcome": "auth_failed", "cool_kind": "auth",
+             "reset_hint": _ts(_now() + timedelta(hours=24))},
+            {"schema": "metabolism.key_ledger.v1", "ts": _ts(_now() - timedelta(hours=1)),
+             "key_id": "4", "stage": "pm", "est_tokens": 1, "outcome": "ok"}])
+        cands = self.kr.candidates(root=tmp_path)
+        assert "claude_code_oauth_4" in [c["key_id"] for c in cands]
+
+    def test_stale_auth_death_ignored(self, tmp_path, monkeypatch):
+        """An auth-death older than 7d is NOT trusted to drop the key (may be rotated since)."""
+        self._present(monkeypatch, 4, 5)
+        _write_macro_budget(tmp_path, {"4": {"pct_weekly": 10.0}, "5": {"pct_weekly": 20.0}})
+        _write_macro_ledger(tmp_path, [{
+            "schema": "metabolism.key_ledger.v1", "ts": _ts(_now() - timedelta(days=9)),
+            "key_id": "4", "stage": "cooling", "outcome": "auth_failed",
+            "cool_kind": "auth", "reset_hint": _ts(_now() - timedelta(days=8))}])
+        cands = self.kr.candidates(root=tmp_path)
+        assert "claude_code_oauth_4" in [c["key_id"] for c in cands]
+
+    def test_stale_budget_fail_open(self, tmp_path, monkeypatch):
+        """A budget file with ts older than 36h is ignored entirely (fail-open)."""
+        self._present(monkeypatch, 3, 5)
+        _write_macro_budget(tmp_path, {"3": {"pct_weekly": 99.0}, "5": {"pct_weekly": 1.0}},
+                            ts=_now() - timedelta(hours=40))
+        health = self.kr._macro_key_health(root=tmp_path)
+        assert health["fresh"] is False
+        # ordering falls back to bot heuristic (equal load → slot order 3,5)
+        cands = self.kr.candidates(root=tmp_path)
+        assert [c["key_id"] for c in cands] == ["claude_code_oauth_3", "claude_code_oauth_5"]
+
+    def test_auth_dead_never_strands_pool(self, tmp_path, monkeypatch):
+        """If EVERY present key is macro-auth-dead, keep them all (never strand the loop)."""
+        self._present(monkeypatch, 3, 5)
+        _write_macro_budget(tmp_path, {"3": {"pct_weekly": 10.0}, "5": {"pct_weekly": 10.0}})
+        _write_macro_ledger(tmp_path, [
+            {"schema": "metabolism.key_ledger.v1", "ts": _ts(_now() - timedelta(hours=2)),
+             "key_id": "3", "stage": "cooling", "outcome": "auth_failed", "cool_kind": "auth",
+             "reset_hint": _ts(_now() + timedelta(hours=24))},
+            {"schema": "metabolism.key_ledger.v1", "ts": _ts(_now() - timedelta(hours=2)),
+             "key_id": "5", "stage": "cooling", "outcome": "auth_failed", "cool_kind": "auth",
+             "reset_hint": _ts(_now() + timedelta(hours=24))}])
+        cands = self.kr.candidates(root=tmp_path)
+        assert set(c["key_id"] for c in cands) == {"claude_code_oauth_3", "claude_code_oauth_5"}
+
+    def test_federation_never_adds_or_uncools(self, tmp_path, monkeypatch):
+        """Federation cannot add a key absent from env, nor un-cool a bot-cooling key."""
+        self._present(monkeypatch, 3)  # only slot 3 present in env
+        # macro claims slot 6 is pristine — but it's not in env, so it must NOT appear.
+        _write_macro_budget(tmp_path, {"3": {"pct_weekly": 50.0}, "6": {"pct_weekly": 1.0}})
+        # slot 3 is bot-side cooling (window) — macro data must not un-cool it.
+        _write_row(tmp_path / "data" / "metabolism" / "key_ledger.jsonl", {
+            "schema": "metabolism.key_ledger.v1", "ts": _ts(_now()),
+            "key_id": "claude_code_oauth_3", "cycle_id": "", "stage": "cooling",
+            "est_tokens": 0, "outcome": "rate_limited", "cool_kind": "window",
+            "reset_hint": _ts(_now() + timedelta(hours=4))})
+        cands = self.kr.candidates(root=tmp_path)
+        ids = [c["key_id"] for c in cands]
+        assert "claude_code_oauth_6" not in ids  # never added
+        assert ids == ["claude_code_oauth_3"]     # present, still cooling
+        assert cands[0]["cooling"] is True         # not un-cooled
+
+
+# ---------------------------------------------------------------------------
+# 8. Bot key-pool status writer (FEDERATION UP) — mastermind.key_pool_status.v1
+# ---------------------------------------------------------------------------
+
+class TestPoolStatusWriter:
+    @pytest.fixture(autouse=True)
+    def _import(self):
+        from brain import key_rotor as _kr
+        self.kr = _kr
+
+    def _present(self, monkeypatch, *slots: int):
+        monkeypatch.delenv("METAB_KEYS_ENABLED", raising=False)
+        for n in range(1, 8):
+            monkeypatch.delenv(f"CLAUDE_CODE_OAUTH_TOKEN_{n}", raising=False)
+        monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+        for n in slots:
+            monkeypatch.setenv(f"CLAUDE_CODE_OAUTH_TOKEN_{n}", f"tok{n}")
+
+    def test_view_exact_schema(self, tmp_path, monkeypatch):
+        """pool_status_view returns exactly {schema, ts, keys[]} with the exact key fields."""
+        self._present(monkeypatch, 3, 5)
+        view = self.kr.pool_status_view(root=tmp_path)
+        assert view["schema"] == "mastermind.key_pool_status.v1"
+        assert set(view.keys()) == {"schema", "ts", "keys"}
+        assert len(view["keys"]) == 2
+        for k in view["keys"]:
+            assert set(k.keys()) == {
+                "key_id", "enabled", "cooling", "cool_kind",
+                "reset_hint", "last_outcome", "last_ts"}
+
+    def test_view_reports_cooling_fields(self, tmp_path, monkeypatch):
+        """A cooling key reports cooling=True + its cool_kind + reset_hint + last_outcome."""
+        self._present(monkeypatch, 3, 5)
+        rh = _ts(_now() + timedelta(hours=4))
+        _write_row(tmp_path / "data" / "metabolism" / "key_ledger.jsonl", {
+            "schema": "metabolism.key_ledger.v1", "ts": _ts(_now()),
+            "key_id": "claude_code_oauth_3", "cycle_id": "", "stage": "cooling",
+            "est_tokens": 0, "outcome": "rate_limited", "cool_kind": "weekly",
+            "reset_hint": rh})
+        view = self.kr.pool_status_view(root=tmp_path)
+        by_id = {k["key_id"]: k for k in view["keys"]}
+        assert by_id["claude_code_oauth_3"]["cooling"] is True
+        assert by_id["claude_code_oauth_3"]["cool_kind"] == "weekly"
+        assert by_id["claude_code_oauth_3"]["reset_hint"] == rh
+        assert by_id["claude_code_oauth_3"]["last_outcome"] == "rate_limited"
+        assert by_id["claude_code_oauth_5"]["cooling"] is False
+        assert by_id["claude_code_oauth_5"]["cool_kind"] is None
+
+    def test_enabled_flag_reflects_metab_keys_enabled(self, tmp_path, monkeypatch):
+        """enabled reflects METAB_KEYS_ENABLED membership."""
+        self._present(monkeypatch, 3, 5)
+        monkeypatch.setenv("METAB_KEYS_ENABLED", "5")
+        view = self.kr.pool_status_view(root=tmp_path)
+        by_id = {k["key_id"]: k for k in view["keys"]}
+        assert by_id["claude_code_oauth_5"]["enabled"] is True
+        assert by_id["claude_code_oauth_3"]["enabled"] is False
+
+    def test_writer_atomic_and_parseable(self, tmp_path, monkeypatch):
+        """write_pool_status writes a parseable file at the default rel path; no temp left behind."""
+        self._present(monkeypatch, 3)
+        out = self.kr.write_pool_status(root=tmp_path)
+        assert out is not None and out.exists()
+        assert out == tmp_path / "data" / "mastermind" / "key_pool_status.json"
+        doc = json.loads(out.read_text())
+        assert doc["schema"] == "mastermind.key_pool_status.v1"
+        # no stray temp file
+        assert not (out.parent / f".{out.name}.tmp").exists()
+
+    def test_legacy_only_pool_view(self, tmp_path, monkeypatch):
+        """When only the legacy bare token is present, the view lists 'legacy'."""
+        for n in range(1, 8):
+            monkeypatch.delenv(f"CLAUDE_CODE_OAUTH_TOKEN_{n}", raising=False)
+        monkeypatch.delenv("METAB_KEYS_ENABLED", raising=False)
+        monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "tok_legacy")
+        view = self.kr.pool_status_view(root=tmp_path)
+        assert [k["key_id"] for k in view["keys"]] == ["legacy"]

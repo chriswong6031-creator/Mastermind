@@ -261,7 +261,15 @@ def mark_cooling(
             "cool_kind": cool_kind,
             "reset_hint": reset_hint,
         }
-        return _write_row(row, root)
+        wrote = _write_row(row, root)
+        # Cooling state just changed → refresh the published pool view (federation UP).
+        # Best-effort: a publish miss must never disturb the cooling write or the loop.
+        if wrote:
+            try:
+                write_pool_status(root=root)
+            except Exception:  # noqa: BLE001
+                pass
+        return wrote
     except Exception as exc:  # noqa: BLE001
         log.warning("key_rotor.mark_cooling(%s): %s", key_id_str, exc)
         return False
@@ -352,6 +360,193 @@ def window_load(key_id_str: str, root: Path | None = None) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Macro-side key health (FEDERATION DOWN) — read the Macro Dashboard's richer
+# "Raw Key Usage" artifacts, fed by REAL anthropic-ratelimit-* response headers.
+#
+# The macro repo is vendored read-only under vendor/macro (a symlink to the
+# build-managed sparse checkout vendor/macro_src; see data_layer/macro_refresh).
+# The whole brain/ package resolves it as _ROOT/"vendor"/"macro" (brain/intake.py
+# idiom) — we mirror that here.  Key identity is SHARED: macro key_id "1".."7"/
+# "legacy" == bot slot key_ids "claude_code_oauth_N"/"legacy".
+#
+# FAIL-OPEN INVARIANT (charter P2): every helper here returns a SAFE empty value
+# on any miss/staleness/corruption, so candidates() degrades to today's ordering.
+# Federation may only REORDER or SKIP bot-side keys — never add, un-cool, or expand.
+# ---------------------------------------------------------------------------
+
+_MACRO_BUDGET_REL = "data/metabolism/key_budget_status.json"
+_MACRO_LEDGER_REL = "data/metabolism/key_ledger.jsonl"
+
+# Ignore macro budget data whose ts is older than this — a frozen macro pipeline
+# must never silently steer the rotor on days-stale utilization (fail-open).
+_MACRO_STALE_SECONDS = 36 * 3600
+# Only the last ~300 ledger lines are read (the file can be large; one row per session).
+_MACRO_LEDGER_TAIL = 300
+# An uncleared macro auth-death older than this is ignored (the token may have been
+# rotated server-side since; only a RECENT auth-death is trusted to drop a bot key).
+_MACRO_AUTH_DEATH_SECONDS = 7 * 24 * 3600
+# pct_weekly at/above this is soft-demoted to the back of the candidate list.
+_MACRO_WEEKLY_DEMOTE_PCT = 95.0
+
+
+def _macro_vendor_root() -> Path:
+    """The vendored macro repo root (symlink-following happens at read time via Path).
+
+    Mirrors the brain/ package convention (_ROOT/"vendor"/"macro").  Kept as its own
+    function so tests can monkeypatch it to a tmp dir.
+    """
+    return _mm_root() / "vendor" / "macro"
+
+
+def _macro_bud_to_key_id(k: str) -> str:
+    """Map a macro budget/ledger key_id to the bot's canonical key_id.
+
+    Macro uses "1".."7"/"legacy"; the bot uses "claude_code_oauth_N"/"legacy".  A key
+    that is already in bot form (or unknown) is returned unchanged.
+    """
+    k = str(k)
+    if k == "legacy":
+        return "legacy"
+    if k.isdigit():
+        return f"claude_code_oauth_{k}"
+    return k
+
+
+def _read_macro_budget(vroot: Path) -> dict[str, Any] | None:
+    """Read + freshness-gate the macro key_budget_status.json.
+
+    Returns the parsed dict ONLY when its top-level ``ts`` is within _MACRO_STALE_SECONDS;
+    returns None on absent/corrupt/unparseable/stale (fail-open).  NEVER raises.
+    """
+    try:
+        p = vroot / _MACRO_BUDGET_REL
+        if not p.exists():
+            return None
+        data = json.loads(p.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return None
+        ts = _parse_ts(str(data.get("ts", "")))
+        if ts is None:
+            return None  # no/!parseable ts → cannot prove freshness → ignore
+        age = (datetime.now(timezone.utc) - ts).total_seconds()
+        if age > _MACRO_STALE_SECONDS:
+            return None  # stale → fail-open to bot-only ordering
+        return data
+    except Exception as exc:  # noqa: BLE001
+        log.warning("key_rotor._read_macro_budget: %s", exc)
+        return None
+
+
+def _read_macro_ledger_tail(vroot: Path) -> list[dict[str, Any]]:
+    """Read the last ~_MACRO_LEDGER_TAIL rows of the macro key_ledger.jsonl.
+
+    Returns [] on absent/corrupt/unreadable (fail-open).  NEVER raises.  Efficiency:
+    reads the whole file then slices the tail — the macro ledger is bounded (one row
+    per session, rotated) so this stays cheap; corrupt rows are skipped, not fatal.
+    """
+    try:
+        p = vroot / _MACRO_LEDGER_REL
+        if not p.exists():
+            return []
+        lines = p.read_text(encoding="utf-8").splitlines()
+        rows: list[dict[str, Any]] = []
+        for line in lines[-_MACRO_LEDGER_TAIL:]:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+                if isinstance(obj, dict):
+                    rows.append(obj)
+            except json.JSONDecodeError:
+                pass
+        return rows
+    except Exception as exc:  # noqa: BLE001
+        log.warning("key_rotor._read_macro_ledger_tail: %s", exc)
+        return []
+
+
+def _macro_key_health(root: Path | None = None) -> dict[str, Any]:
+    """Load macro-side key health, returning a compact per-bot-key view.
+
+    Returns
+    -------
+    {
+      "fresh": bool,                       # True only when a fresh budget file was read
+      "pct_weekly": {bot_key_id: float},   # macro weekly-utilization %, keyed by BOT key_id
+      "auth_dead": set[bot_key_id],        # keys whose last macro row is a RECENT, uncleared
+                                           #   auth-death (auth_failed / cool_kind=auth, no later ok)
+    }
+
+    A missing/stale/corrupt macro dataset yields {"fresh": False, "pct_weekly": {}, "auth_dead": set()}
+    — the fail-open sentinel that leaves candidates() ordering identical to today.  NEVER raises.
+
+    ``root`` overrides the bot repo root (test injection): the macro vendor root becomes
+    ``root/vendor/macro``.  When ``root`` is None (production) the seam is _macro_vendor_root()
+    — monkeypatch either for tests/ops.
+    """
+    safe: dict[str, Any] = {"fresh": False, "pct_weekly": {}, "auth_dead": set()}
+    try:
+        vroot = (root / "vendor" / "macro") if root is not None else _macro_vendor_root()
+        budget = _read_macro_budget(vroot)
+        if budget is None:
+            return safe  # stale/absent → fail-open
+
+        per_key = budget.get("per_key")
+        pct_weekly: dict[str, float] = {}
+        if isinstance(per_key, dict):
+            for raw_kid, rec in per_key.items():
+                if not isinstance(rec, dict):
+                    continue
+                bot_kid = _macro_bud_to_key_id(raw_kid)
+                pw = rec.get("pct_weekly")
+                try:
+                    if pw is not None:
+                        pct_weekly[bot_kid] = float(pw)
+                except (TypeError, ValueError):
+                    pass
+
+        # auth-death detection from the ledger tail: the LAST row per key_id that is an
+        # auth failure (outcome=auth_failed OR a cooling row with cool_kind=auth), with no
+        # later ok row, within the last 7 days → the token is dead server-side; drop it.
+        auth_dead: set[str] = set()
+        rows = _read_macro_ledger_tail(vroot)
+        now = datetime.now(timezone.utc)
+
+        def _ts_of(r: dict) -> datetime:
+            t = _parse_ts(str(r.get("ts", "")))
+            return t if t is not None else datetime.min.replace(tzinfo=timezone.utc)
+
+        # group rows by bot key_id, preserving order
+        by_key: dict[str, list[dict]] = {}
+        for r in rows:
+            kid = _macro_bud_to_key_id(r.get("key_id", ""))
+            if kid:
+                by_key.setdefault(kid, []).append(r)
+
+        for kid, krows in by_key.items():
+            krows_sorted = sorted(krows, key=_ts_of)
+            last = krows_sorted[-1]
+            is_auth_fail = (last.get("outcome") == "auth_failed" or
+                            last.get("cool_kind") == "auth")
+            if not is_auth_fail:
+                continue
+            last_ts = _ts_of(last)
+            # a later ok row would clear it — but 'last' IS the latest row, so any ok is earlier;
+            # still, guard explicitly in case of same-ts ordering ambiguity.
+            later_ok = any(r.get("outcome") == "ok" and _ts_of(r) > last_ts for r in krows_sorted)
+            if later_ok:
+                continue
+            if (now - last_ts).total_seconds() <= _MACRO_AUTH_DEATH_SECONDS:
+                auth_dead.add(kid)
+
+        return {"fresh": True, "pct_weekly": pct_weekly, "auth_dead": auth_dead}
+    except Exception as exc:  # noqa: BLE001
+        log.warning("key_rotor._macro_key_health: %s", exc)
+        return safe
+
+
+# ---------------------------------------------------------------------------
 # candidates() — ordered list of healthy candidates
 # ---------------------------------------------------------------------------
 
@@ -367,6 +562,17 @@ def candidates(root: Path | None = None) -> list[dict]:
 
     Enabled-set filtering: if METAB_KEYS_ENABLED filters out ALL present numbered slots,
     fall back to the unfiltered list (mirror of macro R-V10-3 — never strand the loop).
+
+    FEDERATION (macro Raw Key Usage, when fresh — _macro_key_health):
+      a. DROP a key whose macro-side state is a recent, uncleared auth-death (dead server-side),
+         UNLESS dropping would empty the numbered pool (then keep them — never strand).
+      b. Among non-cooling numbered keys, order by macro pct_weekly ASCENDING (least-utilized
+         first); tie-break by the existing (window_load, slot) heuristic.
+      c. SOFT-DEMOTE keys with macro pct_weekly >= 95 to the back of the non-cooling group
+         (still tried if everything else is cooling — NOT dropped).
+    FAIL-OPEN INVARIANT (charter P2): missing/stale/corrupt macro data → ordering IDENTICAL to
+    the bot-only behaviour above.  Federation only reorders or skips keys already in the env pool;
+    it never adds a key, never un-cools a cooling key, never expands beyond METAB_KEYS_ENABLED.
 
     REDLINE: only env-var names and key_ids are stored; token values are never read.
 
@@ -414,11 +620,45 @@ def candidates(root: Path | None = None) -> list[dict]:
             })
             return all_candidates
 
-        # Sort: non-cooling first by ascending load then slot number, cooling last
-        non_cooling = sorted(
-            [c for c in numbered if not c["cooling"]],
-            key=lambda c: (c["load"], _slot_from_key_id(c["key_id"]) or 99),
-        )
+        # ── FEDERATION: consult macro-side key health (fail-open when absent/stale) ──
+        health = _macro_key_health(root)
+        macro_fresh = bool(health.get("fresh"))
+        pct_weekly: dict[str, float] = health.get("pct_weekly", {}) if macro_fresh else {}
+        auth_dead: set[str] = health.get("auth_dead", set()) if macro_fresh else set()
+
+        # (a) DROP macro auth-dead keys — but never strand the loop: if the drop would
+        #     remove every numbered candidate, keep them (a maybe-dead key beats no key).
+        if macro_fresh and auth_dead:
+            survivors = [c for c in numbered if c["key_id"] not in auth_dead]
+            if survivors:
+                dropped = [c["key_id"] for c in numbered if c["key_id"] in auth_dead]
+                if dropped:
+                    log.info("key_rotor.candidates: macro auth-death dropped %s", dropped)
+                numbered = survivors
+            else:
+                log.warning(
+                    "key_rotor.candidates: macro auth-death would empty the pool (%s) — "
+                    "keeping all keys (never strand the loop)",
+                    sorted(auth_dead),
+                )
+
+        # Sort non-cooling: when macro is fresh, primary key = pct_weekly ASC with a >=95%
+        # soft-demotion bucket (0 = normal, 1 = demoted), tie-broken by the bot heuristic.
+        # When macro is absent/stale, demote_bucket=0 and pct_weekly=1e9 for ALL keys, so the
+        # sort collapses to the original (load, slot) ordering — byte-identical fail-open.
+        def _noncool_sort_key(c: dict) -> tuple:
+            kid = c["key_id"]
+            pw = pct_weekly.get(kid)
+            if macro_fresh and pw is not None:
+                demote = 1 if pw >= _MACRO_WEEKLY_DEMOTE_PCT else 0
+                primary = pw
+            else:
+                # No macro read (or no per-key datum): neutral — falls back to bot heuristic.
+                demote = 0
+                primary = float("inf")
+            return (demote, primary, c["load"], _slot_from_key_id(kid) or 99)
+
+        non_cooling = sorted([c for c in numbered if not c["cooling"]], key=_noncool_sort_key)
         cooling_ones = sorted(
             [c for c in numbered if c["cooling"]],
             key=lambda c: (_slot_from_key_id(c["key_id"]) or 99),
@@ -588,3 +828,108 @@ def all_cooling_info(root: Path | None = None) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         log.warning("key_rotor.all_cooling_info: %s", exc)
         return {"all_cooling": False}
+
+
+# ---------------------------------------------------------------------------
+# Bot key-pool status (FEDERATION UP) — the bot's CURRENT pool view, published to
+# the macro/admin side as data/mastermind/key_pool_status.json.  Schema is EXACT
+# (mastermind.key_pool_status.v1); the macro/admin reader is being extended in a
+# parallel PR to consume it — keep the field names + shape stable.
+# ---------------------------------------------------------------------------
+
+_POOL_STATUS_SCHEMA = "mastermind.key_pool_status.v1"
+_POOL_STATUS_REL = "data/mastermind/key_pool_status.json"
+
+
+def _last_row_for(rows: list[dict], key_id_str: str) -> dict | None:
+    """Return the newest ledger row for key_id_str (by ts), or None."""
+    def _ts_key(r: dict) -> datetime:
+        t = _parse_ts(str(r.get("ts", "")))
+        return t if t is not None else datetime.min.replace(tzinfo=timezone.utc)
+    krows = [r for r in rows if r.get("key_id") == key_id_str]
+    return sorted(krows, key=_ts_key)[-1] if krows else None
+
+
+def _last_cooling_row_for(rows: list[dict], key_id_str: str) -> dict | None:
+    """Return the newest COOLING row (has reset_hint) for key_id_str, or None."""
+    def _ts_key(r: dict) -> datetime:
+        t = _parse_ts(str(r.get("ts", "")))
+        return t if t is not None else datetime.min.replace(tzinfo=timezone.utc)
+    krows = [
+        r for r in rows
+        if r.get("key_id") == key_id_str
+        and r.get("outcome") in ("rate_limited", "auth_failed")
+        and r.get("reset_hint")
+    ]
+    return sorted(krows, key=_ts_key)[-1] if krows else None
+
+
+def pool_status_view(root: Path | None = None) -> dict[str, Any]:
+    """Build the bot's current key-pool view (mastermind.key_pool_status.v1).
+
+    A cheap rebuild from the bot's own ledger tail + the present env slots + the enabled set.
+    Every key the bot knows about (present numbered slots, plus legacy when it is the only
+    path — mirroring candidates()) is listed with its live cooling state and last outcome.
+
+    Returns a dict with keys: schema, ts, keys[].  Each key entry:
+      {key_id, enabled, cooling, cool_kind, reset_hint, last_outcome, last_ts}
+
+    REDLINE: only key_id NAMES + metadata — never a token value.  NEVER raises (returns a
+    minimal well-formed doc on error).
+    """
+    ts = _now_ts()
+    try:
+        enabled = enabled_key_ids()  # None = all enabled
+        rows = _read_ledger(root)
+
+        # Present numbered slots (by env-var NAME presence — never the value).
+        present: list[str] = [key_id(n) for n in range(1, 8)
+                              if os.environ.get(SLOT_ENV[n], "")]
+        # Legacy is part of the pool view only when it is the sole path (mirror candidates()).
+        if not present and os.environ.get(LEGACY_ENV, ""):
+            present = [LEGACY_KEY_ID]
+
+        keys: list[dict[str, Any]] = []
+        for kid in present:
+            cooling = is_cooling(kid, root)
+            cool_row = _last_cooling_row_for(rows, kid) if cooling else None
+            last_row = _last_row_for(rows, kid)
+            # enabled: None → all enabled; else membership. (An enabled filter that names
+            # only absent slots still reports the present keys as enabled=False honestly —
+            # candidates() has its own R-V10-3 fallback for actual selection.)
+            is_enabled = True if enabled is None else (kid in enabled)
+            keys.append({
+                "key_id": kid,
+                "enabled": bool(is_enabled),
+                "cooling": bool(cooling),
+                "cool_kind": (cool_row.get("cool_kind") if cool_row else None),
+                "reset_hint": (cool_row.get("reset_hint") if cool_row else None),
+                "last_outcome": (last_row.get("outcome") if last_row else None),
+                "last_ts": (last_row.get("ts") if last_row else None),
+            })
+
+        return {"schema": _POOL_STATUS_SCHEMA, "ts": ts, "keys": keys}
+    except Exception as exc:  # noqa: BLE001
+        log.warning("key_rotor.pool_status_view: %s", exc)
+        return {"schema": _POOL_STATUS_SCHEMA, "ts": ts, "keys": []}
+
+
+def write_pool_status(dest: Path | None = None, root: Path | None = None) -> Path | None:
+    """Write the pool-status view to `dest` (default <root>/data/mastermind/key_pool_status.json).
+
+    Uses a temp-file + atomic replace (temp+os.replace law) so a reader never sees a half-written
+    file.  Returns the written path, or None on failure.  NEVER raises — a publish miss must never
+    disturb a trading lane or the rotor.
+    """
+    try:
+        base = root if root is not None else _mm_root()
+        out = dest if dest is not None else (base / _POOL_STATUS_REL)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        view = pool_status_view(root)
+        tmp = out.with_name(f".{out.name}.tmp")
+        tmp.write_text(json.dumps(view, separators=(",", ":")) + "\n", encoding="utf-8")
+        tmp.replace(out)
+        return out
+    except Exception as exc:  # noqa: BLE001
+        log.warning("key_rotor.write_pool_status: %s", exc)
+        return None

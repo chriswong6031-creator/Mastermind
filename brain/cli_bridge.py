@@ -366,6 +366,29 @@ async def reason(prompt: str, *, role: str = "pm", model: str | None = None,
                 _rl.log_step(_run_id, "key rotation", "pool exhausted", _err_msg)
         except Exception:
             pass
+        # WELL-KNOWN MARKER (federation / retry-at-reset): the book jobs discard reason()'s
+        # return value and reason() never raises, so an all-pool-cooling no-decision would be
+        # invisible to the scheduler.  Record a queryable run-event so app/scheduler.py can detect
+        # it (by book + time window) and schedule a one-shot retry at the pool's earliest reset.
+        # Best-effort — a logging miss must never change the returned result.
+        try:
+            from control_plane import run_events as _re
+            _re.append({
+                "kind": "brain_pool_exhausted",
+                "job": "",                 # the book job name is unknown here; scheduler keys on book
+                "book": str(book or ""),
+                "step": "rotation",
+                "status": "error",
+                "severity": "ADVISORY_ONLY",
+                "actor": "cli_bridge",
+                "extra": {
+                    "all_cooling": bool(_freeze.get("all_cooling", True)),
+                    "earliest_reset": str(_freeze.get("earliest_reset", "") or ""),
+                    "run_id": str(_run_id or ""),
+                },
+            })
+        except Exception:  # noqa: BLE001
+            pass
         result = {**base, "ok": False, "backend": "none", "text": None,
                   "error": _err_msg, "freeze_info": _freeze}
 
@@ -562,12 +585,15 @@ def _record_cli_cost(result: dict, *, role: str | None = None, model: str | None
 
 
 async def research(prompt: str, *, role: str = "deep", max_turns: int | None = None,
-                   resume: str | None = None) -> dict:
+                   resume: str | None = None, book: str | None = None) -> dict:
     """An ARMED, multi-turn research session: Claude reads the dashboard via the bot MCP
     tools, searches the web/news, reasons through 2nd/3rd-order effects, and writes its
     conclusions back to the app (research notes, proposed theses, emerging-theme flags,
-    recommendations). Returns the result + the tools it called."""
-    return await reason(prompt, role=role, arm=True, max_turns=max_turns, resume=resume)
+    recommendations). Returns the result + the tools it called.
+
+    ``book`` (optional): the caller's book id — forwarded to reason() so an all-pool-cooling
+    marker is attributable to the right book (the scheduler's retry-at-reset keys on it)."""
+    return await reason(prompt, role=role, arm=True, max_turns=max_turns, resume=resume, book=book)
 
 
 async def chat_stream(prompt: str, *, resume: str | None = None,
@@ -719,4 +745,5 @@ def reason_sync(prompt: str, **kw) -> dict:
 
 
 def research_sync(prompt: str, **kw) -> dict:
+    # `book` (if present in kw) forwards through research() → reason() for marker attribution.
     return asyncio.run(research(prompt, **kw))
