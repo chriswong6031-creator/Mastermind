@@ -55,20 +55,38 @@ _CONTAGION_DOWNSTREAM = {
 # ─────────────────────────────────────────────────────────────────────────────
 # default loaders (all optional, all fail-open; tests inject)
 # ─────────────────────────────────────────────────────────────────────────────
-def _default_pulse():
+# Board artifacts are mtime-keyed cached (one parse per build, reload when the nightly refresh
+# rewrites the file) — same rationale as entry_engine._cached_board (review MAJOR: uncached
+# per-name re-parsing on a long-lived scheduler process).
+_BOARD_CACHE: dict[str, tuple[float, object]] = {}
+
+
+def _reset_caches() -> None:
+    """Tests: drop the mtime-keyed board cache."""
+    _BOARD_CACHE.clear()
+
+
+def _cached_board(rel: str):
     try:
         from portfolio import lenses
-        return lenses._load("site/basketdata/sector_pulse.json")
+        p = lenses._V / rel
+        mtime = p.stat().st_mtime if p.exists() else -1.0
+        hit = _BOARD_CACHE.get(rel)
+        if hit is not None and hit[0] == mtime:
+            return hit[1]
+        val = lenses._load(rel)
+        _BOARD_CACHE[rel] = (mtime, val)
+        return val
     except Exception:  # noqa: BLE001
         return None
+
+
+def _default_pulse():
+    return _cached_board("site/basketdata/sector_pulse.json")
 
 
 def _default_theme_ctx():
-    try:
-        from portfolio import lenses
-        return lenses._load("site/basketdata/theme_context.json")
-    except Exception:  # noqa: BLE001
-        return None
+    return _cached_board("site/basketdata/theme_context.json")
 
 
 def _default_contagion():
@@ -83,24 +101,26 @@ def _default_contagion():
 
 
 def _default_momentum():
-    try:
-        from portfolio import lenses
-        return lenses._load("site/factordata/momentum_display.json")
-    except Exception:  # noqa: BLE001
-        return None
+    return _cached_board("site/factordata/momentum_display.json")
 
 
 def _default_risk():
-    """{state} from the regime file's risk_radar (canonical), else the live risk_state file."""
+    """{state} from the regime file's risk_radar (canonical), else the live risk_state file.
+
+    The live artifact carries its verdict nested (``display.verdict`` / ``nightly.verdict``) —
+    the review found a top-level ``state`` read was a dead fallback. Unknown vocabularies simply
+    never match the risk ladder (inert, fail-open)."""
     try:
-        from portfolio import lenses
-        r = lenses._load("data/regime/latest.json") or {}
+        r = _cached_board("data/regime/latest.json") or {}
         rr = r.get("risk_radar") or {}
         if isinstance(rr, dict) and rr.get("state"):
             return {"state": str(rr.get("state")).lower(), "source": "risk_radar"}
-        live = lenses._load("site/live/risk_state.json") or {}
-        if isinstance(live, dict) and live.get("state"):
-            return {"state": str(live.get("state")).lower(), "source": "risk_state_live"}
+        live = _cached_board("site/live/risk_state.json") or {}
+        if isinstance(live, dict):
+            v = ((live.get("display") or {}).get("verdict")
+                 or (live.get("nightly") or {}).get("verdict") or live.get("state"))
+            if v:
+                return {"state": str(v).lower(), "source": "risk_state_live"}
     except Exception:  # noqa: BLE001
         pass
     return {}
@@ -109,7 +129,9 @@ def _default_risk():
 def _default_memberships(ticker: str, stockdata: dict | None) -> tuple[list[str], str | None, str | None]:
     """(theme_ids, category, sector) for an equity from its stockdata: every basket-membership slug
     (not just the first — a name can sit in several cohorts), the pulse theme id when stamped, and
-    the GICS sector. All fail-open."""
+    the GICS sector. All fail-open. NOTE: ``category`` stays None for equities (stockdata carries
+    no industry field) — the contagion adjacency match for single names runs on the GICS *sector*
+    leg; the category leg exists for the SMH/SOXX-class ETFs whose cohort is a whole complex."""
     ids: list[str] = []
     category = sector = None
     try:

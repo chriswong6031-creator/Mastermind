@@ -151,3 +151,80 @@ def test_thin_vote_floor_blocks_rf_class_entry():
     assert thin["size_authority"] != "up"    # …but can no longer open a position
     wide = lenses.synthesize(_rows(6))       # six real votes → a legitimate 'up'
     assert wide["size_authority"] == "up"
+
+
+# ── gate-through guarantee (review coverage gap): a name with wide real evidence, a buyable
+# entry, and neutral weather MUST still land as a conviction add — the triad gates, it must
+# not strangle. Fully offline: candidates/lenses/assessors monkeypatched.
+def test_conviction_buy_still_lands_through_the_triad(monkeypatch):
+    from portfolio import context_gate as cgm
+    from portfolio import conviction
+    from portfolio import entry_engine as eem
+    from portfolio import lenses
+
+    def _row(lens, direction, value=None):
+        return {"lens": lens, "value": value or {}, "status": "context",
+                "direction": direction, "note": ""}
+
+    def _fake_full(subject, kind="name"):
+        rows = [_row("trend", "bull"), _row("sector_rs", "bull"), _row("narrative", "bull"),
+                _row("flows_13f", "bull"), _row("options", "bull"), _row("flows_etf", "bull"),
+                {"lens": "conviction", "value": {"stockdata_present": True},
+                 "status": "partial", "direction": "neutral", "note": ""}]
+        m = {"subject": subject, "kind": kind, "rows": rows}
+        return {**m, "synthesis": lenses.synthesize(m)}
+
+    monkeypatch.setenv("MASTERMIND_ENTRY_GATE", "1")
+    monkeypatch.setattr(conviction, "candidates", lambda: ["GOODCO"])
+    monkeypatch.setattr(lenses, "full", _fake_full)
+    monkeypatch.setattr(eem, "assess", lambda t, **k: {
+        "ticker": t, "verdict": "pullback_in_trend", "buyable": True, "entry_score": 75.0,
+        "metrics": {"tier_eligible": True, "tier_fresh": False}, "notes": [],
+        "park_triggers": None, "sources": ["price_series"], "as_of": None})
+    monkeypatch.setattr(cgm, "assess", lambda t, **k: {
+        "ticker": t, "verdict": "neutral", "context_score": 60.0, "reasons": [],
+        "park_triggers": None, "entry_mult": 1.0, "sources": [], "as_of": None})
+    import brain.neural_web_context as nwc
+    monkeypatch.setattr(nwc, "decision_signals", lambda t: {"entry_shrink": None})
+
+    sized, rejected = conviction.build(0.30, name_cap=0.08, held=set(), asof="2026-07-19")
+    tickers = [p["ticker"] for p in sized]
+    assert "GOODCO" in tickers, f"triad strangled a clean buy: sized={tickers} rejected={rejected}"
+    good = next(p for p in sized if p["ticker"] == "GOODCO")
+    assert good["verdict"] == "add" and good["weight"] > 0
+    assert good.get("entry_report", {}).get("verdict") == "pullback_in_trend"
+
+
+def test_nw_entry_shrink_applies_subtract_only(monkeypatch):
+    """The 'shrink' rung actually shrinks (review: it was dead code) — and only ever shrinks."""
+    from portfolio import context_gate as cgm
+    from portfolio import conviction
+    from portfolio import entry_engine as eem
+    from portfolio import lenses
+
+    def _fake_full(subject, kind="name"):
+        rows = [{"lens": l, "value": {}, "status": "context", "direction": "bull", "note": ""}
+                for l in ("trend", "sector_rs", "narrative", "flows_13f", "options", "flows_etf")]
+        rows.append({"lens": "conviction", "value": {"stockdata_present": True},
+                     "status": "partial", "direction": "neutral", "note": ""})
+        m = {"subject": subject, "kind": kind, "rows": rows}
+        return {**m, "synthesis": lenses.synthesize(m)}
+
+    monkeypatch.setenv("MASTERMIND_ENTRY_GATE", "1")
+    monkeypatch.setattr(conviction, "candidates", lambda: ["SHRUNKCO"])
+    monkeypatch.setattr(lenses, "full", _fake_full)
+    monkeypatch.setattr(eem, "assess", lambda t, **k: {
+        "ticker": t, "verdict": "clean", "buyable": True, "entry_score": 60.0,
+        "metrics": {}, "notes": [], "park_triggers": None, "sources": ["price_series"],
+        "as_of": None})
+    monkeypatch.setattr(cgm, "assess", lambda t, **k: {
+        "ticker": t, "verdict": "neutral", "context_score": 60.0, "reasons": [],
+        "park_triggers": None, "entry_mult": 1.0, "sources": [], "as_of": None})
+    import brain.neural_web_context as nwc
+    monkeypatch.setattr(nwc, "decision_signals", lambda t: {"entry_shrink": 0.7})
+
+    sized, _ = conviction.build(0.30, name_cap=0.08, held=set(), asof="2026-07-19")
+    good = next(p for p in sized if p["ticker"] == "SHRUNKCO")
+    assert good.get("nw_shrink") == 0.7
+    assert good.get("ctx_mult") == 0.7          # composed into the terminal subtract
+    assert good.get("ctx_braked") or good["weight"] > 0   # applied by _apply_extension_brake

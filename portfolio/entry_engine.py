@@ -77,6 +77,33 @@ _TIER_FRESH = ("T1", "T2")    # the dashboard's validated buy tiers (T3 buyable 
 # ─────────────────────────────────────────────────────────────────────────────
 # default loaders — every one optional + fail-open; tests inject instead
 # ─────────────────────────────────────────────────────────────────────────────
+# WHOLE-BOARD artifacts (signal_gate ~240KB, stage roster ~390KB) are mtime-keyed cached so a
+# build assessing N names parses each file ONCE, not N times (review MAJOR: the scheduler process
+# is long-lived, so a plain process cache would serve yesterday's board — the mtime key reloads
+# exactly when the nightly refresh rewrites the file). Fail-open like every other read.
+_BOARD_CACHE: dict[str, tuple[float, object]] = {}
+
+
+def _reset_caches() -> None:
+    """Tests: drop the mtime-keyed board cache."""
+    _BOARD_CACHE.clear()
+
+
+def _cached_board(rel: str):
+    try:
+        from portfolio import lenses
+        p = lenses._V / rel
+        mtime = p.stat().st_mtime if p.exists() else -1.0
+        hit = _BOARD_CACHE.get(rel)
+        if hit is not None and hit[0] == mtime:
+            return hit[1]
+        val = lenses._load(rel)
+        _BOARD_CACHE[rel] = (mtime, val)
+        return val
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _default_series(ticker: str):
     try:
         from portfolio import lenses
@@ -95,10 +122,10 @@ def _default_stockdata(ticker: str):
 
 def _default_signal_gate_row(ticker: str):
     """Per-name row from the dashboard's validated entry-tier cascade
-    (``site/factordata/signal_gate.json`` → ``{as_of, verdicts:{T:{eligible, tier_cascade,…}}}``)."""
+    (``site/factordata/signal_gate.json`` → ``{as_of, verdicts:{T:{eligible, tier_cascade,…}}}``).
+    Board file mtime-cached (one parse per build, not per name)."""
     try:
-        from portfolio import lenses
-        d = lenses._load("site/factordata/signal_gate.json") or {}
+        d = _cached_board("site/factordata/signal_gate.json") or {}
         row = (d.get("verdicts") or {}).get((ticker or "").upper())
         return row if isinstance(row, dict) else None
     except Exception:  # noqa: BLE001
@@ -108,10 +135,9 @@ def _default_signal_gate_row(ticker: str):
 def _default_stage_row(ticker: str):
     """Per-name Weinstein stage row from the vendored stage-analysis context roster
     (``data/stage_analysis/context/latest.json`` → ``roster{T:{stage_flag, weeks_in_stage,…}}``).
-    Absent until the sparse checkout ships it — fail-open."""
+    Absent until the sparse checkout ships it — fail-open. Board file mtime-cached."""
     try:
-        from portfolio import lenses
-        d = lenses._load("data/stage_analysis/context/latest.json") or {}
+        d = _cached_board("data/stage_analysis/context/latest.json") or {}
         row = (d.get("roster") or {}).get((ticker or "").upper())
         return row if isinstance(row, dict) else None
     except Exception:  # noqa: BLE001
@@ -164,7 +190,8 @@ def _leg_metrics(series) -> dict:
             # LAST touch of the low, not the first (argmin) — on a flat base the low is held for
             # weeks, and "how far into the leg is this entry" is measured from when price LEFT it.
             vals = w63.values
-            idx_low = max(i for i in range(len(vals)) if float(vals[i]) == float(vals.min()))
+            _mn = float(vals.min())
+            idx_low = max(i for i in range(len(vals)) if float(vals[i]) == _mn)
             out["days_since_63d_low"] = int(len(w63) - 1 - idx_low)
         except Exception:  # noqa: BLE001
             pass

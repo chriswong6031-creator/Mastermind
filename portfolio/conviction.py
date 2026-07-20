@@ -136,6 +136,12 @@ _INITIAL_SIZE_FRACTION = 0.7
 # program), so this is a firebreak, not a target.
 NW_UNIVERSE_SCAN_CAP = 25
 
+# W8 rotation-probe firebreak (review MAJOR): the base-turn probe on insufficient-confluence
+# rejections runs a full entry+context assessment per name; without a bound a wide reject set
+# turns into an unbounded per-build assessment sweep. Probes beyond the cap simply aren't
+# marked this build (they re-qualify tomorrow) — a coverage bound, not a correctness change.
+ROTATION_PROBE_CAP = 15
+
 
 # ── W2.2 GRADED EXTENSION SCHEDULE (entry brake) ──────────────────────────────────────────────────
 def _ext_schedule() -> tuple[float, float]:
@@ -475,6 +481,7 @@ def build(budget: float, name_cap: float = 0.08,
     rejected: list[dict] = []
     n_evaluated = 0
     n_degraded = 0
+    n_rot_probes = 0                      # W8 rotation-probe firebreak counter (ROTATION_PROBE_CAP)
 
     # W8 §2.8: watchlist promotions union in HERE (not inside candidates(), whose zero-arg
     # signature is a monkeypatch surface for a dozen tests). Additive; the gate still decides.
@@ -529,6 +536,7 @@ def build(budget: float, name_cap: float = 0.08,
         # assessor error withhold nothing (charter P2 — the data-health breaker owns outages).
         entry_rep = ctx_rep = None
         ctx_mult = 1.0
+        nw_shrink = None
         if _w8 and entry_ok and not is_held:
             try:
                 from portfolio import context_gate as _ctxg
@@ -543,6 +551,17 @@ def build(budget: float, name_cap: float = 0.08,
             except Exception:  # noqa: BLE001 — assessors are subtract-only; failure = no brake
                 entry_rep = ctx_rep = None
                 ctx_mult = 1.0
+            # NW graph-conflict entry shrink (the 'shrink' rung of MASTERMIND_NW_DECISION —
+            # review finding: computed but never applied). SUBTRACT-ONLY: composes into the same
+            # terminal multiplier as the context 'against' brake; fail-soft to no-brake.
+            try:
+                from brain import neural_web_context as _nwc
+                _shr = (_nwc.decision_signals(t) or {}).get("entry_shrink")
+                if isinstance(_shr, (int, float)) and 0.0 < float(_shr) < 1.0:
+                    nw_shrink = float(_shr)
+                    ctx_mult = ctx_mult * nw_shrink
+            except Exception:  # noqa: BLE001 — shrink is subtract-only; failure = no brake
+                nw_shrink = None
             _entry_bad = bool(entry_rep) and not entry_rep.get("buyable") \
                 and entry_rep.get("verdict") != "unknown"
             _ctx_blocked = bool(ctx_rep) and ctx_rep.get("verdict") == "blocked"
@@ -602,6 +621,8 @@ def build(budget: float, name_cap: float = 0.08,
                 _entry["entry_report"] = entry_rep
             if ctx_rep is not None:
                 _entry["context_report"] = ctx_rep
+            if nw_shrink is not None:
+                _entry["nw_shrink"] = nw_shrink
             if held_frozen:
                 _entry["retained_reason"] = "data_degraded_freeze"
                 _entry["data_degraded"] = True
@@ -637,8 +658,10 @@ def build(budget: float, name_cap: float = 0.08,
             # never sizes; a promoted name still re-runs the full gate on a later build.
             _rot_probe_ok = (_w8 and not is_held and not vetoes and sa not in ("blocked",)
                              and not syn.get("price_downtrend") and not degraded
-                             and confluence >= 0.0 and reason.startswith("Insufficient"))
+                             and confluence >= 0.0 and reason.startswith("Insufficient")
+                             and n_rot_probes < ROTATION_PROBE_CAP)
             if _rot_probe_ok:
+                n_rot_probes += 1
                 try:
                     from portfolio import context_gate as _ctxg
                     from portfolio import entry_engine as _eeng

@@ -219,6 +219,9 @@ state clears, sector heat flips heating, contagion clears, unwind ends. The queu
 2. Flags-off inertness: with the five flags off, entry/context/prophet/NW/rotation additions are
    inert (no new rejects, no parks, no new candidates).
 3. Full pytest in the worktree: zero NEW failures (catalogued pre-existing only);
-   `tests/incident_replays/ -q` all green.
+   `tests/incident_replays/ -q` green EXCEPT the catalogued pre-existing
+   `test_composed_stack_flag_on_disagreeing_tape` red (posture_class BALANCED vs
+   ROTATE_DEFENSIVE — predates W8, fails byte-identically on master with all W8 flags off;
+   owned by the posture-decider lane, not this program).
 4. Masterplan status log gains the W8 entry; this doc + the absorbed `ENTRY_DISCIPLINE_PLAN.md`
    land in `research/`.
