@@ -94,7 +94,12 @@ _REMOTE = "https://github.com/chriswong6031-creator/macro.git"
 # keep the code trees in the checkout; they are small text. data/yahoo (~250 curated
 # parquets) is the engine price store — loop/harness backtests and test_smoke need it.
 _SPARSE_PATHS = ("site", "data/regime", "engine", "lib", "data/yahoo", "data/risk_radar",
-                  "data/china_regime")  # W-I Task 5(b): CN/HK books' regime read — was missing
+                  "data/china_regime",  # W-I Task 5(b): CN/HK books' regime read — was missing
+                  "data/metabolism")    # Key-federation: macro-side Raw Key Usage health
+                                        # (key_budget_status.json + key_ledger.jsonl) the rotor
+                                        # reads to reorder/skip keys. `git sparse-checkout set`
+                                        # (refresh(), line ~381) runs the FULL list every refresh,
+                                        # so pre-existing clones self-migrate to include it.
 
 _MAX_AGE_DAYS = 2
 

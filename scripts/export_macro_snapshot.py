@@ -37,6 +37,9 @@ _NW_REL_PATH = "site/mastermind/nw_feedback.json"
 _COST_REL_PATH = "data/mastermind/cost_summary.json"
 # Key events — filtered copy of the key ledger for the macro AI Cost admin tab.
 _KEY_EVENTS_REL_PATH = "data/mastermind/key_events.jsonl"
+# Key pool status — the bot's CURRENT pool view (mastermind.key_pool_status.v1) that the
+# macro/admin side reads to render live cooling/dead state alongside key_events.
+_KEY_POOL_STATUS_REL_PATH = "data/mastermind/key_pool_status.json"
 # Ledger source path relative to Mastermind root
 _KEY_LEDGER_REL = "data/metabolism/key_ledger.jsonl"
 # Rolling window for key events export (days)
@@ -124,6 +127,26 @@ def _write_key_events(macro_root: Path) -> None:
         print(f"[export_macro_snapshot] key_events write skipped (non-fatal): {exc}")
 
 
+def _write_pool_status(macro_root: Path) -> None:
+    """Write the bot's current key-pool view to <macro_root>/data/mastermind/key_pool_status.json.
+
+    Cheap rebuild from the bot's own ledger tail via key_rotor.pool_status_view.  The macro/admin
+    side reads this (mastermind.key_pool_status.v1) to show live cooling/dead pool state.  Never
+    raises (a publish miss must never abort the snapshot push).
+    """
+    try:
+        from brain import key_rotor
+        dest = macro_root / _KEY_POOL_STATUS_REL_PATH
+        # root=_ROOT so the view reads the bot's live ledger + env; dest is inside the macro tree.
+        written = key_rotor.write_pool_status(dest=dest, root=_ROOT)
+        if written:
+            print(f"[export_macro_snapshot] wrote key_pool_status to {written}")
+        else:
+            print("[export_macro_snapshot] key_pool_status write returned None (non-fatal).")
+    except Exception as exc:
+        print(f"[export_macro_snapshot] key_pool_status write skipped (non-fatal): {exc}")
+
+
 def _commit_and_push(root: Path) -> bool:
     """Commit the snapshot and push to origin/main with a rebase-retry loop.
 
@@ -169,6 +192,17 @@ def _commit_and_push(root: Path) -> bool:
                       f"{(_r.stderr or '').strip()[:200]}")
     except Exception as _exc:
         print(f"[export_macro_snapshot] key_events stage skipped (non-fatal): {_exc}")
+    # Stage key_pool_status.json — same cone-mode caveat as key_events (data/mastermind/ is
+    # outside the sparse cone, so --sparse is required or `git add` silently refuses it).
+    try:
+        kps_path = root / _KEY_POOL_STATUS_REL_PATH
+        if kps_path.exists():
+            _r = _git(root, "add", "--sparse", "-f", _KEY_POOL_STATUS_REL_PATH)
+            if _r.returncode != 0:
+                print(f"[export_macro_snapshot] key_pool_status stage FAILED rc={_r.returncode}: "
+                      f"{(_r.stderr or '').strip()[:200]}")
+    except Exception as _exc:
+        print(f"[export_macro_snapshot] key_pool_status stage skipped (non-fatal): {_exc}")
     staged = _git(root, "diff", "--cached", "--quiet")
     if staged.returncode == 0:
         print("[export_macro_snapshot] no snapshot changes to commit.")
@@ -228,9 +262,11 @@ def run(no_push: bool = False, dest: str | Path | None = None) -> Path | None:
     except Exception as _ce:
         print(f"[export_macro_snapshot] cost summary write skipped (non-fatal): {_ce}")
 
-    # Write key events (filtered ledger copy) into macro data/mastermind/.
+    # Write key events (filtered ledger copy) + the current pool-status view into macro
+    # data/mastermind/.
     if push and root is not None:
         _write_key_events(root)
+        _write_pool_status(root)
 
     if not push:
         if no_push:
