@@ -285,8 +285,19 @@ def test_phase2_attaches_research_to_conviction_and_holds():
         assert rb["combined"] >= rp.CONFIRM_THRESHOLD
         assert rb["viability"] in rp.VIABILITIES
         assert p["weight"] <= 0.08 + 1e-9          # research scaling never breaches the name cap
-    # every research-held name failed the gate for a stated reason
+    # every research-held name explains itself. Two legitimate classes (bot/phase2.py):
+    #   confirmed=False — the research gate FAILED the name; breakdown["reason"] says why.
+    #   confirmed=True  — the name CLEARED research but was withheld AFTER confirmation
+    #                     (L3 timing gate / desk-quorum, W8 entry de-escalation, committee
+    #                     drop); its reason must carry that withhold-class prefix.
+    _WITHHOLD_PREFIXES = ("timing withhold:", "research disagrees with entry", "committee:")
     for h in out["research_held"]:
-        assert h["confirmed"] is False and h["reason"]
+        assert h["reason"], f"{h['ticker']} held without a stated reason"
+        if h["confirmed"] is True:
+            assert h["reason"].startswith(_WITHHOLD_PREFIXES), (
+                f"{h['ticker']} research-confirmed but held with a non-withhold reason: "
+                f"{h['reason']!r}")
+        else:
+            assert h["confirmed"] is False  # research failure — an explicit False, never absent
     if db.exists():
         db.unlink()
