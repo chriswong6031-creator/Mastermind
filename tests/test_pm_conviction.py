@@ -116,10 +116,16 @@ def test_enforce_no_leverage_caps_and_scales():
 
 
 # ───────────────────── W4 B1: leadership pipe + defensive + prompt payload ─────────────────────
-def test_pm_input_pipes_leadership_and_defensive_and_deanchors():
+def test_pm_input_pipes_leadership_and_defensive_and_deanchors(monkeypatch):
     """The PM payload carries leadership_legs (sleeve-tagged), defensive_candidates, the
     defensive_benchmark basket, and DE-ANCHORS the engine weights to a trailing ADVISORY block
     (candidate rows carry NO weight)."""
+    # Isolate the live posture artifact (data/posture/latest.json — published every build on the
+    # production Mac, absent in a fresh worktree). When present it appends a trailing
+    # `posture_ADVISORY` key that would displace engine_proposed_weights_ADVISORY as the last key
+    # (mirrors the incident-battery _isolate_posture_artifacts fixture).
+    from brain import posture_decider as _pd
+    monkeypatch.setattr(_pd, "latest", lambda: None)
     payload = P._pm_input(
         [{"ticker": "NVDA", "weight": 0.06, "confluence": 0.3, "sleeve": "conviction"}],
         [], {"confirmed_themes": []}, {"quad": 1}, {}, "2026-07-01",

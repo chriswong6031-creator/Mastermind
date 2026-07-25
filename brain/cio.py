@@ -479,7 +479,10 @@ def _narrate(rep: dict) -> str | None:
             "RULES: you recommend only; never propose trades, sizing, or auto-changes. Be blunt and "
             "honest, no moralizing. Do NOT invent numbers — use only what is in the payload. Treat "
             "'inert' seats (n < MIN_N) as not-yet-judgeable, not as failures.")
-        txt, _meta = client.call_model(sys, json.dumps(payload, default=str), role="deep", max_tokens=1500)
+        # seat="cio" + record_book="system": the weekly CIO note reviews ALL books — booking it
+        # under flagship (the old role-default) misstated the flagship line (2026-07-25 ruling).
+        txt, _meta = client.call_model(sys, json.dumps(payload, default=str), role="deep",
+                                       max_tokens=1500, seat="cio", record_book="system")
         return txt or None
     except Exception:  # noqa: BLE001
         return None

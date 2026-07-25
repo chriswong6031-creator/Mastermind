@@ -249,7 +249,7 @@ def risk_assess(book: list[dict] | None, asof: str, *, regime: dict | None = Non
             except Exception:  # noqa: BLE001 — self-mirror is additive; never break the seat
                 sys_prompt = _RISK_SYS
             txt, _meta = client.call_model(sys_prompt, json.dumps(payload, default=str),
-                                           role="deep", max_tokens=1600)
+                                           role="deep", max_tokens=1600, seat="risk_officer")
         except Exception:  # noqa: BLE001 — the seat is additive; never break the build
             txt = None
     j = _parse_json(txt) or {}

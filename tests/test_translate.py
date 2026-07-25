@@ -234,6 +234,10 @@ class TestWebPortfolioZh:
             return tmp_path
 
         monkeypatch.setattr(web_mod, "_data", _patched_data)
+        # /api/portfolio resolves the book via _portfolio_dir() -> registry.data_dir() (an ABSOLUTE
+        # checkout-root path), NOT _data(), so patching _data alone leaks the LIVE production book.
+        # Redirect _portfolio_dir to the tmp book so the endpoint serves this test's fixture.
+        monkeypatch.setattr(web_mod, "_portfolio_dir", lambda portfolio=None: tmp_path / "portfolio")
         # Rewrite latest.json at the right path
         (tmp_path / "portfolio").mkdir(exist_ok=True)
         (tmp_path / "portfolio" / "latest.json").write_text(json.dumps(book), encoding="utf-8")
@@ -266,7 +270,14 @@ class TestWebPortfolioZh:
     def test_portfolio_unchanged_when_cache_empty(self, tmp_path, monkeypatch):
         """If nothing is cached, the portfolio payload has no _zh fields."""
         import brain.translate as tr
-        monkeypatch.setattr(tr, "_CACHE_PATH", tmp_path / "translations.json")
+        empty_cache = tmp_path / "translations.json"
+        empty_cache.write_text("{}", encoding="utf-8")     # a real empty cache on disk
+        monkeypatch.setattr(tr, "_CACHE_PATH", empty_cache)
+        # Reset the module-level mtime memo — otherwise _load_cache returns the stale in-memory
+        # cache warmed by an earlier test / live call (it falls back to _cache_mem when the patched
+        # path is unchanged/missing), leaking real zh entries into this "empty cache" assertion.
+        monkeypatch.setattr(tr, "_cache_mem", None)
+        monkeypatch.setattr(tr, "_cache_mtime", -1.0)
 
         import app.web as web_mod
         monkeypatch.setattr(web_mod, "_cached_zh", tr.cached_zh)
@@ -275,6 +286,8 @@ class TestWebPortfolioZh:
         book = _make_minimal_book()
         (tmp_path / "portfolio" / "latest.json").write_text(json.dumps(book), encoding="utf-8")
         monkeypatch.setattr(web_mod, "_data", lambda: tmp_path)
+        # Serve the tmp book (not the live production portfolio — see the cached-test note above).
+        monkeypatch.setattr(web_mod, "_portfolio_dir", lambda portfolio=None: tmp_path / "portfolio")
 
         from fastapi.testclient import TestClient
         from app.main import app

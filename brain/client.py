@@ -51,11 +51,17 @@ def available() -> bool:
     return cli_bridge.available() or api_available()
 
 
-def call_model(system: str, user: str, *, role: str = "pm", max_tokens: int = 1500):
-    """Return (text|None, degraded_reason|None). Routes CLI-first, then the Messages API."""
+def call_model(system: str, user: str, *, role: str = "pm", max_tokens: int = 1500,
+               seat: str | None = None, record_book: str | None = None):
+    """Return (text|None, degraded_reason|None). Routes CLI-first, then the Messages API.
+
+    seat / record_book: cost-attribution overrides forwarded to the recorder on either
+    backend — seat names the ledger seat (default = role), record_book overrides the
+    _ROLE_BOOK default book. Attribution-only; never changes routing or behaviour."""
     if backend() == "cli" and cli_bridge.available():
         try:
-            r = cli_bridge.reason_sync(user, role=role, append_system=system)
+            r = cli_bridge.reason_sync(user, role=role, append_system=system,
+                                       seat=seat, record_book=record_book)
             if r.get("ok") and r.get("text"):
                 return r["text"], None
             return None, (r.get("error") or "cli_empty")
@@ -75,7 +81,8 @@ def call_model(system: str, user: str, *, role: str = "pm", max_tokens: int = 15
         text = "".join(b.text for b in resp.content if getattr(b, "type", None) == "text")
         # record cost + tokens via cost_guard (best-effort; never raises into the caller)
         try:
-            _record_api_cost(resp, role=role, model=t["model"])
+            _record_api_cost(resp, role=role, model=t["model"],
+                             seat=seat, record_book=record_book)
         except Exception:
             pass
         return (text or None), (None if text else "empty_reply")
@@ -83,19 +90,21 @@ def call_model(system: str, user: str, *, role: str = "pm", max_tokens: int = 15
         return None, "llm_error"
 
 
-def _record_api_cost(resp, *, role: str | None = None, model: str | None = None) -> None:
+def _record_api_cost(resp, *, role: str | None = None, model: str | None = None,
+                     seat: str | None = None, record_book: str | None = None) -> None:
     """Record Messages-API call cost + tokens in cost_guard. Best-effort; never raises.
 
     ``resp`` is an anthropic.types.Message.  Cost is estimated from resp.usage via the
     PRICING table in cost_guard (the API path does not always return a cost field).
 
     Book attribution uses the same _ROLE_BOOK mapping as cli_bridge so that the same
-    logical seat records to the same book regardless of which backend is active.
+    logical seat records to the same book regardless of which backend is active; the
+    same seat / record_book overrides apply on this path too.
     """
     try:
         from brain import cost_guard as _cg
         from brain.cli_bridge import _ROLE_BOOK
-        _book = _ROLE_BOOK.get(str(role or "").lower(), "flagship")
+        _book = record_book or _ROLE_BOOK.get(str(role or "").lower(), "flagship")
         usage = getattr(resp, "usage", None) or {}
         if hasattr(usage, "__dict__"):
             usage = usage.__dict__
@@ -109,7 +118,7 @@ def _record_api_cost(resp, *, role: str | None = None, model: str | None = None)
         usd = _cg.estimate_cost(mdl, itok, otok, crtok, cctok)
         _cg.record(
             _book, usd,
-            seat=str(role or "unknown"),
+            seat=str(seat or role or "unknown"),
             model=mdl,
             input_tokens=itok,
             output_tokens=otok,

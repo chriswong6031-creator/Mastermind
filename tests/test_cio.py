@@ -51,7 +51,7 @@ def _patch(monkeypatch, *, calibration_mod, leaderboard=None, narrate_text=None)
     calls = {"n": 0}
     client = types.ModuleType("brain.client")
 
-    def _call_model(system, user, *, role="pm", max_tokens=1500):
+    def _call_model(system, user, *, role="pm", max_tokens=1500, seat=None, record_book=None):
         calls["n"] += 1
         return (narrate_text, None) if narrate_text else (None, "no_backend")
 

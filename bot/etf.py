@@ -128,6 +128,18 @@ def run_etf(asof: str | None = None, *, force: bool = False, armed: bool = True,
     inaugural = not _has_history() and not (state0.get("positions") or {})
     out["inaugural"] = inaugural
 
+    # 0. NIGHTLY COST TRIPWIRE (before the Brain) — same contract as bot/autonomous.py: when the
+    #    per-night USD cap is armed and this book already hit it, skip the seat and carry the book
+    #    unchanged. OFF by default (cap <= 0 → over_budget always False) → byte-identical. This
+    #    gate was missing here (every sibling bot had it) — closed 2026-07-25 with the cap arming.
+    from brain import cost_guard
+    if armed and cost_guard.over_budget(PORTFOLIO_ID, asof):
+        print(f"etf turn {asof} — nightly cost cap hit "
+              f"(${cost_guard.spent(PORTFOLIO_ID, asof):.2f} / ${cost_guard.cap():.2f}); "
+              "skipping the Brain and carrying the book unchanged.")
+        armed = False
+        out["cost_capped"] = True
+
     # 1. run the Brain (armed) → it researches and submits a target book with rationales
     from brain import etf_mcp
     etf_mcp.clear_submission()                       # never replay yesterday's decision

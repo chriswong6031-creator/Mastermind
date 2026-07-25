@@ -25,7 +25,11 @@ W-E.0 PERCEPTION ORGAN ASSERTIONS (§4 of build_plan.md — E0.4 additions):
 Structure: W0-W4 fixtures from tests/incident_replays/fixtures/2026-07-02-semis-breakdown/.
 W-E.0 fixtures from tests/fixtures/market_view/.
 No live files are touched.  All side-effects are monkeypatched via the conftest autouse
-fixtures (store._DB / position_log / runlog all isolated).
+fixtures (store._DB / position_log / runlog all isolated).  Live-artifact READS are
+isolated too: the battery-local conftest.py points regime_frame's vendor/macro paths and
+posture_decider's data/posture artifacts at empty tmp dirs, so a replay sees the same
+filesystem in the production checkout as in a fresh worktree (a test that needs a frame
+injects its own frozen fixture over the isolation — never a live read).
 
 DEPENDENCY NOTE (E0.4 coordination):
   The §4 organ asserts (6)-(9) import brain.market_view, brain.rotation_tensor, and
@@ -1197,6 +1201,20 @@ def test_composed_stack_flag_on_disagreeing_tape(monkeypatch, tmp_path):
 
     tape = _json.loads((_Path(__file__).resolve().parent.parent
                         / "fixtures" / "posture" / "disagreeing_tape.json").read_text())
+
+    # isolate the frame read — decide() resolves regime_frame._REGION_PATHS["us"]
+    # (vendor/macro/data/regime/latest.json: LIVE + 3h-refreshed on the production Mac,
+    # absent in fresh worktrees).  Inject the tape's recorded 07-01 regime block so the
+    # replay is hermetic in every checkout.  This is the arithmetic the D~0.54 comment
+    # below documents: planes {regime_fragility 1-0.327, STABLE tilt 0.0, flip_margin
+    # 0.05 -> 1.0, dwell caution 0.5} -> D = 0.5433.  Without the injection a calm live
+    # frame dilutes D below the 0.50 band edge (2026-07-25 forensics: the live 07-24
+    # file read conf 0.408 / TRANSITIONING / margin 0.15 -> D 0.273 -> BALANCED, red
+    # only in production).
+    regime_tmp = tmp_path / "regime_latest.json"
+    regime_tmp.write_text(_json.dumps(tape.get("regime") or {}))
+    monkeypatch.setattr(RF, "_REGION_PATHS", {**RF._REGION_PATHS, "us": regime_tmp},
+                        raising=False)
 
     rec = PD.decide("us", evidence=tape.get("evidence"), risk_state=tape.get("risk_state"))
     assert rec["posture_class"] in ("ROTATE_DEFENSIVE", "PRESERVE"), rec["posture_class"]

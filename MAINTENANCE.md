@@ -183,7 +183,7 @@ grep MASTERMIND /proc/$(pgrep -f uvicorn)/environ 2>/dev/null \
   | tr '\0' '\n' | grep MASTERMIND
 ```
 
-Expected in production (as of 2026-07-03 baseline):
+Expected in production (as of 2026-07-03 baseline; cost caps added 2026-07-25):
 ```
 MASTERMIND_FAST_DERISK=1
 MASTERMIND_MACRO_RISK=1
@@ -192,6 +192,8 @@ MASTERMIND_SELECTION_EXPLORE=1
 MASTERMIND_FLAGSHIP_JUDGMENT=1   # shadow book ARMED
 MASTERMIND_FIRM_CAPS=1           # default ON in code (no env var needed)
 MASTERMIND_TIMING_GATE=1         # default ON in code (no env var needed)
+MASTERMIND_NIGHTLY_USD_CAP=6.0   # per-book nightly shadow-USD cap (2026-07-25 cost ruling)
+FLAGSHIP_PM_MAX_TURNS=12         # armed PM loop 30→12 (same ruling)
 ```
 
 Flags that are OFF by default and must NOT be enabled without Fable review:

@@ -51,7 +51,7 @@ def _fake_offline(monkeypatch):
 def _arm(monkeypatch, canned_json: str):
     monkeypatch.setattr(R, "enabled", lambda: True)
 
-    def _call_model(system, user, *, role="pm", max_tokens=1500):
+    def _call_model(system, user, *, role="pm", max_tokens=1500, seat=None, record_book=None):
         return canned_json, {}
     monkeypatch.setattr(R.client, "call_model", _call_model)
     _fake_offline(monkeypatch)

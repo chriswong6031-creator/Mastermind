@@ -207,11 +207,12 @@ def _reformat_to_json(base_sys: str, txt: str | None) -> dict | None:
     if not txt:
         return None
     try:
+        # format-only retry → role="analyst" (sonnet; 2026-07-25 cost ruling — was deep/opus)
         fix, _ = client.call_model(
             base_sys + _JSON_ONLY,
             "Convert the analysis below into the exact JSON object its schema requires. Output JSON "
             "ONLY.\n\n" + str(txt)[:8000],
-            role="deep", max_tokens=2400)
+            role="analyst", max_tokens=2400, seat="gate_officer", record_book="flagship")
         return _parse_json(fix)
     except Exception:  # noqa: BLE001
         return None
@@ -239,7 +240,7 @@ def gate_assess(book: list[dict], asof: str, *, regime: dict | None = None,
             except Exception:  # noqa: BLE001 — self-mirror is additive; never break the seat
                 sys_prompt = _GATE_SYS
             txt, _meta = client.call_model(sys_prompt + _JSON_ONLY, json.dumps(payload, default=str),
-                                           role="deep", max_tokens=2400)
+                                           role="deep", max_tokens=2400, seat="gate_officer")
         except Exception:  # noqa: BLE001 — the seat is additive; never break the build
             txt = None
     j = _parse_json(txt) or _reformat_to_json(_GATE_SYS, txt) or {}

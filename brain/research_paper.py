@@ -944,7 +944,10 @@ def generate(ticker: str, *, asof: str, confluence: float, rows: list[dict],
                                    entry_report=entry_report, context_report=context_report,
                                    prophet_line=prophet_line)
     try:
-        res = cli_bridge.research_sync(prompt, role="deep")
+        # role="analyst" (sonnet): per-ticker paper digest = extraction + structured per-name
+        # analysis, the sonnet tier in the house policy (2026-07-25 cost ruling; was deep/opus).
+        # Book lands on "system" via the analyst role-default — papers are shared research.
+        res = cli_bridge.research_sync(prompt, role="analyst", seat="paper_digest")
     except Exception as exc:                       # event-loop / SDK failure -> deterministic
         fb = _deterministic(ticker, asof=asof, rows=rows, confluence=confluence, price=price, vetoes=vetoes)
         fb["fallback_error"] = repr(exc)[:200]
@@ -965,8 +968,9 @@ def generate(ticker: str, *, asof: str, confluence: float, rows: list[dict],
                                             context_report=context_report, prophet_line=prophet_line)
     verdict = None
     try:
-        rv = cli_bridge.reason_sync(redigest_prompt, role="deep", allowed_tools=[],
-                                    max_turns=1, log_run=False)
+        # format/grade re-digest of the report body → analyst tier (same ruling as above)
+        rv = cli_bridge.reason_sync(redigest_prompt, role="analyst", allowed_tools=[],
+                                    max_turns=1, log_run=False, seat="paper_digest")
         verdict = _parse_verdict((rv or {}).get("text") or "")
     except Exception:
         verdict = None

@@ -113,7 +113,12 @@ def sentinel_assess(ticker: str, engine_full: dict, regime: dict, portfolio_ctx:
         return None
     payload = _sentinel_input(ticker, engine_full, regime, portfolio_ctx)
     try:
-        txt, _meta = client.call_model(_SENTINEL_SYS, json.dumps(payload), role="deep", max_tokens=1100)
+        # role="analyst" (sonnet): per-name adversarial JSON verdict = structured analysis, the
+        # sonnet tier in the house policy (2026-07-25 cost ruling; was role="deep"/opus). The
+        # verdict is subtract-only + calibration-shrunk, so authority is unchanged by tier.
+        # record_book="flagship": sentinel is flagship-committee work even on the analyst role.
+        txt, _meta = client.call_model(_SENTINEL_SYS, json.dumps(payload), role="analyst",
+                                       max_tokens=1100, seat="sentinel", record_book="flagship")
     except Exception:  # noqa: BLE001 — adversary is additive; never break the gate
         return None
     j = _parse_json(txt)

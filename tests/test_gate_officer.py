@@ -36,7 +36,7 @@ def _arm(monkeypatch, canned_json: str):
     """Force the seat ON, stub the LLM with a canned reply, and patch lenses offline."""
     monkeypatch.setattr(G, "enabled", lambda: True)
 
-    def _call_model(system, user, *, role="pm", max_tokens=1500):
+    def _call_model(system, user, *, role="pm", max_tokens=1500, seat=None, record_book=None):
         return canned_json, {}
     monkeypatch.setattr(G.client, "call_model", _call_model)
 

@@ -31,7 +31,7 @@ reasoning:
   permission_mode: default
   add_dirs: [vendor/macro]            # expose the dashboard engine + data to Claude
   effort: high                        # opus/sonnet effort for deep reasoning
-  research_max_turns: 16              # armed multi-turn research loop (MCP tools + web)
+  research_max_turns: 8               # armed multi-turn research loop (MCP tools + web); 16→8 2026-07-25 cost ruling
   prefer_subscription: true           # strip ANTHROPIC_API_KEY -> use the subscription, not the metered API
 
 # Backend: 'cli' = Claude Code (subscription tokens, sees dashboard context, tiered subagents);

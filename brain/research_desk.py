@@ -140,6 +140,19 @@ def run_daily_research(asof: str | None = None, *, max_turns: int | None = None)
     degrades gracefully (ok=False) when unauthenticated."""
     regime = json.loads((Path(cli_bridge._ROOT) / "vendor" / "macro" / "data" / "regime" / "latest.json").read_text())
     asof = asof or regime["date"]
+
+    # NIGHTLY COST TRIPWIRE (before the armed session) — same contract as the bot seats: when
+    # the per-night USD cap is armed and the flagship book already hit it, skip the session.
+    # OFF by default (cap <= 0 → over_budget always False) so this is a no-op when disarmed.
+    try:
+        from brain import cost_guard as _cg
+        if _cg.over_budget("flagship", asof):
+            return {"ok": False, "skipped": "over_budget", "asof": asof,
+                    "error": f"nightly cost cap hit (${_cg.spent('flagship', asof):.2f} "
+                             f"/ ${_cg.cap():.2f}); research session skipped"}
+    except Exception:  # noqa: BLE001 — the tripwire is additive; never block research on a guard bug
+        pass
+
     # NB: targeted replace (not str.format) — the prompt body contains literal
     # braces (e.g. "{validated, context, partial}") that .format() misreads as fields.
     prompt = (RESEARCH_PROMPT
@@ -152,7 +165,29 @@ def run_daily_research(asof: str | None = None, *, max_turns: int | None = None)
     # book="flagship": attribute an all-pool-cooling marker to the flagship job so the
     # scheduler's retry-at-reset can key on it (the flagship BOOK is deterministic and never
     # blocked by cooling — only this research-ingest leg is skipped when the pool is exhausted).
-    return cli_bridge.research_sync(prompt, role="deep", max_turns=max_turns, book="flagship")
+    res = cli_bridge.research_sync(prompt, role="deep", max_turns=max_turns, book="flagship")
+    # Record the armed session's cost explicitly (book= above makes cli_bridge skip its own
+    # recorder — the caller-records contract). Before 2026-07-25 NOBODY recorded this leg, so
+    # the desk's single biggest LLM session was invisible to cost_summary / the nightly cap.
+    try:
+        from brain import cost_guard as _cg
+        _r = res or {}
+        _usg = _r.get("usage") or {}
+        _cg.record(
+            "flagship",
+            _r.get("cost_usd"),
+            asof,
+            seat="research_desk",
+            model=str(_r.get("model") or ""),
+            input_tokens=int(_usg.get("input_tokens") or 0),
+            output_tokens=int(_usg.get("output_tokens") or 0),
+            cache_read_tokens=int(_usg.get("cache_read_input_tokens") or 0),
+            cache_creation_tokens=int(_usg.get("cache_creation_input_tokens") or 0),
+            key_id=_r.get("key_id"),
+        )
+    except Exception:  # noqa: BLE001 — the recorder must never break the research leg
+        pass
+    return res
 
 
 def _clamp(lean: str, subject: str, blocked: set[str]) -> tuple[str, str]:

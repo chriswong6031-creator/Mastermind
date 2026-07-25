@@ -832,10 +832,12 @@ def _reformat_to_json(base_sys: str, txt: str | None) -> dict | None:
     if not txt:
         return None
     try:
+        # format-only retry → role="analyst" (sonnet; 2026-07-25 cost ruling — was deep/opus)
         fix, _ = client.call_model(
             base_sys + _JSON_ONLY,
             "Convert the analysis below into the exact JSON object its schema requires. Output JSON "
-            "ONLY.\n\n" + str(txt)[:8000], role="deep", max_tokens=1600)
+            "ONLY.\n\n" + str(txt)[:8000], role="analyst", max_tokens=1600,
+            seat="macro_risk", record_book="system")
         return _parse_json(fix)
     except Exception:  # noqa: BLE001
         return None
@@ -857,8 +859,13 @@ def macro_risk_assess(asof: str, regime: dict | None) -> dict:
             sys_prompt = self_mirror.inject(_MACRO_RISK_SYS, "macro_risk", _asof_d(asof))
         except Exception:  # noqa: BLE001
             sys_prompt = _MACRO_RISK_SYS
+        # role="analyst" (sonnet): the narrative rationale is structured analysis over the
+        # DETERMINISTIC state — the state + teeth hold all authority regardless of tier
+        # (2026-07-25 cost ruling; was role="deep"/opus — this seat runs on the intraday
+        # derisk/watch lanes, so tier matters). Books: shared US-defense service → "system".
         txt, _meta = client.call_model(sys_prompt + _JSON_ONLY, json.dumps(payload, default=str),
-                                       role="deep", max_tokens=1600)
+                                       role="analyst", max_tokens=1600,
+                                       seat="macro_risk", record_book="system")
     except Exception:  # noqa: BLE001 — the narrative is additive; never break the state
         return state
     j = _parse_json(txt) or _reformat_to_json(_MACRO_RISK_SYS, txt) or {}

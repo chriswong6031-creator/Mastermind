@@ -128,7 +128,9 @@ async def reason(prompt: str, *, role: str = "pm", model: str | None = None,
                  arm: bool = False, resume: str | None = None,
                  mcp_servers: dict | None = None,
                  log_run: bool = True,
-                 book: str | None = None) -> dict:
+                 book: str | None = None,
+                 seat: str | None = None,
+                 record_book: str | None = None) -> dict:
     """Run a headless Claude Code reasoning pass. With arm=True, attaches MCP tools (read the
     dashboard + write conclusions back) + WebSearch/WebFetch and runs a multi-turn research loop.
     Pass `mcp_servers` (with a matching `allowed_tools`) to arm a CUSTOM tool surface — e.g. the
@@ -140,6 +142,12 @@ async def reason(prompt: str, *, role: str = "pm", model: str | None = None,
     which knows its exact PORTFOLIO_ID book name), pass the book name here so cli_bridge skips
     its own _record_cli_cost call and avoids the double-count. When book=None (the default)
     cli_bridge records exactly once under the role-inferred book (flagship / system).
+
+    seat / record_book: attribution overrides for the single-record path (book=None). seat names
+    the ledger seat (default = the role name — "deep" is a shared bucket, so named seats like
+    "sentinel" / "strategist" keep the cost panel honest); record_book overrides _ROLE_BOOK's
+    book WITHOUT the skip semantics of `book` (the cost is still recorded here, just under the
+    stated book — e.g. the sentinel runs role="analyst" but is flagship work).
 
     Key rotation: iterates over key_rotor.candidates() (non-cooling keys first).  If a
     candidate's result text or error matches a key-failure pattern (org-disabled / 429 / etc.),
@@ -425,7 +433,8 @@ async def reason(prompt: str, *, role: str = "pm", model: str | None = None,
 
     # Record cost + token usage in the cost guard (best-effort; never raises)
     try:
-        _record_cli_cost(result, role=role, model=mdl, book=book, key_id=used_key_id)
+        _record_cli_cost(result, role=role, model=mdl, book=book, key_id=used_key_id,
+                         seat=seat, record_book=record_book)
     except Exception:
         pass
     return result
@@ -551,13 +560,16 @@ _ROLE_BOOK: dict[str, str] = {
 
 
 def _record_cli_cost(result: dict, *, role: str | None = None, model: str | None = None,
-                     book: str | None = None, key_id: str | None = None) -> None:
+                     book: str | None = None, key_id: str | None = None,
+                     seat: str | None = None, record_book: str | None = None) -> None:
     """Record CLI-bridge call cost + tokens in cost_guard. Best-effort; never raises.
 
     When book is not None the caller (a bot-level _run_brain site) will record against
     cost_guard themselves using the correct per-book PORTFOLIO_ID — so we skip here to
     avoid the double-count.  When book is None we record once under the role-inferred
-    book (see _ROLE_BOOK).  Seat is the resolved role name.
+    book (see _ROLE_BOOK).  Seat defaults to the resolved role name; pass ``seat`` to
+    name the ledger seat and ``record_book`` to override the book while STILL recording
+    here (unlike ``book``, which hands recording to the caller).
 
     key_id: when provided (a key_id string like "claude_code_oauth_3"), passed to
     cost_guard.record() for per-key attribution in the "keys" sub-dict.
@@ -569,10 +581,10 @@ def _record_cli_cost(result: dict, *, role: str | None = None, model: str | None
         from brain import cost_guard as _cg
         usd = result.get("cost_usd")
         usage = result.get("usage") or {}
-        _book = _ROLE_BOOK.get(str(role or "").lower(), "flagship")
+        _book = record_book or _ROLE_BOOK.get(str(role or "").lower(), "flagship")
         _cg.record(
             _book, usd,
-            seat=str(role or "unknown"),
+            seat=str(seat or role or "unknown"),
             model=str(model or resolve_model(role)),
             input_tokens=int(usage.get("input_tokens") or 0),
             output_tokens=int(usage.get("output_tokens") or 0),
@@ -585,15 +597,18 @@ def _record_cli_cost(result: dict, *, role: str | None = None, model: str | None
 
 
 async def research(prompt: str, *, role: str = "deep", max_turns: int | None = None,
-                   resume: str | None = None, book: str | None = None) -> dict:
+                   resume: str | None = None, book: str | None = None,
+                   seat: str | None = None, record_book: str | None = None) -> dict:
     """An ARMED, multi-turn research session: Claude reads the dashboard via the bot MCP
     tools, searches the web/news, reasons through 2nd/3rd-order effects, and writes its
     conclusions back to the app (research notes, proposed theses, emerging-theme flags,
     recommendations). Returns the result + the tools it called.
 
     ``book`` (optional): the caller's book id — forwarded to reason() so an all-pool-cooling
-    marker is attributable to the right book (the scheduler's retry-at-reset keys on it)."""
-    return await reason(prompt, role=role, arm=True, max_turns=max_turns, resume=resume, book=book)
+    marker is attributable to the right book (the scheduler's retry-at-reset keys on it).
+    ``seat`` / ``record_book``: cost-attribution overrides, forwarded to reason()."""
+    return await reason(prompt, role=role, arm=True, max_turns=max_turns, resume=resume, book=book,
+                        seat=seat, record_book=record_book)
 
 
 async def chat_stream(prompt: str, *, resume: str | None = None,

@@ -81,7 +81,7 @@ _GATE_JSON = json.dumps({
 _RISK_JSON = json.dumps({"decisions": [], "rationale": "held book stands"})
 
 
-def _fake_call_model(system, user, *, role="pm", max_tokens=1500):
+def _fake_call_model(system, user, *, role="pm", max_tokens=1500, seat=None, record_book=None):
     """Route a seat's LLM call to its canned JSON by sniffing the system prompt. This is the ONLY
     LLM boundary in the whole pipeline — every seat funnels through brain.client.call_model."""
     s = system or ""
