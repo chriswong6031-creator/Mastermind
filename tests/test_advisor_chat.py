@@ -162,8 +162,12 @@ def test_chat_stream_surfaces_sdk_exception(monkeypatch):
     monkeypatch.setattr(cli_bridge, "cli_path", lambda: "/usr/bin/claude")
 
     evs = _drain(cli_bridge.chat_stream("hi"))
-    assert evs[-1]["type"] == "error"
-    assert "cli exploded" in evs[-1]["error"]
+    # The stream surfaces the error, then still terminates with a `done` (which
+    # carries the resume session_id + tools_used even on a failed turn) — post-stream
+    # bookkeeping (key-failure detection, response ledger) runs between the two.
+    err = next(e for e in evs if e["type"] == "error")
+    assert "cli exploded" in err["error"]
+    assert evs[-1]["type"] == "done"
 
 
 def test_chat_stream_errors_without_sdk(monkeypatch):

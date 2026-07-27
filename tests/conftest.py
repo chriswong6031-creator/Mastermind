@@ -85,6 +85,18 @@ def _isolate_runlog(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _disable_bot_response_ledger(monkeypatch):
+    """Keep the AI response/thinking ledger (brain/thinking_log) OFF in tests.
+
+    reason()/chat_stream/call_model log every turn to data/response_logs — and, when
+    R2 creds are in the loaded .env, PUT rows into the shared admin corpus. A pytest
+    run must never pollute either sink. Tests that assert on the ledger re-enable it
+    by delenv-ing this var and pointing MASTERMIND_BOT_RESPONSE_LOG_DIR at tmp_path
+    (see tests/test_thinking_log.py::ledger_dir)."""
+    monkeypatch.setenv("MASTERMIND_BOT_RESPONSE_LOG_DISABLED", "1")
+
+
+@pytest.fixture(autouse=True)
 def _isolate_positions_ledger(tmp_path, monkeypatch):
     """Isolate the positions ledger + fills blotter so the real book build tests (phase2 /
     tracking) don't write phantom ADD/TRIM history into the LIVE data/portfolio/*.json — which

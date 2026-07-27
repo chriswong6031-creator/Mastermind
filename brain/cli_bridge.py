@@ -18,6 +18,7 @@ import functools
 import json
 import os
 import shutil
+import time
 from pathlib import Path
 
 import yaml
@@ -50,6 +51,8 @@ def _block_kind(b) -> str:
         return "tool_result"
     if cls == "ThinkingBlock":
         return "thinking"
+    if cls == "RedactedThinkingBlock":
+        return "redacted_thinking"
     legacy = getattr(b, "type", "")
     if not legacy and isinstance(b, dict):
         legacy = b.get("type", "")
@@ -156,6 +159,7 @@ async def reason(prompt: str, *, role: str = "pm", model: str | None = None,
     on them is harmful.  When all candidates are exhausted, returns ok=False with the pool freeze
     message.  If candidates() returns [] (no pool configured), runs once with legacy behaviour.
     """
+    _t0 = time.monotonic()  # response-ledger latency clock (whole turn, entry→result)
     c = _cfg()
     rc = c.get("reasoning", {})
     if arm:
@@ -204,19 +208,24 @@ async def reason(prompt: str, *, role: str = "pm", model: str | None = None,
     _cands_to_try = _pool if _pool else [None]
     result: dict | None = None
     used_key_id: str | None = None
+    # LOG-ONLY thinking side channel (see _via_sdk docstring): holds the shipped
+    # candidate's reasoning trace; cleared per candidate so a failed-over key's
+    # partial thinking is discarded with its result (same rule as the macro lanes).
+    _think_box: list = []
 
     for _cand in _cands_to_try:
         _key_id: str | None = _cand["key_id"] if _cand is not None else None
         _env_name: str | None = _cand["env_name"] if _cand is not None else None
 
         _sdk_exc_repr: str | None = None
+        _think_box.clear()
 
         if _SDK:
             try:
                 result = await _via_sdk(
                     prompt, mdl, role, system, append_system, tools, dirs, turns, workdir,
                     rc.get("permission_mode", "default"), mcp_servers, resume, arm,
-                    run_id=_run_id, env_name=_env_name,
+                    run_id=_run_id, env_name=_env_name, thinking_out=_think_box,
                 )
                 # THE CRUX: classify the result TEXT — org-disabled banners arrive as
                 # ok-looking results whose text contains the subscription-disabled message.
@@ -294,7 +303,11 @@ async def reason(prompt: str, *, role: str = "pm", model: str | None = None,
                         used_key_id = _key_id
                         break
 
-                    # Fall through to subprocess for non-armed, non-key-failure SDK errors
+                    # Fall through to subprocess for non-armed, non-key-failure SDK errors.
+                    # Discard the errored SDK call's partial thinking — the subprocess
+                    # result it would ride with is a different generation (and the CLI
+                    # JSON backend exposes no thinking blocks at all).
+                    _think_box.clear()
                     result = await _via_subprocess(
                         prompt, mdl, role, system, append_system, tools, dirs, turns, workdir,
                         rc.get("permission_mode", "default"), base, env_name=_env_name,
@@ -437,12 +450,56 @@ async def reason(prompt: str, *, role: str = "pm", model: str | None = None,
                          seat=seat, record_book=record_book)
     except Exception:
         pass
+
+    # ── AI response/thinking ledger (surface "bot") — LOG-ONLY, best-effort ─────
+    # One row per reasoning turn to brain/thinking_log (local mirror + R2), the bot
+    # extension of the macro response-log program. Unlike cost recording, `book=`
+    # has NO skip semantics here: there is exactly one log site (this one), so the
+    # row simply carries the caller's book for attribution. log_run=False turns
+    # (bulk utility work like translation) stay out of the corpus, mirroring their
+    # exclusion from the activity log. The trace rides _think_box, never `result`.
+    if log_run:
+        try:
+            from brain import thinking_log as _tl
+            _usage_row = result.get("usage") or {}
+            if not isinstance(_usage_row, dict):
+                _usage_row = {}
+            _tl.log_turn_async(
+                question=prompt,
+                answer=str(result.get("text") or ""),
+                model=str(result.get("model") or mdl),
+                seat=str(seat or role or ""),
+                book=str(book or record_book
+                         or _ROLE_BOOK.get(str(role or "").lower(), "flagship")),
+                role=role,
+                mode=("research" if arm else None),
+                backend=str(result.get("backend") or ""),
+                armed=arm,
+                run_id=_run_id,
+                key_id=used_key_id,
+                thread_id=result.get("session_id"),
+                latency_ms=int((time.monotonic() - _t0) * 1000),
+                input_tokens=int(_usage_row.get("input_tokens") or 0),
+                output_tokens=int(_usage_row.get("output_tokens") or 0),
+                tools=result.get("tools_used") or [],
+                thinking=(_think_box[0] if _think_box else []),
+                flags={"error": not result.get("ok"),
+                       "degraded": bool(result.get("error"))},
+            )
+        except Exception:  # noqa: BLE001 — the ledger never disturbs a turn
+            pass
     return result
 
 
 async def _via_sdk(prompt, mdl, role, system, append_system, tools, dirs, turns, workdir, perm,
                    mcp_servers, resume, arm, run_id: str | None = None,
-                   env_name: str | None = None) -> dict:
+                   env_name: str | None = None,
+                   thinking_out: list | None = None) -> dict:
+    """thinking_out: optional side-channel list; when provided, the turn's reasoning
+    trace (a list of `mastermind.response_log.v1` thinking segments) is appended as ONE
+    element. LEAK LAW (mirrors macro brain_gateway): thinking is LOG-ONLY — it rides
+    this side channel to brain/thinking_log and is NEVER placed in the returned result
+    dict, so no caller (decision paths included) can consume it."""
     opts = _Options(model=mdl, allowed_tools=tools, add_dirs=dirs, cwd=workdir,
                     max_turns=turns, permission_mode=perm, env=_subscription_env(env_name))
     if mcp_servers:
@@ -454,6 +511,8 @@ async def _via_sdk(prompt, mdl, role, system, append_system, tools, dirs, turns,
     if append_system:
         opts.append_system_prompt = append_system
     text, cost, sid, usage, used = None, None, None, None, []
+    _think: list[dict] = []   # LOG-ONLY reasoning capture (see thinking_out)
+    _round = 0                # assistant-message counter → segment "round"
 
     # run-log integration — import lazily so the module is optional
     try:
@@ -470,9 +529,24 @@ async def _via_sdk(prompt, mdl, role, system, append_system, tools, dirs, turns,
             sid = getattr(msg, "session_id", None)
             usage = getattr(msg, "usage", None)
         elif hasattr(msg, "content"):                      # AssistantMessage: collect text + tool calls
+            _round += 1
             for b in (getattr(msg, "content", []) or []):
                 bt = _block_kind(b)
-                if bt == "text" and getattr(b, "text", ""):
+                if bt == "thinking":
+                    # Reasoning block — capture for the response ledger only.
+                    _txt = getattr(b, "thinking", "")
+                    if not _txt and isinstance(b, dict):
+                        _txt = b.get("thinking") or ""
+                    _txt = str(_txt or "")
+                    if _txt.strip():
+                        _think.append({"round": _round, "phase": "tool",
+                                       "model": mdl, "text": _txt})
+                elif bt == "redacted_thinking":
+                    # Text unavailable by design; the segment still records that the
+                    # model reasoned here, so the trace doesn't silently look shorter.
+                    _think.append({"round": _round, "phase": "tool",
+                                   "model": mdl, "text": "", "redacted": True})
+                elif bt == "text" and getattr(b, "text", ""):
                     chunk = b.text
                     text = (text or "") + chunk if text is None else chunk
                     # log reasoning chunk
@@ -507,6 +581,18 @@ async def _via_sdk(prompt, mdl, role, system, append_system, tools, dirs, turns,
                 except Exception:
                     pass
 
+    # The last assistant message is the synthesis — retag its segments so the
+    # upstream FIRST-(N-1)+LAST truncation keeps the decision segment and the
+    # eval corpus reads tool-rounds vs synthesis the same way as the macro lanes.
+    if _think:
+        _last_round = _think[-1]["round"]
+        for _s in _think:
+            if _s["round"] == _last_round:
+                _s["phase"] = "synthesis"
+    if thinking_out is not None:
+        thinking_out.append(_think)
+    # LEAK LAW: `_think` must never be added to this result dict — callers feed
+    # result["text"] into decision paths, and thinking is log-only by contract.
     return {"ok": bool(text), "text": text, "model": mdl, "role": role, "armed": arm,
             "tools_used": used, "cost_usd": cost, "session_id": sid,
             "usage": _as_dict(usage), "backend": "sdk"}
@@ -514,6 +600,9 @@ async def _via_sdk(prompt, mdl, role, system, append_system, tools, dirs, turns,
 
 async def _via_subprocess(prompt, mdl, role, system, append_system, tools, dirs, turns, workdir, perm, base,
                           env_name: str | None = None) -> dict:
+    # NOTE: `--output-format json` returns only the final result text — no content
+    # blocks arrive here, so this backend has no thinking to capture; the response
+    # ledger still logs the turn (with thinking=[]) from reason().
     argv = ["claude", "-p", "--output-format", "json", "--model", mdl,
             "--permission-mode", perm, "--max-turns", str(turns)]
     if tools:
@@ -675,6 +764,13 @@ async def chat_stream(prompt: str, *, resume: str | None = None,
     # Buffer the first ~600 chars of streamed text for post-stream key-failure detection
     _text_buffer = ""
     _error_buffer = ""
+    _t0 = time.monotonic()          # response-ledger latency clock
+    _full_text = ""                 # whole-turn answer for the response ledger
+    # LOG-ONLY reasoning capture (leak law): thinking blocks are collected here for
+    # brain/thinking_log and are NEVER yielded as stream events — the advisor chat
+    # is a user-facing surface.
+    _chat_think: list[dict] = []
+    _msg_i = 0                      # message counter → segment "round"
 
     def _result_event(raw):
         """A tool result -> a 'paper' event if it carries the marker, else 'tool_result'."""
@@ -705,17 +801,32 @@ async def chat_stream(prompt: str, *, resume: str | None = None,
                     emitted_text = True
                     if len(_text_buffer) < 600:
                         _text_buffer += str(final)[:600]
+                    _full_text += str(final)
                     yield {"type": "text", "text": final}
                 continue
             blocks = getattr(msg, "content", None)
             if isinstance(blocks, (list, tuple)):              # Assistant/User message: content blocks
+                _msg_i += 1
                 for b in blocks:
                     bt = _block_kind(b)
-                    if bt == "text" and getattr(b, "text", ""):
+                    if bt == "thinking":
+                        # Captured for the ledger only — never yielded (leak law).
+                        _tk = getattr(b, "thinking", "")
+                        if not _tk and isinstance(b, dict):
+                            _tk = b.get("thinking") or ""
+                        _tk = str(_tk or "")
+                        if _tk.strip():
+                            _chat_think.append({"round": _msg_i, "phase": "tool",
+                                                "model": mdl, "text": _tk})
+                    elif bt == "redacted_thinking":
+                        _chat_think.append({"round": _msg_i, "phase": "tool",
+                                            "model": mdl, "text": "", "redacted": True})
+                    elif bt == "text" and getattr(b, "text", ""):
                         emitted_text = True
                         chunk = b.text
                         if len(_text_buffer) < 600:
                             _text_buffer += chunk
+                        _full_text += chunk
                         yield {"type": "text", "text": chunk}
                     elif bt == "tool_use":
                         name = getattr(b, "name", "?")
@@ -729,6 +840,7 @@ async def chat_stream(prompt: str, *, resume: str | None = None,
                 emitted_text = True
                 if len(_text_buffer) < 600:
                     _text_buffer += blocks
+                _full_text += blocks
                 yield {"type": "text", "text": blocks}
     except Exception as e:                                      # surface, don't crash the stream
         _stream_error = repr(e)[:600]
@@ -750,6 +862,35 @@ async def chat_stream(prompt: str, *, resume: str | None = None,
                     break
         except Exception:
             pass
+
+    # ── AI response/thinking ledger (surface "bot") — LOG-ONLY, best-effort ─────
+    # The done event below carries NO thinking; the trace goes only to the ledger.
+    try:
+        from brain import thinking_log as _tl
+        if _chat_think:
+            _last_round = _chat_think[-1]["round"]
+            for _s in _chat_think:
+                if _s["round"] == _last_round:
+                    _s["phase"] = "synthesis"
+        _tl.log_turn_async(
+            question=prompt,
+            answer=_full_text,
+            model=mdl,
+            seat="advisor_chat",
+            book="system",
+            role=role,
+            mode="chat",
+            backend="sdk",
+            armed=True,
+            key_id=_stream_key_id,
+            thread_id=sid,
+            latency_ms=int((time.monotonic() - _t0) * 1000),
+            tools=used,
+            thinking=_chat_think,
+            flags={"error": bool(_stream_error)},
+        )
+    except Exception:  # noqa: BLE001 — the ledger never disturbs the stream
+        pass
 
     yield {"type": "done", "session_id": sid, "cost_usd": cost, "tools_used": used}
 

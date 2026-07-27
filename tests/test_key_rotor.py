@@ -492,7 +492,7 @@ class TestRotationLoop:
 
         async def _fake_via_sdk(prompt, mdl, role, system, append_system, tools, dirs,
                                 turns, workdir, perm, mcp_servers, resume, arm,
-                                run_id=None, env_name=None):
+                                run_id=None, env_name=None, thinking_out=None):
             call_count["n"] += 1
             if env_name == "CLAUDE_CODE_OAUTH_TOKEN_3":
                 # Return the org-disabled banner as text (the crux case)

@@ -85,9 +85,63 @@ def call_model(system: str, user: str, *, role: str = "pm", max_tokens: int = 15
                              seat=seat, record_book=record_book)
         except Exception:
             pass
+        # LOG-ONLY (leak law): any thinking blocks in resp.content go to the bot
+        # response ledger and are never returned — callers consume text only.
+        try:
+            _log_api_turn(resp, user=user, role=role, model=t["model"],
+                          seat=seat, record_book=record_book, text=text)
+        except Exception:
+            pass
         return (text or None), (None if text else "empty_reply")
     except Exception:
         return None, "llm_error"
+
+
+def _log_api_turn(resp, *, user: str, role: str | None, model: str,
+                  seat: str | None, record_book: str | None, text: str) -> None:
+    """Log one Messages-API turn to the bot response ledger (brain/thinking_log).
+
+    Extracts `thinking` / `redacted_thinking` blocks from resp.content the same way
+    the macro brain_gateway does (a one-shot call's response IS the synthesis, so
+    round=1 phase="synthesis"). LEAK LAW: segments go only to the ledger — this
+    helper returns None and call_model's (text, reason) contract is untouched.
+    Best-effort; caller wraps in try/except."""
+    from brain import thinking_log as _tl
+    from brain.cli_bridge import _ROLE_BOOK
+    segs: list[dict] = []
+    for b in (getattr(resp, "content", None) or []):
+        bt = getattr(b, "type", None)
+        if bt is None and isinstance(b, dict):
+            bt = b.get("type")
+        if bt == "thinking":
+            tk = getattr(b, "thinking", "")
+            if not tk and isinstance(b, dict):
+                tk = b.get("thinking") or ""
+            tk = str(tk or "")
+            if tk.strip():
+                segs.append({"round": 1, "phase": "synthesis", "model": model, "text": tk})
+        elif bt == "redacted_thinking":
+            segs.append({"round": 1, "phase": "synthesis", "model": model,
+                         "text": "", "redacted": True})
+    usage = getattr(resp, "usage", None) or {}
+    if hasattr(usage, "__dict__"):
+        usage = usage.__dict__
+    if not isinstance(usage, dict):
+        usage = {}
+    _tl.log_turn_async(
+        question=user,
+        answer=str(text or ""),
+        model=model,
+        seat=str(seat or role or ""),
+        book=str(record_book or _ROLE_BOOK.get(str(role or "").lower(), "flagship")),
+        role=role,
+        backend="api",
+        armed=False,
+        input_tokens=int(usage.get("input_tokens") or 0),
+        output_tokens=int(usage.get("output_tokens") or 0),
+        thinking=segs,
+        flags={"error": not text},
+    )
 
 
 def _record_api_cost(resp, *, role: str | None = None, model: str | None = None,
