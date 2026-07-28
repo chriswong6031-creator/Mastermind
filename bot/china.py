@@ -456,19 +456,19 @@ def _append_decision_log(asof: str, submission: dict | None, executed: list,
         "error": brain.get("error") if isinstance(brain, dict) else None,
         "packet_id": packet_id,
     }
-    rows = []
+    from bot import decision_rows
+    existing = []
     if p.exists():
         for line in p.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if not line:
                 continue
             try:
-                r = json.loads(line)
+                existing.append(json.loads(line))
             except Exception:
                 continue
-            if r.get("asof") != asof:
-                rows.append(r)
-    rows.append(entry)
+    # Idempotent per asof — but a FAILED re-run must not erase a good book. See bot/decision_rows.
+    rows = decision_rows.replace_for_asof(existing, entry, asof)
     p.write_text("\n".join(json.dumps(r, default=str, ensure_ascii=False) for r in rows) + "\n")
 
 

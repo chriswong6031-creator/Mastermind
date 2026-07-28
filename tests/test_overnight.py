@@ -275,8 +275,17 @@ def test_phase2_run_directive_forces_gate(iso, monkeypatch):
         "directive must cause force=True to the build gate"
 
 
-def test_heavyweight_run_directive_threads_to_brain(monkeypatch):
-    """directive passed to run_heavyweight is forwarded to _run_brain."""
+def test_heavyweight_run_directive_threads_to_brain(iso, monkeypatch):
+    """directive passed to run_heavyweight is forwarded to _run_brain.
+
+    MUST take ``iso`` (registry._ROOT → tmp): run_heavyweight() calls
+    paper_account.mark(..., portfolio_id='heavyweight') UNCONDITIONALLY
+    (bot/heavyweight.py step 6), outside the do_trade branch — so stubbing
+    _run_brain does NOT stop the write. Without iso this test rewrote the LIVE
+    data/portfolios/heavyweight/{account,nav_history} (2026-07-26 wipe-to-$0:
+    stubbing _load_account to a 2-key dict made mark() re-inception spy_shares
+    and append a nav:0 row for this test's asof).
+    """
     import bot.heavyweight as hw_mod
     captured: dict = {}
 
