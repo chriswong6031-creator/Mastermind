@@ -113,8 +113,36 @@ def _isolate_positions_ledger(tmp_path, monkeypatch):
         pass
 
 
+@pytest.fixture(scope="session")
+def _book_state_root(tmp_path_factory):
+    """ONE tmp copy of the live book tree for the whole session (see _isolate_book_state).
+
+    Deliberately session-scoped, not per-test. Parts of the suite are order-coupled: a test
+    writes a book through registry.data_dir() and a LATER test reads it back through
+    app/web.py:_portfolio_dir (test_web::test_api_portfolio_schema,
+    test_bear::test_api_portfolio_carries_rejected_list,
+    test_tracking::test_api_portfolio_now_has_thesis_full all rely on this). A per-test copy
+    re-seeded from live would silently break that sharing — measured: 16 baseline failures →
+    19. One shared root preserves the suite's existing semantics exactly, while still keeping
+    every write off the LIVE tree, which is the whole point.
+
+    So cross-test book leakage remains possible — as it always was. This fixture does not
+    claim to fix that; it fixes writes escaping to production. A test needing true per-test
+    isolation patches registry._ROOT itself (e.g. the `iso` fixture in test_overnight.py),
+    which overrides this one."""
+    import shutil
+    root = tmp_path_factory.mktemp("bookroot")
+    for rel in ("portfolio", "portfolios"):
+        src, dst = _ROOT / "data" / rel, root / "data" / rel
+        if src.exists():
+            shutil.copytree(src, dst, dirs_exist_ok=True)
+        else:
+            dst.mkdir(parents=True, exist_ok=True)
+    return root
+
+
 @pytest.fixture(autouse=True)
-def _isolate_book_state(tmp_path, monkeypatch):
+def _isolate_book_state(_book_state_root, monkeypatch):
     """Isolate EVERY paper book's settled state (account/nav_history/fills/pending) to a tmp copy.
 
     This was the last unguarded live-write path in the suite, and it cost us a book: on
@@ -134,19 +162,13 @@ def _isolate_book_state(tmp_path, monkeypatch):
     The tmp root is SEEDED WITH A COPY of the live tree (like _isolate_experiment_registry)
     rather than left empty, so tests that legitimately READ a real book — e.g. heavyweight
     reading flagship's latest.json — still see realistic state, while every WRITE lands in
-    tmp and is discarded. Per-test copy of ~90 small JSON/JSONL files; cheap. Tests wanting
+    tmp and is discarded. The copy is made ONCE per session (see ``_book_state_root``), not per
+    test — the suite is order-coupled and needs the sharing. Tests wanting
     a pristine/empty book still patch ``registry._ROOT`` themselves and win (their patch
     applies after this autouse one). Idempotent + safe."""
     try:
-        import shutil
         from portfolio import registry
-        iso_root = tmp_path / "_bookroot"
-        for rel in ("portfolio", "portfolios"):
-            src, dst = _ROOT / "data" / rel, iso_root / "data" / rel
-            if src.exists():
-                shutil.copytree(src, dst, dirs_exist_ok=True)
-            else:
-                dst.mkdir(parents=True, exist_ok=True)
+        iso_root = _book_state_root
         monkeypatch.setattr(registry, "_ROOT", iso_root, raising=False)
         try:
             from portfolio import paper_account as pa
