@@ -55,15 +55,20 @@ def test_seeded_from_live_so_reads_still_work():
 
 
 def test_writing_a_book_does_not_touch_the_live_file():
-    """The exact failure mode: mark()/save on a Brain book stays in tmp."""
-    live = REPO / "data" / "portfolios" / "heavyweight" / "account.json"
-    before = live.read_text() if live.exists() else None
+    """The exact failure mode: save on a Brain book stays in tmp.
 
-    state = paper_account._load_account("heavyweight")
+    Uses a throwaway book id, NOT a real one. The isolated root is session-scoped (tests
+    share it on purpose — see conftest._book_state_root), so mutating `heavyweight` here
+    would leak a bogus balance into every later test in the run.
+    """
+    pid = "_isolation_probe"
+    live = REPO / "data" / "portfolios" / pid
+    assert not live.exists(), f"{live} should never exist — pick another probe id"
+
+    state = paper_account._load_account(pid)
     state["cash"] = 123.45
-    state["positions"] = {}
-    paper_account._save_account(state, "heavyweight")
+    paper_account._save_account(state, pid)
 
-    assert paper_account._load_account("heavyweight")["cash"] == 123.45   # write landed
-    after = live.read_text() if live.exists() else None
-    assert after == before, "the LIVE heavyweight account was modified by a test"
+    assert paper_account._load_account(pid)["cash"] == 123.45          # the write landed
+    assert not _is_live(paper_account._paths(pid)["account"])           # ...but not live
+    assert not live.exists(), "a test created a book directory in the LIVE data tree"
