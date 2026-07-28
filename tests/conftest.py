@@ -114,6 +114,54 @@ def _isolate_positions_ledger(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_book_state(tmp_path, monkeypatch):
+    """Isolate EVERY paper book's settled state (account/nav_history/fills/pending) to a tmp copy.
+
+    This was the last unguarded live-write path in the suite, and it cost us a book: on
+    2026-07-26 the Heavyweight account was wiped to ``{cash:0, positions:{}}`` with a
+    backdated ``nav:0`` row in nav_history — the dashboard read $0 (−100%) for a book that
+    had never lost a cent. Cause: ``tests/test_overnight.py`` called ``run_heavyweight()``
+    without the file-local ``iso`` fixture, and ``bot/heavyweight.py`` marks the book
+    UNCONDITIONALLY (outside the do_trade branch), so stubbing the brain did not stop it.
+
+    Two distinct roots have to be redirected, because ``paper_account._paths()`` resolves
+    them differently:
+      * non-default books (heavyweight/autonomous/etf/china/hk/self_directed) →
+        ``registry.data_dir()`` → ``registry._ROOT/data/portfolios/<id>``. Patching
+        ``paper_account._DATA`` does NOTHING for these — only ``registry._ROOT`` works.
+      * the legacy flagship book → the ``paper_account`` module-global path constants.
+
+    The tmp root is SEEDED WITH A COPY of the live tree (like _isolate_experiment_registry)
+    rather than left empty, so tests that legitimately READ a real book — e.g. heavyweight
+    reading flagship's latest.json — still see realistic state, while every WRITE lands in
+    tmp and is discarded. Per-test copy of ~90 small JSON/JSONL files; cheap. Tests wanting
+    a pristine/empty book still patch ``registry._ROOT`` themselves and win (their patch
+    applies after this autouse one). Idempotent + safe."""
+    try:
+        import shutil
+        from portfolio import registry
+        iso_root = tmp_path / "_bookroot"
+        for rel in ("portfolio", "portfolios"):
+            src, dst = _ROOT / "data" / rel, iso_root / "data" / rel
+            if src.exists():
+                shutil.copytree(src, dst, dirs_exist_ok=True)
+            else:
+                dst.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(registry, "_ROOT", iso_root, raising=False)
+        try:
+            from portfolio import paper_account as pa
+            legacy = iso_root / "data" / "portfolio"
+            monkeypatch.setattr(pa, "_DATA", legacy, raising=False)
+            monkeypatch.setattr(pa, "_ACCOUNT_PATH", legacy / "account.json", raising=False)
+            monkeypatch.setattr(pa, "_FILLS_PATH", legacy / "fills.jsonl", raising=False)
+            monkeypatch.setattr(pa, "_NAV_PATH", legacy / "nav_history.jsonl", raising=False)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
 def _isolate_bot_db(tmp_path, monkeypatch):
     """Isolate the system-of-record SQLite store (data_layer.store._DB) to a tmp file.
 
