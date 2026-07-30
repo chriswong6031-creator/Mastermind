@@ -63,6 +63,24 @@ def history(live_prices: Optional[dict[str, float]] = None,
     """
     fills = _load_fills(portfolio_id)
     live = {(k or "").upper(): v for k, v in (live_prices or {}).items()}
+    # Fills are the source of P&L, but some older books contain fractional FIFO
+    # residue from historical sizing/rounding migrations.  When an authoritative
+    # account exists, use its current share counts to decide which BUY remainders
+    # are genuinely open instead of displaying those stale residues as positions.
+    authoritative_shares: dict[str, float] | None = None
+    try:
+        from portfolio import paper_account
+        account_path = paper_account._paths(portfolio_id)["account"]
+        if account_path.exists():
+            account = paper_account._load_account(portfolio_id)
+            authoritative_shares = {
+                (ticker or "").upper(): max(0.0, float(pos.get("shares") or 0.0))
+                for ticker, pos in account.get("positions", {}).items()
+                if isinstance(pos, dict)
+            }
+    except Exception:
+        # A malformed/unavailable account must not hide otherwise valid fill history.
+        authoritative_shares = None
     # ticker -> FIFO queue of [shares_remaining, cost, row_ref]
     lots: dict[str, deque] = defaultdict(deque)
     rows: list[dict] = []
@@ -113,13 +131,27 @@ def history(live_prices: Optional[dict[str, float]] = None,
     # mark still-open BUY remainders to the live quote
     for tk, q in lots.items():
         px = live.get(tk)
+        account_remaining = (
+            authoritative_shares.get(tk, 0.0)
+            if authoritative_shares is not None
+            else None
+        )
         for shares_rem, cost, row in q:
             if shares_rem <= 1e-9:
                 continue
+            open_shares = (
+                min(shares_rem, account_remaining)
+                if account_remaining is not None
+                else shares_rem
+            )
+            if account_remaining is not None:
+                account_remaining = max(0.0, account_remaining - open_shares)
+            if open_shares <= 1e-9:
+                continue
             row["still_open"] = True
-            row["open_shares"] = round(shares_rem, 6)
+            row["open_shares"] = round(open_shares, 6)
             if px and cost:
-                row["unrealized_pnl"] = round((px - cost) * shares_rem, 2)
+                row["unrealized_pnl"] = round((px - cost) * open_shares, 2)
                 row["unrealized_pct"] = round((px / cost - 1) * 100, 2)
 
     rows.reverse()  # newest first for display

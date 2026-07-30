@@ -127,7 +127,14 @@ def run_hk(asof: str | None = None, *, force: bool = False, armed: bool = True,
         if rejected:
             submission = {**submission, "holdings": kept}
             out["rejected_offvenue"] = rejected
-    decided = bool(submission and submission.get("holdings"))
+    # An empty holdings list is a valid, explicit 100%-cash target. Distinguish
+    # that from no submission at all so a legitimate all-cash decision can be
+    # queued/executed and the published target cannot diverge from the account.
+    decided = bool(
+        submission
+        and isinstance(submission.get("holdings"), list)
+        and (submission.get("summary") or "").strip()
+    )
     out["decided"] = decided
 
     # 2b. PACKET GATE (ruling R6, Charter P2/P3/P8)
@@ -374,7 +381,8 @@ def _build_payload(asof: str, submission: dict | None, prices: dict, executed: l
         entry = position_log.get_entry_info(SLEEVE, tk, portfolio_id=PORTFOLIO_ID)
         positions.append({
             "ticker": tk,
-            "name": china_intake.display_name(tk),     # Chinese for A-shares, English for HK/ADR
+            "name": china_intake.display_name(tk),
+            "name_zh": china_intake.display_name_zh(tk),
             "sleeve": SLEEVE,
             "venue": china_intake._venue(tk),
             "weight": round(mv / nav, 4) if (mv and nav) else None,
@@ -403,7 +411,7 @@ def _build_payload(asof: str, submission: dict | None, prices: dict, executed: l
     return {
         "as_of": asof,
         "portfolio_id": PORTFOLIO_ID,
-        "manager": "HK Opus Brain",
+        "manager": "Mastermind AI (Codex-first)",
         "kind": "hk_brain",
         "currency": CURRENCY,
         "benchmark": BENCHMARK,
@@ -438,10 +446,13 @@ def _append_decision_log(asof: str, submission: dict | None, executed: list,
         "sold_note": (submission or {}).get("sold_note"),
         "feed_health": feed_health,
         "holdings": [{"ticker": h.get("ticker"), "name": _intake_mod.display_name(h.get("ticker")),
+                      "name_zh": _intake_mod.display_name_zh(h.get("ticker")),
                       "venue": h.get("venue"), "weight": h.get("weight"),
                       "conviction": h.get("conviction"), "rationale": h.get("rationale")}
                      for h in ((submission or {}).get("holdings") or [])],
-        "executed": [{**e, "name": _intake_mod.display_name(e.get("ticker"))} for e in (executed or [])],
+        "executed": [{**e, "name": _intake_mod.display_name(e.get("ticker")),
+                      "name_zh": _intake_mod.display_name_zh(e.get("ticker"))}
+                     for e in (executed or [])],
         "skipped_unpriceable": skipped,
         "brain_text": (brain.get("text") or "")[:6000] if isinstance(brain, dict) else None,
         "run_id": brain.get("run_id") if isinstance(brain, dict) else None,
@@ -475,8 +486,8 @@ def _translate_report(submission: dict | None, brain: dict | None) -> bool:
     — exactly the strings ``/api/decisions`` and the book view re-render in zh via ``cached_zh``.
     Best-effort: returns True if it ran, False on any miss; never raises, never blocks publishing.
 
-    Display NAMES are intentionally NOT translated — A-share names are already Chinese and HK/ADR
-    names are English proper nouns that should read the same under either toggle."""
+    Display names are not machine-translated: HK rows carry the exchange-native
+    ``name_zh`` from the bilingual market universe alongside their English name."""
     try:
         from brain import translate
     except Exception:

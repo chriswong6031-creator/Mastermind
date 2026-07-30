@@ -15,6 +15,16 @@ never auto-executes.
   `loop/` (self-improving backtest loop), `portfolio/` (sleeves/scorecard/stages),
   `data_layer/`, `bridge/`. `DOCTRINE.md` is the operating doctrine; `config/*.yml` the params.
 
+## Sister-site architecture
+- **Macro Dashboard**, **Terminal**, and **Mastermind Bot Portfolio** are
+  interconnected sister sites. Treat their signals, state, authentication
+  capacity, and operational resources as one deliberately shared system.
+- Macro Dashboard owns the VPS AI-provider control plane and admin visibility.
+  Mastermind consumes that shared pool with Codex/ChatGPT as the primary
+  provider and Claude OAuth slots as automatic quota/auth fallbacks.
+- Mastermind's daily trading loops and self-improvement loops must use the same
+  shared waterfall; do not create a separate credential island for either path.
+
 ## How to reason (the house rules)
 - **Confirmation over prediction.** You cannot time ignition; detect what has already
   turned. Early-following with discipline beats prophecy with conviction.
@@ -27,11 +37,11 @@ never auto-executes.
   bottleneck-migration view, and the D1–D6 failure-mode detectors.
 - **Honesty, not alpha.** Never claim to "know more than the market." Be blunt, no moralizing.
 
-## Model-tier policy (delegate to subagents)
-Per `config/agents.yml` and our in-house Codex policy:
-- **Opus** (`deep-reasoner`) — deepest synthesis / PM judgment. Use sparingly.
-- **Sonnet** (`narrative-analyst`, `quant-coder`) — per-theme/name analysis, code-grounded questions.
-- **Haiku** (`signal-scout`) — high-volume extraction / labeling / search.
-
-Bias toward delegating non-Opus subtasks to Sonnet/Haiku subagents — quality first, then
-token efficiency.
+## Model/provider policy
+- The authoritative VPS uses **Codex `gpt-5.6-sol` at `xhigh`** as the primary
+  model for daily portfolio reasoning and self-improvement reviews.
+- Macro Dashboard's Claude OAuth pool is fallback capacity when Codex is
+  rate-limited or its shared authentication is unavailable. Within that
+  fallback, `deep`/`pm` use Opus, `analyst` uses Sonnet, and `scout` uses Haiku.
+- Provider success, quota, and cooling state must be reflected into Macro's
+  shared ledger so the admin panel and every sister site see the same capacity.

@@ -101,6 +101,14 @@ def _market_view_enrichment(view: dict | None) -> dict:
             "direction": d,
             "status": rec.get("status"),
             "reading": str(rec.get("reading") or "")[:120],
+            "magnitude": rec.get("magnitude"),
+            "confidence": rec.get("confidence"),
+            "freshness": {
+                "asof": (rec.get("freshness") or {}).get("asof"),
+                "age_sessions": (rec.get("freshness") or {}).get("age_sessions"),
+                "stale": bool((rec.get("freshness") or {}).get("stale")),
+            },
+            "source_contract": str(rec.get("source_contract") or "")[:160],
         })
 
     # label_vs_planes human-readable line
@@ -109,6 +117,21 @@ def _market_view_enrichment(view: dict | None) -> dict:
     n_dissent = len(dissenting)
     label_dir = lvp.get("label_direction")
     consensus = lvp.get("plane_consensus_direction")
+    relationship = lvp.get("relationship")
+    if not relationship:
+        if conflict:
+            relationship = "conflict"
+        elif (
+            label_dir in ("risk_on", "risk_off")
+            and consensus in ("risk_on", "risk_off")
+            and label_dir == consensus
+        ):
+            relationship = "confirmed"
+        elif label_dir is None or consensus is None:
+            relationship = "unavailable"
+        else:
+            relationship = "unconfirmed"
+
     if conflict and n_dissent:
         label_vs_planes_line = (
             f"{n_dissent} validated plane{'s' if n_dissent != 1 else ''} dissent "
@@ -119,8 +142,20 @@ def _market_view_enrichment(view: dict | None) -> dict:
         label_vs_planes_line = (
             f"label-vs-planes conflict: label {label_dir} vs plane consensus {consensus}"
         )
+    elif relationship == "confirmed":
+        label_vs_planes_line = (
+            f"Validated planes CONFIRM the {label_dir} regime label."
+        )
+    elif relationship == "unconfirmed":
+        label_vs_planes_line = (
+            f"Regime label {label_dir} is UNCONFIRMED: validated-plane consensus is "
+            f"{consensus or 'absent'}."
+        )
     else:
-        label_vs_planes_line = "Label and validated planes agree — no conflict."
+        label_vs_planes_line = (
+            f"Label-vs-planes confirmation unavailable (label={label_dir}, "
+            f"consensus={consensus})."
+        )
 
     out: dict = {}
     if isinstance(brief, dict) and any(brief.values()):
@@ -188,6 +223,16 @@ def _full_regime_slice(regime: dict | None) -> dict:
         if enrichment:
             reg["market_view"] = enrichment
     except Exception:  # noqa: BLE001 — additive; never break the seat
+        pass
+    # decision_context.v2 — the canonical typed perception slice.  It is read-only and
+    # preserves the richer regime vector/trajectory that market_view summaries intentionally omit.
+    try:
+        from brain import decision_context as _dc
+
+        dc = _dc.prompt_summary()
+        if dc:
+            reg["decision_context"] = dc
+    except Exception:  # noqa: BLE001
         pass
     return reg
 
@@ -397,9 +442,80 @@ def _build_prompt(payload: dict, directive: str | None = None) -> str:
             risk_off_planes = [p for p in _ps if p.get("direction") == "risk_off"]
             if risk_off_planes:
                 lines += ["Risk-off planes: " + "; ".join(
-                    f"{p['name']}({'V' if p.get('status') == 'validated' else 'A'}): {p['reading']}"
+                    f"{p['name']}("
+                    f"{'V' if p.get('status') == 'validated' else 'A'},"
+                    f"{'stale' if (p.get('freshness') or {}).get('stale') else 'fresh'}"
+                    f"): {p['reading']}"
                     for p in risk_off_planes[:6]
                 )]
+        lines += [""]
+    _dc = reg.get("decision_context") or {}
+    if _dc:
+        _hard = _dc.get("hard_label") or {}
+        _prob = _dc.get("probabilistic_state") or {}
+        _traj = _dc.get("trajectory") or {}
+        _liq = _dc.get("liquidity") or {}
+        _risk = _dc.get("risk") or {}
+        _driver = _dc.get("market_driver") or {}
+        _gov = _dc.get("governor") or {}
+        _dq = _dc.get("data_quality") or {}
+        lines += ["## Canonical decision context v2 (typed, point-in-time)"]
+        lines += [
+            "Regime state: "
+            f"hard={_hard.get('quad')} {_hard.get('name')} conf={_hard.get('confidence')}; "
+            f"probabilities={_prob.get('probabilities')} "
+            f"hard_label_agrees={_prob.get('hard_label_agrees')}.",
+            "Trajectory: "
+            f"state={_traj.get('transition_state')} flip_margin={_traj.get('flip_margin')} "
+            f"gaining={_traj.get('gaining_quad')}@{_traj.get('gaining_rate_5s')} "
+            f"losing={_traj.get('losing_quad')}@{_traj.get('losing_rate_5s')}; "
+            f"contradicting={_traj.get('contradicting')}.",
+            "Liquidity/risk: "
+            f"quantity={_liq.get('quantity_overlay')} "
+            f"quality={(_liq.get('quality') or {}).get('label')} "
+            f"risk={_risk.get('state')} score={_risk.get('score')}.",
+            "Governor: "
+            f"relationship={_gov.get('relationship')} consensus={_gov.get('consensus_direction')} "
+            f"decision_coverage={_gov.get('decision_coverage')}; "
+            f"fresh={_dq.get('fresh')}/{_dq.get('signals_total')}.",
+        ]
+        if _driver.get("direction"):
+            lines += [
+                "Dominant market driver: "
+                f"{_driver.get('label')} — {_driver.get('direction')} "
+                f"(confidence={_driver.get('confidence')}, strength={_driver.get('strength')}); "
+                f"evidence={_driver.get('evidence')}; invalidation={_driver.get('invalidation')}."
+            ]
+        _nwc = _dc.get("neural_web_contexts") or {}
+        _rot = _nwc.get("theme_rotation") or {}
+        _weather = _nwc.get("macro_weather") or {}
+        _rates = _nwc.get("rates") or {}
+        _transmission = _nwc.get("transmission") or {}
+        if _rot:
+            lines += [
+                "Theme migration (fresh NW context only): "
+                f"state={_rot.get('leadership_state')} "
+                f"trailing_leader={_rot.get('trailing_leader_name')}/"
+                f"{_rot.get('trailing_leader_health')}; "
+                f"absorbing={_rot.get('migration_absorbing')}; "
+                f"bleeding={_rot.get('migration_bleeding')}."
+            ]
+        if _weather:
+            lines += [
+                "Macro weather (fresh NW context only): "
+                f"US={_weather.get('us_quad')} credit={_weather.get('credit')} "
+                f"FX={_weather.get('fx')}."
+            ]
+        if _rates:
+            lines += [
+                "Rates context (non-authoritative): "
+                f"state={_rates.get('net_state')} path={_rates.get('path_plain_en')}."
+            ]
+        if _transmission:
+            lines += [
+                "Transmission watch (hypothesis only): "
+                f"{_transmission.get('summary')}."
+            ]
         lines += [""]
     # E2.5 — POSTURE block (flag-independent read-only prompt enrichment).
     # The Flagship PM sees the shadow posture so it can observe whether it would have agreed.
@@ -473,7 +589,19 @@ def _build_prompt(payload: dict, directive: str | None = None) -> str:
         "/ not_holding_should).",
         "",
         "```json",
-        json.dumps(payload, indent=2, default=str)[:9000],
+        json.dumps(
+            {
+                **payload,
+                # decision_context.v2 is rendered above in a typed, bounded block.  Exclude the
+                # duplicate nested copy so it cannot crowd the trailing advisory weights out of
+                # the legacy 9k JSON window.
+                "regime": {
+                    k: v for k, v in reg.items() if k != "decision_context"
+                },
+            },
+            indent=2,
+            default=str,
+        )[:9000],
         "```",
     ]
     return "\n".join(lines)

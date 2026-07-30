@@ -434,7 +434,7 @@ def _build_payload(asof: str, submission: dict | None, prices: dict, executed: l
     return {
         "as_of": asof,
         "portfolio_id": PORTFOLIO_ID,
-        "manager": "Autonomous Opus Brain",
+        "manager": "Mastermind AI (Codex-first)",
         "kind": "autonomous",
         "regime": _regime_dict(),
         "gross": gross,

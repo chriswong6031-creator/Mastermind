@@ -825,17 +825,52 @@ def headroom(cluster_or_ticker: str, book_id: str, own_weight: float | None = No
 
 
 def published_weights(book_id: str) -> dict[str, float]:
-    """Return the last-published ``{ticker: weight}`` for ``book_id`` from its latest.json.
+    """Return the authoritative prior ``{ticker: weight}`` for ``book_id``.
 
-    Used by the four US books' firm-clamp exception arms to obtain prior weights for
-    ``portfolio.freeze.freeze_to_prior``.  Returns ``{}`` when the file is absent or
-    unreadable — callers fall back to prior-keys-only mode (no new adds, existing weights
-    unchanged). Never raises."""
+    Prefer the last-published ``latest.json``. If that contract is empty or
+    unreadable while the paper account still holds positions, derive weights
+    from the account's last-good marks. A FREEZE must never turn an observability
+    gap into a liquidation.
+    """
     try:
         book = _load_book({"id": str(book_id or "")})
         if book and isinstance(book.get("holdings"), dict):
-            return {tk: float(w) for tk, w in book["holdings"].items()
-                    if isinstance(w, (int, float)) and w > 0}
+            published = {
+                tk: float(w) for tk, w in book["holdings"].items()
+                if isinstance(w, (int, float)) and w > 0
+            }
+            if published:
+                return published
+    except Exception:  # noqa: BLE001
+        pass
+
+    try:
+        from portfolio import paper_account
+
+        account_path = paper_account._paths(book_id)["account"]
+        if not account_path.exists():
+            return {}
+        account = paper_account._load_account(book_id)
+        marked: dict[str, float] = {}
+        invested = 0.0
+        for ticker, pos in (account.get("positions") or {}).items():
+            shares = max(0.0, float((pos or {}).get("shares") or 0.0))
+            price = float(
+                (pos or {}).get("current_price")
+                or (pos or {}).get("avg_cost")
+                or 0.0
+            )
+            value = shares * price
+            if value > 1e-6:
+                marked[str(ticker).upper()] = value
+                invested += value
+        nav = max(0.0, float(account.get("cash") or 0.0)) + invested
+        if nav > 0:
+            return {
+                ticker: value / nav
+                for ticker, value in marked.items()
+                if value / nav > 1e-9
+            }
     except Exception:  # noqa: BLE001
         pass
     return {}

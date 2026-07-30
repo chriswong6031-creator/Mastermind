@@ -58,6 +58,25 @@ def test_server_and_allowlist_build():
     assert "mcp__bot__propose_thesis" in allowed
 
 
+def test_json_transport_compaction_remains_valid_json():
+    result = bot_mcp._json(
+        {
+            "rows": [
+                {"rank": rank, "detail": "x" * 1_000}
+                for rank in range(100)
+            ],
+            "status": "ok",
+        }
+    )
+    text = _text(result)
+    parsed = json.loads(text)
+
+    assert len(text) <= 8_000
+    assert parsed["status"] == "ok"
+    assert parsed["_transport_truncated"] is True
+    assert parsed["rows"]
+
+
 def test_subscription_env_strips_api_key(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
     env = cli_bridge._subscription_env()

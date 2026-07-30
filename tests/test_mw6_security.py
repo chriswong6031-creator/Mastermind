@@ -347,11 +347,11 @@ class TestServeOnly:
 
 
 # ---------------------------------------------------------------------------
-# Test 4: provenance banner contains sha + PAPER
+# Test 4: provenance API contains sha + PAPER
 # ---------------------------------------------------------------------------
 
-class TestProvenanceBanner:
-    """The /api/provenance endpoint returns sha, snapshot_date, and PAPER TRADING."""
+class TestProvenanceContract:
+    """The API retains deployment provenance without forcing it into the portfolio UI."""
 
     def test_provenance_endpoint_contains_paper_trading(self, monkeypatch):
         """GET /api/provenance must return paper_trading=True and label='PAPER TRADING'."""
@@ -400,17 +400,13 @@ class TestProvenanceBanner:
                 f"sha field looks wrong: {sha!r}"
             )
 
-    def test_banner_html_present_in_index(self):
-        """The provenance banner <div id='mm-provenance'> must exist in index.html."""
+    def test_provenance_stays_api_only_in_portfolio_ui(self):
+        """Deployment provenance remains available by API without blocking the dashboard UI."""
         from pathlib import Path
         html = (Path(__file__).resolve().parent.parent /
                 "app" / "static" / "index.html").read_text()
-        assert "mm-provenance" in html, (
-            "Provenance banner div not found in index.html"
-        )
-        assert "PAPER TRADING" in html, (
-            "PAPER TRADING label not found in provenance banner HTML"
-        )
+        assert "mm-provenance" not in html
+        assert "fetch('/api/provenance')" not in html
 
 
 # ---------------------------------------------------------------------------

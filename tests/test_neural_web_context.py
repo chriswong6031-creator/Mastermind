@@ -32,6 +32,10 @@ def _stale_date() -> str:
     return (date.today() - timedelta(days=10)).isoformat()
 
 
+def _future_date() -> str:
+    return (date.today() + timedelta(days=1)).isoformat()
+
+
 def _fresh_fixture(tmp_path: Path, *, as_of: str | None = None, extra: dict | None = None) -> Path:
     """Write a fresh copy of the v1 fixture to tmp_path with today's as_of (or custom)."""
     raw = json.loads(_FIXTURE_PATH.read_text())
@@ -40,6 +44,11 @@ def _fresh_fixture(tmp_path: Path, *, as_of: str | None = None, extra: dict | No
     for lobe_name, lobe in (raw.get("lobes") or {}).items():
         if isinstance(lobe, dict) and "as_of" in lobe:
             lobe["as_of"] = raw["as_of"]
+    # Per-lobe freshness is authoritative; fixtures must advance it with the lobe payload.
+    freshness = raw.setdefault("freshness", {})
+    for lobe_name in ("market", "reliability", "contradictions",
+                      "bottom_sensors", "options_entry"):
+        freshness[lobe_name] = {"as_of": raw["as_of"], "stale": False}
     if extra:
         raw.update(extra)
     p = tmp_path / "mastermind_context.json"
@@ -86,6 +95,15 @@ class TestFailSoft:
         ar = NWC.audit_row()
         assert ar["status"] == "stale"
         assert ar["asof"] == _stale_date()
+
+    def test_future_dated_as_of_returns_empty_no_raise(self, monkeypatch, tmp_path):
+        import brain.neural_web_context as NWC
+        future_file = _fresh_fixture(tmp_path, as_of=_future_date())
+        _patch_path(monkeypatch, future_file)
+        assert NWC.context() == {}
+        ar = NWC.audit_row()
+        assert ar["status"] == "stale"
+        assert ar["age_days"] == -1
 
     def test_wrong_schema_returns_empty_no_raise(self, monkeypatch, tmp_path):
         import brain.neural_web_context as NWC
@@ -196,6 +214,17 @@ class TestMarketPlane:
         assert isinstance(plane["contradiction_count"], int)
         assert plane["contradiction_count"] == 2
 
+    def test_top_level_fresh_cannot_launder_stale_market_lobe(self, monkeypatch, tmp_path):
+        import brain.neural_web_context as NWC
+        fresh_file = _fresh_fixture(tmp_path)
+        raw = json.loads(fresh_file.read_text())
+        raw["freshness"]["market"] = {"as_of": _stale_date(), "stale": True}
+        fresh_file.write_text(json.dumps(raw))
+        _patch_path(monkeypatch, fresh_file)
+        plane = NWC.market_plane()
+        assert plane["stale"] is True
+        assert plane["lobe_freshness"]["source"] == "producer"
+
 
 # ---------------------------------------------------------------------------
 # audit_row statuses
@@ -226,6 +255,8 @@ class TestAuditRow:
         assert ar["asof"] == _today()
         assert ar["n_candidates"] == 2  # NVDA + AMD in fixture
         assert ar["gap_notes_count"] == 1  # one gap note in fixture
+        assert ar["market_lobe_stale"] is False
+        assert ar["fresh_lobes"] >= 5
 
     def test_present_age_days_is_zero_for_today(self, monkeypatch, tmp_path):
         import brain.neural_web_context as NWC

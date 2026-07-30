@@ -77,7 +77,20 @@ def cli_path() -> str | None:
 
 
 def available() -> bool:
-    """True if we can reason via Claude Code (SDK present, CLI binary on PATH)."""
+    """True if the configured subscription CLI backend is reachable."""
+    selected = os.environ.get("BOT_LLM_BACKEND", _cfg().get("backend", "cli")).strip().lower()
+    if selected == "waterfall":
+        try:
+            from brain import provider_waterfall
+            return provider_waterfall.available()
+        except Exception:
+            return False
+    if selected == "codex":
+        try:
+            from brain import codex_bridge
+            return codex_bridge.available()
+        except Exception:
+            return False
     return bool(cli_path()) and _SDK
 
 
@@ -159,6 +172,122 @@ async def reason(prompt: str, *, role: str = "pm", model: str | None = None,
     on them is harmful.  When all candidates are exhausted, returns ok=False with the pool freeze
     message.  If candidates() returns [] (no pool configured), runs once with legacy behaviour.
     """
+    return await _reason(
+        prompt,
+        role=role,
+        model=model,
+        system=system,
+        append_system=append_system,
+        allowed_tools=allowed_tools,
+        add_dirs=add_dirs,
+        max_turns=max_turns,
+        cwd=cwd,
+        arm=arm,
+        resume=resume,
+        mcp_servers=mcp_servers,
+        log_run=log_run,
+        book=book,
+        seat=seat,
+        record_book=record_book,
+    )
+
+
+async def _reason(prompt: str, *, role: str = "pm", model: str | None = None,
+                  system: str | None = None, append_system: str | None = None,
+                  allowed_tools: list[str] | None = None, add_dirs: list[str] | None = None,
+                  max_turns: int | None = None, cwd: str | None = None,
+                  arm: bool = False, resume: str | None = None,
+                  mcp_servers: dict | None = None,
+                  log_run: bool = True,
+                  book: str | None = None,
+                  seat: str | None = None,
+                  record_book: str | None = None,
+                  _backend_override: str | None = None,
+                  _oauth_candidates: list[dict] | None = None) -> dict:
+    """Internal dispatcher with explicit provider overrides for the shared pool."""
+    selected_backend = (
+        _backend_override
+        or os.environ.get("BOT_LLM_BACKEND", _cfg().get("backend", "cli"))
+    ).strip().lower()
+    if selected_backend == "waterfall":
+        from brain import provider_waterfall
+        return await provider_waterfall.reason(
+            prompt,
+            role=role,
+            model=model,
+            system=system,
+            append_system=append_system,
+            allowed_tools=allowed_tools,
+            add_dirs=add_dirs,
+            max_turns=max_turns,
+            cwd=cwd,
+            arm=arm,
+            resume=resume,
+            mcp_servers=mcp_servers,
+            log_run=log_run,
+            book=book,
+            seat=seat,
+            record_book=record_book,
+        )
+    if selected_backend == "codex":
+        from brain import codex_bridge
+        _codex_t0 = time.monotonic()
+        result = await codex_bridge.reason(
+            prompt,
+            role=role,
+            model=model,
+            system=system,
+            append_system=append_system,
+            allowed_tools=allowed_tools,
+            add_dirs=add_dirs,
+            max_turns=max_turns,
+            cwd=cwd,
+            arm=arm,
+            resume=resume,
+            mcp_servers=mcp_servers,
+            log_run=log_run,
+            book=book,
+            seat=seat,
+            record_book=record_book,
+        )
+        try:
+            _record_cli_cost(
+                result,
+                role=role,
+                model=result.get("model"),
+                book=book,
+                seat=seat,
+                record_book=record_book,
+            )
+        except Exception:
+            pass
+        if log_run:
+            try:
+                from brain import thinking_log as _tl
+                _usage = result.get("usage") or {}
+                _tl.log_turn_async(
+                    question=prompt,
+                    answer=str(result.get("text") or ""),
+                    model=str(result.get("model") or "gpt-5.6-sol"),
+                    seat=str(seat or role or ""),
+                    book=str(book or record_book
+                             or _ROLE_BOOK.get(str(role or "").lower(), "flagship")),
+                    role=role,
+                    mode=("research" if arm else None),
+                    backend="codex",
+                    armed=arm,
+                    thread_id=result.get("session_id"),
+                    latency_ms=int((time.monotonic() - _codex_t0) * 1000),
+                    input_tokens=int(_usage.get("input_tokens") or 0),
+                    output_tokens=int(_usage.get("output_tokens") or 0),
+                    tools=result.get("tools_used") or [],
+                    thinking=[],
+                    flags={"error": not result.get("ok"),
+                           "degraded": bool(result.get("error"))},
+                )
+            except Exception:
+                pass
+        return result
     _t0 = time.monotonic()  # response-ledger latency clock (whole turn, entry→result)
     c = _cfg()
     rc = c.get("reasoning", {})
@@ -200,7 +329,11 @@ async def reason(prompt: str, *, role: str = "pm", model: str | None = None,
     # Import lazily so tests can monkeypatch before first use.
     try:
         from brain import key_rotor as _kr
-        _pool = _kr.candidates()
+        _pool = (
+            list(_oauth_candidates)
+            if _oauth_candidates is not None
+            else _kr.candidates()
+        )
     except Exception:
         _pool = []
 

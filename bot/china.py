@@ -172,6 +172,7 @@ def run_china(asof: str | None = None, *, force: bool = False, armed: bool = Tru
     target = {h["ticker"]: float(h.get("weight") or 0.0)
               for h in (submission.get("holdings") if decided else [])}
     prices: dict[str, float] = {}
+    _warm_live(set(target) | set(held))
     for t in set(target) | set(held) | {BENCHMARK}:
         base = fx.usd_to(paper_account._current_price(t), CURRENCY)
         if base and base > 0:
@@ -408,7 +409,7 @@ def _build_payload(asof: str, submission: dict | None, prices: dict, executed: l
     return {
         "as_of": asof,
         "portfolio_id": PORTFOLIO_ID,
-        "manager": "China Opus Brain",
+        "manager": "Mastermind AI (Codex-first)",
         "kind": "china_brain",
         "currency": CURRENCY,
         "benchmark": BENCHMARK,
@@ -520,6 +521,7 @@ def republish(asof: str | None = None) -> dict:
     held = list((paper_account._load_account(PORTFOLIO_ID).get("positions") or {}).keys())
     target = {h["ticker"]: float(h.get("weight") or 0.0) for h in (submission.get("holdings") or [])}
     prices: dict[str, float] = {}
+    _warm_live(set(target) | set(held))
     for t in set(target) | set(held) | {BENCHMARK}:
         base = fx.usd_to(paper_account._current_price(t), CURRENCY)
         if base and base > 0:
@@ -573,6 +575,23 @@ def _has_history() -> bool:
         return nav_path.exists() and bool(nav_path.read_text().strip())
     except Exception:
         return False
+
+
+def _warm_live(tickers) -> None:
+    """Batch-prefetch A-share Yahoo marks in one request.
+
+    Yahoo quotes ``*.SS``/``*.SZ`` in native CNY and is the reachable VPS
+    fallback when the Tushare endpoint cannot be routed from this region.
+    """
+    try:
+        from data_layer import yahoo_feed
+
+        yahoo_feed.warm([
+            t for t in tickers
+            if (t or "").upper().endswith((".SS", ".SZ"))
+        ])
+    except Exception:
+        pass
 
 
 def _diff_trades(before: dict, after: dict, prices: dict) -> list[dict]:

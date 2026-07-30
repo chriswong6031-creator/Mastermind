@@ -30,12 +30,24 @@ def status(venue: str | None, asof: str | None = None) -> dict:
     """
     v = (venue or "").strip()
     if v == "A-share":
-        healthy, feed = _tushare(asof), "tushare"
+        healthy, feed = _ashare(asof)
     elif v == "HK":
         healthy, feed = _yahoo(), "yahoo"
     else:
         healthy, feed = None, None             # US / unrestricted books: no fresh-feed asymmetry to gate
-    st = "up" if healthy is True else "down" if healthy is False else "snapshot"
+    # ``None`` means the live adapter is not deployed. Snapshot mode is safe
+    # only when a canonical liquid name actually exists in the local snapshot
+    # tree. The VPS incident on 2026-07-30 had neither yfinance nor
+    # site/hkstockdata; treating that as snapshot mode let the HK Brain see
+    # every holding as unpriceable and publish a false 100%-cash target.
+    if healthy is True:
+        st = "up"
+    elif healthy is False:
+        st = "down"
+    elif v in {"A-share", "HK"}:
+        st = "snapshot" if _snapshot_available(v) else "down"
+    else:
+        st = "snapshot"
     return {"venue": v, "feed": feed, "status": st, "asof": asof}
 
 
@@ -52,9 +64,43 @@ def _tushare(asof: str | None):
         return None
 
 
-def _yahoo():
+def _yahoo(probe: str | None = None):
     try:
         from data_layer import yahoo_feed
-        return yahoo_feed.feed_healthy()
+        return yahoo_feed.feed_healthy(probe)
     except Exception:
         return None
+
+
+def _ashare(asof: str | None) -> tuple[bool | None, str]:
+    """A-share live-feed waterfall.
+
+    Yahoo carries Shanghai/Shenzhen symbols and is reachable from the VPS,
+    while Tushare can be regionally unreachable from non-China hosts. Prefer
+    the token-free Yahoo probe; retain Tushare as the second live source.
+    """
+    yahoo = _yahoo("600519.SS")
+    if yahoo is True:
+        return True, "yahoo"
+    tushare = _tushare(asof)
+    if tushare is True:
+        return True, "tushare"
+    if yahoo is False and tushare is False:
+        return False, "yahoo+tushare"
+    if tushare is False:
+        return False, "tushare"
+    if yahoo is False:
+        return False, "yahoo"
+    return None, "yahoo+tushare"
+
+
+def _snapshot_available(venue: str) -> bool:
+    """Whether the venue has a usable local fallback mark (NEVER raises)."""
+    try:
+        from data_layer import terminal_prices
+
+        probe = "0700.HK" if venue == "HK" else "600519.SS"
+        px = terminal_prices.price_local(probe)
+        return bool(px and float(px) > 0)
+    except Exception:
+        return False

@@ -1,8 +1,9 @@
-"""The brain's LLM client — two backends, one contract.
+"""The brain's LLM client — shared waterfall plus direct compatibility modes.
 
-Default backend = 'cli': drive the locally-installed Claude Code via brain/cli_bridge
-(subscription tokens, sees the dashboard context, tiered subagents). Fallback backend =
-'api': the metered Anthropic Messages API (needs ANTHROPIC_API_KEY).
+The authoritative VPS uses ``waterfall``: Codex (ChatGPT-managed auth, Sol
+xhigh) first, then Macro Dashboard's shared Claude OAuth pool.  Direct
+``codex``/``cli`` modes remain available for diagnostics and local use, with
+``api`` as the metered Anthropic Messages API fallback.
 
 Either way `call_model()` returns (text|None, degraded_reason|None) — the same contract as
 master_brain._call_model. When neither backend can run, it returns (None, reason) so the
@@ -13,7 +14,7 @@ from __future__ import annotations
 
 import os
 
-from brain import cli_bridge
+from brain import cli_bridge, codex_bridge
 
 TIERS = {
     "pm": {"model": "claude-opus-4-8", "effort": "high"},
@@ -26,9 +27,9 @@ TIERS = {
 
 
 def backend() -> str:
-    """'cli' (Claude Code) | 'api' (Messages API). Env override > config/agents.yml > 'cli'."""
+    """Configured LLM backend. Env override > agents.yml > ``cli``."""
     env = os.environ.get("BOT_LLM_BACKEND")
-    if env in ("cli", "api"):
+    if env in ("waterfall", "codex", "cli", "api"):
         return env
     try:
         return cli_bridge._cfg().get("backend", "cli")
@@ -48,6 +49,10 @@ def api_available() -> bool:
 
 def available() -> bool:
     """Can we reason at all (either backend)?"""
+    if backend() == "waterfall":
+        return cli_bridge.available()
+    if backend() == "codex":
+        return codex_bridge.available()
     return cli_bridge.available() or api_available()
 
 
@@ -58,6 +63,36 @@ def call_model(system: str, user: str, *, role: str = "pm", max_tokens: int = 15
     seat / record_book: cost-attribution overrides forwarded to the recorder on either
     backend — seat names the ledger seat (default = role), record_book overrides the
     _ROLE_BOOK default book. Attribution-only; never changes routing or behaviour."""
+    if backend() == "waterfall" and cli_bridge.available():
+        try:
+            r = cli_bridge.reason_sync(
+                user,
+                role=role,
+                append_system=system,
+                seat=seat,
+                record_book=record_book,
+            )
+            if r.get("ok") and r.get("text"):
+                return r["text"], None
+            return None, (r.get("error") or "provider_waterfall_empty")
+        except Exception:
+            return None, "provider_waterfall_error"
+
+    if backend() == "codex" and codex_bridge.available():
+        try:
+            r = codex_bridge.reason_sync(
+                user,
+                role=role,
+                append_system=system,
+                seat=seat,
+                record_book=record_book,
+            )
+            if r.get("ok") and r.get("text"):
+                return r["text"], None
+            return None, (r.get("error") or "codex_empty")
+        except Exception:
+            pass
+
     if backend() == "cli" and cli_bridge.available():
         try:
             r = cli_bridge.reason_sync(user, role=role, append_system=system,

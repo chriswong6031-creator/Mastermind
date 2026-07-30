@@ -145,6 +145,16 @@ def test_tushare_ticker_mapping():
     assert tushare_feed._to_ts_code("BABA") is None               # ADR not covered
 
 
+def test_tushare_timeout_is_configurable_and_bounded(monkeypatch):
+    from data_layer import tushare_feed
+    monkeypatch.setenv("TUSHARE_TIMEOUT_SEC", "5")
+    assert tushare_feed._timeout() == 5.0
+    monkeypatch.setenv("TUSHARE_TIMEOUT_SEC", "0")
+    assert tushare_feed._timeout() == 1.0
+    monkeypatch.setenv("TUSHARE_TIMEOUT_SEC", "bad")
+    assert tushare_feed._timeout() == 30.0
+
+
 def test_tushare_price_local_and_degrade(monkeypatch):
     from data_layer import tushare_feed
     tushare_feed.clear_cache()
@@ -406,6 +416,29 @@ def test_display_name_by_venue(monkeypatch):
     assert china_intake.display_name("9999.HK") == "9999.HK"             # no name → ticker fallback
 
 
+def test_hk_display_name_has_english_and_native_chinese_variants(monkeypatch):
+    """HK names resolve from the bilingual market universe without machine translation."""
+    from brain import china_intake
+    china_intake.clear_name_cache()
+
+    def fake_read(rel):
+        if rel == "hkstockdata/0700.HK.json":
+            return {"name": "Tencent"}
+        if rel == "marketdata/hk_heatmap.json":
+            return {"tiles": [
+                {"t": "0700.HK", "name": "Tencent", "name_zh": "腾讯控股"},
+                {"t": "0941.HK", "name": "China Mobile", "name_zh": "中国移动"},
+            ]}
+        return None
+
+    monkeypatch.setattr(china_intake, "_read", fake_read)
+    assert china_intake.display_name("0700.HK") == "Tencent"
+    assert china_intake.display_name_zh("0700.HK") == "腾讯控股"
+    assert china_intake.display_name("0941.HK") == "China Mobile"
+    assert china_intake.display_name_zh("0941.HK") == "中国移动"
+    china_intake.clear_name_cache()
+
+
 def test_display_name_falls_back_to_board(monkeypatch):
     """A freshly surfaced name with NO per-name `chinastockdata/<T>.json` snapshot still resolves via
     the desk boards (every buy-board / alpha-leader row carries a `name`). Regression for 603301
@@ -465,6 +498,8 @@ def test_api_trades_attaches_region_display_names(iso, monkeypatch):
     from brain import china_intake
     monkeypatch.setattr(china_intake, "display_name",
                         lambda t: {"600519.SS": "贵州茅台", "0700.HK": "Tencent"}.get(t, t))
+    monkeypatch.setattr(china_intake, "display_name_zh",
+                        lambda t: {"0700.HK": "腾讯控股"}.get(t, t))
 
     for pid, ticker, want in (("china", "600519.SS", "贵州茅台"), ("hk", "0700.HK", "Tencent")):
         cdir = registry.data_dir(pid)
@@ -475,6 +510,8 @@ def test_api_trades_attaches_region_display_names(iso, monkeypatch):
         data = json.loads(web.api_trades(portfolio=pid).body)
         assert data["history"], f"{pid}: expected a blotter row"
         assert data["history"][0]["name"] == want                       # name on the blotter row
+        if pid == "hk":
+            assert data["history"][0]["name_zh"] == "腾讯控股"
 
     # a US book has no venue restriction → no name attachment (codes are self-describing).
     # flagship's blotter resolves through the (conftest-isolated) legacy _FILLS_PATH.
@@ -486,15 +523,44 @@ def test_api_trades_attaches_region_display_names(iso, monkeypatch):
     assert us["history"] and "name" not in us["history"][0]
 
 
+def test_trade_history_uses_account_to_hide_stale_fifo_residue(iso):
+    """Historical fractional sizing can leave a tiny fill-derived remainder even after
+    the authoritative account has exited the name. It must not appear as an open trade."""
+    from portfolio import trade_history
+
+    cdir = registry.data_dir("hk")
+    cdir.mkdir(parents=True, exist_ok=True)
+    (cdir / "fills.jsonl").write_text(
+        json.dumps({"date": "2026-06-20", "ticker": "3993.HK", "side": "buy",
+                    "shares": 100.0, "price": 7.0, "value": 700.0}) + "\n" +
+        json.dumps({"date": "2026-06-22", "ticker": "3993.HK", "side": "sell",
+                    "shares": 99.999, "price": 7.5, "value": 749.9925}) + "\n")
+    (cdir / "account.json").write_text(json.dumps({
+        "inception_date": "2026-06-20",
+        "starting_nav": 1_000_000.0,
+        "cash": 1_000_000.0,
+        "positions": {},
+    }))
+
+    buy = next(row for row in trade_history.history(
+        live_prices={"3993.HK": 8.0}, portfolio_id="hk"
+    ) if row["action"] == "buy")
+    assert buy["still_open"] is False
+    assert buy["open_shares"] is None
+    assert buy["unrealized_pnl"] is None
+
+
 def test_api_decisions_attaches_region_display_names(iso, monkeypatch):
     """Daily Decision Log buy/sell chips AND holding rows for the venue books (China A-shares,
-    HK) carry the display name, resolved server-side on every read — so even historical entries
-    logged before names were captured (no `name` baked in) backfill. US brain books stay
+    HK) carry localized display names, resolved server-side on every read — so even historical
+    entries logged before names were captured (no `name` baked in) backfill. US brain books stay
     code-only (no venues → no attachment)."""
     from app import web
     from brain import china_intake
     monkeypatch.setattr(china_intake, "display_name",
                         lambda t: {"600519.SS": "贵州茅台", "0700.HK": "Tencent"}.get(t, t))
+    monkeypatch.setattr(china_intake, "display_name_zh",
+                        lambda t: {"0700.HK": "腾讯控股"}.get(t, t))
 
     for pid, ticker, want in (("china", "600519.SS", "贵州茅台"), ("hk", "0700.HK", "Tencent")):
         cdir = registry.data_dir(pid)
@@ -507,6 +573,9 @@ def test_api_decisions_attaches_region_display_names(iso, monkeypatch):
         d = json.loads(web.api_decisions(portfolio=pid).body)["decisions"][0]
         assert d["executed"][0]["name"] == want                          # name on the buy/sell chip
         assert d["holdings"][0]["name"] == want                          # name on the holding row
+        if pid == "hk":
+            assert d["executed"][0]["name_zh"] == "腾讯控股"
+            assert d["holdings"][0]["name_zh"] == "腾讯控股"
 
     # a US brain book has no venue restriction → no name attachment (codes are self-describing).
     adir = registry.data_dir("autonomous")
@@ -546,6 +615,51 @@ def test_api_decisions_sell_chips_show_pct_and_realized_pnl(iso, monkeypatch):
     blot = next(r for r in trade_history.history(portfolio_id="hk")
                 if r["ticker"] == "0700.HK" and r["action"] == "sell")
     assert sell["realized_pnl"] == blot["realized_pnl"]
+
+
+def test_api_portfolio_backfills_hk_bilingual_names(iso, monkeypatch):
+    """An existing HK book gets both language variants without waiting for a republish."""
+    from app import web
+    from brain import china_intake
+
+    monkeypatch.setattr(china_intake, "display_name", lambda t: "Tencent")
+    monkeypatch.setattr(china_intake, "display_name_zh", lambda t: "腾讯控股")
+    cdir = registry.data_dir("hk")
+    cdir.mkdir(parents=True, exist_ok=True)
+    (cdir / "latest.json").write_text(json.dumps({
+        "portfolio_id": "hk",
+        "as_of": "2026-06-23",
+        "kind": "hk_brain",
+        "summary": "Hold the core.",
+        "positions": [{"ticker": "0700.HK", "name": "Tencent", "weight": 0.1}],
+    }))
+
+    position = json.loads(web.api_portfolio(portfolio="hk").body)["positions"][0]
+    assert position["name"] == "Tencent"
+    assert position["name_zh"] == "腾讯控股"
+
+
+def test_api_portfolio_repairs_stale_china_ticker_names(iso, monkeypatch):
+    """An existing China book replaces a raw-ticker name from an earlier degraded publish."""
+    from app import web
+    from brain import china_intake
+
+    monkeypatch.setattr(
+        china_intake, "display_name",
+        lambda t: {"600882.SS": "妙可蓝多"}.get(t, t),
+    )
+    cdir = registry.data_dir("china")
+    cdir.mkdir(parents=True, exist_ok=True)
+    (cdir / "latest.json").write_text(json.dumps({
+        "portfolio_id": "china",
+        "as_of": "2026-07-30",
+        "kind": "china_brain",
+        "summary": "Hold the core.",
+        "positions": [{"ticker": "600882.SS", "name": "600882.SS", "weight": 0.1}],
+    }))
+
+    position = json.loads(web.api_portfolio(portfolio="china").body)["positions"][0]
+    assert position["name"] == "妙可蓝多"
 
 
 def test_api_portfolio_banner_summary_falls_back_to_decision_log(iso):
@@ -838,16 +952,30 @@ def test_tushare_feed_healthy_tristate(monkeypatch):
 
 
 def test_feed_health_status_dispatch(monkeypatch):
-    """The venue dispatcher maps A-share→tushare, HK→yahoo, and treats an unrestricted (US) book
-    as 'snapshot' (no fresh-feed asymmetry to gate)."""
+    """A-shares use live Yahoo when Tushare is unavailable; HK uses Yahoo."""
     from data_layer import feed_health, tushare_feed, yahoo_feed
     monkeypatch.setattr(tushare_feed, "feed_healthy", lambda asof=None: False)
     monkeypatch.setattr(yahoo_feed, "feed_healthy", lambda *a, **k: True)
     assert feed_health.status("A-share", "2026-06-22") == {
-        "venue": "A-share", "feed": "tushare", "status": "down", "asof": "2026-06-22"}
+        "venue": "A-share", "feed": "yahoo", "status": "up", "asof": "2026-06-22"}
     assert feed_health.status("HK")["status"] == "up"
     assert feed_health.status(None)["status"] == "snapshot"       # US / unrestricted → no gate
-    assert feed_health.is_down("A-share") is True and feed_health.is_down("HK") is False
+    assert feed_health.is_down("A-share") is False and feed_health.is_down("HK") is False
+
+
+def test_feed_health_missing_live_adapter_requires_real_snapshot(monkeypatch):
+    """Missing yfinance is safe snapshot mode only when a usable HK snapshot exists."""
+    from data_layer import feed_health, terminal_prices, yahoo_feed
+
+    monkeypatch.setattr(yahoo_feed, "feed_healthy", lambda *a, **k: None)
+    monkeypatch.setattr(terminal_prices, "price_local", lambda ticker: None)
+    assert feed_health.status("HK")["status"] == "down"
+
+    monkeypatch.setattr(
+        terminal_prices, "price_local",
+        lambda ticker: 471.8 if ticker == "0700.HK" else None,
+    )
+    assert feed_health.status("HK")["status"] == "snapshot"
 
 
 def test_run_china_aborts_on_tushare_feed_outage(iso, monkeypatch):

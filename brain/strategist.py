@@ -156,6 +156,14 @@ def _strategist_input(regime: dict | None, asof: str) -> dict:
     except Exception:  # noqa: BLE001 — additive; never break the seat
         pass
 
+    decision_context: dict = {}
+    try:
+        from brain import decision_context as _dc
+
+        decision_context = _dc.prompt_summary()
+    except Exception:  # noqa: BLE001
+        pass
+
     # W-NW.1 — neural_web_context payload key (flag-gated; compact market_plane() distillation).
     # Uses market_plane() — NOT context() — so the injected dict is ~7 scalar fields, not the
     # full 60-120 KB artifact.  The full artifact would violate the <~6k-token payload budget
@@ -196,6 +204,7 @@ def _strategist_input(regime: dict | None, asof: str) -> dict:
         # market_view is absent ({}) when the organ is unbuilt — the strategist still
         # runs without it; the key is always present so the payload schema is stable.
         "market_view": market_view_enrichment,
+        "decision_context": decision_context,
         # neural_web_context is absent ({}) when flag OFF or context absent/stale.
         "neural_web_context": neural_web_ctx,
     }

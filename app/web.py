@@ -484,6 +484,27 @@ def api_portfolio(portfolio: str = "flagship") -> JSONResponse:
         except Exception:
             pass
 
+        # Venue-book display names are resolved on every read. Historical China
+        # latest.json files can contain the ticker itself as ``name`` when their
+        # publishing run could not see the security master; HK files can also
+        # predate ``name_zh``. Repair both without requiring a trading run/republish.
+        if portfolio in {"china", "hk"}:
+            try:
+                from brain import china_intake
+                for pos in payload.get("positions", []):
+                    tk = pos.get("ticker")
+                    if not tk:
+                        continue
+                    name = china_intake.display_name(tk)
+                    if name and name.upper() != tk.upper():
+                        pos["name"] = name
+                    if portfolio == "hk":
+                        name_zh = china_intake.display_name_zh(tk)
+                        if name_zh and name_zh.upper() != tk.upper():
+                            pos["name_zh"] = name_zh
+            except Exception:
+                pass
+
         # ------------------------------------------------------------------
         # Inject zh fields from the cache (read-only — no LLM in this path)
         # ------------------------------------------------------------------
@@ -646,7 +667,7 @@ def _portfolio_status(meta: dict) -> dict:
 def api_portfolios() -> JSONResponse:
     """The set of portfolios the dashboard switches between, each with a quick status
     (NAV, return, vs-SPY, holdings) for the tab labels. The flagship is the gated engine
-    book; the autonomous book is managed free-form by the Opus Brain.
+    book; the autonomous book is managed free-form by the shared-provider Mastermind AI.
 
     Each book's status is I/O-bound (live marks + benchmark history); we price them concurrently
     and cache the assembled payload for ``_PORTFOLIOS_TTL`` so a tab click / poll doesn't re-price."""
@@ -685,13 +706,17 @@ def api_decisions(portfolio: str = "autonomous", limit: int = 60) -> JSONRespons
         # entries logged before names were captured backfill too; mirrors api_trades. US books are
         # self-describing and stay code-only.
         _name = None
+        _name_zh = None
         try:
             from portfolio import registry
             if registry.venues(portfolio):
                 from brain import china_intake
                 _name = china_intake.display_name
+                if portfolio == "hk":
+                    _name_zh = china_intake.display_name_zh
         except Exception:  # noqa: BLE001
             _name = None
+            _name_zh = None
         # A dollar figure alone doesn't say how much of a position a SELL trimmed or whether it
         # made money. Enrich each executed sell with the fraction of the position sold (pct_sold;
         # 1.0 = full exit) and the realized P&L + %, sourced from the SAME FIFO blotter the Trade
@@ -714,6 +739,10 @@ def api_decisions(portfolio: str = "autonomous", limit: int = 60) -> JSONRespons
                     nm = _name(rec["ticker"])
                     if nm and nm.upper() != rec["ticker"].upper():
                         rec["name"] = nm
+                if _name_zh and rec.get("ticker"):
+                    nm_zh = _name_zh(rec["ticker"])
+                    if nm_zh:
+                        rec["name_zh"] = nm_zh
                 if rec.get("side") == "sell":
                     det = _sell.get((d.get("asof"), (rec.get("ticker") or "").upper()))
                     if det:
@@ -727,6 +756,10 @@ def api_decisions(portfolio: str = "autonomous", limit: int = 60) -> JSONRespons
                         nm = _name(tk)
                         if nm and nm.upper() != tk.upper():
                             h["name"] = nm
+                    if tk and _name_zh:
+                        nm_zh = _name_zh(tk)
+                        if nm_zh:
+                            h["name_zh"] = nm_zh
             for fld in ("summary", "sold_note", "brain_text"):
                 v = d.get(fld)
                 if v:
@@ -1036,6 +1069,10 @@ def api_trades(portfolio: str = "flagship") -> JSONResponse:
                 nm = china_intake.display_name(tk)
                 if nm and nm.upper() != tk.upper():
                     row["name"] = nm
+                if portfolio == "hk":
+                    nm_zh = china_intake.display_name_zh(tk)
+                    if nm_zh:
+                        row["name_zh"] = nm_zh
         # Market-status strip: the venue books report their own exchange (HKEX for hk, A-share for
         # china), not the NYSE calendar the US books use.
         if venue_book:

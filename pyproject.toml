@@ -20,6 +20,9 @@ dependencies = [
     "psycopg[binary]>=3.1",
     "duckdb>=1.0",
     "httpx>=0.27",
+    # live native-currency marks for US/HK books; without this the HK feed
+    # health gate cannot distinguish an undeployed feed from a usable snapshot.
+    "yfinance==1.5.2",
 ]
 
 [tool.pytest.ini_options]

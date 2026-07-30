@@ -21,7 +21,7 @@ try {
 body.page-ag {
   background: var(--bg);
   color: var(--text);
-  font: 14px/1.5 Inter, -apple-system, "Segoe UI", Roboto, Helvetica, sans-serif;
+  font: 14px/1.55 var(--font-sans);
   margin: 0;
   padding: 18px;
 }
@@ -75,15 +75,189 @@ body.page-ag a { text-decoration: none; color: var(--link); }
 .footnote { color: var(--muted); font-size: 11px; margin: 20px 0 0;
   border-top: 1px solid var(--line); padding-top: 10px; }
 .msg { color: var(--muted); padding: 40px 0; text-align: center; }
+
+/* Institutional improvement ledger. */
+body.page-ag {
+  --ag-hair: color-mix(in srgb, var(--line) 72%, transparent);
+  --ag-tile: color-mix(in srgb, var(--panel2) 86%, var(--panel));
+  min-height: 100vh;
+  padding: 22px clamp(18px, 3vw, 48px) 72px;
+}
+@media (min-width: 1160px) {
+  body.page-ag { padding-inline: calc((100vw - 1080px) / 2); }
+}
+body.page-ag .note {
+  position: relative;
+  margin: 0 0 18px;
+  padding: 15px 17px 15px 20px;
+  overflow: hidden;
+  border: 1px solid var(--ag-hair);
+  border-left: 0;
+  border-radius: 11px;
+  background: var(--ag-tile);
+  color: color-mix(in srgb, var(--text) 68%, transparent);
+  line-height: 1.55;
+}
+body.page-ag .note::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--info);
+}
+body.page-ag .summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(135px, 1fr));
+  gap: 8px;
+  margin-bottom: 18px;
+}
+body.page-ag .summary .chip {
+  min-height: 58px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  padding: 10px 12px;
+  border-color: var(--ag-hair);
+  border-radius: 9px;
+  background: var(--ag-tile);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: .035em;
+  text-transform: uppercase;
+}
+body.page-ag .summary .chip b {
+  font-size: 17px;
+  letter-spacing: -.02em;
+}
+body.page-ag .item {
+  position: relative;
+  overflow: hidden;
+  margin: 0 0 14px;
+  padding: 19px 21px 20px;
+  border-color: var(--line);
+  border-radius: 15px;
+  background: var(--panel);
+  box-shadow: var(--card-shadow);
+}
+body.page-ag .item::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: linear-gradient(180deg, var(--info),
+    color-mix(in srgb, var(--info) 22%, transparent));
+}
+body.page-ag .item .top {
+  align-items: center;
+  margin-bottom: 10px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--ag-hair);
+}
+body.page-ag .item .rank {
+  min-width: 30px;
+  color: var(--info);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+body.page-ag .item h2 {
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 740;
+  letter-spacing: -.012em;
+}
+body.page-ag .item .meta { margin-bottom: 14px; }
+body.page-ag .pill {
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .045em;
+}
+body.page-ag .block-label {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: .1em;
+}
+body.page-ag .evidence {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+body.page-ag .evidence li {
+  position: relative;
+  margin: 0;
+  padding: 7px 10px 7px 24px;
+  border: 1px solid var(--ag-hair);
+  border-radius: 8px;
+  background: var(--ag-tile);
+  color: color-mix(in srgb, var(--text) 74%, transparent);
+  font-size: 12.5px;
+}
+body.page-ag .evidence li::before {
+  content: "·";
+  position: absolute;
+  left: 11px;
+  color: var(--info);
+  font-weight: 800;
+}
+body.page-ag .fix,
+body.page-ag .impact {
+  color: color-mix(in srgb, var(--text) 76%, transparent);
+  line-height: 1.6;
+}
+body.page-ag .footnote {
+  padding-top: 14px;
+  border-top-color: var(--ag-hair);
+  font-family: var(--font-mono);
+  line-height: 1.55;
+}
+body.page-ag .msg {
+  min-height: 120px;
+  display: grid;
+  place-content: center;
+  padding: 24px;
+  border: 1px dashed var(--ag-hair);
+  border-radius: 11px;
+}
+@media (max-width: 620px) {
+  body.page-ag { padding: 14px 12px 52px; }
+  body.page-ag .item { padding: 17px 15px 18px; border-radius: 13px; }
+  body.page-ag .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 </style>
 </head>
 <body class="page-ag">
-<div class="ag-head">
+<header class="mm-product-bar">
+  <a class="mm-product-brand" href="/" aria-label="Mastermind Dashboard">
+    <svg class="mm-product-mark" viewBox="0 0 32 32" aria-hidden="true">
+      <defs><linearGradient id="ag-logo-grad" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#3b82f6"/><stop offset="1" stop-color="#7c5cff"/>
+      </linearGradient></defs>
+      <rect x="1.5" y="1.5" width="29" height="29" rx="8" fill="url(#ag-logo-grad)"/>
+      <path d="M8 22.5 V11 L16 18.5 L24 11 V22.5" fill="none" stroke="#fff" stroke-width="2.7" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <span class="mm-product-word">MASTERMIND</span>
+  </a>
+  <span class="mm-product-context">Accountability</span>
+  <nav class="mm-product-links" aria-label="Product">
+    <a href="/">Bot Dashboard</a>
+    <a href="/portfolio_desk">Manual Ledger</a>
+    <a href="/market_view">Market View</a>
+    <a href="/agenda" aria-current="page">Agenda</a>
+  </nav>
+</header>
+
+<div class="mm-page-heading">
   <div>
+    <div class="mm-page-kicker">Continuous improvement queue</div>
     <h1>Improvement Agenda</h1>
     <div class="sub" id="sub">loading…</div>
   </div>
-  <div class="sub"><a href="/">&larr; dashboard</a> &nbsp;&middot;&nbsp; <a href="/portfolio_desk">Portfolio Desk</a></div>
+  <p class="mm-page-note">A ranked, read-only queue of evidence-backed system improvements and accountable owners.</p>
 </div>
 <div id="root"><div class="msg">Loading agenda…</div></div>
 

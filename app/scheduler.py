@@ -508,11 +508,16 @@ def _vps_state_sync_job():
             _ledger_end(handle, "error")
             return
         proc = subprocess.run(["/bin/bash", str(script)], capture_output=True, text=True, timeout=180)
-        if proc.returncode == 0:
+        verified = "sync verified token=" in (proc.stdout or "")
+        if proc.returncode == 0 and verified:
             _ledger_end(handle, "ok")
         else:
             _step_failed_event("vps_state_sync", "", "rsync",
-                               RuntimeError((proc.stderr or proc.stdout or "rsync failed").strip()[:300]))
+                               RuntimeError((
+                                   proc.stderr
+                                   or proc.stdout
+                                   or "sync script returned without VPS verification"
+                               ).strip()[:300]))
             _ledger_end(handle, "error")
     except Exception as exc:  # noqa: BLE001 — a sync miss must never kill the scheduler
         _ledger_end(handle, "error")
@@ -1329,7 +1334,6 @@ def start():
         return _scheduler
     try:
         from apscheduler.schedulers.background import BackgroundScheduler
-        from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
         from apscheduler.triggers.cron import CronTrigger
     except ImportError:
         return None
@@ -1355,8 +1359,19 @@ def start():
     if os.environ.get("MASTERMIND_JOBSTORE", "sqlite").strip().lower() == "memory":
         sch = BackgroundScheduler(timezone="UTC")  # default MemoryJobStore
     else:
-        sch = BackgroundScheduler(jobstores={"default": SQLAlchemyJobStore(url=f"sqlite:///{_DB}")},
-                                  timezone="UTC")
+        try:
+            from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+            sch = BackgroundScheduler(
+                jobstores={"default": SQLAlchemyJobStore(url=f"sqlite:///{_DB}")},
+                timezone="UTC",
+            )
+        except ImportError:
+            # A memory-configured deployment must not require SQLAlchemy at
+            # import time. If an environment requests sqlite without the
+            # optional dependency, stay live with the same replace-on-boot
+            # memory semantics instead of silently disabling every job.
+            log.warning("SQLAlchemy unavailable; scheduler falling back to MemoryJobStore")
+            sch = BackgroundScheduler(timezone="UTC")
     # FRESHNESS FOUNDATION: pull the vendored macro analyzer data (origin/main == the live site)
     # every 3h so no book ever decides on a stale read (the NVDA stale-"Constructive"-vs-live-"avoid"
     # bug). The staleness tripwire warns, or refuses to trade via MACRO_STALE_BLOCK=1. run_daily also
@@ -1451,8 +1466,12 @@ def start():
     # marks, snapshots — reaches the box within a tick; a cheap no-op when nothing changed. Never
     # runs on the box (MASTERMIND_SERVE_ONLY disables the scheduler). Cadence via VPS_STATE_SYNC_MINUTE.
     vps_sync_minute = (os.environ.get("VPS_STATE_SYNC_MINUTE", "*/15").strip() or "*/15")
-    sch.add_job(_vps_state_sync_job, CronTrigger(minute=vps_sync_minute, timezone="UTC"),
-                id="vps_state_sync", replace_existing=True, misfire_grace_time=3600, coalesce=True)
+    if os.environ.get("MASTERMIND_VPS_AUTHORITATIVE", "").strip().lower() not in {
+        "1", "true", "yes", "on"
+    }:
+        sch.add_job(_vps_state_sync_job, CronTrigger(minute=vps_sync_minute, timezone="UTC"),
+                    id="vps_state_sync", replace_existing=True, misfire_grace_time=3600,
+                    coalesce=True)
 
     # CIO / Meta-PM weekly accountability review (additive, read-only — recommends, never trades).
     # Default Sunday 10:00 UTC; configurable via CIO_WEEKLY_DAY / CIO_WEEKLY_UTC_HOUR.

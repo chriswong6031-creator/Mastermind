@@ -650,11 +650,21 @@ def check_and_warn(*, block: bool = False, log=print) -> dict:
 def refresh_and_check(log=print) -> dict:
     """Build entry point: pull fresh macro data, then run the staleness tripwire. `block` on stale
     is opt-in via MACRO_STALE_BLOCK=1. Never raises unless blocking is enabled AND data is stale."""
-    new_asof = refresh(log=log)
-    if new_asof:
-        log(f"[macro_refresh] vendored macro data refreshed to asof={new_asof}")
+    externally_managed = os.environ.get(
+        "MASTERMIND_MACRO_MANAGED_EXTERNALLY", ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    if externally_managed:
+        # The authoritative VPS shares /opt/macro with the separately supervised
+        # macro data plane. Never reset or sparse-convert that live checkout from
+        # the Mastermind scheduler; only apply the same freshness tripwire.
+        new_asof = None
+        log("[macro_refresh] external macro data plane — refresh skipped; checking freshness only")
     else:
-        log("[macro_refresh] refresh skipped/failed — reading last-good cached macro data")
+        new_asof = refresh(log=log)
+        if new_asof:
+            log(f"[macro_refresh] vendored macro data refreshed to asof={new_asof}")
+        else:
+            log("[macro_refresh] refresh skipped/failed — reading last-good cached macro data")
     info = check_and_warn(block=(os.environ.get("MACRO_STALE_BLOCK", "0") == "1"), log=log)
     info["refreshed_to"] = new_asof
     return info

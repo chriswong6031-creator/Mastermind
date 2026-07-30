@@ -307,15 +307,22 @@ def _live_price(ticker: str) -> float | None:
         sub, convert = "stockdata", False
 
     local: float | None = None
-    # A-shares: the fresh Tushare CNY close (``daily``, bulk + cached). Hong Kong: the fresh Yahoo
-    # HKD close (Tushare's ``hk_daily`` is throttled to ~1 call/hr — see data_layer.yahoo_feed).
-    # Both lag-correct the vendored snapshot; US ADRs have no live leg and use the snapshot below.
+    # A-shares: prefer Yahoo's native-CNY Shanghai/Shenzhen quote, which remains reachable from
+    # non-China VPS hosts; retain Tushare as the second live source. Hong Kong: Yahoo HKD close
+    # (Tushare's ``hk_daily`` is throttled to ~1 call/hr — see data_layer.yahoo_feed).
+    # Both lag-correct the vendored snapshot.
     if t.endswith((".SS", ".SZ")):
         try:
-            from data_layer import tushare_feed
-            local = tushare_feed.price_local(t)
+            from data_layer import yahoo_feed
+            local = yahoo_feed.price_local(t)
         except Exception:
             local = None
+        if local is None:
+            try:
+                from data_layer import tushare_feed
+                local = tushare_feed.price_local(t)
+            except Exception:
+                local = None
     elif t.endswith(".HK"):
         try:
             from data_layer import yahoo_feed

@@ -234,6 +234,17 @@ class TestConformance:
         """FREEZE-class artifacts must be sizing-input or infrastructure tier (never display-only)."""
         from control_plane import contracts as _c
         _c._reset()
+
+    def test_neural_web_context_is_registered_advisory_context(self):
+        """The Neural Web bridge must be freshness-governed without becoming a sizing anchor."""
+        from control_plane import contracts as _c
+        _c._reset()
+        contract = _c.contract("site-neural-web-mastermind-context")
+        assert contract is not None
+        assert contract["path"] == "site/neuralwebdata/mastermind_context.json"
+        assert contract["allowed_effect"] == "context-only"
+        assert contract["degradation_class"] == "ADVISORY"
+        _c._reset()
         arts = _c.all_contracts()
         for key in _c.freeze_class_keys():
             c = arts.get(key, {})

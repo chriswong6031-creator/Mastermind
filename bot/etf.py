@@ -646,7 +646,7 @@ def _build_payload(asof: str, submission: dict | None, prices: dict, executed: l
     return {
         "as_of": asof,
         "portfolio_id": PORTFOLIO_ID,
-        "manager": "ETF Opus Brain",
+        "manager": "Mastermind AI (Codex-first)",
         "kind": "etf_brain",
         "benchmark": BENCHMARK,
         "regime": _regime_dict(),

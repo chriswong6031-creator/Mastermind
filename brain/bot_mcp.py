@@ -40,8 +40,77 @@ def _ok(text: str) -> dict:
     return {"content": [{"type": "text", "text": text}]}
 
 
+def _compact_json_value(
+    value,
+    *,
+    list_limit: int,
+    str_limit: int,
+    depth: int = 0,
+):
+    """Recursively bound a tool payload while preserving valid JSON and top-level shape."""
+    if depth >= 7:
+        return "<nested context omitted>"
+    if isinstance(value, dict):
+        return {
+            str(k): _compact_json_value(
+                v,
+                list_limit=list_limit,
+                str_limit=str_limit,
+                depth=depth + 1,
+            )
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _compact_json_value(
+                v,
+                list_limit=list_limit,
+                str_limit=str_limit,
+                depth=depth + 1,
+            )
+            for v in value[:list_limit]
+        ]
+    if isinstance(value, tuple):
+        return _compact_json_value(
+            list(value),
+            list_limit=list_limit,
+            str_limit=str_limit,
+            depth=depth,
+        )
+    if isinstance(value, str) and len(value) > str_limit:
+        return value[: max(0, str_limit - 1)] + "…"
+    return value
+
+
 def _json(obj) -> dict:
-    return _ok(json.dumps(obj, default=str, ensure_ascii=False)[:8000])
+    """Return a valid JSON tool result under the 8k transport budget.
+
+    The old implementation sliced serialized bytes, which emitted malformed JSON.  Progressive
+    structural compaction keeps top-level keys and the highest-ranked list rows instead.
+    """
+    payload = json.dumps(obj, default=str, ensure_ascii=False)
+    if len(payload) <= 8000:
+        return _ok(payload)
+    for list_limit, str_limit in ((20, 400), (10, 240), (5, 160), (3, 100), (1, 72)):
+        compact = _compact_json_value(
+            obj,
+            list_limit=list_limit,
+            str_limit=str_limit,
+        )
+        if isinstance(compact, dict):
+            compact["_transport_truncated"] = True
+        payload = json.dumps(compact, default=str, ensure_ascii=False)
+        if len(payload) <= 8000:
+            return _ok(payload)
+    # Extremely wide objects still return valid JSON with their top-level scalar contract.
+    fallback = {
+        str(k): v
+        for k, v in (obj.items() if isinstance(obj, dict) else [])
+        if v is None or isinstance(v, (bool, int, float, str))
+    }
+    fallback["_transport_truncated"] = True
+    fallback["_note"] = "Nested payload exceeded the MCP transport budget."
+    return _ok(json.dumps(fallback, default=str, ensure_ascii=False))
 
 
 def _read_json(p: Path):
@@ -93,8 +162,56 @@ async def get_regime(args):
         mv = _read_market_view()
         enrichment = _market_view_enrichment(mv)
         if enrichment:
-            out["market_view"] = enrichment
+            compact_mv = dict(enrichment)
+            compact_mv["plane_summaries"] = [
+                {
+                    "name": row.get("name"),
+                    "direction": row.get("direction"),
+                    "status": row.get("status"),
+                    "stale": (row.get("freshness") or {}).get("stale"),
+                    "age_sessions": (row.get("freshness") or {}).get("age_sessions"),
+                }
+                for row in (enrichment.get("plane_summaries") or [])
+            ]
+            out["market_view"] = compact_mv
     except Exception:  # noqa: BLE001 — additive; never break the tool
+        pass
+    try:
+        from brain import decision_context as _dc
+
+        dc = _dc.prompt_summary()
+        if dc:
+            liquidity = dc.get("liquidity") or {}
+            quality = liquidity.get("quality") or {}
+            driver = dc.get("market_driver") or {}
+            # Keep this tool's JSON safely below its transport cap. Rich fresh-lobe context remains
+            # available to the strategist/PM; get_regime carries the precise regime core.
+            out["decision_context"] = {
+                "schema_version": dc.get("schema_version"),
+                "market_asof": dc.get("market_asof"),
+                "hard_label": dc.get("hard_label"),
+                "probabilistic_state": dc.get("probabilistic_state"),
+                "trajectory": dc.get("trajectory"),
+                "axes": dc.get("axes"),
+                "liquidity": {
+                    "quantity_overlay": liquidity.get("quantity_overlay"),
+                    "quality_label": quality.get("label"),
+                    "quality_asof": quality.get("asof"),
+                },
+                "risk": dc.get("risk"),
+                "market_driver": {
+                    "label": driver.get("label"),
+                    "direction": driver.get("direction"),
+                    "confidence": driver.get("confidence"),
+                    "strength": driver.get("strength"),
+                    "evidence": driver.get("evidence"),
+                    "invalidation": driver.get("invalidation"),
+                },
+                "governor": dc.get("governor"),
+                "data_quality": dc.get("data_quality"),
+                "neural_web_health": dc.get("neural_web_health"),
+            }
+    except Exception:  # noqa: BLE001
         pass
     return _json(out)
 

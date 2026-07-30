@@ -4,37 +4,48 @@
    auto-adapt: dark tint + light text in dark mode, light tint + dark text in
    light mode. Nothing hard-codes a dark background. */
 
-/* Inter — the typeface used by the Bitcoin Vector dashboard and the landing
-   hub. Loaded here (theme.css is linked by every page) and applied to <body>
-   below so the whole site shares one font; each page keeps its own
-   font-size/line-height. */
+/* San Francisco on Apple platforms, with Inter as the consistent cross-platform
+   fallback. SF Mono carries the same system character into numeric/data UI. */
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 :root {
-  --bg: #0f1115; --panel: #181b21; --panel2: #1e222a; --text: #d7dce3;
-  --muted: #8b93a1; --line: #2a2f3a;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
+    Inter, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", Inter,
+    "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "SF Mono", SFMono-Regular, ui-monospace, Menlo, Consolas, monospace;
+  --bg: #0a0c11; --panel: #14171e; --panel2: #1b1f28; --text: #e2e7ef;
+  --muted: #8c96a6; --line: #2a313d;
   --q1: #2e9e4f; --q2: #d4a017; --q3: #d04545; --q4: #3f78d8;
   --warn: #e0a030; --act: #e05555; --ok: #3da564;
   --up: #45b873; --down: #e06464; --orange: #e08b45;
-  --info: #5b9bf0; --link: #7aa7e0;
+  --info: #5b8cff; --link: #7da6ff;
   --g-cold: #4d8df0; --g-hot: #e0a23c; --g-mid: #3a4150;
   --chart-bg: transparent;
-  --card-shadow: 0 1px 0 rgba(255,255,255,.02);
+  --card-shadow: inset 0 1px 0 rgba(255,255,255,.045),
+    0 1px 2px rgba(0,0,0,.22), 0 18px 42px -30px rgba(0,0,0,.8);
   --popover-shadow: 0 6px 18px rgba(0,0,0,.5);
+  --surface-inset: color-mix(in srgb, var(--panel2) 86%, var(--panel));
+  --hairline: color-mix(in srgb, var(--line) 72%, transparent);
+  --focus-ring: color-mix(in srgb, var(--info) 72%, transparent);
+  --radius-sm: 8px; --radius-md: 11px; --radius-lg: 15px;
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
+  --space-5: 20px; --space-6: 24px; --space-8: 32px;
 }
 html[data-theme="light"] {
   /* Light palette tuned to match the Bitcoin Vector dashboard: airy #F7F8FA
      canvas, white cards on a soft #EAECF0 grid, and the same vivid #285FFF
      primary so links / buttons / accents read as one design family. The dark
      theme (the :root block above) is intentionally left untouched. */
-  --bg: #f7f8fa; --panel: #ffffff; --panel2: #eef1f6; --text: #1c2430;
-  --muted: #5d6b7e; --line: #eaecf0;
+  --bg: #f5f7fa; --panel: #ffffff; --panel2: #edf1f6; --text: #17202d;
+  --muted: #5f6c7e; --line: #dfe5ed;
   --q1: #1f8b41; --q2: #b07d05; --q3: #c12f2f; --q4: #2f63c4;
   --warn: #b9791a; --act: #c43d3d; --ok: #2f8a52;
   --up: #1f9a55; --down: #cf4040; --orange: #c4781f;
   --info: #285fff; --link: #285fff;
   --g-cold: #285fff; --g-hot: #c2841f; --g-mid: #cdd5e0;
   --chart-bg: #11151c;            /* keep dark-rendered Plotly charts legible */
-  --card-shadow: 0 1px 3px rgba(20,30,50,.07);
+  --card-shadow: inset 0 1px 0 rgba(255,255,255,.9),
+    0 1px 2px rgba(20,30,50,.05), 0 16px 38px -28px rgba(20,30,50,.32);
   /* soft, light popover shadow — the dark theme's heavy 50%-black drop shadow
      reads as a murky grey halo on the white light-mode tooltips */
   --popover-shadow: 0 4px 10px rgba(20,30,50,.06), 0 12px 28px rgba(20,30,50,.14);
@@ -73,13 +84,12 @@ html[data-lang="zh"] h2 { letter-spacing: 0; }
 
 a { color: var(--link); }
 
-/* Inter as the primary typeface on every page. The `html body` selector has
-   higher specificity than each page's own `body { font: 14px/1.5 -apple-system… }`
-   shorthand, so it swaps the family while leaving their font-size/line-height
-   untouched. Antialiasing matches Vector's crisp rendering. */
-html body { font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI",
-  Roboto, Helvetica, Arial, sans-serif; font-size: 15px;
+/* Shared SF/Inter typography and crisp native rendering. Page-local rules use
+   the same token, so selector specificity cannot silently swap the family. */
+html body { font-family: var(--font-sans); font-size: 15px;
   -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+html body :where(h1, h2, h3, h4, h5, h6) { font-family: var(--font-display); }
+html body :where(button, input, select, textarea) { font-family: inherit; }
 
 /* ---- ambient aurora backdrop (site-wide) ------------------------------------
    The landing hub's soft accent washes, shared by every page. A fixed, full-
@@ -93,9 +103,9 @@ html body { font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI",
 html body::before {
   content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none;
   background:
-    radial-gradient(680px 440px at 10% -8%, color-mix(in srgb, #416aec 20%, transparent), transparent 68%),
-    radial-gradient(620px 440px at 94% 2%, color-mix(in srgb, #8b5cf6 16%, transparent), transparent 70%),
-    radial-gradient(760px 520px at 50% 112%, color-mix(in srgb, #0ea5e9 14%, transparent), transparent 70%);
+    radial-gradient(760px 460px at 8% -8%, color-mix(in srgb, #416aec 14%, transparent), transparent 70%),
+    radial-gradient(680px 460px at 96% 0%, color-mix(in srgb, #8b5cf6 10%, transparent), transparent 72%),
+    radial-gradient(820px 540px at 50% 112%, color-mix(in srgb, #0ea5e9 8%, transparent), transparent 72%);
 }
 html[data-theme="light"] body::before {
   background:
@@ -247,7 +257,7 @@ html body :is(a.actitem, a.idx-alloc, a.nbcard, a.scard):hover {
   border-top: 1px solid var(--line);
   text-align: center;
   line-height: 1.6;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: var(--font-sans);
 }
 .site-footer .made {
   display: block;
@@ -689,3 +699,142 @@ html[data-lang="zh"] .lang-toggle .zh-opt { color: #fff; }
 .sm-btn.sm-ghost { background: transparent; border-color: transparent; color: var(--muted); font-weight: 500; padding: 8px 12px; }
 .sm-btn.sm-ghost:hover { color: var(--link); background: var(--panel2); box-shadow: none; transform: none; }
 .sm-btn.sm-collapse .sm-ic { transform: rotate(180deg); }
+
+/* ==========================================================================
+   Mastermind product shell
+   Shared by the bot dashboard's supporting read-only tools. It follows the
+   Macro Dashboard's command-center language: one machined top bar, calm ink
+   hierarchy, mono telemetry, and state colour reserved for actual meaning.
+   ========================================================================== */
+.mm-product-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-height: 52px;
+  margin: 0 0 24px;
+  padding: 4px 0 16px;
+  border-bottom: 1px solid var(--hairline);
+}
+.mm-product-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.mm-product-mark {
+  width: 28px;
+  height: 28px;
+  display: block;
+  flex: none;
+  border-radius: 8px;
+  box-shadow: 0 6px 18px -9px color-mix(in srgb, var(--info) 70%, transparent);
+}
+.mm-product-word {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 850;
+  letter-spacing: .14em;
+}
+.mm-product-context {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+  padding-left: 16px;
+  border-left: 1px solid var(--line);
+}
+.mm-product-links {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  padding: 3px;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel2) 70%, transparent);
+}
+.mm-product-links a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 5px 11px;
+  border-radius: 7px;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 700;
+  text-decoration: none;
+  transition: color .15s ease, background .15s ease, border-color .15s ease;
+}
+.mm-product-links a:hover,
+.mm-product-links a[aria-current="page"] {
+  color: var(--text);
+  background: var(--panel);
+}
+.mm-page-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin: 0 0 22px;
+}
+.mm-page-kicker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 7px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+}
+.mm-page-kicker::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--up);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--up) 14%, transparent);
+}
+.mm-page-heading h1 {
+  margin: 0;
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: clamp(27px, 3vw, 36px);
+  line-height: 1.05;
+  letter-spacing: -.032em;
+}
+.mm-page-heading .sub {
+  margin-top: 7px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.mm-page-note {
+  max-width: 52ch;
+  color: color-mix(in srgb, var(--text) 68%, transparent);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+
+:where(.mm-product-links a, .mm-product-brand):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+@media (max-width: 700px) {
+  .mm-product-bar { align-items: flex-start; flex-wrap: wrap; gap: 10px 12px; }
+  .mm-product-context { margin-left: auto; }
+  .mm-product-links {
+    width: 100%;
+    margin-left: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .mm-product-links::-webkit-scrollbar { display: none; }
+  .mm-product-links a { flex: 1 0 auto; justify-content: center; }
+}

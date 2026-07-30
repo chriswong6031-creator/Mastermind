@@ -181,8 +181,11 @@ def build_row(
     stay []). seat/book/role/armed/backend/run_id/key_id are additive bot keys the
     admin preserves and can filter on."""
     provider = "claude_api" if str(model).startswith("claude") else (
-        "deepseek" if "deepseek" in str(model).lower() else None)
-    if backend in ("sdk", "cli"):
+        "openai" if str(model).startswith(("gpt-", "o")) else (
+            "deepseek" if "deepseek" in str(model).lower() else None))
+    if backend == "codex":
+        provider = "openai_codex"
+    elif backend in ("sdk", "cli"):
         provider = "claude_code"
     row: dict[str, Any] = {
         "id": row_id or uuid.uuid4().hex,
