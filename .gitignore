@@ -44,3 +44,42 @@ data/posture/
 data/deploy_lag.json
 catboost_info/
 data/portfolio_watch/
+
+# Session-local configuration, archives, and credential-bearing backups.
+.claude/launch.json
+.claude/worktree-backup-*/
+.env.bak*
+.worktrees/
+
+# VPS-authoritative runtime output. Source/config fixtures that are already
+# tracked remain tracked; these rules prevent new live state from entering PRs.
+data/_backup*/
+data/backtest/
+data/brain/attribution/
+data/brain/chat_history/
+data/brain/cio/
+data/brain/cost/
+data/brain/decision_provenance/
+data/brain/distill/
+data/brain/student/
+data/cache/
+data/committee/
+data/decision_context/
+data/gate_officer/
+data/lifecycle/
+data/macro_risk/
+data/mastermind/
+data/mastermind_ai/
+data/metabolism/
+data/nw_reflection/
+data/pipeline/
+data/portfolio/_backup*/
+data/portfolio/self_directed/
+data/portfolios/
+data/quiver/
+data/response_logs/
+data/risk_officer/
+data/shadow/
+data/signal_history/
+data/universe_triage/
+data/*.log
