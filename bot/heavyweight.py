@@ -760,7 +760,7 @@ def _build_payload(asof: str, submission: dict | None, kept: list[dict], notes: 
     return {
         "as_of": asof,
         "portfolio_id": PORTFOLIO_ID,
-        "manager": "Heavyweight Opus Brain",
+        "manager": "Mastermind AI (Codex-first)",
         "kind": "heavyweight",
         "regime": _regime_dict(),
         "gross": gross,

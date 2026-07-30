@@ -152,12 +152,15 @@ def test_pm_input_pipes_leadership_and_defensive_and_deanchors(monkeypatch):
 def _fake_market_view(n_dissent: int = 2, conflict: bool = True) -> dict:
     """Minimal market_view.v1 artifact for test injection."""
     dissenting = [f"plane_{i}" for i in range(n_dissent)]
+    consensus = "risk_off" if conflict else "risk_on"
     return {
         "schema_version": "market_view.v1",
         "label_vs_planes": {
             "conflict": conflict,
+            "relationship": "conflict" if conflict else "confirmed",
+            "confirmed": not conflict,
             "label_direction": "risk_on",
-            "plane_consensus_direction": "risk_off",
+            "plane_consensus_direction": consensus,
             "dissenting_planes": dissenting,
             "magnitude": 0.667,
         },
@@ -207,10 +210,10 @@ def test_market_view_enrichment_absent_view():
 
 
 def test_market_view_enrichment_no_conflict():
-    """A conflict=False view still produces a label_vs_planes_line (no-conflict message)."""
+    """Matching directional evidence is rendered as explicit confirmation."""
     mv = _fake_market_view(n_dissent=0, conflict=False)
     enrichment = P._market_view_enrichment(mv)
-    assert "agree" in (enrichment.get("label_vs_planes_line") or "")
+    assert "CONFIRM" in (enrichment.get("label_vs_planes_line") or "")
 
 
 def test_read_market_view_absent_file(tmp_path, monkeypatch):

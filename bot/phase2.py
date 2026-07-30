@@ -72,6 +72,9 @@ def _append_nw_context_audit(root: Path, run_id: str, audit_row: dict) -> None:
             "asof": audit_row.get("asof"),
             "age_days": audit_row.get("age_days"),
             "n_candidates": audit_row.get("n_candidates"),
+            "market_lobe_stale": audit_row.get("market_lobe_stale"),
+            "fresh_lobes": audit_row.get("fresh_lobes"),
+            "stale_lobes": audit_row.get("stale_lobes"),
         }
         with audit_path.open("a", encoding="utf-8") as fh:
             fh.write(_json.dumps(row, default=str) + "\n")
@@ -110,6 +113,90 @@ def _append_treasury_context_audit(root: Path, run_id: str, audit_row: dict) -> 
             fh.write(_json.dumps(row, default=str) + "\n")
     except Exception:
         pass  # best-effort append; never raise
+
+
+def _market_view_inputs(
+    regime: dict,
+    asof: str,
+    *,
+    holdings: list[dict] | None = None,
+) -> dict[str, dict | None]:
+    """Compute the three previously-unwired Market View planes, independently and fail-soft.
+
+    The outputs remain advisory under their existing contracts.  Reusing the regime-embedded
+    liquidity-quality block is preferred because it preserves the Macro build's exact as-of and
+    composition; the local classifier is only a fallback.
+    """
+    out: dict[str, dict | None] = {
+        "distribution_tells": None,
+        "liquidity_quality": None,
+        "regime_nowcast": None,
+    }
+    try:
+        from portfolio import distribution_tells as _dt
+
+        held = holdings if holdings is not None else position_log.open_positions()
+        def _asof_prices(ticker: str):
+            series = _dt._default_series_fn(ticker)
+            if series is None:
+                return None
+            try:
+                return series[series.index <= asof]
+            except Exception:  # noqa: BLE001
+                return series
+
+        distribution = _dt.score(held, prices_fn=_asof_prices)
+        if isinstance(distribution, dict):
+            distribution["asof"] = asof
+            out["distribution_tells"] = distribution
+    except Exception:  # noqa: BLE001 — one missing plane never blocks perception
+        pass
+
+    embedded_lq = regime.get("liquidity_quality")
+    embedded_lq_asof = (
+        str(embedded_lq.get("asof") or "")[:10]
+        if isinstance(embedded_lq, dict)
+        else ""
+    )
+    if (
+        isinstance(embedded_lq, dict)
+        and embedded_lq.get("label")
+        and (not embedded_lq_asof or embedded_lq_asof <= str(asof)[:10])
+    ):
+        out["liquidity_quality"] = embedded_lq
+    else:
+        try:
+            from brain import liquidity_quality as _lq
+
+            def _asof_liquidity(name: str):
+                series = _lq.series_from_frames(name)
+                if series is None:
+                    return None
+                try:
+                    return series[series.index <= asof]
+                except Exception:  # noqa: BLE001
+                    return series
+
+            classified = _lq.classify(_asof_liquidity)
+            classified_asof = str((classified or {}).get("asof") or "")[:10]
+            if not classified_asof or classified_asof <= str(asof)[:10]:
+                out["liquidity_quality"] = classified
+        except Exception:  # noqa: BLE001
+            pass
+
+    try:
+        from brain import regime_nowcast as _nc
+
+        # Preserve the existing shrink-source semantics: the price-action nowcast evaluates the
+        # hard regime label, while the separate risk-state plane remains independently visible.
+        out["regime_nowcast"] = _nc.nowcast(
+            quad=regime.get("quad"),
+            quad_name=regime.get("quad_name"),
+            asof=asof,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    return out
 
 
 def _conv_theme_id(t: str) -> str:
@@ -798,7 +885,10 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
         _nw_audit = _nwc_mod.audit_row()
         _rl_log(_run_id, "perception", "nw_context",
                 f"status={_nw_audit.get('status')} asof={_nw_audit.get('asof')} "
-                f"age_days={_nw_audit.get('age_days')} n_candidates={_nw_audit.get('n_candidates')}",
+                f"age_days={_nw_audit.get('age_days')} n_candidates={_nw_audit.get('n_candidates')} "
+                f"fresh_lobes={_nw_audit.get('fresh_lobes')} "
+                f"stale_lobes={_nw_audit.get('stale_lobes')} "
+                f"market_lobe_stale={_nw_audit.get('market_lobe_stale')}",
                 **_nw_audit)
         # W-M: append to persistent nw_context_audit.jsonl sidecar (FB-R11, FB-R3).
         # Delegates to _append_nw_context_audit (MAJOR-3) so the logic is unit-testable.
@@ -850,9 +940,32 @@ def run(asof: str | None = None, force: bool = False, research: bool = False,
     # build proceeds unchanged (a perception organ never blocks the book — masterplan §4).
     try:
         from brain import market_view as _mv_mod
+        _mv_inputs = _market_view_inputs(regime, asof)
         # Pass neural_web_out only when flag is ON (dark-ship: OFF → build call byte-identical)
         _nw_out_for_build = _nw_plane if _nw_plane else None
-        _pv = _mv_mod.build("us", write=True, neural_web_out=_nw_out_for_build)
+        _pv = _mv_mod.build(
+            "us",
+            write=True,
+            distribution_tells_out=_mv_inputs.get("distribution_tells"),
+            liquidity_quality_out=_mv_inputs.get("liquidity_quality"),
+            regime_nowcast_out=_mv_inputs.get("regime_nowcast"),
+            neural_web_out=_nw_out_for_build,
+        )
+        # Publish the typed AI-facing contract beside market_view.v1.  This is read-only and
+        # preserves every existing authority boundary.
+        try:
+            from brain import decision_context as _dc
+
+            _dc.build(
+                "us",
+                regime=regime,
+                market_view=_pv,
+                neural_web=_nwc_mod.context() if "_nwc_mod" in locals() else {},
+                write=True,
+                seq=int(_pv.get("seq") or 0),
+            )
+        except Exception:
+            pass
         _pv_brief = (_pv.get("brief") or {}).get("wheres_the_risk", "")
         _pv_conflict = (_pv.get("label_vs_planes") or {}).get("conflict", False)
         _pv_coverage = (_pv.get("assembly") or {}).get("fresh", "?")

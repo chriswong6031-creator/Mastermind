@@ -1,11 +1,10 @@
-# In-house model-tier routing policy for the Claude Code reasoning layer.
-# Mirrors our standing Claude Code agent usage policy:
+# In-house model-tier routing policy for the Mastermind reasoning layer.
+# Legacy Claude tier names remain the local/default routing policy:
 #   Opus   = planning / orchestration / deep + creative reasoning (top loop on Opus)
 #   Sonnet = code / medium reasoning / structured analysis
 #   Haiku  = search / extraction / labeling / high-volume fan-out
 #   Fable  = gated; the most demanding long-horizon synthesis only when evals justify
-# Bias toward delegating whole non-Opus subtasks to Sonnet/Haiku subagents
-# (quality first, then token efficiency).
+# The authoritative VPS overrides every role to Codex Sol xhigh below.
 
 # Flag-gated seats (env, default OFF — live build is byte-identical until enabled):
 #   MASTERMIND_FLAGSHIP_JUDGMENT=1  arms the Flagship deep-reasoning BUY layer:
@@ -34,6 +33,22 @@ reasoning:
   research_max_turns: 8               # armed multi-turn research loop (MCP tools + web); 16→8 2026-07-25 cost ruling
   prefer_subscription: true           # strip ANTHROPIC_API_KEY -> use the subscription, not the metered API
 
-# Backend: 'cli' = Claude Code (subscription tokens, sees dashboard context, tiered subagents);
-#          'api' = the metered Messages API (brain/client.py). 'cli' is the default reasoning layer.
+# Backend: 'waterfall' = Macro shared pool (Codex first, Claude OAuth fallback);
+#          'cli' = Claude Code (subscription tokens, sees dashboard context, tiered subagents);
+#          'codex' = OpenAI Codex CLI with ChatGPT-managed auth (brain/codex_bridge.py);
+#          'api' = the metered Anthropic Messages API. 'cli' remains the local default;
+# set BOT_LLM_BACKEND=waterfall on the authoritative VPS.
 backend: cli
+
+# Codex provider policy. Daily paper-book and self-improvement calls use the
+# requested Sol / Extra High baseline whenever the shared Codex account is
+# healthy; Macro's brain-pro/brain-fast Claude pool is the automatic backup.
+codex:
+  model: gpt-5.6-sol
+  reasoning_effort: xhigh
+  roles:
+    pm: gpt-5.6-sol
+    deep: gpt-5.6-sol
+    analyst: gpt-5.6-sol
+    scout: gpt-5.6-sol
+    fable: gpt-5.6-sol

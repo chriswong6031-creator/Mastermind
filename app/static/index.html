@@ -24,12 +24,16 @@ try {
 * { box-sizing: border-box; }
 
 body.page-mm {
+  --num: var(--font-mono, "SF Mono", SFMono-Regular, ui-monospace, Menlo, Consolas, monospace);
   background: var(--bg);
   color: var(--text);
-  font: 14px/1.5 Inter, -apple-system, "Segoe UI", Roboto, Helvetica, sans-serif;
+  font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, "Segoe UI", sans-serif);
+  font-size: 14px;
+  line-height: 1.5;
   margin: 0;
   padding: 18px;
 }
+body.page-mm :where(button, input, select, textarea) { font-family: inherit; }
 @media (min-width: 1100px) {
   body.page-mm { padding: 26px max(40px, calc((100vw - 1500px) / 2)); }
 }
@@ -571,11 +575,6 @@ body.page-mm td.l { text-align: left; }
 .mm-closed-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 22%, transparent); }
 /* mobile: hide secondary table columns so Positions / Trade History don't overflow */
 @media (max-width: 640px) { body.page-mm .mm-hide-sm { display: none !important; } }
-/* macro vitals integrated into the top Performance scorecard */
-.mm-perf-macro { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
-.mm-perf-macro:empty { display: none; }
-.mm-perf-macro-head { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 10px; }
-.mm-perf-macro-sub { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--muted); opacity: .8; margin-left: 7px; }
 .mm-tl-item {
   display: grid;
   grid-template-columns: 64px 12px 1fr;
@@ -855,7 +854,7 @@ body.page-mm td.l { text-align: left; }
    PERFORMANCE HEADER
    ──────────────────────────────────────────────────────────────────────────── */
 #performance {
-  --num: "SF Mono", ui-monospace, "Cascadia Mono", "JetBrains Mono", "Roboto Mono", Menlo, Consolas, monospace;
+  --num: var(--font-mono, "SF Mono", SFMono-Regular, ui-monospace, Menlo, Consolas, monospace);
 }
 .mm-perf-grid {
   display: grid;
@@ -934,6 +933,11 @@ body.page-mm td.l { text-align: left; }
 #equity-curve {
   position: relative;
 }
+.mm-performance-chart {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
 .mm-ec-wrap {
   position: relative;
   width: 100%;
@@ -961,21 +965,18 @@ body.page-mm td.l { text-align: left; }
   z-index: 10;
   font-variant-numeric: tabular-nums;
 }
-.mm-ec-note {
-  font-size: 11px;
-  color: var(--muted);
-  text-align: center;
-  margin-top: 8px;
-  font-style: italic;
-  line-height: 1.5;
-}
 .mm-ec-legend {
   display: flex;
   gap: 18px;
   flex-wrap: wrap;
   align-items: center;
-  margin-bottom: 10px;
+  margin-top: 10px;
   font-size: 11.5px;
+  color: var(--muted);
+}
+.mm-ec-range {
+  margin-left: auto;
+  font-size: 11px;
   color: var(--muted);
 }
 .mm-ec-leg-item {
@@ -1300,24 +1301,9 @@ body.page-mm .mm-side-chip { display: inline-block; padding: 1px 8px; border-rad
 body.page-mm .mm-side-chip.buy  { background: color-mix(in srgb, var(--up) 15%, var(--panel2));   color: var(--up); }
 body.page-mm .mm-side-chip.sell { background: color-mix(in srgb, var(--down) 15%, var(--panel2)); color: var(--down); }
 
-/* ── macro metrics strip ─────────────────────────────────────────────────── */
-body.page-mm .mm-macro-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--line);
-  border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
-@media (max-width: 760px) { body.page-mm .mm-macro-grid { grid-template-columns: repeat(2, 1fr); } }
-body.page-mm .mm-macro-cell { background: var(--panel); padding: 12px 14px; }
-body.page-mm .mm-macro-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: 5px; }
-body.page-mm .mm-macro-value { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums;
-  font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace; }
-body.page-mm .mm-macro-sub { font-size: 11px; color: var(--muted); margin-top: 3px; }
-body.page-mm .mm-macro-tag { display: inline-block; padding: 1px 7px; border-radius: 5px; font-size: 10px; font-weight: 700; margin-top: 4px; }
-body.page-mm .mm-macro-tag.warn { background: color-mix(in srgb, var(--warn) 16%, var(--panel2)); color: var(--warn); }
-body.page-mm .mm-macro-tag.calm { background: color-mix(in srgb, var(--up) 16%, var(--panel2)); color: var(--up); }
-body.page-mm .mm-macro-tag.hot  { background: color-mix(in srgb, var(--down) 16%, var(--panel2)); color: var(--down); }
-body.page-mm .mm-macro-tag.neu  { background: color-mix(in srgb, var(--muted) 16%, var(--panel2)); color: var(--muted); }
-
 /* ── top nav (Dashboard / Research view switch) ──────────────────────────── */
-body.page-mm #mm-nav { position: sticky; top: 0; z-index: 60; display: flex; align-items: center; gap: 14px;
-  flex-wrap: wrap; padding: 9px 4px; margin-bottom: 4px; }            /* opaque + same color as the page → seamless, no visible bar */
+body.page-mm #mm-nav { position: relative; z-index: 60; display: flex; align-items: center; gap: 14px;
+  flex-wrap: wrap; padding: 9px 4px; margin-bottom: 4px; }
 /* top loading bar — immediate feedback during portfolio switches / data loads */
 #mm-loadbar { position: fixed; top: 0; left: 0; height: 3px; width: 0; z-index: 200;
   background: linear-gradient(90deg, var(--info, #3b82f6), #7c5cff);
@@ -1672,8 +1658,8 @@ html[data-theme="light"] body.page-mm #hero {
               0 22px 48px -24px color-mix(in srgb, var(--info) 26%, rgba(28,40,66,.24));
 }
 
-/* sticky nav — NO border/shadow. Background intentionally removed (was var(--bg)),
-   so the bar is transparent and scrolled content shows through beneath it. */
+/* static-in-flow nav — NO border/shadow. It scrolls away with the page, so its
+   transparent background never overlaps the dashboard content below. */
 body.page-mm #mm-nav {
   border: 0;
   box-shadow: none;
@@ -1705,6 +1691,596 @@ body.page-mm :is(.mm-nav-tab, .mm-pf-tab, .mm-rsub-tab, .mm-sd-btn, .mm-sd-qbtn,
 @media (prefers-reduced-motion: reduce) {
   body.page-mm .mm-empty-icon { animation: none; }
   body.page-mm .panel, body.page-mm #mm-nav { transition: none; }
+}
+
+/* ==========================================================================
+   INSTITUTIONAL PRODUCT SYSTEM — 2026 refresh
+   Macro Dashboard's machined-terminal language, adapted to portfolio UX.
+   ========================================================================== */
+body.page-mm {
+  --mm-hair: color-mix(in srgb, var(--line) 72%, transparent);
+  --mm-hair-strong: var(--line);
+  --mm-tile: color-mix(in srgb, var(--panel2) 86%, var(--panel));
+  --mm-ink-2: color-mix(in srgb, var(--text) 66%, transparent);
+  --mm-elevated: inset 0 1px 0 color-mix(in srgb, #fff 5%, transparent),
+    0 1px 2px rgba(0,0,0,.24), 0 18px 44px -32px rgba(0,0,0,.82);
+  min-height: 100vh;
+  padding: 22px clamp(18px, 3vw, 48px) 72px;
+  font-size: 14px;
+  line-height: 1.55;
+}
+@media (min-width: 1560px) {
+  body.page-mm { padding-inline: calc((100vw - 1480px) / 2); }
+}
+
+/* Command rail: deliberately in document flow. It never follows scrolling. */
+body.page-mm #mm-nav {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 2px 2px;
+  margin: 0 0 20px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  isolation: isolate;
+}
+body.page-mm .mm-back { order: 0; }
+body.page-mm .mm-nav-brand { order: 1; gap: 10px; min-height: 36px; }
+body.page-mm .mm-logo-mark {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  box-shadow: 0 7px 20px -11px color-mix(in srgb, var(--info) 76%, transparent);
+}
+body.page-mm .mm-logo-word {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 850;
+  letter-spacing: .145em;
+}
+body.page-mm .mm-nav-tabs {
+  order: 2;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 8px;
+  padding: 3px;
+  border: 1px solid var(--mm-hair);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--panel2) 68%, transparent);
+}
+body.page-mm .mm-nav-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 31px;
+  padding: 5px 13px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 720;
+  letter-spacing: .01em;
+  box-shadow: none;
+}
+body.page-mm .mm-nav-tab:hover {
+  color: var(--text);
+  border-color: transparent;
+  background: color-mix(in srgb, var(--info) 7%, var(--panel));
+}
+body.page-mm .mm-nav-tab.active {
+  color: var(--text);
+  border-color: var(--line);
+  background: var(--panel);
+  box-shadow: inset 0 -2px 0 var(--info), 0 4px 12px -10px rgba(0,0,0,.8);
+}
+body.page-mm .mm-nav-spacer { order: 3; margin-left: auto; }
+body.page-mm .mm-nav-ctrls { order: 4; }
+
+/* Book selector becomes a quiet telemetry rail instead of a row of nav pills. */
+body.page-mm .mm-pf-switch {
+  order: 10;
+  flex: 1 0 100%;
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  align-items: stretch;
+  gap: 5px;
+  margin: 8px 0 0;
+  padding: 5px;
+  border: 1px solid var(--mm-hair-strong);
+  border-radius: 15px;
+  background: color-mix(in srgb, var(--panel) 82%, transparent);
+  box-shadow: var(--mm-elevated);
+  -webkit-backdrop-filter: blur(12px) saturate(1.05);
+  backdrop-filter: blur(12px) saturate(1.05);
+}
+body.page-mm .mm-pf-switch:empty { display: none; }
+body.page-mm .mm-pf-tab {
+  --book: var(--info);
+  position: relative;
+  min-width: 0;
+  min-height: 54px;
+  padding: 8px 12px 8px 14px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  overflow: hidden;
+  transition: color .16s ease, background .16s ease, border-color .16s ease;
+}
+body.page-mm .mm-pf-tab:has(.mm-pf-dot.autonomous) { --book: #9a73ff; }
+body.page-mm .mm-pf-tab:has(.mm-pf-dot.heavyweight) { --book: #e7a62a; }
+body.page-mm .mm-pf-tab:has(.mm-pf-dot.china) { --book: #e45d67; }
+body.page-mm .mm-pf-tab:has(.mm-pf-dot.hk) { --book: #35bd83; }
+body.page-mm .mm-pf-tab:has(.mm-pf-dot.etf) { --book: #31b9d7; }
+body.page-mm .mm-pf-tab::before {
+  content: "";
+  position: absolute;
+  inset: 9px auto 9px 0;
+  width: 2px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--book) 42%, transparent);
+}
+body.page-mm .mm-pf-tab:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--book) 6%, var(--panel2));
+}
+body.page-mm .mm-pf-tab.active {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--book) 30%, var(--line));
+  background: linear-gradient(135deg,
+    color-mix(in srgb, var(--book) 12%, var(--panel2)),
+    color-mix(in srgb, var(--book) 3%, var(--panel)));
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 5%, transparent);
+}
+body.page-mm .mm-pf-tab.active::before { background: var(--book); }
+body.page-mm .mm-pf-tab .mm-pf-name {
+  overflow: hidden;
+  color: inherit;
+  font-size: 12px;
+  font-weight: 760;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+body.page-mm .mm-pf-tab .mm-pf-sub {
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--num);
+  font-size: 10.5px;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Unified layout rhythm and machined panels. */
+body.page-mm .mm-section { margin-top: 18px; }
+body.page-mm .grid { gap: 18px; }
+body.page-mm .panel {
+  position: relative;
+  border: 1px solid var(--mm-hair-strong);
+  border-radius: 15px;
+  padding: 20px 22px;
+  background: var(--panel);
+  box-shadow: var(--mm-elevated);
+}
+body.page-mm .panel > h2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 28px;
+  margin: 0 0 16px;
+  padding: 0 0 13px;
+  border-bottom: 1px solid var(--mm-hair-strong);
+  color: var(--text);
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 740;
+  line-height: 1.3;
+  letter-spacing: -.012em;
+  text-transform: none;
+}
+body.page-mm .panel > h2::before {
+  content: "";
+  align-self: center;
+  width: 3px;
+  height: 18px;
+  flex: none;
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--info),
+    color-mix(in srgb, var(--info) 28%, transparent));
+}
+body.page-mm .panel > h2 > span[style] {
+  color: var(--muted) !important;
+  font-size: 11px !important;
+  font-weight: 450 !important;
+  letter-spacing: 0;
+}
+body.page-mm .mm-coll-h2 .mm-coll-chev {
+  order: 3;
+  margin-left: auto;
+  margin-right: 0;
+}
+body.page-mm .panel.mm-collapsed > h2 { margin-bottom: 0; padding-bottom: 0; border-bottom: 0; }
+
+/* KPI board: clear headline NAV plus inset vital cells. */
+body.page-mm #performance {
+  overflow: hidden;
+  background:
+    radial-gradient(620px 240px at 0 0,
+      color-mix(in srgb, var(--info) 7%, transparent), transparent 70%),
+    var(--panel);
+}
+body.page-mm .mm-perf-grid {
+  display: grid;
+  grid-template-columns: minmax(250px, 1.45fr) repeat(4, minmax(112px, 1fr));
+  gap: 9px;
+  align-items: stretch;
+}
+body.page-mm .mm-perf-divider { display: none; }
+body.page-mm .mm-perf-nav {
+  justify-content: center;
+  min-height: 86px;
+  padding: 8px 14px 8px 2px;
+}
+body.page-mm .mm-perf-nav-label,
+body.page-mm .mm-perf-stat-label,
+body.page-mm .mm-sd-field-lbl {
+  color: var(--muted);
+  font-family: var(--num);
+  font-size: 9.5px;
+  font-weight: 720;
+  letter-spacing: .11em;
+}
+body.page-mm .mm-perf-nav-value {
+  color: var(--text);
+  font-family: var(--num);
+  font-size: clamp(30px, 3vw, 40px);
+  font-weight: 800;
+  letter-spacing: -.035em;
+}
+body.page-mm .mm-perf-stat {
+  justify-content: center;
+  min-width: 0;
+  min-height: 86px;
+  padding: 12px 13px;
+  border: 1px solid var(--mm-hair);
+  border-radius: 10px;
+  background: var(--mm-tile);
+}
+body.page-mm .mm-perf-stat-value {
+  font-family: var(--num);
+  font-size: 20px;
+  font-weight: 750;
+}
+body.page-mm .mm-perf-stat-sub { line-height: 1.3; }
+body.page-mm .mm-performance-chart {
+  margin-top: 16px;
+  padding: 15px;
+  border: 1px solid var(--mm-hair);
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--info) 3%, var(--mm-tile)), var(--mm-tile));
+}
+body.page-mm .mm-ec-wrap {
+  min-height: 250px;
+  overflow: hidden;
+  border-radius: 8px;
+}
+body.page-mm .mm-ec-legend {
+  margin-top: 12px;
+  padding-top: 11px;
+  border-top: 1px solid var(--mm-hair);
+  font-family: var(--num);
+  font-size: 10.5px;
+}
+body.page-mm .mm-ec-leg-line { height: 2px; }
+
+/* Book thesis / allocation / tables. */
+body.page-mm #auto-banner {
+  overflow: hidden;
+  border-color: color-mix(in srgb, #9a73ff 26%, var(--line));
+  background:
+    radial-gradient(520px 180px at 0 0, color-mix(in srgb, #9a73ff 9%, transparent), transparent 72%),
+    var(--panel);
+}
+body.page-mm #auto-banner::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: linear-gradient(#9a73ff, color-mix(in srgb, #9a73ff 24%, transparent));
+}
+body.page-mm .mm-auto-badge {
+  border: 1px solid color-mix(in srgb, #9a73ff 42%, var(--line));
+  border-radius: 7px;
+  background: color-mix(in srgb, #9a73ff 13%, var(--panel2));
+  color: #bd9fff;
+  font-family: var(--num);
+  font-size: 10px;
+  letter-spacing: .07em;
+}
+body.page-mm .mm-auto-badge.heavyweight {
+  border-color: color-mix(in srgb, #e7a62a 42%, var(--line));
+  background: color-mix(in srgb, #e7a62a 13%, var(--panel2));
+  color: #e7b958;
+}
+body.page-mm .mm-auto-badge.china {
+  border-color: color-mix(in srgb, #e45d67 42%, var(--line));
+  background: color-mix(in srgb, #e45d67 13%, var(--panel2));
+  color: #ef7a83;
+}
+body.page-mm .mm-auto-badge.hk {
+  border-color: color-mix(in srgb, #35bd83 42%, var(--line));
+  background: color-mix(in srgb, #35bd83 13%, var(--panel2));
+  color: #5ad39b;
+}
+body.page-mm .mm-auto-badge.etf {
+  border-color: color-mix(in srgb, #31b9d7 42%, var(--line));
+  background: color-mix(in srgb, #31b9d7 13%, var(--panel2));
+  color: #59cde6;
+}
+body.page-mm .mm-auto-title { font-size: 14px; font-weight: 760; }
+body.page-mm .mm-auto-meta,
+body.page-mm .mm-auto-tag { font-family: var(--num); font-size: 10.5px; }
+body.page-mm .mm-auto-sum { max-width: 108ch; color: var(--mm-ink-2); line-height: 1.62; }
+
+body.page-mm .mm-sleeve-bar,
+body.page-mm .mm-sd-wbar {
+  height: 26px;
+  padding: 3px;
+  border: 1px solid var(--mm-hair);
+  border-radius: 10px;
+  background: var(--mm-tile);
+  gap: 3px;
+}
+body.page-mm .mm-sleeve-seg,
+body.page-mm .mm-sd-wseg { border-radius: 6px; font-family: var(--num); font-size: 9.5px; }
+body.page-mm .mm-sleeve-legend { margin-top: 10px; font-size: 11.5px; }
+
+body.page-mm .mm-table-wrap,
+body.page-mm .mm-rp-wrap {
+  border: 1px solid var(--mm-hair);
+  border-radius: 10px;
+  overflow: auto;
+  background: color-mix(in srgb, var(--panel2) 32%, transparent);
+}
+body.page-mm table { font-size: 12.5px; }
+body.page-mm th {
+  padding: 10px 11px;
+  border-bottom: 1px solid var(--mm-hair-strong);
+  background: color-mix(in srgb, var(--panel2) 56%, transparent);
+  color: var(--muted);
+  font-family: var(--num);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: .075em;
+}
+body.page-mm td {
+  padding: 11px;
+  border-bottom: 1px solid var(--mm-hair);
+}
+body.page-mm tbody tr:last-child td { border-bottom: 0; }
+body.page-mm tbody tr:hover > td {
+  background: color-mix(in srgb, var(--info) 5%, transparent);
+}
+body.page-mm :is(td, .mm-perf-stat-value, .mm-th-stat-val, .mm-sizing-num .val,
+  .mm-rp-score, .mm-rp-ci, .mm-cal-card .val, .mm-cal-bar-val, .mm-cal-weight,
+  .mm-rej-ticker, .mm-rej-confluence, .mm-step-ts, .mm-trace-res) {
+  font-variant-numeric: tabular-nums;
+}
+body.page-mm :is(.mm-rp-score, .mm-rp-ci, .mm-cal-card .val, .mm-cal-bar-val,
+  .mm-cal-weight, .mm-rej-ticker, .mm-rej-confluence, .mm-step-ts, .mm-trace-res,
+  .mm-comp-metric .mv, .mm-sd-result .tk, .mm-sd-sel-tk, .mm-sd-sel-px) {
+  font-family: var(--num);
+}
+
+/* Secondary evidence reads as one component family. */
+body.page-mm :is(.mm-dec, .mm-research-card, .mm-run-row, .mm-rej-card,
+  .mm-comp-card, .mm-cal-card, .mm-th-stat, .mm-sizing-card) {
+  border: 1px solid var(--mm-hair);
+  border-radius: 11px;
+  background: var(--mm-tile);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 3%, transparent);
+}
+body.page-mm .mm-dec { padding: 15px 16px; }
+body.page-mm .mm-dec.mm-dec-today {
+  border-color: color-mix(in srgb, var(--up) 34%, var(--line));
+  box-shadow: inset 3px 0 0 var(--up);
+  background: color-mix(in srgb, var(--up) 5%, var(--mm-tile));
+}
+body.page-mm .mm-dec-date { font-family: var(--num); font-size: 12px; }
+body.page-mm .mm-dec-cost { font-family: var(--num); }
+body.page-mm .mm-dec-think {
+  border: 1px solid var(--mm-hair);
+  background: color-mix(in srgb, var(--panel) 72%, var(--panel2));
+}
+body.page-mm .mm-dec-more {
+  min-width: 172px;
+  min-height: 36px;
+  border-radius: 9px;
+  background: var(--mm-tile);
+}
+body.page-mm .mm-rp-intro,
+body.page-mm .mm-cal-explain {
+  max-width: 102ch;
+  color: var(--mm-ink-2);
+  font-size: 12.5px;
+  line-height: 1.62;
+}
+body.page-mm .mm-run-header { padding: 11px 13px; }
+body.page-mm .mm-run-meta,
+body.page-mm .mm-tl-ts { font-family: var(--num); }
+
+/* Research tabs use the same restrained segmented-control pattern as the shell. */
+body.page-mm .mm-rsub-bar {
+  width: fit-content;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--mm-hair);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel2) 68%, transparent);
+}
+body.page-mm .mm-rsub-tab {
+  min-height: 30px;
+  padding: 5px 14px;
+  border-color: transparent;
+  background: transparent;
+}
+body.page-mm .mm-rsub-tab.active {
+  border-color: var(--line);
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: inset 0 -2px 0 var(--info);
+}
+
+/* Self-directed book: order entry is a first-class workstation, not a form dump. */
+body.page-mm #sd-header {
+  overflow: hidden;
+  background:
+    radial-gradient(620px 260px at 0 0, color-mix(in srgb, var(--info) 8%, transparent), transparent 72%),
+    var(--panel);
+}
+body.page-mm #sd-header .mm-hero-eyebrow {
+  color: var(--muted);
+  font-family: var(--num);
+  font-size: 9.5px;
+}
+body.page-mm #sd-scorecard { gap: 9px !important; }
+body.page-mm #sd-scorecard .mm-perf-stat { min-width: 128px; }
+body.page-mm .mm-sd-ticket {
+  grid-template-columns: minmax(0, 1.25fr) minmax(280px, .75fr);
+  gap: 22px;
+}
+body.page-mm .mm-sd-input,
+body.page-mm .mm-sd-thesis-ta {
+  min-height: 42px;
+  border-color: var(--mm-hair-strong);
+  border-radius: 9px;
+  background: var(--mm-tile);
+  box-shadow: inset 0 1px 2px rgba(0,0,0,.12);
+}
+body.page-mm .mm-sd-input:focus,
+body.page-mm .mm-sd-thesis-ta:focus {
+  border-color: var(--info);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--info) 12%, transparent);
+}
+body.page-mm .mm-sd-sel {
+  border-color: var(--mm-hair);
+  background: var(--mm-tile);
+}
+body.page-mm .mm-sd-actions { gap: 8px; }
+body.page-mm .mm-sd-pend-chip .x {
+  appearance: none;
+  margin: 0 0 0 2px;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+body.page-mm .mm-sd-pend-chip .x:hover { color: var(--down); }
+body.page-mm .mm-sd-btn {
+  min-height: 42px;
+  border: 1px solid color-mix(in srgb, #fff 13%, transparent);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, #fff 14%, transparent),
+    0 6px 16px -12px rgba(0,0,0,.8);
+  transition: transform .15s ease, filter .15s ease, box-shadow .15s ease;
+}
+body.page-mm .mm-sd-btn:not(:disabled):hover { transform: translateY(-1px); }
+
+/* Loading and no-data states look intentional and occupy predictable space. */
+body.page-mm .mm-empty {
+  min-height: 116px;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  padding: 22px;
+  color: var(--muted);
+  font-size: 12px;
+}
+body.page-mm .mm-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  margin: 0 0 8px;
+  border: 1px solid var(--mm-hair);
+  border-radius: 10px;
+  background: var(--mm-tile);
+  color: var(--info);
+  font-size: 15px;
+}
+body.page-mm #footer-disc {
+  margin-top: 32px;
+  padding-top: 18px;
+  border-top-color: var(--mm-hair);
+  font-family: var(--num);
+  font-size: 10px;
+  letter-spacing: .035em;
+}
+
+html[data-theme="light"] body.page-mm {
+  --mm-elevated: inset 0 1px 0 rgba(255,255,255,.9),
+    0 1px 2px rgba(20,30,50,.05), 0 18px 42px -32px rgba(20,30,50,.32);
+}
+
+@media (max-width: 1120px) {
+  body.page-mm .mm-pf-switch { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  body.page-mm .mm-perf-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  body.page-mm .mm-perf-nav { grid-column: span 4; }
+}
+@media (max-width: 760px) {
+  body.page-mm { padding: 14px 12px 54px; }
+  body.page-mm #mm-nav { gap: 9px; margin-bottom: 15px; }
+  body.page-mm .mm-nav-brand { flex: 1; }
+  body.page-mm .mm-nav-tabs {
+    order: 5;
+    width: 100%;
+    margin-left: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  body.page-mm .mm-nav-tabs::-webkit-scrollbar { display: none; }
+  body.page-mm .mm-nav-tab { flex: 1 0 auto; justify-content: center; text-align: center; }
+  body.page-mm .mm-nav-spacer { display: none; }
+  body.page-mm .mm-pf-switch {
+    display: flex;
+    gap: 5px;
+    overflow-x: auto;
+    scroll-snap-type: x proximity;
+    scrollbar-width: none;
+  }
+  body.page-mm .mm-pf-switch::-webkit-scrollbar { display: none; }
+  body.page-mm .mm-pf-tab { flex: 0 0 154px; scroll-snap-align: start; }
+  body.page-mm .panel { padding: 17px 15px; border-radius: 13px; }
+  body.page-mm .panel > h2 { font-size: 15px; }
+  body.page-mm .mm-perf-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  body.page-mm .mm-perf-nav { grid-column: span 2; min-height: 76px; }
+  body.page-mm .mm-perf-stat { min-height: 78px; }
+  body.page-mm .mm-performance-chart { margin-inline: -4px; padding: 10px; }
+  body.page-mm .mm-ec-wrap { min-height: 210px; }
+  body.page-mm .mm-ec-range { width: 100%; margin-left: 0; }
+  body.page-mm .mm-sd-ticket { grid-template-columns: 1fr; }
+}
+@media (max-width: 440px) {
+  body.page-mm .mm-logo-word { font-size: 12px; letter-spacing: .11em; }
+  body.page-mm .mm-nav-ctrls { gap: 6px; }
+  body.page-mm .theme-switch { width: 50px; }
+  body.page-mm .lang-toggle .opt { padding-inline: 7px; }
+  body.page-mm .mm-perf-nav-value { font-size: 30px; }
+  body.page-mm .mm-perf-stat-value { font-size: 18px; }
+  body.page-mm .mm-th-summary { display: grid; grid-template-columns: 1fr 1fr; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body.page-mm .mm-pf-tab,
+  body.page-mm .mm-nav-tab,
+  body.page-mm .mm-sd-btn { transition: none; }
+  body.page-mm .mm-sd-btn:not(:disabled):hover { transform: none; }
 }
 </style>
 </head>
@@ -1820,6 +2396,11 @@ body.page-mm :is(.mm-nav-tab, .mm-pf-tab, .mm-rsub-tab, .mm-sd-btn, .mm-sd-qbtn,
 .mm-trace-res{font-size:11px;color:var(--muted);line-height:1.5;padding-left:14px;
   font-family:ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-word}
 .mm-dec-trace-load{font-size:11px;color:var(--muted);font-style:italic}
+.mm-dec-more-wrap{display:flex;justify-content:center;padding-top:2px}
+.mm-dec-more{min-width:160px;padding:8px 16px;border-radius:9px;border:1px solid var(--line);
+  background:var(--panel2);color:var(--link);font:inherit;font-size:12px;font-weight:700;
+  cursor:pointer;transition:border-color .15s ease,background .15s ease,color .15s ease}
+.mm-dec-more:hover{border-color:var(--link);background:color-mix(in srgb,var(--link) 8%,var(--panel2))}
 </style>
 <div id="mm-nav">
   <!-- Back to the Macro Dashboard — hidden by default; the inline script below un-hides it
@@ -1840,11 +2421,11 @@ body.page-mm :is(.mm-nav-tab, .mm-pf-tab, .mm-rsub-tab, .mm-sd-btn, .mm-sd-qbtn,
   <!-- PORTFOLIO SWITCHER — swaps the whole dashboard between books (flagship | autonomous | …).
        Populated from /api/portfolios so new portfolio types appear automatically. -->
   <span class="mm-pf-switch" id="pf-switch" role="group" aria-label="Portfolio"></span>
-  <span class="mm-nav-tabs">
-    <button class="mm-nav-tab active" id="nav-dashboard" type="button" onclick="showView('dashboard')"><span class="l-en">Dashboard</span><span class="l-zh">仪表盘</span></button>
-    <button class="mm-nav-tab" id="nav-desk" type="button" onclick="showView('desk')"><span class="l-en">Desk</span><span class="l-zh">交易台</span></button>
+  <span class="mm-nav-tabs" role="navigation" aria-label="Workspace">
+    <button class="mm-nav-tab active" id="nav-dashboard" type="button" aria-current="page" onclick="showView('dashboard')"><span class="l-en">Dashboard</span><span class="l-zh">仪表盘</span></button>
+    <button class="mm-nav-tab" id="nav-desk" type="button" onclick="showView('desk')"><span class="l-en">Flagship Desk</span><span class="l-zh">旗舰交易台</span></button>
     <button class="mm-nav-tab" id="nav-research" type="button" onclick="showView('research')"><span class="l-en">Research</span><span class="l-zh">研究</span></button>
-    <a class="mm-nav-tab" href="/portfolio_desk"><span class="l-en">Portfolio</span><span class="l-zh">持仓台</span></a>
+    <a class="mm-nav-tab" href="/portfolio_desk"><span class="l-en">Manual Ledger</span><span class="l-zh">手动账本</span></a>
   </span>
   <span class="mm-nav-spacer"></span>
   <!-- theme + lang toggles live here so they stay visible in BOTH views. These are
@@ -1859,26 +2440,6 @@ body.page-mm :is(.mm-nav-tab, .mm-pf-tab, .mm-rsub-tab, .mm-sd-btn, .mm-sd-qbtn,
     </div>
   </span>
 </div>
-<!-- MW6 provenance banner: git SHA + data snapshot + PAPER TRADING — always visible -->
-<div id="mm-provenance" style="display:none;text-align:center;padding:2px 12px;font-size:10px;
-  color:var(--text-muted,#8b97ad);background:color-mix(in srgb,var(--panel2,#141925) 80%,transparent);
-  border-bottom:1px solid var(--border,#232a39);letter-spacing:.03em;font-family:monospace">
-  <span id="prov-paper" style="color:var(--up,#4ade80);font-weight:700">PAPER TRADING</span>
-  &nbsp;·&nbsp;<span id="prov-sha"></span>
-  &nbsp;·&nbsp;<span id="prov-date"></span>
-</div>
-<script>
-(function(){
-  fetch('/api/provenance').then(function(r){return r.json();}).then(function(d){
-    var el=document.getElementById('mm-provenance');
-    if(!el)return;
-    if(d.sha)document.getElementById('prov-sha').textContent='sha:'+d.sha;
-    if(d.snapshot_date)document.getElementById('prov-date').textContent='data:'+d.snapshot_date;
-    el.style.display='block';
-  }).catch(function(){});
-})();
-</script>
-
 <script>
 /* "← Dashboard" back affordance for #mm-back. Mirrors the Terminal's lib/originNav:
    referrer-first detection (macro→bot is a cross-site HTTPS hop, so the default
@@ -1930,19 +2491,14 @@ body.page-mm :is(.mm-nav-tab, .mm-pf-tab, .mm-rsub-tab, .mm-sd-btn, .mm-sd-qbtn,
 })();
 </script>
 
-<!-- ── READINESS BANNER (shown only when a forward-proof threshold has crossed) ── -->
-<div class="mm-section" id="readiness-sec" style="margin-top:0;display:none">
-  <div class="panel span12" id="readiness-banner" style="grid-column:span 12;border:1px solid var(--up);border-radius:12px"></div>
-</div>
-
 <!-- ── AUTONOMOUS BOOK BANNER (shown only when the autonomous portfolio is active) ── -->
 <div class="grid mm-section" id="auto-banner-sec" style="margin-top:0;display:none">
   <div class="panel span12" id="auto-banner">
     <div class="mm-auto-banner">
       <div class="mm-auto-head">
         <div class="mm-auto-id">
-          <span class="mm-auto-badge" id="auto-badge">Opus Brain</span>
-          <span class="mm-auto-title" id="auto-title">Opus Brain</span>
+          <span class="mm-auto-badge" id="auto-badge">Mastermind AI</span>
+          <span class="mm-auto-title" id="auto-title">Mastermind AI</span>
           <span class="mm-auto-tag" id="auto-tag"></span>
         </div>
         <div class="mm-auto-meta" id="auto-meta"></div>
@@ -1950,75 +2506,6 @@ body.page-mm :is(.mm-nav-tab, .mm-pf-tab, .mm-rsub-tab, .mm-sd-btn, .mm-sd-qbtn,
       <div class="mm-auto-sum clamped" id="auto-sum">—</div>
       <button class="mm-auto-more" id="auto-more" type="button" style="display:none" onclick="toggleAutoThesis()"></button>
     </div>
-  </div>
-</div>
-
-<!-- ── STRATEGY POSTURE ─────────────────────────────────────────────────────────
-     Per-book strategy-label chip: a glance-able posture (Offensive / Defensive / Risk-off /
-     Rotating / Neutral·Cash-heavy) + sub-strategy, with a hover panel showing exactly what
-     playbook the Brain is running today (favored / avoided / driver). Filled by renderPosture()
-     from /api/posture; a plain .mm-section so it follows the same per-book show/hide as the rest
-     of the dashboard (and stays hidden in the Desk / Self views, which have their own surfaces). -->
-<div class="grid mm-section" id="posture-sec" style="margin-top:0;display:none">
-  <div class="panel span12" id="posture-host"></div>
-</div>
-
-<!-- ── COMMAND HERO ─────────────────────────────────────────────────────────── -->
-<div class="grid mm-section" style="margin-top:0">
-  <div class="panel span12" id="hero">
-    <div class="mm-hero-bar">
-
-      <!-- LEFT: 2×2 quad mini-map -->
-      <div>
-        <div class="mm-hero-eyebrow" style="margin-bottom:7px;text-align:center"><span class="l-en">Regime</span><span class="l-zh">市场状态</span></div>
-        <div class="mm-qmini" id="qmini">
-          <div class="mm-qm q2"></div>
-          <div class="mm-qm q1"></div>
-          <div class="mm-qm q3"></div>
-          <div class="mm-qm q4"></div>
-        </div>
-      </div>
-
-      <!-- CENTER: regime + identity -->
-      <div class="mm-hero-main" id="hero-main">
-        <div class="mm-hero-eyebrow" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px">
-          <span><span class="mm-hb"></span>&nbsp; MASTERMIND &mdash; PAPER PORTFOLIO</span>
-          <!-- theme + lang toggles now live in the top nav (#mm-nav) so they stay visible in
-               both the Dashboard and Research views. -->
-        </div>
-        <div class="mm-hero-name" id="hero-quad-name">Loading…</div>
-        <div id="hero-says" class="mm-hero-says"></div>
-        <div class="mm-hero-meta">
-          <span class="mm-paper">PAPER</span>
-          <span id="hero-asof" style="font-size:11.5px;color:var(--muted)"></span>
-          <span id="hero-tr" style="font-size:11.5px;color:var(--muted)"></span>
-          <span id="updated" style="margin-left:auto"></span>
-        </div>
-      </div>
-
-      <!-- RIGHT: vitals strip -->
-      <div class="mm-hero-vitals" id="hero-vitals">
-        <div class="mm-v-group">
-          <div class="mm-v-label"><span class="l-en">Gross Exposure</span><span class="l-zh">总敞口</span></div>
-          <div class="mm-v-chip" id="v-gross">—</div>
-        </div>
-        <div class="mm-v-group">
-          <div class="mm-v-label"><span class="l-en">Cash</span><span class="l-zh">现金</span></div>
-          <div class="mm-v-chip" id="v-cash">—</div>
-        </div>
-        <div class="mm-v-group">
-          <div class="mm-v-label"><span class="l-en">Liquidity Overlay</span><span class="l-zh">流动性叠加</span></div>
-          <div class="mm-v-chip" id="v-liq">—</div>
-        </div>
-        <div class="mm-v-group">
-          <div class="mm-v-label"><span class="l-en">Track Record</span><span class="l-zh">跟踪记录</span></div>
-          <div class="mm-v-chip" id="v-tr"><span class="l-en">building</span><span class="l-zh">积累中</span></div>
-        </div>
-      </div>
-
-    </div>
-    <!-- macro regime vitals (rates · dollar · vol), integrated into the regime hero (filled by renderMacro) -->
-    <div class="mm-perf-macro" id="perf-macro"></div>
   </div>
 </div>
 
@@ -2058,35 +2545,26 @@ body.page-mm :is(.mm-nav-tab, .mm-pf-tab, .mm-rsub-tab, .mm-sd-btn, .mm-sd-qbtn,
         <div class="mm-perf-stat-sub" id="perf-cash-lbl"><span class="l-en">cash: —</span><span class="l-zh">现金: —</span></div>
       </div>
     </div>
-  </div>
-</div>
-
-<!-- ── EQUITY CURVE ───────────────────────────────────────────────────────── -->
-<div class="mm-section">
-  <div class="panel span12" id="equity-curve" style="grid-column:span 12">
-    <h2><span class="l-en">Equity Curve</span><span class="l-zh">净值曲线</span></h2>
-    <!-- legend — updated: no hypothetical segment; portfolio is flat pre-inception then live -->
-    <div class="mm-ec-legend" id="ec-legend">
-      <span class="mm-ec-leg-item">
-        <span class="mm-ec-leg-line" style="background:var(--up)"></span>
-        <span id="ec-leg-portfolio">Portfolio (live since —)</span>
-      </span>
-      <span class="mm-ec-leg-item">
-        <span class="mm-ec-leg-line" style="background:var(--muted);opacity:.55;border-top:2px dashed var(--muted);height:0;margin-top:1px"></span>
-        <!-- benchmark symbol is book-specific (SPY for US books, FXI for the China book, …) — set
-             dynamically by renderEquityCurve from /api/performance .benchmark. The text below is a
-             static fallback only, shown until the first data load. -->
-        <span id="ec-leg-bench">S&amp;P 500 ($1M ref)</span>
-      </span>
-      <span style="margin-left:auto;font-size:11px;color:var(--muted)" id="ec-range-label"></span>
+    <div class="mm-performance-chart" id="equity-curve">
+      <!-- SVG container -->
+      <div class="mm-ec-wrap" id="ec-wrap">
+        <div class="mm-empty" style="padding:40px 0"><span class="mm-empty-icon">⊙</span>Loading equity curve…</div>
+        <div class="mm-ec-tooltip" id="ec-tooltip"></div>
+      </div>
+      <!-- Chart context belongs below the graph so the metrics remain the first scan target. -->
+      <div class="mm-ec-legend" id="ec-legend">
+        <span class="mm-ec-leg-item">
+          <span class="mm-ec-leg-line" style="background:var(--up)"></span>
+          <span id="ec-leg-portfolio">Portfolio (live since —)</span>
+        </span>
+        <span class="mm-ec-leg-item">
+          <span class="mm-ec-leg-line" style="background:var(--muted);opacity:.55;border-top:2px dashed var(--muted);height:0;margin-top:1px"></span>
+          <!-- Benchmark symbol is book-specific and set by renderEquityCurve(). -->
+          <span id="ec-leg-bench">S&amp;P 500 ($1M ref)</span>
+        </span>
+        <span class="mm-ec-range" id="ec-range-label"></span>
+      </div>
     </div>
-    <!-- SVG container -->
-    <div class="mm-ec-wrap" id="ec-wrap">
-      <div class="mm-empty" style="padding:40px 0"><span class="mm-empty-icon">⊙</span>Loading equity curve…</div>
-      <div class="mm-ec-tooltip" id="ec-tooltip"></div>
-    </div>
-    <!-- honest note -->
-    <div class="mm-ec-note" id="ec-note"></div>
   </div>
 </div>
 
@@ -2108,14 +2586,6 @@ body.page-mm :is(.mm-nav-tab, .mm-pf-tab, .mm-rsub-tab, .mm-sd-btn, .mm-sd-qbtn,
   </div>
 </div>
 
-<!-- ── SAFETY (portfolio risk backtest) ───────────────────────────────────── -->
-<div class="mm-section">
-  <div class="panel span12" id="safety" style="grid-column:span 12">
-    <h2><span class="l-en">Portfolio Safety</span><span class="l-zh">组合安全度</span></h2>
-    <div class="mm-empty"><span class="mm-empty-icon">🛡</span><span class="l-en">Assessing portfolio risk…</span><span class="l-zh">评估组合风险中…</span></div>
-  </div>
-</div>
-
 <!-- ── POSITIONS ──────────────────────────────────────────────────────────── -->
 <div class="mm-section">
   <div class="panel span12" id="positions" style="grid-column:span 12">
@@ -2132,16 +2602,28 @@ body.page-mm :is(.mm-nav-tab, .mm-pf-tab, .mm-rsub-tab, .mm-sd-btn, .mm-sd-qbtn,
   </div>
 </div>
 
+<!-- ── SAFETY (portfolio risk backtest; supporting detail after holdings + fills) ── -->
+<div class="mm-section">
+  <div class="panel span12" id="safety" style="grid-column:span 12">
+    <h2><span class="l-en">Portfolio Safety</span><span class="l-zh">组合安全度</span></h2>
+    <div class="mm-empty"><span class="mm-empty-icon">🛡</span><span class="l-en">Assessing portfolio risk…</span><span class="l-zh">评估组合风险中…</span></div>
+  </div>
+</div>
+
 <!-- ── BRAIN LOG + RESEARCH (side-by-side on wide screens) ─────────────────── -->
 <!-- ── AUTONOMOUS DAILY DECISION LOG (shown only when the autonomous portfolio is active) ── -->
 <div class="mm-section" id="decisions-sec" style="display:none">
   <div class="panel span12" id="decisions">
     <h2><span class="l-en">Daily Decision Log</span><span class="l-zh">每日决策日志</span></h2>
     <div class="mm-dec-sub" style="color:var(--muted);font-size:12px;margin:-2px 0 12px">
-      <span class="l-en">What the Opus Brain bought, sold and held each day — and why.</span>
-      <span class="l-zh">Opus 大脑每天买入、卖出与持有的内容及其理由。</span>
+      <span class="l-en">What Mastermind AI bought, sold and held each day — and why.</span>
+      <span class="l-zh">Mastermind AI 每天买入、卖出与持有的内容及其理由。</span>
     </div>
     <div class="mm-dec-list" id="dec-list"></div>
+    <div class="mm-dec-more-wrap">
+      <button class="mm-dec-more" id="dec-more" type="button" aria-controls="dec-list"
+              aria-expanded="false" onclick="toggleDecisionLog()" hidden></button>
+    </div>
   </div>
 </div>
 
@@ -2235,9 +2717,9 @@ body.page-mm :is(.mm-nav-tab, .mm-pf-tab, .mm-rsub-tab, .mm-sd-btn, .mm-sd-qbtn,
   <!-- sub-nav: Theses (existing) / Calibration (new) -->
   <div class="mm-section" style="margin-bottom:0">
     <div class="span12" style="grid-column:span 12">
-      <div class="mm-rsub-bar">
-        <button class="mm-rsub-tab active" id="rsub-theses" type="button" onclick="showResearchSub('theses')"><span class="l-en">Theses</span><span class="l-zh">研究论文</span></button>
-        <button class="mm-rsub-tab" id="rsub-calibration" type="button" onclick="showResearchSub('calibration')"><span class="l-en">Calibration</span><span class="l-zh">校准</span></button>
+      <div class="mm-rsub-bar" role="tablist" aria-label="Research sections">
+        <button class="mm-rsub-tab active" id="rsub-theses" type="button" role="tab" aria-selected="true" aria-controls="research-sub-theses" onclick="showResearchSub('theses')"><span class="l-en">Theses</span><span class="l-zh">研究论文</span></button>
+        <button class="mm-rsub-tab" id="rsub-calibration" type="button" role="tab" aria-selected="false" aria-controls="research-sub-calibration" onclick="showResearchSub('calibration')"><span class="l-en">Calibration</span><span class="l-zh">校准</span></button>
       </div>
     </div>
   </div>
@@ -2407,9 +2889,10 @@ body.page-mm :is(.mm-nav-tab, .mm-pf-tab, .mm-rsub-tab, .mm-sd-btn, .mm-sd-qbtn,
         <div>
           <div class="mm-sd-field-lbl"><span class="l-en">Search US stocks</span><span class="l-zh">搜索美股</span></div>
           <div class="mm-sd-search-wrap">
-            <input class="mm-sd-input" id="sd-search" type="text" autocomplete="off" spellcheck="false"
+            <input class="mm-sd-input" id="sd-search" type="text" role="combobox" aria-autocomplete="list"
+                   aria-controls="sd-results" aria-expanded="false" autocomplete="off" spellcheck="false"
                    placeholder="AAPL, NVDA, Microsoft…" oninput="selfSearch()" onkeydown="selfSearchKey(event)" onfocus="selfSearch()">
-            <div class="mm-sd-results" id="sd-results"></div>
+            <div class="mm-sd-results" id="sd-results" role="listbox"></div>
           </div>
           <div class="mm-sd-sel empty" id="sd-selected"><span class="l-en">Search and select a stock to trade.</span><span class="l-zh">搜索并选择一只股票进行交易。</span></div>
         </div>
@@ -2461,7 +2944,7 @@ body.page-mm :is(.mm-nav-tab, .mm-pf-tab, .mm-rsub-tab, .mm-sd-btn, .mm-sd-qbtn,
 </div>
 
 <!-- ── RESEARCH THESIS MODAL ────────────────────────────────────────────────── -->
-<div id="mm-thesis-modal" onclick="if(event.target===this)closeThesis()">
+<div id="mm-thesis-modal" role="dialog" aria-modal="true" aria-labelledby="mm-modal-title" onclick="if(event.target===this)closeThesis()">
   <div class="mm-modal-card">
     <div class="mm-modal-head">
       <span class="t" id="mm-modal-title">&mdash;</span>
@@ -2846,6 +3329,19 @@ function t(key) {
   return entry[lg] || entry['en'] || key;
 }
 
+// Security names follow the active UI language while the ticker remains the
+// stable identifier. HK rows carry both `name` (English) and `name_zh` (native).
+function securityName(row) {
+  if (!row) return '';
+  var isZh = document.documentElement.getAttribute('data-lang') === 'zh';
+  var name = (isZh && row.name_zh) ? row.name_zh : (row.name || row.name_zh || '');
+  // A failed security-master lookup historically stored the ticker in `name`.
+  // Do not render that fallback as a misleading duplicate subtitle.
+  return String(name).trim().toUpperCase() === String(row.ticker || '').trim().toUpperCase()
+    ? ''
+    : name;
+}
+
 // hover/focus "?" help icon — popover text from an I18N key
 function helpIcon(key) {
   return '<span class="mm-help" tabindex="0" role="note" onclick="event.stopPropagation()">?<span class="mm-help-pop">' + esc(t(key)) + '</span></span>';
@@ -2960,14 +3456,12 @@ var fmtTsShort = function(s) {
 };
 
 // ── state ────────────────────────────────────────────────────────────────────
-var _book = null, _trades = null, _activity = [], _research = [], _regime = null;
-var _outcomes = null;             // live thesis-outcome labels + Brier track record (/api/outcomes)
+var _book = null, _trades = null, _activity = [], _research = [];
 var _shadowBooks = null;          // parallel forward shadow-book leaderboard (/api/shadow_books)
 var _predictions = null;          // universe-wide prediction log coverage + cross-sectional scorecard
 var _engineBacktest = null;       // historical engine-backtest verdict (/api/engine_backtest)
 var _factorZoo = null;            // advanced factor-alpha lab verdict (/api/factor_zoo)
 var _fundamentals = null;         // PIT fundamental (value/quality) factor verdict (/api/fundamentals)
-var _readiness = null;            // forward-proof readiness flags + alerts (/api/readiness)
 var _student = null;              // CatBoost return-predicting student (/api/student)
 var _distill = null;              // CatBoost Opus-mimic distillation model (/api/distill)
 // paged-feed state (Brain Log + Research Feed) — preserved across re-renders, clamped on reload
@@ -2995,7 +3489,7 @@ window.researchPage = function(d) {
   renderResearch();
 };
 var _expandedIdx = null;
-var _perf = null, _runs = [], _rejected = [], _macro = null;
+var _perf = null, _runs = [], _rejected = [];
 var _risk = null;                 // portfolio safety scorecard (/api/risk) — the risk backtest
 var _papers = [];                 // research papers (the Research page rows)
 var _papersErr = null;            // server-side error from /api/research_papers, surfaced in the empty state
@@ -3012,7 +3506,7 @@ var _sharedLoaded = false;        // true once engine-level (shared) endpoints h
 var _pendingSelfSelect = false;   // set when loaded at /self — auto-select that tab once portfolios load
 var _portfolios = [];             // [{id,name,tagline,kind,manager,status}] from /api/portfolios
 var _decisions = [];              // autonomous Brain daily decision log (/api/decisions)
-var _posture = null, _postureSeq = 0;  // current book's strategy-label posture (/api/posture)
+var DECISION_PREVIEW_COUNT = 5, _decisionsExpanded = false;
 // run drilldown cache
 var _runLogCache = {};
 
@@ -3045,14 +3539,6 @@ function collH2(id, en, zh, sub) {
     + (sub ? ' <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px">' + sub + '</span>' : '')
     + '</h2>';
 }
-
-// quad meta — names/says resolved at render time via t() so lang switches work
-var QUAD_META = {
-  Q1: { nameKey: 'quad.Goldilocks', color: 'var(--q1)', saysKey: 'quad.Goldilocks.says' },
-  Q2: { nameKey: 'quad.Reflation',  color: 'var(--q2)', saysKey: 'quad.Reflation.says'  },
-  Q3: { nameKey: 'quad.Stagflation',color: 'var(--q3)', saysKey: 'quad.Stagflation.says'},
-  Q4: { nameKey: 'quad.Growth-Scare',color:'var(--q4)',saysKey: 'quad.Growth-Scare.says'},
-};
 
 // ── FORMAT HELPERS ────────────────────────────────────────────────────────────
 // Per-book currency symbol: HK Brain = HK$ (HKD), China Brain = ¥ (CNY), everything else = $ (USD).
@@ -3172,10 +3658,6 @@ function renderEquityCurve() {
   // backend emits it as .benchmark; use it for the legend + tooltip instead of a hardcoded "SPY"
   // so the China/HK books don't mislabel their comparison line as the S&P 500.
   var bench = (p && p.benchmark) || 'SPY';
-
-  // Note
-  var noteEl = E('ec-note');
-  if (noteEl) noteEl.textContent = (p && p.note) || '';
 
   // Update legend label with realized_since date
   var legPortEl = E('ec-leg-portfolio');
@@ -3647,131 +4129,6 @@ function renderRejected() {
   el.innerHTML = html;
 }
 
-// ── MACRO REGIME VITALS ───────────────────────────────────────────────────────
-function macroH2() {
-  return '<h2><span class="l-en">Macro Dashboard &mdash; Regime Vitals</span><span class="l-zh">宏观仪表盘 &mdash; 市场体征</span> <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px">' + t('macro.subtitle') + '</span></h2>';
-}
-function _macroTag(txt, cls) { return '<span class="mm-macro-tag ' + cls + '">' + txt + '</span>'; }
-function _regWord(r) {
-  var k = { restrictive: 'macro.reg_restrictive', neutral: 'macro.reg_neutral', accommodative: 'macro.reg_accommodative' }[r];
-  return k ? t(k) : (r || '—');
-}
-function _dirWord(d) {
-  var k = { rising: 'macro.dir_rising', falling: 'macro.dir_falling', flat: 'macro.dir_flat' }[d];
-  return k ? t(k) : (d || '');
-}
-function _macroCell(label, value, sub, tag) {
-  return '<div class="mm-macro-cell"><div class="mm-macro-label">' + label + '</div>'
-       + '<div class="mm-macro-value">' + value + '</div>'
-       + '<div class="mm-macro-sub">' + (sub || '&nbsp;') + '</div>'
-       + (tag || '') + '</div>';
-}
-function renderMacro() {
-  var el = E('perf-macro');   // integrated into the top Performance scorecard
-  if (!el) return;
-  var m = _macro;
-  if (!m || (!m.yield_curve && !m.real_yield && !m.dxy && !m.vix)) {
-    el.innerHTML = '';        // no macro data yet — keep the top scorecard clean (:empty hides the divider)
-    return;
-  }
-  var cells = '';
-
-  var yc = m.yield_curve;
-  if (yc) {
-    var bp = yc.curve_2s10s != null ? Math.round(yc.curve_2s10s * 100) : null;
-    var inv = bp != null && bp < 0;
-    var val = bp != null ? (bp > 0 ? '+' : '') + bp + ' bp' : '—';
-    var sub = yc.nominal_10y != null ? t('macro.10y') + ' ' + yc.nominal_10y.toFixed(2) + '%' : '';
-    cells += _macroCell(t('macro.curve'), val, sub,
-      _macroTag(inv ? t('macro.curve_inv') : t('macro.curve_pos'), inv ? 'hot' : 'neu'));
-  }
-
-  var ry = m.real_yield;
-  if (ry) {
-    var rval = ry.real_10y != null ? ry.real_10y.toFixed(2) + '%' : '—';
-    var regCls = ry.regime === 'restrictive' ? 'warn' : ry.regime === 'accommodative' ? 'calm' : 'neu';
-    var pctStr = ry.pctile != null ? Math.round(ry.pctile * 100) + 'th ' + t('macro.pctile') : '';
-    var chgStr = ry.chg_63d_bp != null ? ((ry.chg_63d_bp > 0 ? '+' : '') + ry.chg_63d_bp + 'bp/63d') : '';
-    var rsub = [pctStr, chgStr].filter(Boolean).join(' · ');
-    cells += _macroCell(t('macro.real10y'), rval, rsub,
-      _macroTag(_regWord(ry.regime) + (ry.direction ? ' · ' + _dirWord(ry.direction) : ''), regCls));
-  }
-
-  var dx = m.dxy;
-  if (dx) {
-    var dval = dx.value != null ? dx.value.toFixed(2) : '—';
-    var dsub = dx.chg_pct != null ? ((dx.chg_pct > 0 ? '+' : '') + dx.chg_pct.toFixed(2) + '% ' + t('macro.1d')) : '';
-    var ddir = dx.chg_pct > 0.02 ? 'macro.dir_rising' : dx.chg_pct < -0.02 ? 'macro.dir_falling' : 'macro.dir_flat';
-    cells += _macroCell(t('macro.dxy'), dval, dsub, _macroTag(t(ddir), 'neu'));
-  }
-
-  var vx = m.vix;
-  if (vx) {
-    var vval = vx.value != null ? vx.value.toFixed(2) : '—';
-    var vsub = vx.chg_pct != null ? ((vx.chg_pct > 0 ? '+' : '') + vx.chg_pct.toFixed(2) + '% ' + t('macro.1d')) : '';
-    var bandCls = { calm: 'calm', normal: 'neu', elevated: 'warn', stress: 'hot' }[vx.band] || 'neu';
-    cells += _macroCell(t('macro.vix'), vval, vsub, _macroTag(t('macro.band_' + (vx.band || 'normal')), bandCls));
-  }
-
-  el.innerHTML = '<div class="mm-perf-macro-head"><span class="l-en">Macro Backdrop</span><span class="l-zh">宏观环境</span>'
-    + '<span class="mm-perf-macro-sub"><span class="l-en">rates · dollar · vol</span><span class="l-zh">利率 · 美元 · 波动率</span></span></div>'
-    + '<div class="mm-macro-grid">' + cells + '</div>';
-}
-
-// ── HERO ─────────────────────────────────────────────────────────────────────
-function renderHero() {
-  var b = _book || {};
-  var r = (b.regime) || _regime || {};
-  var tr = b.track_record || {};
-  var quad = r.quad || '';
-  var meta = QUAD_META[quad] || { nameKey: null, color: 'var(--muted)', saysKey: null };
-  var quadName = meta.nameKey ? t(meta.nameKey) : (quad || '—');
-  var quadSays = meta.saysKey ? t(meta.saysKey) : '';
-
-  // quad name + says
-  E('hero-quad-name').textContent = quadName;
-  E('hero-quad-name').style.color = meta.color;
-  E('hero-says').textContent = (r.quad_name && r.quad_name !== quad ? r.quad_name + ' — ' : '') + quadSays;
-
-  // as-of
-  E('hero-asof').textContent = b.as_of ? t('hero.as_of') + ' ' + fmtDateVerbose(b.as_of) : (r.as_of ? t('hero.as_of') + ' ' + fmtDateVerbose(r.as_of) : '');
-
-  // track record chip
-  if (tr.n != null) {
-    var n = tr.n || 0;
-    var hr = tr.hit_rate != null ? (tr.hit_rate * 100).toFixed(0) + '% hit rate' : t('hero.building');
-    E('hero-tr').textContent = 'n=' + n + ' · ' + hr;
-  }
-
-  // vitals — label elements are HTML with l-en/l-zh spans; chip values are JS
-  if (b.gross != null) {
-    E('v-gross').textContent = pctInt(b.gross);
-    E('v-gross').className = 'mm-v-chip tone-' + (b.gross >= 0.7 ? 'up' : b.gross >= 0.4 ? 'info' : 'warn');
-  }
-  if (b.cash != null) {
-    E('v-cash').textContent = pctInt(b.cash);
-    E('v-cash').className = 'mm-v-chip tone-' + (b.cash >= 0.3 ? 'warn' : 'muted');
-  }
-  var liqMap = { contracting: 'warn', expanding: 'up', neutral: 'muted', tight: 'down' };
-  var liqOverlay = r.liquidity_overlay || '—';
-  E('v-liq').textContent = liqOverlay;
-  E('v-liq').className = 'mm-v-chip tone-' + (liqMap[liqOverlay] || 'muted');
-
-  if (tr.status) {
-    var n = tr.n || 0;
-    E('v-tr').textContent = (n > 0 && tr.hit_rate != null) ? ((tr.hit_rate * 100).toFixed(0) + '% · n=' + n) : t('hero.building') + ' · n=' + n;
-    E('v-tr').className = 'mm-v-chip tone-' + (n >= 5 ? (tr.hit_rate >= 0.6 ? 'up' : 'warn') : 'muted');
-  }
-
-  // qmini — highlight active quad
-  ['q1','q2','q3','q4'].forEach(function(q) {
-    var el = document.querySelector('.mm-qm.' + q);
-    if (!el) return;
-    var isOn = quad.toLowerCase() === q;
-    if (isOn) el.classList.add('on'); else el.classList.remove('on');
-  });
-}
-
 // ── ALLOCATION ───────────────────────────────────────────────────────────────
 function renderAllocation() {
   var b = _book || {};
@@ -4018,9 +4375,10 @@ function renderPositions() {
     // verdict → gerund (HOLDING / ADDING / TRIMMING …); CSS class stays the raw verdict
     var vKey = { hold: 'pos.v_hold', add: 'pos.v_add', trim: 'pos.v_trim', reduce: 'pos.v_reduce', avoid: 'pos.v_avoid', watch: 'pos.v_watch' }[verdict];
     var vLabel = vKey ? t(vKey) : verdict.toUpperCase();
+    var posName = securityName(p);
 
     rows += '<tr class="pos-row" data-idx="' + i + '" onclick="toggleExpand(' + i + ')">' +
-      '<td><span class="pos-ticker">' + esc(p.ticker) + '</span>' + (p.pending ? ' <span class="mm-pend-chip">' + t('pend.status') + '</span>' : '') + (p.name ? '<span class="pos-name" style="display:block;font-size:11px;color:var(--muted);font-weight:500;line-height:1.2">' + esc((document.documentElement.getAttribute('data-lang') === 'zh' && p.name_zh) ? p.name_zh : p.name) + '</span>' : '') + '</td>' +
+      '<td><span class="pos-ticker">' + esc(p.ticker) + '</span>' + (p.pending ? ' <span class="mm-pend-chip">' + t('pend.status') + '</span>' : '') + (posName ? '<span class="pos-name" style="display:block;font-size:11px;color:var(--muted);font-weight:500;line-height:1.2">' + esc(posName) + '</span>' : '') + '</td>' +
       '<td class="l mm-hide-sm"><span class="mm-sleeve-chip ' + sleeveClass + '">' + sleeveName + '</span></td>' +
       '<td class="mm-hide-sm">' + (p.stage != null ? p.stage : '—') + '</td>' +
       '<td style="font-variant-numeric:tabular-nums;font-weight:700">' + pct(p.weight) + '</td>' +
@@ -4187,8 +4545,9 @@ function _pendingOrdersHtml() {
     var shares = o.shares != null ? Number(o.shares).toLocaleString(undefined, { maximumFractionDigits: 1 }) : '—';
     var estPx = o.est_price != null ? _ccySym() + Number(o.est_price).toFixed(2) : '—';
     var estVal = o.est_value != null ? _ccySym() + Math.round(o.est_value).toLocaleString() : '—';
+    var orderName = securityName(o);
     rows += '<tr>' +
-      '<td><span class="pos-ticker">' + esc(o.ticker || '—') + '</span>' + (o.name ? '<span class="pos-name" style="display:block;font-size:11px;color:var(--muted);font-weight:500;line-height:1.2">' + esc(o.name) + '</span>' : '') + '</td>' +
+      '<td><span class="pos-ticker">' + esc(o.ticker || '—') + '</span>' + (orderName ? '<span class="pos-name" style="display:block;font-size:11px;color:var(--muted);font-weight:500;line-height:1.2">' + esc(orderName) + '</span>' : '') + '</td>' +
       '<td><span class="mm-side-chip buy">' + t('trades.buy') + '</span></td>' +
       '<td class="mm-hide-sm" style="font-variant-numeric:tabular-nums">' + shares + '</td>' +
       '<td style="font-variant-numeric:tabular-nums">' + estPx + '</td>' +
@@ -4261,9 +4620,10 @@ function renderTrades() {
     var price = r.price != null ? _ccySym() + Number(r.price).toFixed(2) : '—';
     var exitPx = r.exit_price != null ? _ccySym() + Number(r.exit_price).toFixed(2) : '—';
     var rr = pnlCell(r.realized_pnl, r.realized_pct);   // realized only — closed (sell) rows
+    var tradeName = securityName(r);
     html += '<tr>' +
       '<td class="l" style="font-variant-numeric:tabular-nums;color:var(--muted)">' + fmtDate(r.date) + '</td>' +
-      '<td><span class="pos-ticker">' + esc(r.ticker || '—') + '</span>' + (r.name ? '<span class="pos-name" style="display:block;font-size:11px;color:var(--muted);font-weight:500;line-height:1.2">' + esc(r.name) + '</span>' : '') + '</td>' +
+      '<td><span class="pos-ticker">' + esc(r.ticker || '—') + '</span>' + (tradeName ? '<span class="pos-name" style="display:block;font-size:11px;color:var(--muted);font-weight:500;line-height:1.2">' + esc(tradeName) + '</span>' : '') + '</td>' +
       '<td><span class="mm-side-chip ' + (isBuy ? 'buy' : 'sell') + '">' + (isBuy ? t('trades.buy') : t('trades.sell')) + '</span></td>' +
       '<td class="mm-hide-sm" style="font-variant-numeric:tabular-nums">' + shares + '</td>' +
       '<td style="font-variant-numeric:tabular-nums">' + price + '</td>' +
@@ -4449,6 +4809,8 @@ window.showResearchSub = function(sub) {
   if (ca) ca.style.display = (_researchSub === 'calibration') ? '' : 'none';
   if (tt) tt.classList.toggle('active', _researchSub === 'theses');
   if (ct) ct.classList.toggle('active', _researchSub === 'calibration');
+  if (tt) tt.setAttribute('aria-selected', _researchSub === 'theses' ? 'true' : 'false');
+  if (ct) ct.setAttribute('aria-selected', _researchSub === 'calibration' ? 'true' : 'false');
   if (_researchSub === 'calibration') renderCalibrationPage();
 };
 
@@ -5287,7 +5649,8 @@ function renderSelfPending() {
     }
     chips += '<span class="mm-sd-pend-chip"><span class="mm-side-chip ' + (o.side === 'buy' ? 'buy' : 'sell') + '">' + side + '</span> ' +
       esc(o.ticker) + ' ' + amt + est +
-      ' <span class="x" title="' + t('sd.cancel') + '" onclick="cancelSelfOrder(\'' + esc(o.order_id) + '\')">✕</span></span>';
+      ' <button class="x" type="button" title="' + t('sd.cancel') + '" aria-label="' + t('sd.cancel') +
+      '" onclick="cancelSelfOrder(\'' + esc(o.order_id) + '\')">✕</button></span>';
   });
   host.innerHTML = '<div class="mm-sd-pending-h">' + t('sd.pending_h') + ' — ' + t('sd.pending_note') + '</div>' + chips;
 }
@@ -5341,6 +5704,8 @@ window.selfSearch = function() {
 
 function renderSelfResults(results, flag) {
   var host = E('sd-results'); if (!host) return;
+  var input = E('sd-search');
+  if (input) input.setAttribute('aria-expanded', (flag === 'err' || results.length) ? 'true' : 'false');
   if (flag === 'err') { host.innerHTML = '<div class="mm-sd-results-note">' + t('sd.search_unavail') + '</div>'; return; }
   if (!results.length) {
     var q = ((E('sd-search') || {}).value || '').trim();
@@ -5349,7 +5714,9 @@ function renderSelfResults(results, flag) {
   }
   var html = '';
   results.forEach(function(r, i) {
-    html += '<div class="mm-sd-result' + (i === _selfActiveIdx ? ' active' : '') + '" onclick="selectSelfTicker(\'' + esc(r.ticker) + '\')">' +
+    html += '<div class="mm-sd-result' + (i === _selfActiveIdx ? ' active' : '') +
+      '" role="option" aria-selected="' + (i === _selfActiveIdx ? 'true' : 'false') +
+      '" onclick="selectSelfTicker(\'' + esc(r.ticker) + '\')">' +
       '<span class="tk">' + esc(r.ticker) + '</span><span class="nm">' + esc(r.name || '') + '</span>' +
       (r.exchange ? '<span class="ex">' + esc(r.exchange) + '</span>' : '') + '</div>';
   });
@@ -5501,6 +5868,9 @@ window.showView = function(view) {
   if (nd) nd.classList.toggle('active', _currentView === 'dashboard');
   if (nr) nr.classList.toggle('active', _currentView === 'research');
   if (nk) nk.classList.toggle('active', _currentView === 'desk');
+  if (nd) nd.toggleAttribute('aria-current', _currentView === 'dashboard');
+  if (nr) nr.toggleAttribute('aria-current', _currentView === 'research');
+  if (nk) nk.toggleAttribute('aria-current', _currentView === 'desk');
   try {
     history.replaceState(null, '',
       _currentView === 'research' ? '/research' : (_currentView === 'desk' ? '/desk' : '/'));
@@ -5513,7 +5883,7 @@ window.showView = function(view) {
 // ── MULTI-PORTFOLIO SWITCHER ──────────────────────────────────────────────────
 // Gated-only sections (hidden when the free-form autonomous book is active). 'research' (the feed)
 // shares the feeds-row section with 'brainlog', so hiding brainlog's section hides both.
-var PF_GATED_ONLY = ['hero', 'alloc', 'brainlog', 'runs', 'rejected',
+var PF_GATED_ONLY = ['alloc', 'brainlog', 'runs', 'rejected',
                      'shadow-books', 'xsec', 'engine-bt', 'factor-zoo', 'fundamentals', 'learning-models'];
 var PF_AUTO_ONLY  = ['auto-banner', 'decisions'];
 
@@ -5537,6 +5907,7 @@ function renderPortfolioSwitch() {
     var navStr = st.nav != null ? ccy + Math.round(st.nav).toLocaleString('en-US') : '—';
     var sub = navStr + ' · <span class="' + cls + '">' + _fmtPctSigned(ret) + '</span>';
     return '<button class="mm-pf-tab' + (p.id === _portfolio ? ' active' : '') + '" type="button" ' +
+      'aria-pressed="' + (p.id === _portfolio ? 'true' : 'false') + '" ' +
       'data-pf="' + esc(p.id) + '" onclick="setPortfolio(\'' + esc(p.id) + '\')" title="' + esc(p.tagline || '') + '">' +
       '<span class="mm-pf-name"><span class="mm-pf-dot ' + (p.kind === 'autonomous' ? 'autonomous' : (p.kind === 'heavyweight' ? 'heavyweight' : (p.kind === 'china_brain' ? 'china' : (p.kind === 'hk_brain' ? 'hk' : (p.kind === 'etf_brain' ? 'etf' : 'gated'))))) + '"></span>' + esc(_pfLabel(p)) + '</span>' +
       '<span class="mm-pf-sub">' + sub + '</span></button>';
@@ -5560,6 +5931,7 @@ function _isBrainBook(id) {
 function applyPortfolioScope() {
   var auto = _isBrainBook(_portfolio);
   var self = _portfolio === 'self_directed';
+  var flagship = _portfolio === 'flagship';
   // The self-directed book reuses the dedicated #view-self layout: body.view-self hides every
   // dashboard .mm-section and shows #view-self (its order ticket / scorecard / blotter). The
   // portfolio switcher lives in #mm-nav (not a .mm-section), so it stays visible to switch back.
@@ -5573,13 +5945,17 @@ function applyPortfolioScope() {
     var p = E(id); if (!p) return;
     var s = p.closest('.mm-section'); if (s) s.style.display = (auto && !self) ? '' : 'none';
   });
-  var nr = E('nav-research'); if (nr) nr.style.display = (auto || self) ? 'none' : '';
-  if ((auto || self) && _currentView === 'research') showView('dashboard');
+  var nr = E('nav-research'); if (nr) nr.style.display = flagship ? '' : 'none';
+  var nd = E('nav-desk'); if (nd) nd.style.display = flagship ? '' : 'none';
+  // Desk and Research are Flagship artifacts. Never leave a Brain or Self-Directed
+  // tab selected while the viewport silently shows Flagship-only data.
+  if (!flagship && _currentView !== 'dashboard') showView('dashboard');
   if (self) refreshSelf();
 }
 
 window.setPortfolio = function(id) {
   if (!id) return;
+  if (id !== _portfolio) _decisionsExpanded = false;
   _portfolio = id;
   renderPortfolioSwitch();
   applyPortfolioScope();
@@ -5613,15 +5989,15 @@ function renderAutoBanner() {
                 : kind === 'china_brain' ? 'china'
                 : kind === 'hk_brain' ? 'hk'
                 : kind === 'etf_brain' ? 'etf' : 'autonomous';
-  if (badgeEl) { badgeEl.className = 'mm-auto-badge ' + badgeKind; badgeEl.textContent = isZh ? 'Opus 大脑' : 'Opus Brain'; }
+  if (badgeEl) { badgeEl.className = 'mm-auto-badge ' + badgeKind; badgeEl.textContent = 'Mastermind AI'; }
   var bookName = _pfLabel(pf) || b.manager || (isZh ? '大脑账本' : 'Brain book');
   var bookTag  = pf.tagline || '';
   // The China + HK books are fully localized in zh mode, so translate the tagline too rather than
   // leaving an English line over Chinese content (the book name itself comes from _pfLabel above).
   if (isZh && kind === 'china_brain') {
-    bookTag  = '仅限A股 · Opus 管理 · 每日';
+    bookTag  = '仅限A股 · Codex 优先 · 每日';
   } else if (isZh && kind === 'hk_brain') {
-    bookTag  = '仅限港股 · Opus 管理 · 每日';
+    bookTag  = '仅限港股 · Codex 优先 · 每日';
   }
   if (titleEl) titleEl.textContent = bookName;
   if (tagEl)   tagEl.textContent = bookTag;
@@ -5693,35 +6069,6 @@ function _postureChipHTML(p) {
     '</div>';
 }
 
-function renderPosture() {
-  var sec = E('posture-sec'), host = E('posture-host');
-  if (!host) return;
-  var p = _posture;
-  // hidden for the self-directed manual book (no Brain posture); also guard against a stale
-  // payload from a previous book while a switch's fetch is still in flight.
-  if (!p || _portfolio === 'self_directed' || (p.book && p.book !== _portfolio)) {
-    if (sec) sec.style.display = 'none';
-    host.innerHTML = '';
-    return;
-  }
-  host.innerHTML = '<div class="mm-posture-wrap">' + _postureChipHTML(p) + '</div>';
-  if (sec) sec.style.display = '';
-}
-
-async function loadPosture() {
-  if (!E('posture-host')) return;
-  if (_portfolio === 'self_directed') { _posture = null; renderPosture(); return; }
-  var mySeq = ++_postureSeq;
-  try {
-    var r = await fetch('/api/posture?book=' + encodeURIComponent(_portfolio));
-    var d = r.ok ? await r.json() : null;
-    if (mySeq !== _postureSeq) return;   // a newer switch owns the render now
-    _posture = d; renderPosture();
-  } catch (e) {
-    if (mySeq === _postureSeq) { _posture = null; renderPosture(); }
-  }
-}
-
 // The Desk view is the Flagship desk's home — render its posture chip in the desk header.
 function loadDeskPosture() {
   var host = E('desk-posture'); if (!host) return;
@@ -5733,17 +6080,21 @@ function loadDeskPosture() {
 
 function renderDecisions() {
   var host = E('dec-list');
+  var more = E('dec-more');
   if (!host) return;
   var isZh = document.documentElement.getAttribute('data-lang') === 'zh';
   if (!_decisions || !_decisions.length) {
     host.innerHTML = '<div class="mm-empty"><span class="mm-empty-icon">○</span>' +
       (isZh ? '尚无决策日志——大脑首次运行后出现。' : 'No decisions logged yet — appears after the Brain’s first run.') + '</div>';
+    if (more) more.hidden = true;
     return;
   }
-  host.innerHTML = _decisions.map(function(d, i) {
+  var shown = _decisionsExpanded ? _decisions : _decisions.slice(0, DECISION_PREVIEW_COUNT);
+  host.innerHTML = shown.map(function(d, i) {
     var trades = (d.executed || []).map(function(tr) {
       var v = tr.value != null ? ' ' + _ccySym() + Number(tr.value).toLocaleString(undefined, { maximumFractionDigits: 0 }) : '';
-      var tNm = (tr.name && tr.name !== tr.ticker) ? ' <span class="mm-trade-chip-nm">' + esc(tr.name) + '</span>' : '';
+      var trName = securityName(tr);
+      var tNm = (trName && trName !== tr.ticker) ? ' <span class="mm-trade-chip-nm">' + esc(trName) + '</span>' : '';
       // SELLS also show how much of the line was cut + the realized P&L vs avg cost.
       var extra = '';
       if (tr.side === 'sell') {
@@ -5765,7 +6116,8 @@ function renderDecisions() {
       var conv = (h.conviction || '').toLowerCase();
       var chip = conv ? '<span class="mm-dec-conv ' + conv + '">' + esc(conv) + '</span>' : '';
       var hRat = (isZh && h.rationale_zh) ? h.rationale_zh : (h.rationale || '');
-      var hNm = (h.name && h.name !== h.ticker) ? ' <span style="color:var(--muted);font-weight:500">' + esc(h.name) + '</span>' : '';
+      var holdingName = securityName(h);
+      var hNm = (holdingName && holdingName !== h.ticker) ? ' <span style="color:var(--muted);font-weight:500">' + esc(holdingName) + '</span>' : '';
       return '<div class="mm-dec-h"><b>' + esc(h.ticker) + '</b>' + hNm + ' ' +
         (h.weight != null ? pct(h.weight) : '') + chip + ' — ' + esc(hRat) + '</div>';
     }).join('');
@@ -5787,7 +6139,23 @@ function renderDecisions() {
       _decReasoningBlock(d, i) +
     '</div>';
   }).join('');
+  if (more) {
+    var hasMore = _decisions.length > DECISION_PREVIEW_COUNT;
+    more.hidden = !hasMore;
+    more.setAttribute('aria-expanded', _decisionsExpanded ? 'true' : 'false');
+    if (hasMore) {
+      var remaining = Math.max(0, _decisions.length - DECISION_PREVIEW_COUNT);
+      more.textContent = _decisionsExpanded
+        ? (isZh ? '收起' : 'Show less')
+        : (isZh ? '查看更多 ' + remaining + ' 条' : 'See ' + remaining + ' more');
+    }
+  }
 }
+
+window.toggleDecisionLog = function() {
+  _decisionsExpanded = !_decisionsExpanded;
+  renderDecisions();
+};
 
 // ── the Brain's thinking trace — closing reasoning + the data/tools it consulted ──
 function _decReasoningBlock(d, i) {
@@ -6256,29 +6624,6 @@ function renderFundamentals() {
     + cards + ftable + regHtml + gaps + meth + honest;
 }
 
-// ── READINESS BANNER (shown only when a forward-proof threshold has crossed) ────
-// The forward-proof program is gated on data accrual (months out). The daily build records the
-// moment a threshold crosses; this banner surfaces it so the system tells YOU when to revisit —
-// no calendar-watching, no Claude session, no expiring cron. Hidden until something is actually ready.
-function renderReadiness() {
-  var sec = E('readiness-sec'), el = E('readiness-banner');
-  if (!sec || !el) return;
-  var d = _readiness || {};
-  var al = d.alerts || [];
-  if (!al.length) { sec.style.display = 'none'; return; }
-  var isZh = document.documentElement.getAttribute('data-lang') === 'zh';
-  var items = al.slice().reverse().map(function(a) {
-    return '<li style="margin:3px 0">' + esc(a.message || a.flag) +
-      ' <span style="color:var(--muted);font-size:11px">(' + esc(a.date || '') + ')</span></li>';
-  }).join('');
-  el.innerHTML = '<div style="display:flex;align-items:flex-start;gap:10px">'
-    + '<span style="font-size:18px">🔔</span><div>'
-    + '<div style="font-weight:800"><span class="l-en">Forward-proof readiness — time to revisit</span>'
-    + '<span class="l-zh">前瞻验证就绪 — 该回看了</span></div>'
-    + '<ul style="margin:6px 0 0;padding-left:18px;font-size:12.5px">' + items + '</ul></div></div>';
-  sec.style.display = '';
-}
-
 // ── FOOTER ────────────────────────────────────────────────────────────────────
 function renderFooter() {
   var b = _book || {};
@@ -6420,74 +6765,20 @@ function renderLearningModels() {
     '<div class="mm-comp-grid">' + cards + '</div>';
 }
 
-// ── LIVE THESIS OUTCOMES (track record) ───────────────────────────────────────
-// Decoupled, non-blocking: grades realized thesis outcomes (triple-barrier + rel-return vs
-// SPY) and lights up the hero Track Record vital as positions mature. Honest at n=0.
-function loadOutcomes() {
-  fetch('/api/outcomes').then(function(r) { return r.ok ? r.json() : null; }).then(function(d) {
-    if (!d) return;
-    _outcomes = d;
-    var s = d.summary || {}, tr = d.track_record || {};
-    var n = tr.n || 0, vEl = E('v-tr'), hEl = E('hero-tr');
-    if (vEl) {
-      vEl.textContent = n > 0
-        ? ((tr.hit_rate != null ? (tr.hit_rate * 100).toFixed(0) + '%' : '—') + ' · n=' + n)
-        : (t('hero.building') + (s.n_in_progress ? ' · ' + s.n_in_progress + ' maturing' : ''));
-      vEl.className = 'mm-v-chip tone-' + (n >= 5 ? (tr.hit_rate >= 0.6 ? 'up' : 'warn') : 'muted');
-    }
-    if (hEl && n > 0) hEl.textContent = 'Brier ' + (tr.brier != null ? tr.brier : '—') + ' · n=' + n;
-    renderCalibration(d.calibration);
-  }).catch(function() {});
-}
-
-// Surface the empirical calibration loop: each agent's confidence is shrunk toward its realized
-// reliability (de-confidence only, bounded [floor,1]). Honest at cold-start — a tooltip explains
-// "building" until an agent has min_n resolved decisions; once an agent is actively de-confidencing
-// (<1.0) we badge the Track Record vital so it's visible the system is self-correcting.
-function renderCalibration(cal) {
-  var vEl = E('v-tr');
-  if (!vEl || !cal || !cal.agents) return;
-  var ag = cal.agents, lines = [], anyActive = false;
-  ['forge', 'sentinel'].forEach(function(k) {
-    var a = ag[k]; if (!a) return;
-    var name = k.toUpperCase();
-    if (a.status === 'scoring') {
-      lines.push(name + ': conf ×' + a.multiplier + '  (reliability ' +
-                 Math.round((a.reliability || 0) * 100) + '% vs stated ' +
-                 Math.round((a.mean_confidence || 0) * 100) + '%, n=' + a.n + ')');
-      if (a.multiplier < 1.0) anyActive = true;
-    } else {
-      lines.push(name + ': building calibration (n=' + (a.n || 0) + '/' + (cal.min_n || 12) + ')');
-    }
-  });
-  vEl.title = 'Confidence calibration — de-confidence only, floor ' + (cal.floor != null ? cal.floor : 0.5) +
-              '\n' + lines.join('\n');
-  // mark the vital when calibration is actively trimming an agent's overconfidence
-  var prev = vEl.querySelector('.mm-cal-dot');
-  if (prev) prev.remove();
-  if (anyActive) {
-    var dot = document.createElement('span');
-    dot.className = 'mm-cal-dot';
-    dot.textContent = ' ⚖';
-    dot.style.cssText = 'opacity:.8;font-size:.85em';
-    vEl.appendChild(dot);
-  }
-}
-
 // ── FETCH + RENDER ────────────────────────────────────────────────────────────
 // Render every section RESILIENTLY: a throw in one section (e.g. a transient/partial data
 // state) is caught + logged so it can't cascade and leave later sections — like Research
 // Papers — stuck on their "Loading…" placeholder (which reads as "empty for some reason").
 function _renderAll() {
   var steps = [
-    ['performance', renderPerformance], ['macro', renderMacro], ['equityCurve', renderEquityCurve],
-    ['hero', renderHero], ['allocation', renderAllocation], ['safety', renderSafety], ['positions', renderPositions],
+    ['performance', renderPerformance], ['equityCurve', renderEquityCurve],
+    ['allocation', renderAllocation], ['safety', renderSafety], ['positions', renderPositions],
     ['trades', renderTrades], ['brainLog', renderBrainLog], ['research', renderResearch],
     ['runs', renderRuns], ['rejected', renderRejected],
     ['shadowBooks', renderShadowBooks], ['xsec', renderXsec], ['engineBacktest', renderEngineBacktest],
-    ['factorZoo', renderFactorZoo], ['fundamentals', renderFundamentals], ['readiness', renderReadiness],
+    ['factorZoo', renderFactorZoo], ['fundamentals', renderFundamentals],
     ['learningModels', renderLearningModels],
-    ['autoBanner', renderAutoBanner], ['decisions', renderDecisions], ['posture', renderPosture],
+    ['autoBanner', renderAutoBanner], ['decisions', renderDecisions],
     ['sizingScorecard', renderSizingScorecard],
     ['researchPapers', renderResearchPapers], ['calibration', renderCalibrationPage], ['footer', renderFooter],
     ['self', renderSelf],
@@ -6542,9 +6833,7 @@ async function fetchAll(opts) {
     var sharedPromise = scopedOnly ? null : Promise.allSettled([
       fetch('/api/activity').then(function(r)  { return r.ok ? r.json() : [];   }).catch(function() { return []; }),
       fetch('/api/research').then(function(r)  { return r.ok ? r.json() : [];   }).catch(function() { return []; }),
-      fetch('/regime').then(function(r)         { return r.ok ? r.json() : null; }).catch(function() { return null; }),
       fetch('/api/runs').then(function(r)       { return r.ok ? r.json() : [];   }).catch(function() { return []; }),
-      fetch('/api/macro').then(function(r)      { return r.ok ? r.json() : null; }).catch(function() { return null; }),
       fetch('/api/research_papers').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
       fetch('/api/outcome_ledger').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
       fetch('/api/shadow_books').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
@@ -6552,7 +6841,6 @@ async function fetchAll(opts) {
       fetch('/api/engine_backtest').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
       fetch('/api/factor_zoo').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
       fetch('/api/fundamentals').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
-      fetch('/api/readiness').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
       fetch('/api/student').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
       fetch('/api/distill').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
     ]);
@@ -6577,15 +6865,13 @@ async function fetchAll(opts) {
       // fetch; a switch that fires while the (slower) shared bundle is still in flight would
       // otherwise fall through and clobber the now-active tab with this stale load's data.
       if (mySeq !== _pfFetchSeq) return;
-      var actRes = s[0], researchRes = s[1], regimeRes = s[2], runsRes = s[3],
-          macroRes = s[4], papersRes = s[5], calibRes = s[6], shadowRes = s[7], predRes = s[8],
-          ebtRes = s[9], fzRes = s[10], fundRes = s[11], readyRes = s[12],
-          studentRes = s[13], distillRes = s[14];
+      var actRes = s[0], researchRes = s[1], runsRes = s[2],
+          papersRes = s[3], calibRes = s[4], shadowRes = s[5], predRes = s[6],
+          ebtRes = s[7], fzRes = s[8], fundRes = s[9],
+          studentRes = s[10], distillRes = s[11];
       _activity    = (actRes.status    === 'fulfilled' ? actRes.value     : null) || [];
       _research    = (researchRes.status === 'fulfilled' ? researchRes.value : null) || [];
-      _regime      = regimeRes.status  === 'fulfilled' ? regimeRes.value  : null;
       _runs        = (runsRes.status   === 'fulfilled' ? runsRes.value    : null) || [];
-      _macro       = macroRes.status   === 'fulfilled' ? macroRes.value   : null;
       var _papersResp = (papersRes.status === 'fulfilled' ? papersRes.value : null) || {};
       _papers      = _papersResp.papers || [];
       _papersErr   = _papersResp.error || (papersRes.status === 'rejected' ? String(papersRes.reason || 'fetch failed') : null);
@@ -6595,7 +6881,6 @@ async function fetchAll(opts) {
       _engineBacktest = ebtRes.status    === 'fulfilled' ? ebtRes.value    : null;
       _factorZoo      = fzRes.status     === 'fulfilled' ? fzRes.value     : null;
       _fundamentals   = fundRes.status   === 'fulfilled' ? fundRes.value   : null;
-      _readiness      = readyRes.status  === 'fulfilled' ? readyRes.value  : null;
       _student        = studentRes.status === 'fulfilled' ? studentRes.value : null;
       _distill        = distillRes.status === 'fulfilled' ? distillRes.value : null;
       _sharedLoaded   = true;
@@ -6611,11 +6896,6 @@ async function fetchAll(opts) {
     // extract rejected from portfolio
     _rejected = (_book && _book.rejected) ? _book.rejected : [];
 
-    // merge regime into book when needed (uses cached _regime on scoped-only switches)
-    if (_book && !(_book.regime||{}).quad && _regime) {
-      _book.regime = { quad: _regime.quad, quad_name: _regime.quad_name, liquidity_overlay: _regime.liquidity_overlay };
-    }
-
     _renderAll();
     applyColl('runs');
     applyColl('rejected');
@@ -6624,12 +6904,7 @@ async function fetchAll(opts) {
     applyColl('engine-bt');
     applyColl('factor-zoo');
     applyColl('fundamentals');
-    loadOutcomes();   // live thesis-outcome track record (decoupled, non-blocking)
-    loadPosture();    // per-book strategy-label posture chip (decoupled, non-blocking)
     refreshSelf();    // self-directed book (decoupled): settles due pending orders + refreshes marks
-
-    var now = new Date();
-    E('updated').textContent = t('hero.updated') + ' ' + now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   } finally {
     // only the owning (newest) fetch clears the bar; a superseded call leaving early must not
     if (opts.showBar && mySeq === _pfFetchSeq) loadBarDone();

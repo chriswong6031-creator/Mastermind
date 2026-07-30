@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 
 def _read_events(root: Path) -> list[dict]:
@@ -56,4 +57,85 @@ def test_sync_script_noops_under_serve_only():
         env={"MASTERMIND_SERVE_ONLY": "1", "PATH": "/usr/bin:/bin"},
     )
     assert r.returncode == 0
-    assert "sync ok" not in r.stdout, "serve-only guard must exit before the rsync/echo"
+    assert "sync verified" not in r.stdout, "serve-only guard must exit before the rsync/echo"
+
+
+def test_stage_state_is_incremental_additive_and_excludes_runtime_files(tmp_path):
+    from scripts.stage_state_for_vps import stage
+
+    source = tmp_path / "source"
+    staged = tmp_path / "staged"
+    (source / "portfolio").mkdir(parents=True)
+    (source / "portfolio" / "latest.json").write_text('{"as_of":"2026-07-29"}')
+    (source / "scheduler.sqlite").write_text("do not copy")
+    (source / "writer.lock").write_text("do not copy")
+
+    first = stage(source, staged)
+    assert (staged / "portfolio" / "latest.json").read_text() == '{"as_of":"2026-07-29"}'
+    assert not (staged / "scheduler.sqlite").exists()
+    assert not (staged / "writer.lock").exists()
+    assert (staged / ".vps_sync_token").read_text().strip() == first
+    manifest = (staged / ".vps_sync_manifest.sha256").read_text()
+    assert "portfolio/latest.json" in manifest
+    assert staged.stat().st_mode & 0o777 == 0o700
+
+    (source / "portfolio" / "latest.json").write_text('{"as_of":"2026-07-30"}')
+    (source / "retained.json").write_text("retained")
+    stage(source, staged)
+    (source / "retained.json").unlink()
+    second = stage(source, staged)
+
+    assert second != first
+    assert (staged / "portfolio" / "latest.json").read_text() == '{"as_of":"2026-07-30"}'
+    assert (staged / "retained.json").read_text() == "retained"
+
+
+def test_zero_exit_without_round_trip_verification_is_an_error(tmp_path, monkeypatch):
+    import app.scheduler as sched_mod
+    import control_plane.run_events as re_mod
+
+    orig_lp = re_mod._ledger_path
+    monkeypatch.setattr(re_mod, "_ledger_path", lambda root=None: orig_lp(tmp_path))
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="", stderr=""),
+    )
+
+    sched_mod._vps_state_sync_job()
+
+    events = _read_events(tmp_path)
+    assert any(
+        event.get("kind") == "step_failed"
+        and event.get("job") == "vps_state_sync"
+        and event.get("step") == "rsync"
+        for event in events
+    )
+    finished = [
+        event for event in events
+        if event.get("kind") == "run_finished" and event.get("job") == "vps_state_sync"
+    ]
+    assert finished[-1]["status"] == "error"
+
+
+def test_verified_round_trip_is_success(tmp_path, monkeypatch):
+    import app.scheduler as sched_mod
+    import control_plane.run_events as re_mod
+
+    orig_lp = re_mod._ledger_path
+    monkeypatch.setattr(re_mod, "_ledger_path", lambda root=None: orig_lp(tmp_path))
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(
+            returncode=0, stdout="sync verified token=test-token\n", stderr=""
+        ),
+    )
+
+    sched_mod._vps_state_sync_job()
+
+    finished = [
+        event for event in _read_events(tmp_path)
+        if event.get("kind") == "run_finished" and event.get("job") == "vps_state_sync"
+    ]
+    assert finished[-1]["status"] == "ok"

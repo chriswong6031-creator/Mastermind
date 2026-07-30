@@ -33,6 +33,17 @@ _TOKEN: str | None = None
 _TOKEN_LOADED = False
 
 
+def _timeout() -> float:
+    """Bound a Tushare request so an unreachable regional route cannot stall a
+    scheduler worker for minutes.  Production may lower this on a VPS while
+    retaining the historical 30-second default elsewhere.
+    """
+    try:
+        return max(1.0, float(os.environ.get("TUSHARE_TIMEOUT_SEC", "30")))
+    except (TypeError, ValueError):
+        return 30.0
+
+
 def _token() -> str | None:
     global _TOKEN, _TOKEN_LOADED
     if _TOKEN_LOADED:
@@ -72,7 +83,7 @@ def _call(api: str, params: dict, fields: str) -> dict | None:
     body = json.dumps({"api_name": api, "token": tok, "params": params, "fields": fields}).encode()
     req = urllib.request.Request(_API, data=body, headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=_timeout()) as resp:
             r = json.load(resp)
     except Exception as e:  # noqa: BLE001
         log.debug("tushare %s request failed (%s)", api, e)

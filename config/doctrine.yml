@@ -324,6 +324,15 @@ market_view:
   coverage_floor:          0.30 # (unverified-prior) below this present-plane fraction the view is
                                 #   "degraded" (may only refuse to loosen, never tighten offense)
 
+# ---- canonical AI perception contract (brain/decision_context.py) ----
+# decision_context.v2 is a read-only, point-in-time contract layered over market_view.v1. It adds
+# regime probabilities/trajectory, typed units, explicit availability, authority, and per-lobe
+# Neural Web freshness. It does not grant any new sizing authority.
+decision_context:
+  schema_version: 2
+  artifact_path: data/decision_context/latest.json
+  neural_web_per_lobe_freshness_required: true
+
 # ---- us_standouts board gate (P-NEW-2) ----
 # The dashboard's standout BUY board publishes its OWN Phase-0 gate verdict, `gate_go`. When it is
 # FALSE the board is explicitly "a confluence read, NOT a standalone alpha" (validation_status

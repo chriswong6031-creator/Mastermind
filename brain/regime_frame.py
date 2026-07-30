@@ -316,17 +316,96 @@ def freshness(region: str = "us") -> int | None:
 # cycles() — the sole sector_cycles.json consumer (architecture Stage 1, W2)
 # ---------------------------------------------------------------------------
 
-def cycles() -> dict[str, dict[str, Any]]:
-    """Return the per-sector cycle read keyed by ETF ticker, or {} when stale/absent.
+def cycles_with_meta() -> dict[str, Any]:
+    """Return the freshness-stamped sector-cycle snapshot.
 
     THIS IS THE ONLY CONSUMER of vendor/macro/site/sectordata/sector_cycles.json in the
     firm.  Leadership brakes (the entry-tilt seed and the late_cycle new-leg halving) read
-    THIS dict — never the JSON — so the freshness gate here governs every downstream use.
+    ``cycles()`` below, which delegates to this function.  Consumers that need the source
+    timestamp (for example Market View) use this snapshot instead of fabricating today's date.
 
     FRESHNESS GATE (fail-closed): if meta.asOf is older than the doctrine's
     ``cycles.stale_after_trading_days`` NYSE sessions (default 5), or asOf is missing /
-    unparseable, this returns {} and every consumer degrades to a no-op.  Stale cycle data
-    may only REMOVE a tilt/shrink, never impose one — per the master invariant.
+    unparseable, ``sectors`` is empty and every consumer degrades to a no-op.  Stale cycle
+    data may only REMOVE a tilt/shrink, never impose one — per the master invariant.
+
+    Shape::
+
+        {
+          "asof": str | None,
+          "age_sessions": int | None,
+          "stale": bool,
+          "sectors": {ticker: cycle_row, ...},
+          "degrade_reason": str | None,
+        }
+    """
+    empty = {
+        "asof": None,
+        "age_sessions": None,
+        "stale": True,
+        "sectors": {},
+        "degrade_reason": "absent_or_unreadable",
+    }
+    try:
+        if not _CYCLES_PATH.exists():
+            return empty
+        raw = json.loads(_CYCLES_PATH.read_text())
+    except Exception:  # noqa: BLE001 — any I/O or parse error → no-op
+        return empty
+
+    meta = raw.get("meta") or {}
+    as_of = meta.get("asOf") if isinstance(meta, dict) else None
+    stale_after = _cycles_stale_after_td()
+    age = _trading_days_since(as_of)
+    # Unknown age (age is None) is treated as stale — fail-closed, never fail-open.
+    if age is None or age < 0 or age > stale_after:
+        return {
+            "asof": as_of,
+            "age_sessions": age,
+            "stale": True,
+            "sectors": {},
+            "degrade_reason": (
+                "unknown_age" if age is None
+                else "future_dated" if age < 0
+                else "stale"
+            ),
+        }
+
+    out: dict[str, dict[str, Any]] = {}
+    for sec in raw.get("sectors") or []:
+        if not isinstance(sec, dict):
+            continue
+        ticker = sec.get("ticker")
+        if not ticker or not isinstance(ticker, str):
+            continue
+        now = sec.get("now") or {}
+        if not isinstance(now, dict):
+            now = {}
+        phase = now.get("phase")
+        pos = _as_float(now.get("pos"))
+        osc_slope = _as_float(now.get("osc_slope"))
+        out[ticker] = {
+            "phase": phase,
+            "phaseLabel": now.get("phaseLabel"),
+            "pos": pos,
+            "osc_slope": osc_slope,
+            "late_cycle": _late_cycle(phase, osc_slope, pos),
+            "entry_favored": isinstance(phase, str) and phase in _ENTRY_FAVORED_PHASES,
+        }
+    return {
+        "asof": as_of,
+        "age_sessions": age,
+        "stale": False,
+        "sectors": out,
+        "degrade_reason": None,
+    }
+
+
+def cycles() -> dict[str, dict[str, Any]]:
+    """Return the per-sector cycle read keyed by ETF ticker, or {} when stale/absent.
+
+    This compatibility surface intentionally returns only the sector map.  The source is read
+    once by ``cycles_with_meta()``; timestamp-aware consumers call that function directly.
 
     KEYING: the keys are the sector ETF tickers themselves (XLK, XLV, XLF, …) because in
     sector_cycles.json the sector rows ARE those ETFs (kind=='sector').  Basket-block
@@ -350,42 +429,11 @@ def cycles() -> dict[str, dict[str, Any]]:
     always safe and a missing file is indistinguishable from a no-op.
     """
     try:
-        if not _CYCLES_PATH.exists():
-            return {}
-        raw = json.loads(_CYCLES_PATH.read_text())
-    except Exception:  # noqa: BLE001 — any I/O or parse error → no-op
+        snapshot = cycles_with_meta()
+        sectors = snapshot.get("sectors")
+        return sectors if isinstance(sectors, dict) else {}
+    except Exception:  # noqa: BLE001 — every degraded path is an empty/no-op map
         return {}
-
-    meta = raw.get("meta") or {}
-    as_of = meta.get("asOf") if isinstance(meta, dict) else None
-    stale_after = _cycles_stale_after_td()
-    age = _trading_days_since(as_of)
-    # Unknown age (age is None) is treated as stale — fail-closed, never fail-open.
-    if age is None or age > stale_after:
-        return {}
-
-    out: dict[str, dict[str, Any]] = {}
-    for sec in raw.get("sectors") or []:
-        if not isinstance(sec, dict):
-            continue
-        ticker = sec.get("ticker")
-        if not ticker or not isinstance(ticker, str):
-            continue
-        now = sec.get("now") or {}
-        if not isinstance(now, dict):
-            now = {}
-        phase = now.get("phase")
-        pos = _as_float(now.get("pos"))
-        osc_slope = _as_float(now.get("osc_slope"))
-        out[ticker] = {
-            "phase": phase,
-            "phaseLabel": now.get("phaseLabel"),
-            "pos": pos,
-            "osc_slope": osc_slope,
-            "late_cycle": _late_cycle(phase, osc_slope, pos),
-            "entry_favored": isinstance(phase, str) and phase in _ENTRY_FAVORED_PHASES,
-        }
-    return out
 
 
 def _as_float(val: Any) -> float | None:

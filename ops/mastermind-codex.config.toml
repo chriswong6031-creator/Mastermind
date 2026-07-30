@@ -1,0 +1,11 @@
+# Machine-local Codex policy for the authoritative Mastermind VPS.
+# Authentication is stored separately in CODEX_HOME/auth.json (mode 0600).
+model = "gpt-5.6-sol"
+model_reasoning_effort = "xhigh"
+approval_policy = "never"
+sandbox_mode = "read-only"
+cli_auth_credentials_store = "file"
+
+# Mastermind's book tools are attached per invocation by brain/codex_bridge.py.
+# Native web search is available for the research portions of the daily loops.
+web_search = "live"

@@ -279,6 +279,21 @@ artifacts:
       - brain/regime_frame.py           # site/sectordata/sector_cycles.json
     declared_by: census
 
+  # Neural Web context bridge — advisory context with per-lobe freshness enforcement.
+  site-neural-web-mastermind-context:
+    path: site/neuralwebdata/mastermind_context.json
+    owner: macro_engine
+    schema_hint: json
+    freshness_budget_sessions: 1
+    tier: display
+    allowed_effect: context-only
+    degradation_class: ADVISORY
+    consumer_modules:
+      - brain/neural_web_context.py
+      - brain/decision_context.py
+      - brain/market_view.py
+    declared_by: census
+
   # macro_refresh anchor 4 (R2 leg) — SPY stockdata
   site-stockdata-spy:
     path: site/stockdata/SPY.json

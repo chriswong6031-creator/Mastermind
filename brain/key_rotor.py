@@ -93,6 +93,60 @@ def _ledger_path(root: Path | None = None) -> Path:
     return base / _LEDGER_REL
 
 
+def _shared_pool_enabled() -> bool:
+    return os.environ.get("MASTERMIND_SHARED_LLM_POOL", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _mirror_shared_session(
+    key_id_str: str,
+    *,
+    est_tokens: int,
+    cycle_id: str,
+    stage: str,
+    outcome: str,
+    root: Path | None,
+) -> None:
+    """Mirror non-secret usage metadata into Macro's shared provider ledger."""
+    if root is not None or not _shared_pool_enabled():
+        return
+    try:
+        from engine.neuralweb import key_pool as _shared
+
+        _shared.record_session(
+            key_id_str,
+            est_tokens=est_tokens,
+            cycle_id=f"mastermind:{cycle_id}" if cycle_id else "mastermind",
+            stage=f"mastermind:{stage}" if stage else "mastermind",
+            outcome=outcome,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("key_rotor shared session mirror (%s): %s", key_id_str, exc)
+
+
+def _mirror_shared_cooling(
+    key_id_str: str,
+    *,
+    reset_hint: str,
+    cool_kind: str,
+    root: Path | None,
+) -> None:
+    """Mirror provider cooling into the Macro admin/control-plane ledger."""
+    if root is not None or not _shared_pool_enabled():
+        return
+    try:
+        from engine.neuralweb import key_pool as _shared
+
+        _shared.mark_cooling(
+            key_id_str,
+            reset_hint=reset_hint,
+            cool_kind=cool_kind,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("key_rotor shared cooling mirror (%s): %s", key_id_str, exc)
+
+
 # ---------------------------------------------------------------------------
 # Enabled-key filter (METAB_KEYS_ENABLED)
 # ---------------------------------------------------------------------------
@@ -213,7 +267,17 @@ def record_session(
             "est_tokens": int(est_tokens),
             "outcome": outcome,
         }
-        return _write_row(row, root)
+        wrote = _write_row(row, root)
+        if wrote:
+            _mirror_shared_session(
+                key_id_str,
+                est_tokens=int(est_tokens),
+                cycle_id=cycle_id,
+                stage=stage,
+                outcome=outcome,
+                root=root,
+            )
+        return wrote
     except Exception as exc:  # noqa: BLE001
         log.warning("key_rotor.record_session(%s): %s", key_id_str, exc)
         return False
@@ -262,6 +326,13 @@ def mark_cooling(
             "reset_hint": reset_hint,
         }
         wrote = _write_row(row, root)
+        if wrote:
+            _mirror_shared_cooling(
+                key_id_str,
+                reset_hint=reset_hint,
+                cool_kind=cool_kind,
+                root=root,
+            )
         # Cooling state just changed → refresh the published pool view (federation UP).
         # Best-effort: a publish miss must never disturb the cooling write or the loop.
         if wrote:

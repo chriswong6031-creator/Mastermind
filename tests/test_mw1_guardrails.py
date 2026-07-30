@@ -972,6 +972,37 @@ class TestPeerSentinel:
         import os
         os.environ.pop("MASTERMIND_PEER_SENTINEL", None)
 
+    def test_sentinel_uses_account_when_published_book_is_empty(self, iso, monkeypatch):
+        """An empty latest.json must not make FREEZE liquidate a still-invested account."""
+        _capture(monkeypatch)
+
+        from portfolio import firm_exposure, market_calendar, paper_account
+
+        self._write_latest(iso, "flagship", [])
+        self._write_latest(iso, "heavyweight", [{"ticker": "SPY", "weight": 0.10}])
+        account_path = iso / "data" / "portfolio" / "account.json"
+        account_path.parent.mkdir(parents=True, exist_ok=True)
+        account_path.write_text(json.dumps({
+            "inception_date": "2026-06-19",
+            "starting_nav": 1_000_000.0,
+            "cash": 850_000.0,
+            "positions": {
+                "NVDA": {"shares": 100.0, "avg_cost": 900.0, "current_price": 1000.0},
+                "MSFT": {"shares": 100.0, "avg_cost": 450.0, "current_price": 500.0},
+            },
+        }))
+        monkeypatch.setattr(paper_account, "_ACCOUNT_PATH", account_path, raising=False)
+        monkeypatch.setattr(market_calendar, "is_trading_day", lambda d: True)
+        monkeypatch.setenv("MASTERMIND_PEER_SENTINEL", "1")
+
+        result = firm_exposure.clamp_book(
+            {"NVDA": 0.08, "MSFT": 0.04, "NEW": 0.04}, "flagship"
+        )
+
+        assert result["positions"]["NVDA"] > 0
+        assert result["positions"]["MSFT"] > 0
+        assert "NEW" not in result["positions"]
+
     def test_sentinel_stale_peer_fires(self, iso, monkeypatch):
         """Stale-branch: a peer with a file older than the staleness budget triggers sentinel.
 

@@ -195,11 +195,13 @@ def _freshness(asof: Any) -> dict[str, Any]:
     """
     age = _rf._trading_days_since(str(asof) if asof is not None else None)
     stale_after = _stale_after_td()
-    stale = age is None or age > stale_after
+    stale = age is None or age < 0 or age > stale_after
     return {
         "asof": str(asof) if asof is not None else None,
         "age_sessions": age,
         "stale": bool(stale),
+        "future_dated": age is not None and age < 0,
+        "stale_after_sessions": stale_after,
     }
 
 
@@ -225,6 +227,14 @@ def _plane_record(
     if conf is not None:
         conf = min(max(conf, 0.0), 1.0)
     status = "validated" if (validated and not fresh["stale"]) else "advisory"
+    raw_out = dict(raw) if isinstance(raw, dict) else {"value": raw}
+    # Availability and activation are separate concepts.  ``artifact_present`` describes
+    # whether the source record exists; ``signal_active`` describes whether it is firing.
+    # Keep legacy ``present`` compatible for the current UI, but never infer absence from a
+    # detector's domain-specific "present" field.
+    raw_out.setdefault("artifact_present", True)
+    raw_out.setdefault("present", True)
+    raw_out.setdefault("signal_active", direction is not None)
     return {
         "reading": reading,
         "direction": direction,
@@ -233,7 +243,7 @@ def _plane_record(
         "confidence": conf,
         "status": status,
         "source_contract": source_contract,
-        "raw": raw,
+        "raw": raw_out,
     }
 
 
@@ -244,11 +254,22 @@ def _absent_record(source_contract: str, note: str = "") -> dict[str, Any]:
         "reading": None,
         "direction": None,
         "magnitude": None,
-        "freshness": {"asof": None, "age_sessions": None, "stale": True},
+        "freshness": {
+            "asof": None,
+            "age_sessions": None,
+            "stale": True,
+            "future_dated": False,
+            "stale_after_sessions": _stale_after_td(),
+        },
         "confidence": None,
         "status": "advisory",
         "source_contract": source_contract,
-        "raw": {"present": False, "note": note} if note else {"present": False},
+        "raw": {
+            "present": False,
+            "artifact_present": False,
+            "signal_active": False,
+            **({"note": note} if note else {}),
+        },
     }
 
 
@@ -431,7 +452,8 @@ def _adapt_turning_point(raw: dict[str, Any]) -> dict[str, Any]:
         confidence=None,
         validated=False,
         source_contract="regime.turning_point",
-        raw={"present": present, "active": active, "raw_fire": raw_fire,
+        raw={"detector_present": present, "active": active, "raw_fire": raw_fire,
+             "signal_active": bool(present or active or raw_fire),
              "state": b.get("state"), "put_state": b.get("put_state")},
     )
 
@@ -495,7 +517,7 @@ def _adapt_market_drivers(raw: dict[str, Any]) -> dict[str, Any]:
     if b is None:
         return _absent_record("regime.market_drivers")
     return _plane_record(
-        reading=b.get("primary_label") or b.get("primary"),
+        reading=b.get("headline") or b.get("direction") or b.get("primary_label") or b.get("primary"),
         direction=_NEUTRAL if b.get("verdict") else None,  # attribution, not a risk vote
         magnitude=b.get("dir_sign"),
         asof=b.get("asof"),
@@ -504,7 +526,9 @@ def _adapt_market_drivers(raw: dict[str, Any]) -> dict[str, Any]:
         source_contract="regime.market_drivers",
         raw={"verdict": b.get("verdict"), "primary": b.get("primary"),
              "direction": b.get("direction"), "dir_sign": b.get("dir_sign"),
-             "confidence": b.get("confidence")},
+             "confidence": b.get("confidence"), "strength": b.get("strength"),
+             "evidence": list(b.get("evidence") or [])[:8],
+             "invalidation": b.get("invalidation")},
     )
 
 
@@ -544,11 +568,14 @@ def _adapt_macro_risk(raw: dict[str, Any]) -> dict[str, Any]:
         reading=b.get("label"),
         direction=direction,
         magnitude=score,
-        asof=None,  # macro_risk carries no own asof; freshness unknown (fail-closed)
+        # Embedded macro_risk is produced as part of this exact regime snapshot.  When it lacks
+        # its own timestamp, inherit the regime snapshot's market date with explicit provenance.
+        asof=b.get("asof") or raw.get("date"),
         confidence=None,
         validated=False,
         source_contract="regime.macro_risk",
-        raw={"score": score, "label": b.get("label"), "components": b.get("components")},
+        raw={"score": score, "label": b.get("label"), "components": b.get("components"),
+             "asof_inherited_from_regime": not bool(b.get("asof"))},
     )
 
 
@@ -565,9 +592,11 @@ def _adapt_cycles(raw: dict[str, Any]) -> dict[str, Any]:
     an entry-favored-dominated board reads risk_on.
     """
     try:
-        cyc = _rf.cycles()
+        snapshot = _rf.cycles_with_meta()
+        cyc = snapshot.get("sectors") if isinstance(snapshot, dict) else {}
+        source_asof = snapshot.get("asof") if isinstance(snapshot, dict) else None
     except Exception:  # noqa: BLE001
-        cyc = {}
+        cyc, source_asof = {}, None
     if not cyc:
         return _absent_record("regime_frame.cycles (sector_cycles.json)",
                               "cycles() empty (stale/absent)")
@@ -580,18 +609,16 @@ def _adapt_cycles(raw: dict[str, Any]) -> dict[str, Any]:
         direction = _RISK_ON
     else:
         direction = _NEUTRAL
-    # cycles() is already freshness-gated internally; expose an explicit asof from the reader
-    # is not available here, so treat a non-empty cycles() as fresh (the gate already passed).
-    fresh_today = date.today().isoformat()
     return _plane_record(
         reading=f"{late} late-cycle / {entry} entry-favored of {n} sectors",
         direction=direction,
         magnitude=round(late / n, 4) if n else None,
-        asof=fresh_today,
+        asof=source_asof,
         confidence=None,
         validated=True,
         source_contract="regime_frame.cycles (walk-forward entry-tilt)",
-        raw={"n": n, "late_cycle": late, "entry_favored": entry},
+        raw={"n": n, "late_cycle": late, "entry_favored": entry,
+             "source_asof": source_asof},
     )
 
 
@@ -615,8 +642,16 @@ def _adapt_distribution_tells(dt_out: Any) -> dict[str, Any]:
         direction = _RISK_OFF
     else:
         direction = _NEUTRAL
+    if dt_out.get("reason"):
+        reading = dt_out.get("reason")
+    elif hot:
+        reading = "distribution escalation hot"
+    elif cross is True:
+        reading = "defensive relative-strength cross"
+    else:
+        reading = "no distribution"
     return _plane_record(
-        reading=dt_out.get("reason") or ("hot" if hot else "no distribution"),
+        reading=reading,
         direction=direction,
         magnitude=frac,
         asof=dt_out.get("asof"),
@@ -971,17 +1006,19 @@ def _disagreements(planes: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def _coherence(planes: dict[str, dict[str, Any]]) -> Optional[float]:
-    """A 0-1 coherence scalar = agreement among ALL directional planes (validated + advisory).
+    """A 0-1 coherence scalar = agreement among FRESH directional planes.
 
     1.0 = every directional plane agrees; 0.0 = a perfect even split.  Absent/None-direction
-    planes are excluded (they cannot manufacture coherence).  None when no plane is
-    directional.  This is descriptive only — it never signs the tilt.
+    and stale planes are excluded (they cannot manufacture coherence).  None when no fresh
+    plane is directional.  This is descriptive only — it never signs the tilt.
     """
     dirs = [
         planes[name]["direction"]
         for name in PLANE_ORDER
         if isinstance(planes.get(name), dict)
         and planes[name].get("direction") in (_RISK_OFF, _RISK_ON, _NEUTRAL)
+        and not (planes[name].get("freshness") or {}).get("stale")
+        and (planes[name].get("raw") or {}).get("artifact_present", True) is not False
     ]
     dirs = [d for d in dirs if d is not None]
     if not dirs:
@@ -1021,10 +1058,25 @@ def _label_vs_planes(
             rec = planes.get(name)
             if isinstance(rec, dict) and rec.get("direction") not in (label_dir, None, _NEUTRAL):
                 dissenting.append(name)
+    if conflict:
+        relationship = "conflict"
+    elif (
+        label_dir in (_RISK_ON, _RISK_OFF)
+        and consensus in (_RISK_ON, _RISK_OFF)
+        and label_dir == consensus
+    ):
+        relationship = "confirmed"
+    elif label_dir is None or consensus is None:
+        relationship = "unavailable"
+    else:
+        # A neutral label or consensus is an abstention, never confirmation.
+        relationship = "unconfirmed"
     return {
         "label_direction": label_dir,
         "plane_consensus_direction": consensus,
         "conflict": bool(conflict),
+        "relationship": relationship,
+        "confirmed": relationship == "confirmed",
         "magnitude": abs(_rf._as_float(tilt.get("tilt")) or 0.0),
         "dissenting_planes": dissenting,
     }
@@ -1053,6 +1105,7 @@ def _brief(
         return str(r) if r is not None else None
 
     conflict = label_vs_planes.get("conflict")
+    relationship = label_vs_planes.get("relationship")
     # what_changed
     prev_conflict = None
     if isinstance(prev_view, dict):
@@ -1065,9 +1118,21 @@ def _brief(
         what_changed = ("Label-vs-planes conflict PERSISTS: validated planes continue to "
                         f"dissent from the {label_vs_planes.get('label_direction')} label.")
     elif not conflict and prev_conflict is True:
-        what_changed = "Label-vs-planes conflict RESOLVED: the label and validated planes now agree."
+        if relationship == "confirmed":
+            what_changed = "Label-vs-planes conflict RESOLVED: validated planes now confirm the label."
+        else:
+            what_changed = (
+                "Label-vs-planes conflict CLOSED, but confirmation is absent: "
+                f"relationship={relationship}."
+            )
+    elif relationship == "confirmed":
+        what_changed = "Validated planes confirm the regime label."
+    elif relationship == "unconfirmed":
+        what_changed = (
+            "Regime label is UNCONFIRMED: the validated-plane consensus is neutral or abstaining."
+        )
     else:
-        what_changed = "No label-vs-planes conflict: label and validated planes agree."
+        what_changed = "Label-vs-planes confirmation is unavailable."
 
     # whats_rotating — cycles + rotation_tensor readings
     rot_bits = [b for b in (_reading("cycles"), _reading("rotation_tensor")) if b]
@@ -1080,9 +1145,14 @@ def _brief(
     ]
     risk_names.sort(key=lambda n: 0 if planes[n].get("status") == "validated" else 1)
     if risk_names:
+        def _risk_label(name: str) -> str:
+            rec = planes[name]
+            tier = "V" if rec.get("status") == "validated" else "A"
+            freshness = "stale" if (rec.get("freshness") or {}).get("stale") else "fresh"
+            return f"{name}({tier},{freshness}): {_reading(name)}"
+
         wheres_the_risk = "; ".join(
-            f"{n}{'*' if planes[n].get('status') == 'validated' else ''}: {_reading(n)}"
-            for n in risk_names[:5]
+            _risk_label(name) for name in risk_names[:5]
         )
     else:
         wheres_the_risk = "No plane reads risk_off."
@@ -1097,10 +1167,15 @@ def _brief(
         posture_implication = (
             "Validated consensus reads risk_off — the perception layer leans defensive "
             "(shrink-only).")
-    elif tilt.get("direction") == _RISK_ON and not conflict:
+    elif tilt.get("direction") == _RISK_ON and relationship == "confirmed":
         posture_implication = (
-            "Validated consensus reads risk_on and agrees with the label — no defensive "
+            "Validated consensus reads risk_on and confirms the label — no defensive "
             "shrink implied by the view.")
+    elif tilt.get("direction") == _RISK_ON:
+        posture_implication = (
+            "Validated consensus reads risk_on but does not confirm the regime label; "
+            "the view does not authorize loosening risk."
+        )
     else:
         posture_implication = (
             "No validated directional consensus — the view neither loosens nor tightens.")
@@ -1208,23 +1283,37 @@ def view(
 
     # ---- coverage + assembly bookkeeping ----
     total = len(PLANE_ORDER)
+    def _artifact_present(rec: dict[str, Any]) -> bool:
+        raw_rec = rec.get("raw") or {}
+        if "artifact_present" in raw_rec:
+            return raw_rec.get("artifact_present") is not False
+        return raw_rec.get("present", True) is not False
+
     fresh = sum(
         1 for r in ordered_planes.values()
-        if r.get("raw", {}).get("present", True) is not False
+        if _artifact_present(r)
         and not (r.get("freshness") or {}).get("stale")
     )
     stale = sum(
         1 for r in ordered_planes.values()
-        if r.get("raw", {}).get("present", True) is not False
+        if _artifact_present(r)
         and (r.get("freshness") or {}).get("stale")
     )
     missing = sum(
         1 for r in ordered_planes.values()
-        if r.get("raw", {}).get("present", True) is False
+        if not _artifact_present(r)
     )
     present = total - missing
     coverage = round(present / total, 4) if total else 0.0
-    degraded = coverage < _coverage_floor()
+    validated = int(tilt.get("n_validated") or 0)
+    decision_coverage = round(validated / len(_VALIDATED_PLANES), 4)
+    fresh_coverage = round(fresh / total, 4) if total else 0.0
+    degrade_reasons: list[str] = []
+    if coverage < _coverage_floor():
+        degrade_reasons.append("availability_coverage_below_floor")
+    if decision_coverage < 1.0:
+        degrade_reasons.append("validated_decision_plane_incomplete")
+    degraded = bool(degrade_reasons)
 
     assembly = {
         "total": total,
@@ -1232,6 +1321,11 @@ def view(
         "fresh": fresh,
         "stale": stale,
         "missing": missing,
+        "validated": validated,
+        "decision_total": len(_VALIDATED_PLANES),
+        "decision_coverage": decision_coverage,
+        "fresh_coverage": fresh_coverage,
+        "degrade_reasons": degrade_reasons,
         "degraded": bool(degraded),
     }
 
@@ -1282,7 +1376,7 @@ def build(
     liquidity_quality_out: Any = None,
     regime_nowcast_out: Any = None,
     neural_web_out: Any = None,
-    seq: int = 0,
+    seq: int | None = None,
 ) -> dict[str, Any]:
     """Build the view and (optionally) atomically publish latest.json + a dated copy.
 
@@ -1292,6 +1386,13 @@ def build(
     a perception organ that fails to publish protects nothing but breaks nothing).
     """
     prev = _read_prev_latest()
+    if seq is None:
+        try:
+            resolved_seq = int((prev or {}).get("seq") or 0) + 1
+        except (TypeError, ValueError):
+            resolved_seq = 1
+    else:
+        resolved_seq = int(seq)
     v = view(
         region,
         distribution_tells_out=distribution_tells_out,
@@ -1299,7 +1400,7 @@ def build(
         regime_nowcast_out=regime_nowcast_out,
         neural_web_out=neural_web_out,
         prev_view=prev,
-        seq=seq,
+        seq=resolved_seq,
     )
     if not write:
         return v

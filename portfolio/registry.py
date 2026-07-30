@@ -50,8 +50,8 @@ PORTFOLIOS: list[dict] = [
     {
         "id": "autonomous",
         "name": "US Brain",
-        "tagline": "Free-form · Opus-managed · daily",
-        "kind": "autonomous",     # an Opus Brain trades freely; no gate, no research paper
+        "tagline": "Free-form · Codex-first AI · daily",
+        "kind": "autonomous",     # shared-provider AI trades freely; no gate, no research paper
         "manager": "brain",
         "starting_nav": 1_000_000.0,
         "benchmark": "SPY",
@@ -60,8 +60,8 @@ PORTFOLIOS: list[dict] = [
     {
         "id": "etf",
         "name": "ETF Brain",
-        "tagline": "US-listed ETFs only · Opus-managed · daily · doctrine + guardrails",
-        "kind": "etf_brain",      # an Opus Brain rotates across US ETFs (index/sector/factor/duration/
+        "tagline": "US-listed ETFs only · Codex-first AI · daily · doctrine + guardrails",
+        "kind": "etf_brain",      # shared-provider AI rotates across US ETFs (index/sector/factor/duration/
                                   # cash) under an ETF-adapted doctrine + hard risk guardrails (bot/etf.py).
                                   # The ETF-only allowlist is enforced in the trusted layer via
                                   # portfolio.etf_universe (not registry.venues — that gates market venue).
@@ -73,8 +73,8 @@ PORTFOLIOS: list[dict] = [
     {
         "id": "china",
         "name": "CN Brain",
-        "tagline": "Mainland A-shares only · Opus-managed · daily",
-        "kind": "china_brain",    # a free-form Opus Brain over the macro China A-share desks; holds
+        "tagline": "Mainland A-shares only · Codex-first AI · daily",
+        "kind": "china_brain",    # shared-provider AI over the macro China A-share desks; holds
                                   # ONLY mainland A-shares (*.SS / *.SZ), marked natively in CNY (bot/china.py).
         "manager": "brain",
         "starting_nav": 1_000_000.0,
@@ -86,8 +86,8 @@ PORTFOLIOS: list[dict] = [
     {
         "id": "hk",
         "name": "HK Brain",
-        "tagline": "Hong Kong only · Opus-managed · daily",
-        "kind": "hk_brain",       # a free-form Opus Brain over the HK buy board; holds ONLY Hong-Kong
+        "tagline": "Hong Kong only · Codex-first AI · daily",
+        "kind": "hk_brain",       # shared-provider AI over the HK buy board; holds ONLY Hong-Kong
                                   # listed names (*.HK), marked natively in HKD (no cross-FX — bot/hk.py).
         "manager": "brain",
         "starting_nav": 1_000_000.0,

@@ -195,8 +195,8 @@ _(no artifact paths detected)_
 - `site/sectordata/sector_cycles.json`
 - `site/stockdata/SPY.json`
 
-### `brain.neural_web_context` (0 paths)
-_(no artifact paths detected)_
+### `brain.neural_web_context` (1 path)
+- `site/neuralwebdata/mastermind_context.json`
 
 ## F. GuardrailResult Construction Sites
 

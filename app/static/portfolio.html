@@ -21,10 +21,13 @@ try {
 body.page-pf {
   background: var(--bg);
   color: var(--text);
-  font: 14px/1.5 Inter, -apple-system, "Segoe UI", Roboto, Helvetica, sans-serif;
+  font-family: var(--font-sans, -apple-system, BlinkMacSystemFont, "SF Pro Text", Inter, "Segoe UI", sans-serif);
+  font-size: 14px;
+  line-height: 1.5;
   margin: 0;
   padding: 18px;
 }
+body.page-pf :where(button, input, select, textarea) { font-family: inherit; }
 @media (min-width: 1100px) {
   body.page-pf { padding: 26px max(40px, calc((100vw - 1280px) / 2)); }
 }
@@ -58,21 +61,9 @@ body.page-pf h2 {
   letter-spacing: .07em; margin-bottom: 3px; }
 .pf-strip-kv .val { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .pf-strip-kv .val.pos { color: var(--up); }
-.pf-strip-kv .val.neg { color: var(--dn); }
+.pf-strip-kv .val.neg { color: var(--down); }
 .pf-strip-kv .val.muted { color: var(--muted); font-size: 13px; font-weight: 400; }
 .pf-strip-sep { width: 1px; background: var(--line); align-self: stretch; }
-
-/* ── market context strip ─────────────────────────────────────────────────── */
-.mkt-strip {
-  background: var(--panel2); border: 1px solid var(--line);
-  border-radius: 10px; padding: 10px 16px;
-  margin: 0 0 16px; display: flex; gap: 16px; flex-wrap: wrap; align-items: center;
-  font-size: 12px; color: var(--muted);
-}
-.mkt-strip.hidden { display: none; }
-.mkt-chip { display: inline-flex; align-items: center; gap: 6px; }
-.mkt-chip .chip-label { color: var(--muted); }
-.mkt-chip .chip-val { font-weight: 600; color: var(--text); }
 
 /* ── positions table ──────────────────────────────────────────────────────── */
 .pos-table-wrap { overflow-x: auto; }
@@ -92,7 +83,7 @@ table.pos-table tbody tr { cursor: pointer; transition: background .12s; }
 table.pos-table tbody tr:hover { background: var(--panel2); }
 .ticker-cell { font-weight: 700; font-size: 14px; }
 .pos-pct.pos { color: var(--up); }
-.pos-pct.neg { color: var(--dn); }
+.pos-pct.neg { color: var(--down); }
 .dash { color: var(--muted); }
 .role-badge {
   display: inline-block; padding: 2px 8px; border-radius: 999px;
@@ -158,22 +149,204 @@ table.pos-table tbody tr:hover { background: var(--panel2); }
 .warn-card { background: color-mix(in srgb, var(--muted) 6%, var(--panel));
   border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px;
   margin: 0 0 12px; font-size: 12px; color: var(--muted); }
+
+/* Institutional Portfolio Desk — same machined material language as Macro. */
+body.page-pf {
+  --pf-hair: color-mix(in srgb, var(--line) 72%, transparent);
+  --pf-tile: color-mix(in srgb, var(--panel2) 86%, var(--panel));
+  min-height: 100vh;
+  padding: 22px clamp(18px, 3vw, 48px) 72px;
+}
+@media (min-width: 1360px) {
+  body.page-pf { padding-inline: calc((100vw - 1280px) / 2); }
+}
+body.page-pf .panel {
+  margin-bottom: 18px;
+  padding: 20px 22px;
+  border-color: var(--line);
+  border-radius: 15px;
+  background: var(--panel);
+  box-shadow: var(--card-shadow);
+}
+body.page-pf .panel > h2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 16px;
+  padding: 0 0 13px;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 740;
+  letter-spacing: -.012em;
+  text-transform: none;
+}
+body.page-pf .panel > h2::before {
+  content: "";
+  width: 3px;
+  height: 18px;
+  flex: none;
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--info),
+    color-mix(in srgb, var(--info) 28%, transparent));
+}
+body.page-pf .pf-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 6px;
+  border-color: var(--line);
+  border-radius: 15px;
+  background: var(--panel);
+  box-shadow: var(--card-shadow);
+}
+body.page-pf .pf-strip-kv {
+  min-width: 0;
+  min-height: 88px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 13px 16px;
+  border: 1px solid var(--pf-hair);
+  border-radius: 10px;
+  background: var(--pf-tile);
+}
+body.page-pf .pf-strip-kv:first-child {
+  background:
+    radial-gradient(280px 100px at 0 0, color-mix(in srgb, var(--info) 9%, transparent), transparent 78%),
+    var(--pf-tile);
+}
+body.page-pf .pf-strip-kv .label {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: .1em;
+}
+body.page-pf .pf-strip-kv .val {
+  font-family: var(--font-mono);
+  font-size: 23px;
+  font-weight: 760;
+  letter-spacing: -.025em;
+}
+body.page-pf .pf-strip-sep { display: none; }
+body.page-pf .pos-table-wrap {
+  border: 1px solid var(--pf-hair);
+  border-radius: 10px;
+  overflow: auto;
+  background: color-mix(in srgb, var(--panel2) 30%, transparent);
+}
+body.page-pf table.pos-table th {
+  padding: 10px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--panel2) 58%, transparent);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+}
+body.page-pf table.pos-table td {
+  padding: 11px 10px;
+  border-top-color: var(--pf-hair);
+}
+body.page-pf table.pos-table tbody tr:hover > td {
+  background: color-mix(in srgb, var(--info) 5%, transparent);
+}
+body.page-pf .ticker-cell { font-family: var(--font-mono); }
+body.page-pf .role-badge,
+body.page-pf .lane-chip { border-radius: 6px; }
+body.page-pf .add-form {
+  display: grid;
+  grid-template-columns: 1.05fr .8fr .9fr 1fr minmax(180px, 1.5fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+body.page-pf .add-form .field { min-width: 0; }
+body.page-pf .add-form input,
+body.page-pf .add-form select {
+  width: 100% !important;
+  min-height: 40px;
+  border-color: var(--line);
+  border-radius: 9px;
+  background: var(--pf-tile);
+}
+body.page-pf .add-form input:focus,
+body.page-pf .add-form select:focus {
+  border-color: var(--info);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--info) 12%, transparent);
+}
+body.page-pf .btn {
+  min-height: 36px;
+  border-radius: 9px;
+  font-weight: 700;
+}
+body.page-pf .btn.primary {
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.16),
+    0 8px 18px -13px color-mix(in srgb, var(--info) 75%, transparent);
+}
+body.page-pf .msg {
+  min-height: 110px;
+  display: grid;
+  place-content: center;
+  padding: 24px;
+  border: 1px dashed var(--pf-hair);
+  border-radius: 11px;
+  text-align: center;
+}
+body.page-pf #edit-modal {
+  -webkit-backdrop-filter: blur(7px);
+  backdrop-filter: blur(7px);
+}
+body.page-pf #edit-modal > .panel {
+  width: min(460px, calc(100vw - 24px)) !important;
+  box-shadow: 0 28px 80px rgba(0,0,0,.52);
+}
+body.page-pf #edit-modal .add-form { grid-template-columns: 1fr; }
+body.page-pf #edit-modal .add-form > div:last-of-type { flex-wrap: wrap; }
+body.page-pf :where(.btn, input, select):focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+@media (max-width: 900px) {
+  body.page-pf .add-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  body.page-pf .add-form .field:last-of-type { grid-column: 1 / -1; }
+}
+@media (max-width: 620px) {
+  body.page-pf { padding: 14px 12px 52px; }
+  body.page-pf .pf-strip { grid-template-columns: 1fr; }
+  body.page-pf .pf-strip-kv { min-height: 72px; }
+  body.page-pf .panel { padding: 17px 14px; border-radius: 13px; }
+  body.page-pf .add-form { grid-template-columns: 1fr; }
+  body.page-pf .add-form .field:last-of-type { grid-column: auto; }
+}
 </style>
 </head>
 <body class="page-pf">
 
-<div class="pf-head">
+<header class="mm-product-bar">
+  <a class="mm-product-brand" href="/" aria-label="Mastermind Dashboard">
+    <svg class="mm-product-mark" viewBox="0 0 32 32" aria-hidden="true">
+      <defs><linearGradient id="pf-logo-grad" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#3b82f6"/><stop offset="1" stop-color="#7c5cff"/>
+      </linearGradient></defs>
+      <rect x="1.5" y="1.5" width="29" height="29" rx="8" fill="url(#pf-logo-grad)"/>
+      <path d="M8 22.5 V11 L16 18.5 L24 11 V22.5" fill="none" stroke="#fff" stroke-width="2.7" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <span class="mm-product-word">MASTERMIND</span>
+  </a>
+  <span class="mm-product-context">Manual Ledger</span>
+  <nav class="mm-product-links" aria-label="Product">
+    <a href="/">Bot Dashboard</a>
+    <a href="/portfolio_desk" aria-current="page">Manual Ledger</a>
+    <a href="/market_view">Market View</a>
+    <a href="/agenda">Agenda</a>
+  </nav>
+</header>
+
+<div class="mm-page-heading">
   <div>
+    <div class="mm-page-kicker">Paper portfolio operations</div>
     <h1>Portfolio Desk</h1>
     <div class="sub" id="pf-sub">loading…</div>
   </div>
-  <div class="sub">
-    <a href="/">&larr; dashboard</a>
-    &nbsp;&middot;&nbsp;
-    <a href="/market_view">Market View</a>
-    &nbsp;&middot;&nbsp;
-    <a href="/agenda">Agenda</a>
-  </div>
+  <p class="mm-page-note">Maintain the manual paper ledger, inspect position-level risk evidence, and keep the record clean.</p>
 </div>
 
 <!-- ── header value strip ─────────────────────────────────────────────────── -->
@@ -196,15 +369,6 @@ table.pos-table tbody tr:hover { background: var(--panel2); }
 </div>
 <div id="pf-strip-novalue" class="warn-card" style="display:none">
   Value tracking is off — add shares to positions to see portfolio value.
-</div>
-
-<!-- ── market context strip ───────────────────────────────────────────────── -->
-<div id="mkt-strip" class="mkt-strip hidden">
-  <div class="mkt-chip"><span class="chip-label">Market</span><span class="chip-val" id="mkt-state">—</span></div>
-  <div class="mkt-chip"><span class="chip-label">Regime</span><span class="chip-val" id="mkt-quad">—</span></div>
-  <div class="mkt-chip"><span class="chip-label">Risk Radar</span><span class="chip-val" id="mkt-radar">—</span></div>
-  <div class="mkt-chip"><span class="chip-label">Vol</span><span class="chip-val" id="mkt-vol">—</span></div>
-  <div class="mkt-chip" style="margin-left:auto"><span class="chip-label" id="mkt-asof" style="font-size:10px"></span></div>
 </div>
 
 <!-- ── main panel ─────────────────────────────────────────────────────────── -->
@@ -250,45 +414,40 @@ table.pos-table tbody tr:hover { background: var(--panel2); }
   </div>
 
   <!-- edit modal -->
-  <div id="edit-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:200; align-items:center; justify-content:center;">
+  <div id="edit-modal" role="dialog" aria-modal="true" aria-labelledby="edit-modal-title"
+       style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:200; align-items:center; justify-content:center;">
     <div class="panel" style="width:400px; max-width:96vw; position:relative">
       <h2 id="edit-modal-title">Edit Position</h2>
       <div class="add-form" style="flex-direction:column">
         <input type="hidden" id="edit-id">
         <div class="field">
-          <label>Ticker</label>
+          <label for="edit-ticker">Ticker</label>
           <input type="text" id="edit-ticker" disabled style="opacity:.5">
         </div>
         <div class="field">
-          <label>Shares (optional)</label>
+          <label for="edit-shares">Shares (optional)</label>
           <input type="number" id="edit-shares" min="0.0001" step="any" placeholder="e.g. 100">
         </div>
         <div class="field">
-          <label>Entry price (optional)</label>
+          <label for="edit-entry-price">Entry price (optional)</label>
           <input type="number" id="edit-entry-price" min="0.0001" step="any" placeholder="e.g. 150.00">
         </div>
         <div class="field">
-          <label>Entry date (optional)</label>
+          <label for="edit-entry-date">Entry date (optional)</label>
           <input type="date" id="edit-entry-date">
         </div>
         <div class="field">
-          <label>Notes (optional)</label>
+          <label for="edit-notes">Notes (optional)</label>
           <input type="text" id="edit-notes" placeholder="thesis, context…">
         </div>
         <div style="display:flex; gap:8px; margin-top:8px">
-          <button class="btn primary" onclick="submitEdit()">Save</button>
-          <button class="btn" onclick="closeEditModal()">Cancel</button>
-          <button class="btn sm danger" onclick="closePosition()" style="margin-left:auto">Close position</button>
+          <button class="btn primary" type="button" onclick="submitEdit()">Save</button>
+          <button class="btn" type="button" onclick="closeEditModal()">Cancel</button>
+          <button class="btn sm danger" type="button" onclick="closePosition()" style="margin-left:auto">Close position</button>
         </div>
       </div>
       <div id="edit-error" style="color:var(--act); font-size:12px; margin-top:8px; display:none"></div>
     </div>
-  </div>
-
-  <!-- alerts feed panel (W3) -->
-  <div id="pf-alerts-panel" class="panel" style="display:none; margin-top:8px">
-    <h2>Recent Alerts</h2>
-    <div id="alerts-list" style="font-size:12px; color:var(--muted)">Loading…</div>
   </div>
 
   <!-- add position panel -->
@@ -296,27 +455,27 @@ table.pos-table tbody tr:hover { background: var(--panel2); }
     <h2>Add Position</h2>
     <div class="add-form">
       <div class="field">
-        <label>Ticker <span style="color:var(--act)">*</span></label>
+        <label for="add-ticker">Ticker <span style="color:var(--act)">*</span></label>
         <input type="text" id="add-ticker" required placeholder="AAPL, 0700.HK…" style="width:120px">
       </div>
       <div class="field">
-        <label>Shares</label>
+        <label for="add-shares">Shares</label>
         <input type="number" id="add-shares" min="0.0001" step="any" placeholder="optional" style="width:100px">
       </div>
       <div class="field">
-        <label>Entry price</label>
+        <label for="add-entry-price">Entry price</label>
         <input type="number" id="add-entry-price" min="0.0001" step="any" placeholder="optional" style="width:110px">
       </div>
       <div class="field">
-        <label>Entry date</label>
+        <label for="add-entry-date">Entry date</label>
         <input type="date" id="add-entry-date" style="width:140px">
       </div>
       <div class="field">
-        <label>Notes</label>
+        <label for="add-notes">Notes</label>
         <input type="text" id="add-notes" placeholder="optional" style="width:200px">
       </div>
       <div class="field" style="justify-content:flex-end">
-        <button class="btn primary" onclick="addPosition()">Add</button>
+        <button class="btn primary" type="button" onclick="addPosition()">Add</button>
       </div>
     </div>
     <div id="add-error" style="color:var(--act); font-size:12px; margin-top:8px; display:none"></div>
@@ -436,12 +595,15 @@ function laneDetailGrid(lanes) {
 function show(id) { var e = document.getElementById(id); if (e) e.style.display = ""; }
 function hide(id) { var e = document.getElementById(id); if (e) e.style.display = "none"; }
 function showBlock(id) { var e = document.getElementById(id); if (e) e.style.display = "block"; }
-function showFlex(id) { var e = document.getElementById(id); if (e) e.style.display = "flex"; }
+function showGrid(id) { var e = document.getElementById(id); if (e) e.style.display = "grid"; }
 
 /* ── fetch & render ──────────────────────────────────────────────────────── */
 function load() {
   fetch("/api/pfolio/positions", { headers: { Accept: "application/json" }, credentials: "same-origin" })
-    .then(function(r) { return r.json(); })
+    .then(function(r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    })
     .then(function(d) { render(d); })
     .catch(function(err) {
       hide("pf-loading");
@@ -465,49 +627,10 @@ function render(d) {
     return;
   }
 
-  // Market context strip (W3: add vol_regime + asof)
-  if (d.market) {
-    var ms = document.getElementById("mkt-strip");
-    ms.classList.remove("hidden");
-    // market_state / risk_radar arrive as nested objects ({verdict, score, ...}); read .verdict
-    // (tolerating a bare string for older payloads). The old code used the dict directly, which
-    // printed "[object Object]" and threw TypeError on .toLowerCase() below — that exception
-    // propagated to the fetch .catch and blanked the ENTIRE positions table.
-    var verdictOf = function(x) {
-      if (x && typeof x === "object") return x.verdict || x.state || "";
-      return x || "";
-    };
-    document.getElementById("mkt-state").textContent = verdictOf(d.market.market_state) || "—";
-    document.getElementById("mkt-quad").textContent  = d.market.quad_name   || d.market.quad || "—";
-    var radarEl = document.getElementById("mkt-radar");
-    var radarVal = verdictOf(d.market.risk_radar);
-    radarEl.textContent = radarVal || "—";
-    // Color-code verdict
-    var radarLower = (radarVal || "").toLowerCase();
-    if (radarLower.indexOf("risk-off") !== -1 || radarLower.indexOf("caution") !== -1) {
-      radarEl.style.color = "var(--warn, #f59e0b)";
-    } else if (radarLower.indexOf("danger") !== -1 || radarLower.indexOf("red") !== -1) {
-      radarEl.style.color = "var(--neg, #ef4444)";
-    } else if (radarLower.indexOf("risk-on") !== -1 || radarLower.indexOf("green") !== -1) {
-      radarEl.style.color = "var(--pos, #22c55e)";
-    } else {
-      radarEl.style.color = "";
-    }
-    // Vol regime (W3)
-    var volEl = document.getElementById("mkt-vol");
-    if (volEl) volEl.textContent = d.market.vol_regime || "—";
-    // Asof (W3)
-    var asofEl = document.getElementById("mkt-asof");
-    if (asofEl) {
-      var asofVal = d.market.state_asof || d.market.asof || "";
-      asofEl.textContent = asofVal ? "as of " + asofVal.slice(0, 10) : "";
-    }
-  }
-
   // Header strip
   var tv = d.total_value;
   if (tv !== null && tv !== undefined) {
-    showFlex("pf-strip");
+    showGrid("pf-strip");
     hide("pf-strip-novalue");
     document.getElementById("strip-value").textContent = fmtAbs$(tv);
     // day P&L
@@ -615,7 +738,7 @@ function render(d) {
         // Path (W3)
         var pathData = risk.path;
         if (pathData && pathData.current_role) {
-          detHtml += "<div style='margin-top:6px;font-size:11px;color:var(--muted)'>Role path: <span style='color:var(--fg)'>" + esc(pathData.current_role) + "</span>";
+          detHtml += "<div style='margin-top:6px;font-size:11px;color:var(--muted)'>Role path: <span style='color:var(--text)'>" + esc(pathData.current_role) + "</span>";
           if (pathData.sessions_at_role) detHtml += " · " + pathData.sessions_at_role + " session(s)";
           detHtml += "</div>";
         }
@@ -646,40 +769,6 @@ function toggleDetail(id) {
     det.classList.add("open");
     _openDetailId = id;
   }
-}
-
-/* ── alerts feed (W3) ─────────────────────────────────────────────────────── */
-function loadAlerts() {
-  var panel = document.getElementById("pf-alerts-panel");
-  var list  = document.getElementById("alerts-list");
-  if (!panel || !list) return;
-  panel.style.display = "block";
-  list.textContent = "Loading…";
-  fetch("/api/pfolio/alerts", { headers: { Accept: "application/json" }, credentials: "same-origin" })
-    .then(function(r) { return r.json(); })
-    .then(function(d) {
-      var alerts = (d && d.alerts) || [];
-      if (!alerts.length) {
-        list.innerHTML = "<span style='color:var(--muted)'>No alerts yet.</span>";
-        return;
-      }
-      list.innerHTML = alerts.map(function(a) {
-        var ts = (a.ts || a.alert_date || "").slice(0, 16).replace("T", " ");
-        var role = a.type || a.role || "";
-        var badgeCls = role || "ok";
-        var headline = esc(a.headline || a.message || "");
-        var ticker = esc((a.ticker || "").toUpperCase());
-        return '<div style="padding:6px 0;border-bottom:1px solid var(--border,#333)">' +
-          '<span class="role-badge ' + esc(badgeCls) + '" style="font-size:10px">' + esc(role) + "</span> " +
-          "<strong>" + ticker + "</strong> " +
-          "<span>" + headline + "</span>" +
-          "<span style='float:right;color:var(--muted);font-size:10px'>" + esc(ts) + "</span>" +
-          "</div>";
-      }).join("");
-    })
-    .catch(function() {
-      list.innerHTML = "<span style='color:var(--muted)'>Alerts unavailable.</span>";
-    });
 }
 
 /* ── add position ──────────────────────────────────────────────────────────── */
@@ -853,10 +942,7 @@ document.getElementById("pos-tbody").addEventListener("click", function(evt) {
 
 /* ── auto-refresh ─────────────────────────────────────────────────────────── */
 load();
-loadAlerts();
 _timer = setInterval(load, REFRESH_MS);
-// Refresh alerts every 5 minutes
-setInterval(loadAlerts, 300000);
 
 })();
 </script>

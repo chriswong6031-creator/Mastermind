@@ -194,10 +194,16 @@ def decision_signals(ticker: str) -> dict[str, Any]:
         if not _mode_ge(mode, "shadow"):
             return _inert_signals(mode)
 
+        c = context()
         row = candidate(ticker)
         # per-name inert: absent row, or a name not cleared by the FDR batch.
         kernel = row.get("kernel") if isinstance(row, dict) else None
-        fdr_ok = isinstance(kernel, dict) and kernel.get("fdr_cleared") is True
+        reliability_fresh = not lobe_freshness("reliability", c).get("stale", True)
+        fdr_ok = (
+            reliability_fresh
+            and isinstance(kernel, dict)
+            and kernel.get("fdr_cleared") is True
+        )
         if not row or not fdr_ok:
             return _inert_signals(mode)
 
@@ -207,12 +213,14 @@ def decision_signals(ticker: str) -> dict[str, Any]:
         signals["inert"] = False
 
         # --- graph_conflicts (shared leg for shrink + clean_in_conflicted) --- #
-        conflicts_raw = row.get("graph_conflicts")
-        conflicts = len(conflicts_raw) if isinstance(conflicts_raw, list) else 0
+        contradictions_fresh = not lobe_freshness("contradictions", c).get("stale", True)
+        conflicts_raw = row.get("graph_conflicts") if contradictions_fresh else None
+        conflicts = len(conflicts_raw) if isinstance(conflicts_raw, list) else None
 
         # --- candidacy (mode >= candidacy) --- #
         if _mode_ge(mode, "candidacy"):
-            bottom = row.get("bottom") or {}
+            bottom_fresh = not lobe_freshness("bottom_sensors", c).get("stale", True)
+            bottom = (row.get("bottom") or {}) if bottom_fresh else {}
             state = None
             if isinstance(bottom, dict):
                 state = bottom.get("bottom_state") or bottom.get("state")
@@ -226,12 +234,15 @@ def decision_signals(ticker: str) -> dict[str, Any]:
             except Exception:  # noqa: BLE001
                 contradictions = 0
             signals["clean_in_conflicted"] = (
-                conflicts == 0 and contradictions >= NW_CONTRADICTIONS_MIN
+                conflicts == 0
+                and contradictions_fresh
+                and not (market_plane() or {}).get("stale", True)
+                and contradictions >= NW_CONTRADICTIONS_MIN
             )
 
         # --- entry_shrink (mode >= shrink; subtract-only, never on absence) --- #
         if _mode_ge(mode, "shrink"):
-            if conflicts >= NW_CONFLICTS_MIN:
+            if conflicts is not None and conflicts >= NW_CONFLICTS_MIN:
                 signals["entry_shrink"] = NW_ENTRY_SHRINK
 
         return signals
@@ -255,6 +266,62 @@ def _age_days(asof_str: str | None) -> int | None:
         return None
 
 
+def lobe_freshness(name: str, ctx: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Return an honest freshness record for one Neural Web lobe.
+
+    Explicit producer freshness wins.  When the producer did not publish a freshness entry,
+    derive age from the lobe's own ``as_of``/``asof``.  A missing or unparseable lobe timestamp
+    is stale (fail-closed); top-level freshness never launders a stale sub-lobe.
+    """
+    try:
+        c = ctx if isinstance(ctx, dict) else context()
+        if not c:
+            return {
+                "asof": None,
+                "age_days": None,
+                "stale": True,
+                "source": "absent",
+            }
+        freshness = c.get("freshness") or {}
+        explicit = freshness.get(name) if isinstance(freshness, dict) else None
+        if isinstance(explicit, dict):
+            asof = explicit.get("as_of") or explicit.get("asof")
+            age = _age_days(asof)
+            explicit_stale = explicit.get("stale")
+            stale = bool(explicit_stale) if explicit_stale is not None else (
+                age is None or age < 0 or age > _STALE_DAYS
+            )
+            # An explicit "fresh" flag cannot override an unparseable/missing timestamp.
+            if age is None or age < 0:
+                stale = True
+            return {
+                "asof": asof,
+                "age_days": age,
+                "stale": bool(stale),
+                "source": "producer",
+            }
+
+        lobes = c.get("lobes") or {}
+        lobe = lobes.get(name) if isinstance(lobes, dict) else None
+        asof = (
+            lobe.get("as_of") or lobe.get("asof")
+            if isinstance(lobe, dict)
+            else None
+        )
+        age = _age_days(asof)
+        return {
+            "asof": asof,
+            "age_days": age,
+            "stale": age is None or age < 0 or age > _STALE_DAYS,
+            "source": "derived",
+        }
+    except Exception:  # noqa: BLE001 — fail-closed
+        return {
+            "asof": None,
+            "age_days": None,
+            "stale": True,
+            "source": "error",
+        }
 def _load_raw() -> dict[str, Any] | None:
     """Read and JSON-parse the artifact.  Returns None on any IO/parse error."""
     try:
@@ -280,6 +347,8 @@ def _validate(raw: Any) -> tuple[bool, str]:
     age = _age_days(asof)
     if age is None:
         return False, f"as_of unparseable: {asof!r}"
+    if age < 0:
+        return False, f"future-dated: as_of={asof} age={age}d"
     if age > _STALE_DAYS:
         return False, f"stale: as_of={asof} age={age}d > {_STALE_DAYS}d"
     return True, "ok"
@@ -349,9 +418,15 @@ def market_plane() -> dict[str, Any]:
         lobes = c.get("lobes") or {}
         market = lobes.get("market") or {}
         contradictions_lobe = lobes.get("contradictions") or {}
-        asof = c.get("as_of")
-        age = _age_days(asof)
-        stale = (age is None) or (age > _STALE_DAYS)
+        market_health = lobe_freshness("market", c)
+        asof = market_health.get("asof") or c.get("as_of")
+        stale = bool(market_health.get("stale", True))
+        if stale:
+            return {
+                "stale": True,
+                "asof": asof,
+                "lobe_freshness": market_health,
+            }
 
         verdict_raw = market.get("verdict") or {}
         regime_raw = market.get("regime") or {}
@@ -409,6 +484,7 @@ def market_plane() -> dict[str, Any]:
             "contradiction_summary": contr_summary,
             "asof": asof,
             "stale": stale,
+            "lobe_freshness": market_health,
         }
     except Exception:  # noqa: BLE001
         return {"stale": True, "asof": None}
@@ -428,9 +504,8 @@ def seat_prompt_block(tickers: list[str], max_chars: int = 1200) -> str:
         if not c:
             return ""
         asof = c.get("as_of")
-        age = _age_days(asof)
-        stale = (age is None) or (age > _STALE_DAYS)
-        if stale:
+        market_health = lobe_freshness("market", c)
+        if market_health.get("stale", True):
             return ""
 
         lobes = c.get("lobes") or {}
@@ -443,6 +518,12 @@ def seat_prompt_block(tickers: list[str], max_chars: int = 1200) -> str:
 
         lines: list[str] = []
         lines.append(f"NW asof={asof}")
+        source_lobes = ("market", "reliability", "contradictions",
+                        "bottom_sensors", "options_entry")
+        stale_lobes = [name for name in source_lobes
+                       if lobe_freshness(name, c).get("stale", True)]
+        if stale_lobes:
+            lines.append("NW stale lobes excluded: " + ",".join(stale_lobes))
 
         # market-level context
         quad_name = regime_raw.get("quad_name") or ""
@@ -474,20 +555,36 @@ def seat_prompt_block(tickers: list[str], max_chars: int = 1200) -> str:
             if not isinstance(row, dict):
                 continue
             parts: list[str] = [tkr]
-            bottom = row.get("bottom") or {}
+            bottom = (
+                row.get("bottom") or {}
+                if not lobe_freshness("bottom_sensors", c).get("stale", True)
+                else {}
+            )
             if bottom:
                 bst = bottom.get("bottom_state") or bottom.get("state") or ""
                 if bst:
                     parts.append(f"bottom={bst}")
-            opts = row.get("options") or {}
+            opts = (
+                row.get("options") or {}
+                if not lobe_freshness("options_entry", c).get("stale", True)
+                else {}
+            )
             if opts:
                 gate_status = opts.get("gate_status") or opts.get("status") or ""
                 if gate_status:
                     parts.append(f"options={gate_status}")
-            conflicts = row.get("graph_conflicts") or []
+            conflicts = (
+                row.get("graph_conflicts") or []
+                if not lobe_freshness("contradictions", c).get("stale", True)
+                else []
+            )
             if conflicts and isinstance(conflicts, list):
                 parts.append(f"conflicts={len(conflicts)}")
-            kernel = row.get("kernel") or {}
+            kernel = (
+                row.get("kernel") or {}
+                if not lobe_freshness("reliability", c).get("stale", True)
+                else {}
+            )
             if isinstance(kernel, dict) and kernel.get("fdr_cleared") is False:
                 parts.append("kernel=display_armed_only")
             cand_lines.append(" ".join(parts))
@@ -523,7 +620,7 @@ def audit_row() -> dict[str, Any]:
             return {"status": "absent", "asof": asof, "age_days": age,
                     "n_candidates": 0, "gap_notes_count": 0}
 
-        if age is None or age > _STALE_DAYS:
+        if age is None or age < 0 or age > _STALE_DAYS:
             return {"status": "stale", "asof": asof, "age_days": age,
                     "n_candidates": 0, "gap_notes_count": 0}
 
@@ -531,6 +628,9 @@ def audit_row() -> dict[str, Any]:
         n_cands = len(cc) if isinstance(cc, dict) else 0
         gap_notes = raw.get("gap_notes") or []
         n_gaps = len(gap_notes) if isinstance(gap_notes, list) else 0
+        lobes = raw.get("lobes") or {}
+        lobe_names = list(lobes) if isinstance(lobes, dict) else []
+        lobe_health = {name: lobe_freshness(name, raw) for name in lobe_names}
 
         return {
             "status": "present",
@@ -538,6 +638,11 @@ def audit_row() -> dict[str, Any]:
             "age_days": age,
             "n_candidates": n_cands,
             "gap_notes_count": n_gaps,
+            "market_lobe_stale": lobe_health.get("market", {}).get("stale", True),
+            "fresh_lobes": sum(1 for row in lobe_health.values()
+                               if not row.get("stale", True)),
+            "stale_lobes": sum(1 for row in lobe_health.values()
+                               if row.get("stale", True)),
         }
     except Exception:  # noqa: BLE001
         return {"status": "absent", "asof": None, "age_days": None,

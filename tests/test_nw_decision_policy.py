@@ -54,6 +54,10 @@ def _write_fixture(
     for _lobe_name, lobe in (raw.get("lobes") or {}).items():
         if isinstance(lobe, dict) and "as_of" in lobe:
             lobe["as_of"] = raw["as_of"]
+    freshness = raw.setdefault("freshness", {})
+    for lobe_name in ("market", "reliability", "contradictions",
+                      "bottom_sensors", "options_entry"):
+        freshness[lobe_name] = {"as_of": raw["as_of"], "stale": False}
     if candidate_context is not None:
         raw["candidate_context"] = candidate_context
     if contradiction_records is not None:
@@ -419,6 +423,20 @@ class TestFailSoft:
         sig = NWC.decision_signals("NVDA")
         assert sig["inert"] is True
         assert sig["candidacy"] is None
+
+    def test_stale_reliability_lobe_makes_cleared_name_inert(self, monkeypatch, tmp_path):
+        import brain.neural_web_context as NWC
+        rows = {"NVDA": _cleared_row("BOTTOMING", conflicts=3)}
+        f = _write_fixture(tmp_path, candidate_context=rows)
+        raw = json.loads(f.read_text())
+        raw["freshness"]["reliability"] = {"as_of": _stale_date(), "stale": True}
+        f.write_text(json.dumps(raw))
+        _patch_path(monkeypatch, f)
+        monkeypatch.setenv("MASTERMIND_NW_DECISION", "shrink")
+        sig = NWC.decision_signals("NVDA")
+        assert sig["inert"] is True
+        assert sig["candidacy"] is None
+        assert sig["entry_shrink"] is None
 
     def test_unknown_ticker_inert(self, monkeypatch, tmp_path):
         import brain.neural_web_context as NWC

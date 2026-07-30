@@ -37,6 +37,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -340,6 +341,7 @@ def _stock_name(sub: str, ticker: str) -> str | None:
 
 
 _BOARD_NAMES: dict | None = None
+_HK_NAMES: dict | None = None
 
 
 def _board_names() -> dict:
@@ -373,10 +375,56 @@ def _board_name(ticker: str) -> str | None:
     return _board_names().get(_u(ticker))
 
 
+def _hk_names() -> dict:
+    """``{TICKER: {en, zh}}`` from the Macro Dashboard's HK market heatmap.
+
+    The per-ticker ``hkstockdata`` snapshots intentionally carry only the English
+    display name. The heatmap is the canonical bilingual HK universe and supplies
+    a native ``name_zh`` for every covered listing. Memoized and degrade-safe so a
+    missing/stale macro artifact can never break a portfolio response.
+    """
+    global _HK_NAMES
+    if _HK_NAMES is not None:
+        return _HK_NAMES
+    names: dict[str, dict[str, str]] = {}
+    raw = _read("marketdata/hk_heatmap.json")
+    if isinstance(raw, dict):
+        for row in raw.get("tiles") or []:
+            if not isinstance(row, dict):
+                continue
+            tk = _u(row.get("t") or row.get("ticker"))
+            if not tk:
+                continue
+            en = row.get("name")
+            zh = row.get("name_zh")
+            names[tk] = {
+                "en": en.strip() if isinstance(en, str) else "",
+                "zh": zh.strip() if isinstance(zh, str) else "",
+            }
+    _HK_NAMES = names
+    return names
+
+
+def _native_zh(raw: str | None) -> str | None:
+    """Extract the Chinese half of a bilingual board label, when present."""
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    value = raw.strip()
+    if " / " in value:
+        candidate = value.split(" / ", 1)[1].strip()
+        if re.search(r"[\u3400-\u9fff]", candidate):
+            return candidate
+    match = re.search(r"[\u3400-\u9fff]", value)
+    if match:
+        return value[match.start():].strip(" /-—·") or None
+    return None
+
+
 def clear_name_cache() -> None:
     """Drop the memoized board-name map (tests / a forced refresh after a board rebuild)."""
-    global _BOARD_NAMES
+    global _BOARD_NAMES, _HK_NAMES
     _BOARD_NAMES = None
+    _HK_NAMES = None
 
 
 def display_name(ticker: str) -> str:
@@ -394,10 +442,30 @@ def display_name(ticker: str) -> str:
             return raw.split(" / ", 1)[1].strip() or t   # Chinese half
         return raw or t
     sub = "hkstockdata" if t.endswith(".HK") else "stockdata"
-    raw = _stock_name(sub, t) or _board_name(t)
+    hk_en = (_hk_names().get(t) or {}).get("en") if t.endswith(".HK") else None
+    raw = _stock_name(sub, t) or hk_en or _board_name(t)
     if raw and " / " in raw:
         return raw.split(" / ", 1)[0].strip() or t       # English half
     return raw or t
+
+
+def display_name_zh(ticker: str) -> str:
+    """The native Chinese display name for an A-share or Hong Kong listing.
+
+    A-shares already use their Chinese name in :func:`display_name`. HK listings
+    resolve through the bilingual market heatmap, then fall back to a bilingual
+    board label. ADRs retain their English proper name. Missing data falls back to
+    the normal display name, never to a blank label.
+    """
+    t = _u(ticker)
+    if not t:
+        return ""
+    if t.endswith(".SS") or t.endswith(".SZ"):
+        return display_name(t)
+    if t.endswith(".HK"):
+        native = (_hk_names().get(t) or {}).get("zh") or _native_zh(_board_name(t))
+        return native or display_name(t)
+    return display_name(t)
 
 
 def queue(limit: int = 40, *, profile: str | None = None) -> list[dict]:
