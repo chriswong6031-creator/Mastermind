@@ -68,6 +68,11 @@ def test_successful_codex_stops_before_oauth(monkeypatch):
 def test_codex_quota_failure_falls_back_to_selected_oauth_slot(monkeypatch):
     from brain import cli_bridge, provider_waterfall as pw
 
+    monkeypatch.setattr(
+        pw,
+        "_shared_modules",
+        lambda: (_SharedAuth, _SharedKeyPool()),
+    )
     monkeypatch.setattr(pw, "provider_rungs", lambda _role: [
         {"provider": "codex", "key_id": "codex_account",
          "env_name": None, "cooling": False},

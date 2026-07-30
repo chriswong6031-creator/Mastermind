@@ -18,8 +18,24 @@ from portfolio import paper_account, registry
 
 @pytest.fixture
 def iso(tmp_path, monkeypatch):
-    """Isolate per-id portfolio state to a tmp root (registry.data_dir derives off _ROOT)."""
+    """Isolate book state and make execution-time assumptions deterministic.
+
+    The run-level tests assert rebalance results, not the wall-clock market-hours
+    gate (which has its own calendar/settlement tests). Without this seam the
+    same test queues or fills depending on what time pytest happens to run.
+    """
     monkeypatch.setattr(registry, "_ROOT", tmp_path, raising=False)
+    from bot import settle
+    monkeypatch.setattr(settle, "is_open", lambda portfolio_id: True)
+    # A bare CI worktree intentionally has no vendored live snapshot. Seed only
+    # the health probe seam so normal run tests exercise the book; outage tests
+    # explicitly arm a failed live adapter and still take precedence.
+    from data_layer import terminal_prices
+    monkeypatch.setattr(
+        terminal_prices,
+        "price_local",
+        lambda ticker: 1.0 if ticker == "600519.SS" else None,
+    )
     return tmp_path
 
 
@@ -405,6 +421,7 @@ def test_run_china_marks_in_cny(iso, monkeypatch):
 def test_display_name_by_venue(monkeypatch):
     """A-shares show the Chinese name; HK and ADRs show the English name; missing → ticker."""
     from brain import china_intake
+    china_intake.clear_name_cache()
     monkeypatch.setattr(china_intake, "_read", lambda rel: {
         "chinastockdata/600519.SS.json": {"name": "Kweichow Moutai Co., Ltd. / 贵州茅台"},
         "hkstockdata/0700.HK.json": {"name": "Tencent"},
@@ -414,6 +431,7 @@ def test_display_name_by_venue(monkeypatch):
     assert china_intake.display_name("0700.HK") == "Tencent"             # HK → English
     assert china_intake.display_name("BABA") == "Alibaba Group (ADR)"    # ADR → English
     assert china_intake.display_name("9999.HK") == "9999.HK"             # no name → ticker fallback
+    china_intake.clear_name_cache()
 
 
 def test_hk_display_name_has_english_and_native_chinese_variants(monkeypatch):

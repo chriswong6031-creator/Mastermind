@@ -7,6 +7,7 @@ first-run book builds) is never triggered.  No LLM spend in any test.
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
@@ -310,6 +311,9 @@ class TestServeOnly:
         """When MASTERMIND_SERVE_ONLY=1 the REAL startup hook leaves app.state.scheduler
         as None and skips every first-run daemon thread — exercised through TestClient
         (safe precisely BECAUSE serve-only prevents the scheduler/Brain side effects)."""
+        root = Path(__file__).resolve().parent.parent
+        if not (root / "vendor" / "macro" / "lib" / "config.py").exists():
+            pytest.skip("real app startup requires the vendored macro engine")
         monkeypatch.setenv("MASTERMIND_SERVE_ONLY", "1")
         monkeypatch.setenv("MASTERMIND_PASSWORD", "pw-serve-only-test")
         assert auth.serve_only() is True
