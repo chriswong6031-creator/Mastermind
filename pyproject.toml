@@ -25,6 +25,9 @@ dependencies = [
     "yfinance==1.5.2",
 ]
 
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
 [tool.pytest.ini_options]
 filterwarnings = ["ignore::Warning"]
 addopts = "-q"
