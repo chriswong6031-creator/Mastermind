@@ -71,6 +71,8 @@ _LATEST_PATH: Path = _ARTIFACT_DIR / "latest.json"
 # The E0.1/E0.2 organs — read from their own contracts when present, degrade to absent.
 _ROTATION_TENSOR_PATH: Path = _ARTIFACT_DIR / "rotation_tensor.json"
 _ANTICIPATION_DIR: Path = _ROOT / "data" / "anticipation"
+_RRG_PATH: Path = _ROOT / "vendor" / "macro" / "site" / "marketdata" / "subsector_rotation.json"
+_GROUP_FLOW_PATH: Path = _ROOT / "vendor" / "macro" / "site" / "basketdata" / "flow.json"
 
 _SCHEMA_VERSION = "market_view.v1"
 
@@ -737,6 +739,169 @@ def _adapt_regime_nowcast(nc_out: Any) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Published Macro context planes — advisory/annotate-only
+# ---------------------------------------------------------------------------
+
+def _adapt_rrg() -> dict[str, Any]:
+    """Adapt Macro's published subsector-rotation/RRG contract.
+
+    RRG quadrants describe relative rotation, not portfolio risk.  The plane therefore
+    remains neutral + advisory even when the source's emerging-score track record is
+    validated.  It supplies precise leadership/migration context without inventing a
+    risk-on/off vote from sector labels.
+    """
+    try:
+        raw = json.loads(_RRG_PATH.read_text())
+    except FileNotFoundError:
+        return _absent_record(
+            "site/marketdata/subsector_rotation.json (RRG)",
+            "published RRG contract absent",
+        )
+    except Exception:  # noqa: BLE001
+        return _absent_record(
+            "site/marketdata/subsector_rotation.json (RRG)",
+            "published RRG contract unreadable",
+        )
+    if not isinstance(raw, dict):
+        return _absent_record(
+            "site/marketdata/subsector_rotation.json (RRG)",
+            "published RRG contract malformed",
+        )
+    sectors = [row for row in (raw.get("sectors") or []) if isinstance(row, dict)]
+    if not sectors:
+        return _absent_record(
+            "site/marketdata/subsector_rotation.json (RRG)",
+            "RRG contract has no sector rows",
+        )
+
+    by_quadrant: dict[str, list[str]] = {
+        "leading": [],
+        "improving": [],
+        "weakening": [],
+        "lagging": [],
+    }
+    for row in sectors:
+        quadrant = str(row.get("quadrant") or "").lower()
+        key = str(row.get("key") or row.get("name") or "").strip()
+        if quadrant in by_quadrant and key:
+            by_quadrant[quadrant].append(key)
+    parts = [
+        f"{name}={','.join(values)}"
+        for name, values in by_quadrant.items()
+        if values
+    ]
+    track = raw.get("track_record") if isinstance(raw.get("track_record"), dict) else {}
+    horizons = track.get("horizons") if isinstance(track.get("horizons"), dict) else {}
+    proven = [
+        str(horizon)
+        for horizon, passed in (track.get("proven") or {}).items()
+        if passed
+    ] if isinstance(track.get("proven"), dict) else []
+    evidence = [f"RRG {part}" for part in parts]
+    for horizon in proven[:4]:
+        stats = horizons.get(horizon) if isinstance(horizons.get(horizon), dict) else {}
+        evidence.append(
+            f"{horizon}d emerging-score IC={stats.get('score_ic')} "
+            f"HAC-t={stats.get('score_ic_t_hac')}"
+        )
+    return _plane_record(
+        reading="sector RRG: " + "; ".join(parts),
+        direction=_NEUTRAL,
+        magnitude=None,
+        asof=raw.get("asof") or raw.get("as_of"),
+        confidence=None,
+        validated=False,
+        source_contract="site/marketdata/subsector_rotation.json (RRG; context-only)",
+        raw={
+            "quadrants": by_quadrant,
+            "n_sectors": len(sectors),
+            "track_record_verdict": track.get("verdict"),
+            "proven_horizons": proven,
+            "evidence": evidence,
+            "advisory": True,
+        },
+    )
+
+
+def _adapt_group_flow() -> dict[str, Any]:
+    """Adapt the display-only group concentration/flow context.
+
+    The producer explicitly says the score is uncalibrated and non-directional.  Preserve
+    that honesty: expose emerging/cooling groups and cluster absorption, but never turn
+    this concentration proxy into a risk vote or a sizing input.
+    """
+    try:
+        raw = json.loads(_GROUP_FLOW_PATH.read_text())
+    except FileNotFoundError:
+        return _absent_record(
+            "site/basketdata/flow.json (display-only concentration proxy)",
+            "published group-flow context absent",
+        )
+    except Exception:  # noqa: BLE001
+        return _absent_record(
+            "site/basketdata/flow.json (display-only concentration proxy)",
+            "published group-flow context unreadable",
+        )
+    if not isinstance(raw, dict):
+        return _absent_record(
+            "site/basketdata/flow.json (display-only concentration proxy)",
+            "published group-flow context malformed",
+        )
+
+    def _names(block: Any) -> list[str]:
+        if not isinstance(block, dict):
+            return []
+        rows = list(block.get("sectors") or []) + list(block.get("baskets") or [])
+        return [
+            str(row.get("name") or row.get("id"))
+            for row in rows
+            if isinstance(row, dict) and (row.get("name") or row.get("id"))
+        ]
+
+    emerging = _names(raw.get("emerging"))
+    cooling = _names(raw.get("cooling"))
+    cluster = raw.get("cluster") if isinstance(raw.get("cluster"), dict) else {}
+    if not emerging and not cooling and not cluster:
+        return _absent_record(
+            "site/basketdata/flow.json (display-only concentration proxy)",
+            "group-flow context has no group rows",
+        )
+    cluster_regime = cluster.get("regime")
+    absorption = _rf._as_float(cluster.get("absorption"))
+    reading = (
+        "display-only concentration proxy"
+        f" | emerging={','.join(emerging[:4]) or 'none'}"
+        f" | cooling={','.join(cooling[:4]) or 'none'}"
+        f" | cluster={cluster_regime or 'unknown'}"
+        f" absorption={absorption if absorption is not None else 'unknown'}"
+    )
+    evidence = [
+        f"emerging concentration: {', '.join(emerging[:8]) or 'none'}",
+        f"cooling concentration: {', '.join(cooling[:8]) or 'none'}",
+        f"cluster regime={cluster_regime} absorption={absorption}",
+    ]
+    return _plane_record(
+        reading=reading,
+        direction=_NEUTRAL,
+        magnitude=None,
+        asof=raw.get("as_of") or raw.get("asof"),
+        confidence=None,
+        validated=False,
+        source_contract="site/basketdata/flow.json (display-only; uncalibrated)",
+        raw={
+            "emerging": emerging[:12],
+            "cooling": cooling[:12],
+            "cluster_regime": cluster_regime,
+            "cluster_absorption": absorption,
+            "calibrated": bool(raw.get("calibrated")),
+            "directional": False,
+            "evidence": evidence,
+            "advisory": True,
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
 # E0.1 / E0.2 organs — lazy-import, degrade to absent while unbuilt
 # ---------------------------------------------------------------------------
 
@@ -1253,11 +1418,10 @@ def view(
     planes["regime_nowcast"] = _adapt_regime_nowcast(regime_nowcast_out)
     planes["rotation_tensor"] = _adapt_rotation_tensor()
     planes["anticipation"] = _adapt_anticipation()
-    # H4-handoff null-advisory stubs — schema complete from day one; filled by later PRs.
-    planes["rrg"] = _absent_record("site/marketdata/subsector_rotation.json (RRG)",
-                                   "H4 handoff — dashboard vendoring pending")
-    planes["group_flow"] = _absent_record("data/group_flow (DSR meta)",
-                                          "H4 handoff — display_only source pending")
+    # Published, context-only Macro contracts.  Both remain advisory and non-directional.
+    planes["rrg"] = _adapt_rrg()
+    planes["group_flow"] = _adapt_group_flow()
+    # Remaining H4 handoffs stay explicit nulls until their point-in-time contracts exist.
     planes["event_calendar"] = _absent_record("engine.event_calendar",
                                               "H4 handoff — pending")
     planes["intl_spillover"] = _absent_record("intl spillover",

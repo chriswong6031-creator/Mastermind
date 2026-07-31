@@ -61,6 +61,12 @@ def _patch_regime(monkeypatch, tmp_path, regime: dict, cycles: dict | None = Non
         cp = tmp_path / "sector_cycles.json"
         cp.write_text(json.dumps(cycles))
         monkeypatch.setattr(RF, "_CYCLES_PATH", cp, raising=False)
+    # Published Macro context files are separately tested below.  Default every frozen-view
+    # test to explicit absence so the live vendored tree cannot leak into deterministic fixtures.
+    monkeypatch.setattr(MV, "_RRG_PATH", tmp_path / "missing_rrg.json", raising=False)
+    monkeypatch.setattr(
+        MV, "_GROUP_FLOW_PATH", tmp_path / "missing_group_flow.json", raising=False
+    )
     monkeypatch.setattr(RF, "_trading_days_since", lambda asof: age, raising=False)
 
 
@@ -201,6 +207,81 @@ class TestAdapters:
         plane = v["planes"]["distribution_tells"]
         assert plane["direction"] == "risk_off"
         assert plane["reading"] == "defensive relative-strength cross"
+
+    def test_rrg_contract_is_present_precise_and_non_directional(
+        self, monkeypatch, tmp_path
+    ):
+        _patch_regime(
+            monkeypatch,
+            tmp_path,
+            FIX.incident_regime("2026-07-01"),
+            FIX.incident_sector_cycles("2026-07-01"),
+        )
+        path = tmp_path / "rrg.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "asof": "2026-07-01",
+                    "sectors": [
+                        {"key": "XLK", "quadrant": "lagging"},
+                        {"key": "XLP", "quadrant": "leading"},
+                        {"key": "XLC", "quadrant": "improving"},
+                    ],
+                    "track_record": {
+                        "verdict": "validated",
+                        "proven": {"10": True, "21": True},
+                        "horizons": {
+                            "10": {"score_ic": 0.25, "score_ic_t_hac": 4.1},
+                            "21": {"score_ic": 0.26, "score_ic_t_hac": 3.6},
+                        },
+                    },
+                }
+            )
+        )
+        monkeypatch.setattr(MV, "_RRG_PATH", path)
+        plane = MV.view("us")["planes"]["rrg"]
+        assert plane["raw"]["artifact_present"] is True
+        assert plane["direction"] == "neutral"
+        assert plane["status"] == "advisory"
+        assert "leading=XLP" in plane["reading"]
+        assert plane["raw"]["proven_horizons"] == ["10", "21"]
+
+    def test_group_flow_preserves_display_only_uncalibrated_contract(
+        self, monkeypatch, tmp_path
+    ):
+        _patch_regime(
+            monkeypatch,
+            tmp_path,
+            FIX.incident_regime("2026-07-01"),
+            FIX.incident_sector_cycles("2026-07-01"),
+        )
+        path = tmp_path / "group_flow.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "as_of": "2026-07-01",
+                    "verdict": "display_only",
+                    "calibrated": False,
+                    "cluster": {"regime": "mixed", "absorption": 0.45},
+                    "emerging": {
+                        "sectors": [{"name": "Energy"}],
+                        "baskets": [{"name": "Non-AI Software"}],
+                    },
+                    "cooling": {
+                        "sectors": [{"name": "Consumer Staples"}],
+                        "baskets": [],
+                    },
+                }
+            )
+        )
+        monkeypatch.setattr(MV, "_GROUP_FLOW_PATH", path)
+        plane = MV.view("us")["planes"]["group_flow"]
+        assert plane["raw"]["artifact_present"] is True
+        assert plane["raw"]["calibrated"] is False
+        assert plane["raw"]["directional"] is False
+        assert plane["direction"] == "neutral"
+        assert plane["status"] == "advisory"
+        assert "emerging=Energy,Non-AI Software" in plane["reading"]
 
 
 # ---------------------------------------------------------------------------
@@ -527,6 +608,10 @@ class TestMissingFileNoOp:
         monkeypatch.setattr(_NWC, "market_plane", lambda: {"stale": True, "asof": None})
         monkeypatch.setattr(MV, "_ANTICIPATION_DIR", tmp_path / "no_anticipation", raising=False)
         monkeypatch.setattr(MV, "_ROTATION_TENSOR_PATH", tmp_path / "no_rt.json", raising=False)
+        monkeypatch.setattr(MV, "_RRG_PATH", tmp_path / "no_rrg.json", raising=False)
+        monkeypatch.setattr(
+            MV, "_GROUP_FLOW_PATH", tmp_path / "no_group_flow.json", raising=False
+        )
         v = MV.view("us")   # must not raise
         assert v["schema_version"] == "market_view.v1"
         assert v["asof"] is None

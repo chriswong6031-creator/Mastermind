@@ -219,7 +219,7 @@ def test_neural_lobe_after_decision_asof_is_excluded() -> None:
 def test_future_dated_cycle_is_quarantined() -> None:
     regime = _regime()
     regime["business_cycle"] = {
-        "asof": "2026-07-31",
+        "asof": "2026-08-31",
         "available": True,
         "phase": {"label": "recovery"},
     }
@@ -231,6 +231,52 @@ def test_future_dated_cycle_is_quarantined() -> None:
     assert out["data_quality"]["temporal_anomalies"] == [
         "business_cycle_asof_after_regime_market_asof"
     ]
+
+
+def test_same_month_business_cycle_period_end_is_not_future_information() -> None:
+    regime = _regime()
+    regime["business_cycle"] = {
+        "asof": "2026-07-31",
+        "available": True,
+        "phase": {"label": "recovery"},
+    }
+    out = DC.assemble(regime, _view(), neural_web={})
+    cycle = out["regime"]["cycle"]["business_cycle"]
+    assert cycle["admitted"] is True
+    assert cycle["future_dated"] is False
+    assert cycle["asof"] == "2026-07-29"
+    assert cycle["source_period_end"] == "2026-07-31"
+    assert cycle["asof_semantics"] == (
+        "monthly_period_end_clamped_to_regime_market_asof"
+    )
+    assert cycle["phase"]["label"] == "recovery"
+    assert out["data_quality"]["temporal_anomalies"] == []
+
+
+def test_stale_neural_lobes_keep_context_degraded_with_reason() -> None:
+    neural = {
+        "as_of": "2026-07-29",
+        "freshness": {
+            "market": {"as_of": "2026-07-28", "stale": True},
+            "theme_rotation": {"as_of": "2026-07-29", "stale": False},
+        },
+        "lobes": {
+            "market": {"as_of": "2026-07-28", "verdict": "mixed"},
+            "theme_rotation": {
+                "as_of": "2026-07-29",
+                "leadership_state": "rotating",
+            },
+        },
+    }
+    view = _view()
+    view["assembly"]["decision_coverage"] = 1.0
+    view["assembly"]["decision_total"] = 2
+    out = DC.assemble(_regime(), view, neural_web=neural)
+    quality = out["data_quality"]
+    assert quality["temporal_anomalies"] == []
+    assert quality["neural_web_stale_lobes"] == ["market"]
+    assert quality["degraded"] is True
+    assert quality["degrade_reasons"] == ["neural_web_stale_lobes:market"]
 
 
 def test_prompt_summary_retains_precision_without_raw_signal_matrix() -> None:
