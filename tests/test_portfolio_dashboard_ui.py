@@ -123,13 +123,35 @@ def test_live_marks_replace_around_the_clock_full_dashboard_polling() -> None:
     assert "setInterval(fetchAll, 60000)" not in HTML
     assert "setInterval(loadPortfolios, 60000)" not in HTML
     assert "if (document.hidden)" in HTML
+    assert "var holdingsComplete = !data.error" in HTML
+    assert "sleeve: 'account'" in HTML
+    assert "if (holdingsComplete) _book.positions = reconciled" in HTML
 
 
-def test_initial_loadbar_finishes_after_scoped_portfolio_paints() -> None:
+def test_initial_loadbar_finishes_before_live_and_deferred_hydration() -> None:
+    fetch_all = HTML.index("async function fetchAll(opts)")
+    critical = HTML.index("await _fetchPortfolioCritical(requestedPortfolio)", fetch_all)
     paint = HTML.index("_paintPortfolioSnapshot(scopedSnapshot)")
     done = HTML.index("loadBarDone(); barFinished = true", paint)
-    shared = HTML.index("var s = await sharedPromise", paint)
-    assert paint < done < shared
+    live_first = HTML.index("await Promise.race([", done)
+    details = HTML.index("await _fetchPortfolioDetails(requestedPortfolio", live_first)
+    shared = HTML.index("_hydrateShared();", details)
+    assert critical < paint < done < live_first < details < shared
+
+    critical_fn = HTML[
+        HTML.index("function _fetchPortfolioCritical(id)"):
+        HTML.index("function _fetchPortfolioDetails(id, base)")
+    ]
+    assert "/api/portfolio" in critical_fn
+    assert "/api/trades" not in critical_fn
+    assert "/api/performance" not in critical_fn
+
+    hydrate_fn = HTML[
+        HTML.index("function _hydrateShared()"):
+        HTML.index("async function fetchAll(opts)")
+    ]
+    assert "if (_sharedLoad) return _sharedLoad" in hydrate_fn
+    assert "loadPortfolios().then" in hydrate_fn
 
 
 def test_institutional_shell_is_shared_across_supporting_workspaces() -> None:

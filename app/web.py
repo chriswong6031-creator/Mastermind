@@ -580,6 +580,10 @@ def api_live_marks(portfolio: str = "flagship") -> JSONResponse:
                 positions.append({
                     "ticker": ticker,
                     **row,
+                    # UI and historical book rows use ``cost_basis``; retain ``avg_cost`` in the
+                    # live contract too, but expose the shared name so an account-only holding
+                    # renders its true entry instead of a misleading dash.
+                    "cost_basis": row.get("avg_cost"),
                     "quote_source": quote.get("source"),
                     "quote_as_of": quote.get("as_of"),
                     "quote_time_kind": quote.get("time_kind"),
@@ -678,15 +682,57 @@ def api_portfolio(portfolio: str = "flagship") -> JSONResponse:
         try:
             from portfolio import paper_account
             prices = _book_marks(portfolio)
-            pnl = paper_account.positions_pnl(prices, portfolio_id=portfolio) if prices else {}
+            # positions_pnl({}) still returns every actual account lot with honest null marks. This
+            # matters when the daily strategy snapshot has zero rows but the paper account still
+            # owns positions: the first critical response must not pretend the account is empty.
+            pnl = paper_account.positions_pnl(prices, portfolio_id=portfolio)
+            account_nav = paper_account.nav(prices, portfolio_id=portfolio)
+            account = paper_account._load_account(portfolio)
+            cash = float(account.get("cash") or 0.0)
+            starting_nav = float(account.get("starting_nav") or 1_000_000.0)
+            payload["account_preview"] = {
+                "inception_date": account.get("inception_date"),
+                "starting_nav": starting_nav,
+                "current_nav": round(float(account_nav), 2),
+                "cash": round(cash, 2),
+                "invested": round(max(0.0, float(account_nav) - cash), 2),
+                "total_return_pct": round((float(account_nav) / starting_nav - 1.0) * 100, 4)
+                if starting_nav > 0 else None,
+            }
+            published_tickers: set[str] = set()
             for pos in payload.get("positions", []):
-                rec = pnl.get(pos.get("ticker"))
+                ticker = pos.get("ticker")
+                if ticker:
+                    published_tickers.add(ticker)
+                rec = pnl.get(ticker)
                 if rec:
                     pos["cost_basis"] = rec.get("avg_cost")   # true avg-cost basis
                     pos["current_price"] = rec.get("current_price")
                     pos["market_value"] = rec.get("market_value")
                     pos["unrealized_pnl"] = rec.get("unrealized_pnl")
                     pos["unrealized_pct"] = rec.get("unrealized_pct")
+                    if rec.get("market_value") is not None and account_nav > 0:
+                        pos["weight"] = round(float(rec["market_value"]) / account_nav, 6)
+            for ticker, rec in pnl.items():
+                if ticker in published_tickers:
+                    continue
+                payload.setdefault("positions", []).append({
+                    "ticker": ticker,
+                    "sleeve": "account",
+                    "verdict": "hold",
+                    "stage": None,
+                    "live_only": True,
+                    "shares": rec.get("shares"),
+                    "cost_basis": rec.get("avg_cost"),
+                    "current_price": rec.get("current_price"),
+                    "market_value": rec.get("market_value"),
+                    "unrealized_pnl": rec.get("unrealized_pnl"),
+                    "unrealized_pct": rec.get("unrealized_pct"),
+                    "weight": (
+                        round(float(rec["market_value"]) / account_nav, 6)
+                        if rec.get("market_value") is not None and account_nav > 0 else None
+                    ),
+                })
         except Exception:
             pass
 

@@ -5,6 +5,8 @@ event. Relies on real data fixtures already in data/ (portfolio, research).
 """
 from __future__ import annotations
 
+import json
+
 from fastapi.testclient import TestClient
 
 # ── W8 legacy-contract pin (2026-07-19): this file tests pre-W8 mechanics (design
@@ -109,6 +111,73 @@ def test_live_marks_contract_is_never_browser_cached(monkeypatch):
     assert data["poll_after_seconds"] == 59405
     assert "current_nav" in data["performance"]
     assert r.headers["cache-control"] == "no-store"
+
+
+def test_live_marks_exposes_account_cost_basis_for_live_only_holdings(monkeypatch):
+    from app import web
+    from portfolio import market_sessions, paper_account
+
+    monkeypatch.setattr(market_sessions, "status_for_portfolio", lambda portfolio_id: {
+        "venue": "US", "market": "NYSE", "timezone": "America/New_York",
+        "is_open": False, "state": "post_close", "trading_day": True,
+        "holiday": False, "as_of": "2026-07-30T17:00:00-04:00",
+        "next_open": "2026-07-31T09:30:00-04:00", "poll_after_seconds": 59405,
+    })
+    monkeypatch.setattr(web, "_account_tickers", lambda portfolio_id: ["ABC"])
+    monkeypatch.setattr(web, "_book_marks", lambda portfolio_id, refresh=False: {"ABC": 110.0})
+    monkeypatch.setattr(web, "_quote_provenance", lambda tickers: {})
+    monkeypatch.setattr(paper_account, "positions_pnl", lambda prices, portfolio_id=None: {
+        "ABC": {
+            "shares": 10.0, "avg_cost": 100.0, "current_price": 110.0,
+            "market_value": 1100.0, "unrealized_pnl": 100.0, "unrealized_pct": 10.0,
+        }
+    })
+    monkeypatch.setattr(paper_account, "performance", lambda portfolio_id=None, prices=None: {
+        "current_nav": 10_000.0, "cash": 8_900.0, "invested": 1_100.0,
+        "total_return_pct": 0.0,
+    })
+
+    data = json.loads(web.api_live_marks("flagship").body)
+    assert data["positions"][0]["ticker"] == "ABC"
+    assert data["positions"][0]["cost_basis"] == 100.0
+    assert data["positions"][0]["current_price"] == 110.0
+    assert data["positions"][0]["unrealized_pnl"] == 100.0
+
+
+def test_portfolio_first_paint_includes_account_lot_missing_from_daily_snapshot(
+        tmp_path, monkeypatch):
+    from app import web
+    from portfolio import paper_account
+
+    (tmp_path / "latest.json").write_text(json.dumps({
+        "schema": "portfolio.v1", "portfolio_id": "flagship", "positions": [],
+        "decisions": [], "rejected": [],
+    }))
+    monkeypatch.setattr(web, "_portfolio_dir", lambda portfolio_id=None: tmp_path)
+    monkeypatch.setattr(web, "_book_marks", lambda portfolio_id=None: {"ABC": 110.0})
+    monkeypatch.setattr(web, "_attach_security_names", lambda rows: None)
+    monkeypatch.setattr(paper_account, "positions_pnl", lambda prices, portfolio_id=None: {
+        "ABC": {
+            "shares": 10.0, "avg_cost": 100.0, "current_price": 110.0,
+            "market_value": 1100.0, "unrealized_pnl": 100.0, "unrealized_pct": 10.0,
+        }
+    })
+    monkeypatch.setattr(paper_account, "nav", lambda prices, portfolio_id=None: 10_000.0)
+    monkeypatch.setattr(paper_account, "_load_account", lambda portfolio_id=None: {
+        "inception_date": "2026-07-01", "starting_nav": 10_000.0,
+        "cash": 8_900.0, "positions": {},
+    })
+
+    response = web.api_portfolio("flagship")
+    assert response.status_code == 200
+    positions = json.loads(response.body)["positions"]
+    assert positions == [{
+        "ticker": "ABC", "sleeve": "account", "verdict": "hold", "stage": None,
+        "live_only": True, "shares": 10.0, "cost_basis": 100.0,
+        "current_price": 110.0, "market_value": 1100.0,
+        "unrealized_pnl": 100.0, "unrealized_pct": 10.0, "weight": 0.11,
+    }]
+    assert json.loads(response.body)["account_preview"]["current_nav"] == 10_000.0
 
 
 def test_live_marks_only_warms_feed_during_exchange_session(monkeypatch):
