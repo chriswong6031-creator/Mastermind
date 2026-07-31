@@ -2024,7 +2024,12 @@ body.page-mm .mm-auto-badge.etf {
 body.page-mm .mm-auto-title { font-size: 14px; font-weight: 760; }
 body.page-mm .mm-auto-meta,
 body.page-mm .mm-auto-tag { font-family: var(--num); font-size: 10.5px; }
-body.page-mm .mm-auto-sum { max-width: 108ch; color: var(--mm-ink-2); line-height: 1.62; }
+body.page-mm .mm-auto-sum {
+  width: 100%;
+  max-width: none;
+  color: var(--mm-ink-2);
+  line-height: 1.62;
+}
 
 body.page-mm .mm-sleeve-bar,
 body.page-mm .mm-sd-wbar {
@@ -2318,8 +2323,8 @@ html[data-theme="light"] body.page-mm {
 .mm-auto-title{font-weight:800;font-size:15px;line-height:1.2}
 .mm-auto-tag{font-size:12px;color:var(--muted)}
 .mm-auto-meta{color:var(--muted);font-size:12px;display:flex;gap:16px;flex-wrap:wrap;font-variant-numeric:tabular-nums}
-.mm-auto-sum{color:var(--text);font-size:13px;line-height:1.62;max-width:80ch}
-.mm-auto-sum.clamped{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.mm-auto-sum{width:100%;max-width:none;color:var(--text);font-size:13px;line-height:1.62}
+.mm-auto-sum.clamped{display:-webkit-box;-webkit-line-clamp:var(--mm-auto-clamp-lines,6);-webkit-box-orient:vertical;overflow:hidden}
 .mm-auto-more{align-self:flex-start;background:transparent;border:0;color:#7c5cff;
   font:inherit;font-size:12px;font-weight:700;cursor:pointer;padding:2px 0;margin-top:-4px;
   display:inline-flex;align-items:center;gap:5px}
@@ -2504,7 +2509,8 @@ html[data-theme="light"] body.page-mm {
         <div class="mm-auto-meta" id="auto-meta"></div>
       </div>
       <div class="mm-auto-sum clamped" id="auto-sum">—</div>
-      <button class="mm-auto-more" id="auto-more" type="button" style="display:none" onclick="toggleAutoThesis()"></button>
+      <button class="mm-auto-more" id="auto-more" type="button" style="display:none"
+              aria-controls="auto-sum" aria-expanded="false" onclick="toggleAutoThesis()"></button>
     </div>
   </div>
 </div>
@@ -6016,29 +6022,58 @@ function renderAutoBanner() {
     metaEl.innerHTML = parts.map(esc).join(' <span style="opacity:.4">·</span> ');
   }
 
-  // thesis — full-width, clamped to 3 lines with a Show more / less toggle so the
-  // banner stays compact instead of dumping the Brain's whole rationale up top.
+  // Thesis — use the panel's full width and only collapse genuinely long copy.
+  // A narrower mobile viewport gets a tighter preview so the banner stays scannable.
   var sumEl = E('auto-sum'), moreEl = E('auto-more');
   var txt = ((isZh && b.summary_zh) ? b.summary_zh : b.summary) ||
             (isZh ? '尚无决策——大脑首次运行后出现。' : 'No decision yet — appears after the Brain’s first run.');
-  if (sumEl) { sumEl.classList.add('clamped'); sumEl.textContent = txt; }
+  if (sumEl) sumEl.textContent = txt;
   if (moreEl && sumEl) {
-    moreEl.textContent = isZh ? '展开 ▾' : 'Show more ▾';
-    // only offer the toggle when the text actually overflows the 3-line clamp; measure
-    // after layout so clientHeight/scrollHeight are real.
-    requestAnimationFrame(function() {
-      moreEl.style.display = (sumEl.scrollHeight - sumEl.clientHeight > 4) ? 'inline-flex' : 'none';
-    });
+    _autoThesisExpanded = false;
+    requestAnimationFrame(function() { syncAutoThesisDisclosure(); });
   }
 }
 
-window.toggleAutoThesis = function() {
+var _autoThesisExpanded = false;
+var _autoThesisResizeTimer = null;
+
+function syncAutoThesisDisclosure() {
   var sumEl = E('auto-sum'), moreEl = E('auto-more');
-  if (!sumEl) return;
+  if (!sumEl || !moreEl) return;
+
+  // Measure the full text before deciding whether a disclosure is useful.
+  sumEl.classList.remove('clamped');
+  var compact = window.matchMedia('(max-width: 760px)').matches;
+  var maxLines = compact ? 4 : 6;
+  sumEl.style.setProperty('--mm-auto-clamp-lines', maxLines);
+  var lineHeight = parseFloat(window.getComputedStyle(sumEl).lineHeight);
+  var needsDisclosure = lineHeight > 0 && sumEl.scrollHeight > (lineHeight * maxLines) + 2;
   var isZh = document.documentElement.getAttribute('data-lang') === 'zh';
-  var clamped = sumEl.classList.toggle('clamped');
-  if (moreEl) moreEl.textContent = clamped ? (isZh ? '展开 ▾' : 'Show more ▾') : (isZh ? '收起 ▴' : 'Show less ▴');
+
+  if (!needsDisclosure) {
+    _autoThesisExpanded = false;
+    moreEl.style.display = 'none';
+    moreEl.setAttribute('aria-expanded', 'false');
+    return;
+  }
+
+  if (!_autoThesisExpanded) sumEl.classList.add('clamped');
+  moreEl.style.display = 'inline-flex';
+  moreEl.setAttribute('aria-expanded', _autoThesisExpanded ? 'true' : 'false');
+  moreEl.textContent = _autoThesisExpanded
+    ? (isZh ? '收起 ▴' : 'Show less ▴')
+    : (isZh ? '展开 ▾' : 'Show more ▾');
+}
+
+window.toggleAutoThesis = function() {
+  _autoThesisExpanded = !_autoThesisExpanded;
+  syncAutoThesisDisclosure();
 };
+
+window.addEventListener('resize', function() {
+  window.clearTimeout(_autoThesisResizeTimer);
+  _autoThesisResizeTimer = window.setTimeout(syncAutoThesisDisclosure, 120);
+});
 
 // ── STRATEGY POSTURE: per-book strategy-label chip + hover playbook ────────────
 // The glance-able layer on top of the Brain's free-form rationale. Pure presentation —
