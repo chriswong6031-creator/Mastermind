@@ -336,8 +336,28 @@ def _stock_name(sub: str, ticker: str) -> str | None:
     raw = _read(f"{sub}/{ticker}.json")
     if isinstance(raw, dict):
         n = raw.get("name")
-        return n if isinstance(n, str) and n.strip() else None
+        if isinstance(n, str) and n.strip() and _u(n) != _u(ticker):
+            return n.strip()
+        # Some Macro snapshots carry the symbol itself as a placeholder `name`
+        # while their company profile begins with the proper name (for example,
+        # "GATX Corporation is ..."). Recover that prefix rather than leaking a
+        # duplicate ticker into the portfolio UI.
+        profile = raw.get("profile")
+        description = profile.get("description") if isinstance(profile, dict) else None
+        if isinstance(description, str):
+            prefix, marker, _ = description.strip().partition(" is ")
+            if marker and _u(ticker) in _u(prefix) and 1 <= len(prefix.split()) <= 12:
+                return prefix
     return None
+
+
+def _etf_name(ticker: str) -> str | None:
+    """The fixed ETF book's canonical local name, without any network lookup."""
+    try:
+        from portfolio import etf_universe
+        return etf_universe.name_of(ticker)
+    except Exception:  # noqa: BLE001 — display enrichment must remain fail-soft
+        return None
 
 
 _BOARD_NAMES: dict | None = None
@@ -469,7 +489,7 @@ def display_name(ticker: str) -> str:
         return _china_names().get(t) or _native_zh(raw) or raw or t
     sub = "hkstockdata" if t.endswith(".HK") else "stockdata"
     hk_en = (_hk_names().get(t) or {}).get("en") if t.endswith(".HK") else None
-    raw = _stock_name(sub, t) or hk_en or _board_name(t)
+    raw = _stock_name(sub, t) or hk_en or _etf_name(t) or _board_name(t)
     if raw and " / " in raw:
         return raw.split(" / ", 1)[0].strip() or t       # English half
     return raw or t
