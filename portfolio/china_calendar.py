@@ -58,16 +58,16 @@ _HOLIDAYS: frozenset[date] = frozenset(
         "2025-06-02",                                                   # Dragon Boat
         "2025-10-01", "2025-10-02", "2025-10-03", "2025-10-06",         # Nat'l Day + Mid-Autumn
         "2025-10-07", "2025-10-08",
-        # 2026 (approximate — Lunar holidays projected; refresh when SSE publishes)
+        # 2026 (official SSE/SZSE schedule published 2025-12-22)
         "2026-01-01",                                                   # New Year
         "2026-02-16", "2026-02-17", "2026-02-18", "2026-02-19",         # Spring Festival (CNY 2026-02-17)
-        "2026-02-20", "2026-02-23", "2026-02-24",
+        "2026-02-20", "2026-02-23",
         "2026-04-06",                                                   # Qingming (obs)
         "2026-05-01", "2026-05-04", "2026-05-05",                       # Labour Day
         "2026-06-19",                                                   # Dragon Boat
         "2026-09-25",                                                   # Mid-Autumn
         "2026-10-01", "2026-10-02", "2026-10-05", "2026-10-06",         # National Day
-        "2026-10-07", "2026-10-08",
+        "2026-10-07",
         # 2027 (approximate)
         "2027-01-01",                                                   # New Year
         "2027-02-08", "2027-02-09", "2027-02-10", "2027-02-11",         # Spring Festival (CNY 2027-02-06)
@@ -86,7 +86,7 @@ _HOLIDAYS: frozenset[date] = frozenset(
 # HKEX holiday set — Hong Kong Exchange closures BEYOND shared weekends.
 # Source: HKEX official holiday schedule https://www.hkex.com.hk/Services/
 #         Trading/Securities/Overview/Trading-Hours-and-Schedules/
-#         Exchange-Holidays?sc_lang=en  (retrieved 2026-07-02, covers 2025–2027).
+#         Exchange-Holidays?sc_lang=en  (verified 2026-07-30, covers 2025–2027).
 # The mainland CN set above already excludes weekends; the HKEX set adds closures
 # that differ from SSE/SZSE (e.g. HK SAR Establishment Day, Christmas, Easter,
 # Buddha's Birthday, Good Friday, Day after Christmas).  Where the two sets overlap
@@ -106,9 +106,10 @@ _HKEX_HOLIDAYS: frozenset[date] = frozenset(
         "2025-06-02",                                   # Tuen Ng Festival
         "2025-07-01",                                   # HK SAR Establishment Day
         "2025-10-01",                                   # National Day
-        "2025-10-07",                                   # Chung Yeung Festival
+        "2025-10-07",                                   # day after Mid-Autumn Festival
+        "2025-10-29",                                   # Chung Yeung Festival
         "2025-12-25", "2025-12-26",                     # Christmas / Boxing Day
-        # 2026 (official HKEX — Lunar dates projected; refresh yearly)
+        # 2026 (official HKEX securities-market circular CT/075/25)
         "2026-01-01",                                   # New Year's Day
         "2026-02-17", "2026-02-18", "2026-02-19",       # Lunar New Year
         "2026-04-03",                                   # Ching Ming Festival
@@ -119,7 +120,7 @@ _HKEX_HOLIDAYS: frozenset[date] = frozenset(
         "2026-06-19",                                   # Tuen Ng Festival
         "2026-07-01",                                   # HK SAR Establishment Day
         "2026-10-01",                                   # National Day
-        "2026-10-05",                                   # Chung Yeung Festival (approx)
+        "2026-10-19",                                   # day following Chung Yeung Festival
         "2026-12-25",                                   # Christmas Day
         # 2027 (approximate)
         "2027-01-01",                                   # New Year's Day
@@ -128,12 +129,12 @@ _HKEX_HOLIDAYS: frozenset[date] = frozenset(
         "2027-03-29",                                   # Easter Monday (approx)
         "2027-04-05",                                   # Ching Ming Festival (approx)
         "2027-05-01",                                   # Labour Day
-        "2027-05-14",                                   # Buddha's Birthday (approx)
+        "2027-05-13",                                   # Buddha's Birthday
         "2027-06-09",                                   # Tuen Ng Festival (approx)
         "2027-07-01",                                   # HK SAR Establishment Day
-        "2027-09-15",                                   # Mid-Autumn
+        "2027-09-16",                                   # day after Mid-Autumn Festival
         "2027-10-01",                                   # National Day
-        "2027-10-25",                                   # Chung Yeung Festival (approx)
+        "2027-10-08",                                   # Chung Yeung Festival
         "2027-12-27",                                   # Christmas (obs)
     )
 )

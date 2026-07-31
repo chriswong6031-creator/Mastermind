@@ -7,7 +7,7 @@ import json
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -121,9 +121,9 @@ def _dash_mark_usd(t: str) -> float | None:
         from data_layer import yahoo_feed, terminal_prices
     except Exception:
         return None
-    cached = yahoo_feed.price_cached(tt)   # LOCAL ccy: USD for US, HKD for *.HK (tushare *.SS not cached here)
+    cached = yahoo_feed.price_cached(tt)   # LOCAL currency: USD / HKD / CNY by venue suffix
     if cached is not None and cached > 0:
-        if tt.endswith(".HK"):
+        if tt.endswith((".HK", ".SS", ".SZ")):
             try:
                 from portfolio import fx
                 usd = fx.to_usd(cached, tt)
@@ -134,7 +134,7 @@ def _dash_mark_usd(t: str) -> float | None:
     return terminal_prices.price_usd(tt)   # cold miss → instant Terminal snapshot (→ USD)
 
 
-def _live_prices(tickers: list[str]) -> dict[str, float]:
+def _live_prices(tickers: list[str], *, refresh: bool | None = None) -> dict[str, float]:
     """USD marks for the bare-US names in `tickers`, for the DASHBOARD read path — {} when none.
 
     NON-BLOCKING: kicks a background refresh of the live Yahoo cache (so it never blocks the response)
@@ -147,10 +147,16 @@ def _live_prices(tickers: list[str]) -> dict[str, float]:
     if not us:
         return {}
     try:
-        from data_layer import yahoo_feed
-        yahoo_feed.warm(us, background=True)          # refresh off the request thread; never blocks
+        from portfolio import market_sessions
+        market_open = market_sessions.status_for_portfolio("self_directed")["is_open"]
     except Exception:
-        pass
+        market_open = False
+    if market_open and refresh is not False:
+        try:
+            from data_layer import yahoo_feed
+            yahoo_feed.warm(us, background=(refresh is None))
+        except Exception:
+            pass
     out: dict[str, float] = {}
     for t in us:
         v = _dash_mark_usd(t)
@@ -159,7 +165,7 @@ def _live_prices(tickers: list[str]) -> dict[str, float]:
     return out
 
 
-def _book_marks(portfolio_id: str | None = None) -> dict[str, float]:
+def _book_marks(portfolio_id: str | None = None, *, refresh: bool | None = None) -> dict[str, float]:
     """Current marks for a book's held names, in the book's BASE currency — the dashboard's live
     valuation preview for NAV / per-position P&L.
 
@@ -179,16 +185,21 @@ def _book_marks(portfolio_id: str | None = None) -> dict[str, float]:
         ccy = registry.currency(portfolio_id)
     except Exception:
         ccy = "USD"
-    # Pre-warm the live caches OFF the request thread (US + HK); a cold miss falls back to the Terminal
-    # snapshot inside _dash_mark_usd, so this never blocks. (A-shares mark off the snapshot directly.)
+    # Only touch the live feed during this book's actual cash session. The default dashboard read
+    # warms off-thread; the dedicated live-marks endpoint pre-warms synchronously and then calls
+    # this helper with refresh=False. China A-shares are included — their CNY marks are converted
+    # to USD by _dash_mark_usd before conversion into the book's base currency below.
     try:
-        from data_layer import yahoo_feed
-        yahoo_feed.warm([t for t in tickers if t and "." not in t], background=True)
-        hk = [t for t in tickers if (t or "").upper().endswith(".HK")]
-        if hk:
-            yahoo_feed.warm(hk, background=True)
+        from portfolio import market_sessions
+        market_open = market_sessions.status_for_portfolio(portfolio_id)["is_open"]
     except Exception:
-        pass
+        market_open = False
+    if market_open and refresh is not False:
+        try:
+            from data_layer import yahoo_feed
+            yahoo_feed.warm(tickers, background=(refresh is None))
+        except Exception:
+            pass
     out: dict[str, float] = {}
     for t in tickers:
         usd = _dash_mark_usd(t)
@@ -204,6 +215,23 @@ def _book_marks(portfolio_id: str | None = None) -> dict[str, float]:
                 base = None
             if base and base > 0:
                 out[t] = float(base)
+    return out
+
+
+def _quote_provenance(tickers: list[str]) -> dict[str, dict[str, Any]]:
+    """Cache-only source/as-of metadata for marks; never triggers a quote request."""
+    try:
+        from data_layer import terminal_prices, yahoo_feed
+    except Exception:
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for ticker in tickers:
+        t = (ticker or "").upper().strip()
+        if not t:
+            continue
+        quote = yahoo_feed.quote_cached(t) or terminal_prices.quote_local(t)
+        if quote:
+            out[t] = quote
     return out
 
 
@@ -471,6 +499,141 @@ def api_performance(portfolio: str = "flagship") -> JSONResponse:
         })
 
 
+@router.get("/api/live_marks")
+def api_live_marks(portfolio: str = "flagship") -> JSONResponse:
+    """Active-book intraday prices, unrealized P&L, and calculated NAV.
+
+    The endpoint is deliberately narrow and read-only. It performs a batched live
+    refresh only while the selected book's own exchange is open. At all other
+    times it serves explicitly labelled cache/snapshot marks and tells the client
+    to wake once at the next valid open instead of polling overnight or through
+    holidays.
+    """
+    from portfolio import market_sessions, registry
+
+    pid = portfolio if registry.is_known(portfolio) else registry.DEFAULT_ID
+    session = market_sessions.status_for_portfolio(pid)
+    generated_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    try:
+        if pid == "self_directed":
+            from data_layer import yahoo_feed
+            from portfolio import self_directed
+
+            held = sorted((self_directed._load_account().get("positions") or {}).keys())
+            if session["is_open"] and held:
+                yahoo_feed.warm(held)  # one blocking batch; only on a valid US session
+            prices = _live_prices(held, refresh=False)
+            book = self_directed.book(
+                prices=prices,
+                read_only=True,
+                resolve_missing_prices=False,
+            )
+            _attach_security_names(book.get("positions"))
+            provenance = _quote_provenance(held)
+            for row in book.get("positions") or []:
+                quote = provenance.get((row.get("ticker") or "").upper()) or {}
+                row.update({
+                    "quote_source": quote.get("source"),
+                    "quote_as_of": quote.get("as_of"),
+                    "quote_time_kind": quote.get("time_kind"),
+                    "quote_is_live": quote.get("source") == "yahoo_intraday",
+                })
+            priced = sum(1 for row in book.get("positions") or []
+                         if row.get("current_price") is not None)
+            performance = {
+                "current_nav": book.get("nav"),
+                "cash": book.get("cash"),
+                "invested": book.get("invested"),
+                "total_return_pct": (book.get("allocation") or {}).get("total_return_pct"),
+            }
+            payload = {
+                "schema_version": "live_marks.v1",
+                "portfolio": pid,
+                "currency": registry.currency(pid),
+                "generated_at": generated_at,
+                "session": session,
+                "poll_after_seconds": (
+                    300 if session["is_open"] and not held else session["poll_after_seconds"]),
+                "positions": book.get("positions") or [],
+                "performance": performance,
+                "book": book,
+                "pricing": {
+                    "priced_positions": priced,
+                    "total_positions": len(held),
+                    "complete": priced == len(held),
+                },
+            }
+        else:
+            from data_layer import yahoo_feed
+            from portfolio import paper_account
+
+            held = _account_tickers(pid)
+            if session["is_open"] and held:
+                yahoo_feed.warm(held)  # all names in one request; no per-ticker stampede
+            prices = _book_marks(pid, refresh=False)
+            pnl = paper_account.positions_pnl(prices, portfolio_id=pid)
+            provenance = _quote_provenance(held)
+            positions = []
+            for ticker, row in pnl.items():
+                quote = provenance.get((ticker or "").upper()) or {}
+                positions.append({
+                    "ticker": ticker,
+                    **row,
+                    "quote_source": quote.get("source"),
+                    "quote_as_of": quote.get("as_of"),
+                    "quote_time_kind": quote.get("time_kind"),
+                    "quote_age_seconds": quote.get("age_seconds"),
+                    "quote_is_live": quote.get("source") == "yahoo_intraday",
+                })
+            performance_full = paper_account.performance(portfolio_id=pid, prices=prices)
+            performance = {
+                key: performance_full.get(key)
+                for key in (
+                    "inception_date", "starting_nav", "current_nav", "cash", "invested",
+                    "total_return_pct", "vs_spy_pct", "benchmark", "day_change_pct",
+                    "max_drawdown_pct", "realized_since",
+                )
+            }
+            current_nav = performance.get("current_nav")
+            if current_nav and current_nav > 0:
+                for row in positions:
+                    market_value = row.get("market_value")
+                    if market_value is not None:
+                        row["weight"] = round(float(market_value) / float(current_nav), 6)
+            priced = sum(1 for row in positions if row.get("current_price") is not None)
+            payload = {
+                "schema_version": "live_marks.v1",
+                "portfolio": pid,
+                "currency": registry.currency(pid),
+                "generated_at": generated_at,
+                "session": session,
+                "poll_after_seconds": (
+                    300 if session["is_open"] and not held else session["poll_after_seconds"]),
+                "positions": positions,
+                "performance": performance,
+                "pricing": {
+                    "priced_positions": priced,
+                    "total_positions": len(held),
+                    "complete": priced == len(held),
+                },
+            }
+        return JSONResponse(payload, headers={"Cache-Control": "no-store"})
+    except Exception as exc:  # noqa: BLE001 — live preview must degrade, never sink the dashboard
+        return JSONResponse({
+            "schema_version": "live_marks.v1",
+            "portfolio": pid,
+            "currency": registry.currency(pid),
+            "generated_at": generated_at,
+            "session": session,
+            "poll_after_seconds": 60 if session["is_open"] else session["poll_after_seconds"],
+            "positions": [],
+            "performance": {},
+            "pricing": {"priced_positions": 0, "total_positions": 0, "complete": False},
+            "error": str(exc),
+        }, headers={"Cache-Control": "no-store"})
+
+
 @router.get("/api/risk")
 def api_risk(portfolio: str = "flagship", recompute: bool = False) -> JSONResponse:
     """Portfolio safety scorecard: a static-weight historical risk backtest of the live book
@@ -635,7 +798,12 @@ def _portfolio_status(meta: dict) -> dict:
     if pid == "self_directed":
         try:
             from portfolio import self_directed
-            bk = self_directed.book(read_only=True)  # GET must not settle pending orders
+            held = list((self_directed._load_account().get("positions") or {}).keys())
+            bk = self_directed.book(
+                prices=_live_prices(held, refresh=False),
+                read_only=True,
+                resolve_missing_prices=False,
+            )  # tab badges are snapshot-only; the active-book live endpoint refreshes quotes
             alloc = bk.get("allocation") or {}
             status.update({
                 "nav": bk.get("nav"),
@@ -665,7 +833,9 @@ def _portfolio_status(meta: dict) -> dict:
         return {**{k: meta.get(k) for k in ("id", "name", "tagline", "kind", "manager", "benchmark", "currency")},
                 "status": status}
     try:
-        perf = paper_account.performance(portfolio_id=pid, prices=_book_marks(pid))
+        # The switcher is navigation metadata, not a reason to live-fetch every book at once.
+        # Use cache/snapshot marks here; /api/live_marks updates the active tab during its session.
+        perf = paper_account.performance(portfolio_id=pid, prices=_book_marks(pid, refresh=False))
         nav = perf.get("current_nav") or 0
         status.update({
             "nav": perf.get("current_nav"),
@@ -1102,7 +1272,8 @@ def api_self_directed() -> JSONResponse:
         held = list((self_directed._load_account().get("positions") or {}).keys())
         pend = [o.get("ticker") for o in self_directed._load_pending()]
         prices = _live_prices(sorted({*held, *[t for t in pend if t]}))
-        payload = self_directed.book(prices=prices, read_only=True)
+        payload = self_directed.book(
+            prices=prices, read_only=True, resolve_missing_prices=False)
         _attach_security_names(payload.get("positions"))
         _attach_security_names(payload.get("pending"))
         return JSONResponse(payload)

@@ -589,7 +589,8 @@ def quote_info(ticker: str) -> dict:
 
 
 def book(*, prices: dict[str, float] | None = None, now: datetime | None = None,
-         market_open: bool | None = None, read_only: bool = False) -> dict:
+         market_open: bool | None = None, read_only: bool = False,
+         resolve_missing_prices: bool = True) -> dict:
     """The Self-Directed book contract for the dashboard.
 
     Settles pending orders first (if the market is open), then returns positions with live
@@ -597,8 +598,10 @@ def book(*, prices: dict[str, float] | None = None, now: datetime | None = None,
     `prices` (TICKER→px) overrides live marks (used by tests / a shared price fetch).
 
     `read_only=True` skips the settle_pending() side-effect so a GET request does not
-    mutate state files.  The scheduled mark-sweep (app/scheduler.py settle_pending job and
-    the publish path) call book() without this flag so settlement still fires on schedule."""
+    mutate state files.  ``resolve_missing_prices=False`` also prevents per-name live
+    network fallbacks; the session-aware dashboard endpoint uses it while markets are
+    closed so an unpriced name cannot trigger an overnight quote request.  The scheduled
+    mark-sweep and existing interactive routes retain the default live fallback."""
     if not read_only:
         settle_pending(now=now, market_open=market_open, prices=prices)
     state = _load_account()
@@ -608,7 +611,9 @@ def book(*, prices: dict[str, float] | None = None, now: datetime | None = None,
     positions_raw = state.get("positions", {})
     marks: dict[str, float] = {}
     for ticker, pos in positions_raw.items():
-        px = prices.get(ticker) or _current_price(ticker)
+        px = prices.get(ticker)
+        if px is None and resolve_missing_prices:
+            px = _current_price(ticker)
         if px and px > 0:
             marks[ticker] = float(px)
 
@@ -644,7 +649,7 @@ def book(*, prices: dict[str, float] | None = None, now: datetime | None = None,
     weights = [p["weight"] for p in positions if p["weight"] is not None]
     total_unreal = sum(p["unrealized_pnl"] for p in positions if p["unrealized_pnl"] is not None)
 
-    pending = _mark_pending(_load_pending(), prices)
+    pending = _mark_pending(_load_pending(), prices, resolve_missing=resolve_missing_prices)
 
     return {
         "starting_nav": state.get("starting_nav", _STARTING_NAV),
@@ -668,14 +673,17 @@ def book(*, prices: dict[str, float] | None = None, now: datetime | None = None,
     }
 
 
-def _mark_pending(pending: list[dict], prices: dict[str, float]) -> list[dict]:
+def _mark_pending(pending: list[dict], prices: dict[str, float],
+                  resolve_missing: bool = True) -> list[dict]:
     """Attach an indicative current price + est. shares/value to each queued order for display.
     A share-sized order carries `shares`; a dollar-sized order carries `notional` (with the
     estimated shares it would buy at the indicative price)."""
     out = []
     for o in pending:
         ticker = (o.get("ticker") or "").upper()
-        px = prices.get(ticker) or _current_price(ticker)
+        px = prices.get(ticker)
+        if px is None and resolve_missing:
+            px = _current_price(ticker)
         has_sh = o.get("shares") is not None
         shares = float(o.get("shares") or 0.0) if has_sh else None
         notional = None if has_sh else float(o.get("notional") or 0.0)

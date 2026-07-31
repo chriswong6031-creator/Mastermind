@@ -26,13 +26,27 @@
     s.src = 'https://www.googletagmanager.com/gtag/js?id=' + GA4_ID;
     document.head.appendChild(s);
   }
-  // Analytics must never compete with the portfolio/API burst that makes the first screen useful.
-  // Queue it for idle time (with a bounded fallback) after the page has begun painting.
-  if (window.requestIdleCallback) {
-    window.requestIdleCallback(loadGA4, { timeout: 3000 });
-  } else {
-    window.setTimeout(loadGA4, 1500);
-  }
+  // requestIdleCallback can run while the first API burst is still in flight. Enforce a real
+  // minimum delay first, then use idle time, so analytics never joins the cold-load waterfall.
+  window.setTimeout(function () {
+    if (window.requestIdleCallback) window.requestIdleCallback(loadGA4, { timeout: 2500 });
+    else loadGA4();
+  }, 4000);
+
+  // Warm sister workspaces only after the current page has had time to become useful. Immediate
+  // markup prefetches made a cold page download three more HTML documents alongside its own APIs.
+  window.setTimeout(function () {
+    var prefetch = function () {
+      ['/', '/portfolio_desk', '/market_view', '/agenda'].forEach(function (path) {
+        if (path === location.pathname || document.querySelector('link[rel="prefetch"][href="' + path + '"]')) return;
+        var link = document.createElement('link');
+        link.rel = 'prefetch'; link.as = 'document'; link.href = path;
+        document.head.appendChild(link);
+      });
+    };
+    if (window.requestIdleCallback) window.requestIdleCallback(prefetch, { timeout: 2500 });
+    else prefetch();
+  }, 6000);
 
   /* ---- Plotly charts: re-theme to the active theme -------------------------
      Charts are built transparent with neutral-grey axes (build_site.py); here we

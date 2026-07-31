@@ -29,6 +29,7 @@ _MAX_ENTRIES = 512
 # Portfolio Desk (/api/pfolio/*) where a just-added position must show immediately (not after the TTL).
 _DENY_PREFIXES = ("/api/self_directed/search", "/api/self_directed/quote", "/api/pfolio/",
                   "/api/account",        # per-user Supabase profile — never shared/public
+                  "/api/live_marks",     # active-book intraday marks + session clock
                   "/api/mastermind_ai")  # W-AI admin surface — always fresh, never mirror-cached
 
 # The origin already holds these read-only responses for ``MASTERMIND_RESP_CACHE_TTL`` seconds.

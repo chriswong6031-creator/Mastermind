@@ -1,12 +1,14 @@
-"""Yahoo (yfinance) live price feed — fresh quotes for the US and Hong-Kong books.
+"""Yahoo (yfinance) live price feed — fresh quotes for US, China, and Hong-Kong books.
 
 Serves any yfinance symbol in ONE batched ``yf.download`` call, token-free:
   * US names (bare tickers + ETFs, e.g. ``SMH``, ``NVDA``) — the US books had NO live leg and
     marked off the CI/EOD-lagging vendored snapshot, so on a fast day (SMH -7%) the NAV was wrong.
     paper_account now routes US marks here too.
   * Hong-Kong names (``0700.HK``) — Tushare's ``hk_daily`` is throttled to ~1 req/hr; Yahoo isn't.
-The quote is in the symbol's native currency (USD for US, HKD for ``*.HK``); ``paper_account``
-converts to the book's base currency via ``portfolio.fx``.
+  * Mainland A-shares (``600000.SS`` / ``000001.SZ``) — the dashboard live-preview path now warms
+    these too instead of freezing the China book on Terminal's published snapshot.
+The quote is in the symbol's native currency (USD / HKD / CNY); ``paper_account`` converts it to
+the book's base currency via ``portfolio.fx``.
 
 Liveness: the cache carries an INTRADAY TTL (``YAHOO_FEED_TTL_SEC``, default 120s) so a long-lived
 server re-fetches a moving symbol rather than freezing it at the day's first print — a book viewed
@@ -22,13 +24,14 @@ import logging
 import os
 import threading
 import time
-from datetime import date
+from datetime import date, datetime, timezone
 
 log = logging.getLogger(__name__)
 
 _CACHE: dict[str, float] = {}      # SYMBOL -> latest Close quote in its local currency (per process)
 _OPEN_CACHE: dict[str, float] = {} # SYMBOL -> today's session Open price (cleared daily, same TTL)
 _TS: dict[str, float] = {}         # SYMBOL -> monotonic ts of its last fetch (drives the intraday TTL)
+_ASOF: dict[str, str] = {}         # SYMBOL -> wall-clock UTC fetch time (display/provenance)
 _FETCHED_DAY: str | None = None    # the calendar day the cache was populated for (cleared when it rolls)
 
 # Serialise blocking fetches so concurrent callers dedup onto ONE batched download (kills the
@@ -56,10 +59,10 @@ def _today() -> str:
 
 def _reset_if_stale() -> None:
     """Drop the cache when the calendar day rolls so a long-lived server re-fetches each day."""
-    global _FETCHED_DAY, _CACHE, _OPEN_CACHE, _TS
+    global _FETCHED_DAY, _CACHE, _OPEN_CACHE, _TS, _ASOF
     d = _today()
     if _FETCHED_DAY != d:
-        _CACHE, _OPEN_CACHE, _TS = {}, {}, {}
+        _CACHE, _OPEN_CACHE, _TS, _ASOF = {}, {}, {}, {}
         _FETCHED_DAY = d
 
 
@@ -116,16 +119,22 @@ def warm(tickers, background: bool = False) -> None:
 
 def _bg_fetch(want) -> None:
     """Daemon-thread wrapper: fetch off the request thread, then clear the in-flight guard."""
-    try:
-        _fetch_and_cache(want)
-    finally:
-        with _LOCK:
+    # Hold the same lock as blocking warm() for the duration of yf.download. A live-marks request
+    # arriving just after the dashboard's background warm then waits for that one batch and reuses
+    # it instead of launching a duplicate download.
+    with _LOCK:
+        try:
+            todo = [s for s in want if not _fresh(s, time.monotonic(), _ttl())]
+            if todo:
+                _fetch_and_cache(todo)
+        finally:
             _INFLIGHT.difference_update(want)
 
 
 def _fetch_and_cache(want) -> None:
     """The actual batched yfinance download + cache populate (Close for marks, Open for settle)."""
     now = time.monotonic()
+    fetched_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     try:
         import yfinance as yf
         df = yf.download(want, period="7d", progress=False, auto_adjust=False, threads=False)
@@ -149,7 +158,7 @@ def _fetch_and_cache(want) -> None:
                 s = close[sym].dropna()
                 if len(s):
                     k = str(sym).upper().strip()
-                    _CACHE[k], _TS[k] = float(s.iloc[-1]), now
+                    _CACHE[k], _TS[k], _ASOF[k] = float(s.iloc[-1]), now, fetched_at
             # Populate _OPEN_CACHE from the last row's Open value (the current/today's open).
             if open_col is not None and hasattr(open_col, "columns"):
                 for sym in open_col.columns:
@@ -162,7 +171,8 @@ def _fetch_and_cache(want) -> None:
         else:                                     # single ticker → a bare Series
             s = close.dropna()
             if len(s) and len(want) == 1:
-                _CACHE[want[0]], _TS[want[0]] = float(s.iloc[-1]), now
+                _CACHE[want[0]], _TS[want[0]], _ASOF[want[0]] = (
+                    float(s.iloc[-1]), now, fetched_at)
             if open_col is not None and not hasattr(open_col, "columns"):
                 so = open_col.dropna()
                 if len(so) and len(want) == 1:
@@ -195,6 +205,25 @@ def price_cached(ticker: str) -> float | None:
     if _fresh(t, time.monotonic(), _ttl()):
         return _CACHE.get(t)
     return None
+
+
+def quote_cached(ticker: str) -> dict | None:
+    """Cache-only quote plus freshness/provenance metadata; never touches the network."""
+    _reset_if_stale()
+    t = (ticker or "").upper().strip()
+    now = time.monotonic()
+    if not t or not _fresh(t, now, _ttl()):
+        return None
+    fetched_mono = _TS.get(t, now)
+    return {
+        "ticker": t,
+        "price_local": _CACHE.get(t),
+        "source": "yahoo_intraday",
+        "as_of": _ASOF.get(t),
+        "time_kind": "feed_retrieval",
+        "age_seconds": max(0, round(now - fetched_mono, 1)),
+        "fresh": True,
+    }
 
 
 def open_price_local(ticker: str) -> float | None:

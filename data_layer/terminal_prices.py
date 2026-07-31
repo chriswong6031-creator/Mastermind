@@ -23,6 +23,7 @@ is correct — the live feeds still price the book.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -56,6 +57,33 @@ def price_local(ticker: str) -> float | None:
     except Exception:
         pass
     return None
+
+
+def quote_local(ticker: str) -> dict | None:
+    """Terminal snapshot quote with file-mtime provenance; a local read, never a live fetch."""
+    t = (ticker or "").upper().strip()
+    if not t:
+        return None
+    try:
+        path = _ROOT / "vendor" / "macro" / "site" / _dir_for(t) / f"{t}.json"
+        if not path.exists():
+            return None
+        value = (json.loads(path.read_text()).get("tech") or {}).get("price")
+        if value is None or float(value) <= 0:
+            return None
+        modified = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+        age = max(0.0, (datetime.now(timezone.utc) - modified).total_seconds())
+        return {
+            "ticker": t,
+            "price_local": float(value),
+            "source": "terminal_snapshot",
+            "as_of": modified.isoformat(timespec="seconds"),
+            "time_kind": "snapshot_file_mtime",
+            "age_seconds": round(age, 1),
+            "fresh": False,
+        }
+    except Exception:
+        return None
 
 
 def price_usd(ticker: str) -> float | None:
