@@ -341,6 +341,7 @@ def _stock_name(sub: str, ticker: str) -> str | None:
 
 
 _BOARD_NAMES: dict | None = None
+_CHINA_NAMES: dict | None = None
 _HK_NAMES: dict | None = None
 
 
@@ -373,6 +374,30 @@ def _board_names() -> dict:
 
 def _board_name(ticker: str) -> str | None:
     return _board_names().get(_u(ticker))
+
+
+def _china_names() -> dict:
+    """``{TICKER: native Chinese name}`` from the complete A-share heatmap.
+
+    The live Macro data plane can publish the heatmap without materializing every
+    optional ``chinastockdata/<T>.json`` snapshot. The heatmap is therefore the
+    canonical complete native-name fallback for portfolio holdings.
+    """
+    global _CHINA_NAMES
+    if _CHINA_NAMES is not None:
+        return _CHINA_NAMES
+    names: dict[str, str] = {}
+    raw = _read("marketdata/china_heatmap.json")
+    if isinstance(raw, dict):
+        for row in raw.get("tiles") or []:
+            if not isinstance(row, dict):
+                continue
+            tk = _u(row.get("t") or row.get("ticker"))
+            zh = row.get("name_zh")
+            if tk and isinstance(zh, str) and zh.strip():
+                names[tk] = zh.strip()
+    _CHINA_NAMES = names
+    return names
 
 
 def _hk_names() -> dict:
@@ -422,8 +447,9 @@ def _native_zh(raw: str | None) -> str | None:
 
 def clear_name_cache() -> None:
     """Drop the memoized board-name map (tests / a forced refresh after a board rebuild)."""
-    global _BOARD_NAMES, _HK_NAMES
+    global _BOARD_NAMES, _CHINA_NAMES, _HK_NAMES
     _BOARD_NAMES = None
+    _CHINA_NAMES = None
     _HK_NAMES = None
 
 
@@ -440,7 +466,7 @@ def display_name(ticker: str) -> str:
         raw = _stock_name("chinastockdata", t) or _board_name(t)   # snapshot first, then the boards
         if raw and " / " in raw:
             return raw.split(" / ", 1)[1].strip() or t   # Chinese half
-        return raw or t
+        return _china_names().get(t) or _native_zh(raw) or raw or t
     sub = "hkstockdata" if t.endswith(".HK") else "stockdata"
     hk_en = (_hk_names().get(t) or {}).get("en") if t.endswith(".HK") else None
     raw = _stock_name(sub, t) or hk_en or _board_name(t)

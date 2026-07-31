@@ -55,6 +55,34 @@ def _portfolio_dir(portfolio_id: str | None = None) -> Path:
         return _data() / "portfolio"
 
 
+def _attach_security_names(rows) -> None:
+    """Attach canonical display names to ticker-bearing API rows in place.
+
+    The Macro security master covers US stocks/ETFs plus the China/HK books.
+    Resolve on every read so historical payloads written before names were
+    captured are repaired without requiring a trading run or state rewrite.
+    Missing artifacts remain fail-soft and never replace a valid name with a
+    duplicate raw ticker.
+    """
+    try:
+        from brain import china_intake
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            ticker = (row.get("ticker") or "").upper().strip()
+            if not ticker:
+                continue
+            name = china_intake.display_name(ticker)
+            if name and name.upper() != ticker:
+                row["name"] = name
+            if ticker.endswith(".HK"):
+                name_zh = china_intake.display_name_zh(ticker)
+                if name_zh and name_zh.upper() != ticker:
+                    row["name_zh"] = name_zh
+    except Exception:  # noqa: BLE001 — display enrichment must never sink an API response
+        pass
+
+
 # The free-form "Brain" books — each backed by a bot module exposing load_decisions(). Maps a
 # portfolio id to that module (None for the gated flagship / self-directed, which have no Brain
 # decision log). Shared by /api/decisions and /api/portfolio's banner-summary fallback.
@@ -484,26 +512,9 @@ def api_portfolio(portfolio: str = "flagship") -> JSONResponse:
         except Exception:
             pass
 
-        # Venue-book display names are resolved on every read. Historical China
-        # latest.json files can contain the ticker itself as ``name`` when their
-        # publishing run could not see the security master; HK files can also
-        # predate ``name_zh``. Repair both without requiring a trading run/republish.
-        if portfolio in {"china", "hk"}:
-            try:
-                from brain import china_intake
-                for pos in payload.get("positions", []):
-                    tk = pos.get("ticker")
-                    if not tk:
-                        continue
-                    name = china_intake.display_name(tk)
-                    if name and name.upper() != tk.upper():
-                        pos["name"] = name
-                    if portfolio == "hk":
-                        name_zh = china_intake.display_name_zh(tk)
-                        if name_zh and name_zh.upper() != tk.upper():
-                            pos["name_zh"] = name_zh
-            except Exception:
-                pass
+        # Every book gets canonical human-readable security names on read. This
+        # repairs historical US/China/HK payloads without mutating runtime state.
+        _attach_security_names(payload.get("positions"))
 
         # ------------------------------------------------------------------
         # Inject zh fields from the cache (read-only — no LLM in this path)
@@ -699,24 +710,8 @@ def api_decisions(portfolio: str = "autonomous", limit: int = 60) -> JSONRespons
             return JSONResponse({"decisions": [], "note": "decision log is Brain-book-only (autonomous/heavyweight/china/hk/etf)"})
         decisions = _src.load_decisions(limit)
         today_iso = date.today().isoformat()
-        # Region books (China A-shares, HK) trade opaque numeric / HK codes — resolve the human
-        # display name (Chinese for A-shares, English for HK/ADR) for every holding AND executed
-        # trade so the Daily Decision Log's buy/sell chips and holding rows read like the Positions
-        # panel. Resolved server-side on every read (not just baked in at log time) so historical
-        # entries logged before names were captured backfill too; mirrors api_trades. US books are
-        # self-describing and stay code-only.
-        _name = None
-        _name_zh = None
-        try:
-            from portfolio import registry
-            if registry.venues(portfolio):
-                from brain import china_intake
-                _name = china_intake.display_name
-                if portfolio == "hk":
-                    _name_zh = china_intake.display_name_zh
-        except Exception:  # noqa: BLE001
-            _name = None
-            _name_zh = None
+        # Resolve names for every Brain book on read so historical US and venue-
+        # book decisions render like the Positions and Trade History panels.
         # A dollar figure alone doesn't say how much of a position a SELL trimmed or whether it
         # made money. Enrich each executed sell with the fraction of the position sold (pct_sold;
         # 1.0 = full exit) and the realized P&L + %, sourced from the SAME FIFO blotter the Trade
@@ -734,32 +729,15 @@ def api_decisions(portfolio: str = "autonomous", limit: int = 60) -> JSONRespons
         for d in decisions:
             # flag a decision logged today so the UI can highlight + tag it "new"
             d["today"] = str(d.get("asof") or "")[:10] == today_iso
+            _attach_security_names(d.get("executed"))
+            _attach_security_names(d.get("holdings"))
             for rec in (d.get("executed") or []):
-                if _name and rec.get("ticker") and not rec.get("name"):
-                    nm = _name(rec["ticker"])
-                    if nm and nm.upper() != rec["ticker"].upper():
-                        rec["name"] = nm
-                if _name_zh and rec.get("ticker"):
-                    nm_zh = _name_zh(rec["ticker"])
-                    if nm_zh:
-                        rec["name_zh"] = nm_zh
                 if rec.get("side") == "sell":
                     det = _sell.get((d.get("asof"), (rec.get("ticker") or "").upper()))
                     if det:
                         for k in ("pct_of_position", "realized_pnl", "realized_pct"):
                             if det.get(k) is not None and rec.get(k) is None:
                                 rec[k] = det[k]
-            if _name:
-                for h in (d.get("holdings") or []):
-                    tk = (h.get("ticker") or "")
-                    if tk and not h.get("name"):
-                        nm = _name(tk)
-                        if nm and nm.upper() != tk.upper():
-                            h["name"] = nm
-                    if tk and _name_zh:
-                        nm_zh = _name_zh(tk)
-                        if nm_zh:
-                            h["name_zh"] = nm_zh
             for fld in ("summary", "sold_note", "brain_text"):
                 v = d.get(fld)
                 if v:
@@ -1058,21 +1036,9 @@ def api_trades(portfolio: str = "flagship") -> JSONResponse:
         prices = _book_marks(portfolio) if venue_book else _live_prices(_account_tickers(portfolio))
         history = trade_history.history(prices, portfolio_id=portfolio)
         pending = paper_account.load_pending(portfolio)
-        # Region books (China A-shares, HK) trade opaque numeric / HK codes — attach the
-        # human display name (Chinese for A-shares, English for HK/ADR) to each blotter and
-        # pending row so Trade History reads like the Positions panel. Scoped to venue-
-        # restricted books; US tickers are self-describing and stay code-only.
-        if venue_book:
-            from brain import china_intake
-            for row in (*history, *pending):
-                tk = (row.get("ticker") or "")
-                nm = china_intake.display_name(tk)
-                if nm and nm.upper() != tk.upper():
-                    row["name"] = nm
-                if portfolio == "hk":
-                    nm_zh = china_intake.display_name_zh(tk)
-                    if nm_zh:
-                        row["name_zh"] = nm_zh
+        open_positions = position_log.open_positions(portfolio_id=portfolio)
+        closed_positions = position_log.closed_positions(portfolio_id=portfolio)
+        _attach_security_names([*open_positions, *closed_positions, *history, *pending])
         # Market-status strip: the venue books report their own exchange (HKEX for hk, A-share for
         # china), not the NYSE calendar the US books use.
         if venue_book:
@@ -1081,8 +1047,8 @@ def api_trades(portfolio: str = "flagship") -> JSONResponse:
         else:
             market_status = market_calendar.status()
         return JSONResponse({
-            "open": position_log.open_positions(portfolio_id=portfolio),
-            "closed": position_log.closed_positions(portfolio_id=portfolio),
+            "open": open_positions,
+            "closed": closed_positions,
             "history": history,
             # PENDING orders queued while the market is closed — fill at next open
             "pending": pending,
@@ -1121,7 +1087,10 @@ def api_self_directed() -> JSONResponse:
         held = list((self_directed._load_account().get("positions") or {}).keys())
         pend = [o.get("ticker") for o in self_directed._load_pending()]
         prices = _live_prices(sorted({*held, *[t for t in pend if t]}))
-        return JSONResponse(self_directed.book(prices=prices, read_only=True))
+        payload = self_directed.book(prices=prices, read_only=True)
+        _attach_security_names(payload.get("positions"))
+        _attach_security_names(payload.get("pending"))
+        return JSONResponse(payload)
     except Exception as exc:  # noqa: BLE001 — never 500 the dashboard
         return JSONResponse({"nav": 1_000_000.0, "cash": 1_000_000.0, "invested": 0.0,
                              "positions": [], "pending": [],
@@ -1139,7 +1108,10 @@ def api_self_directed_history() -> JSONResponse:
         from portfolio import self_directed
         held = list((self_directed._load_account().get("positions") or {}).keys())
         prices = _live_prices(held)
-        return JSONResponse(self_directed.history(prices=prices))
+        payload = self_directed.history(prices=prices)
+        _attach_security_names(payload.get("history"))
+        _attach_security_names(payload.get("pending"))
+        return JSONResponse(payload)
     except Exception as exc:  # noqa: BLE001
         return JSONResponse({"history": [], "pending": [], "realized_total": 0.0,
                              "n_closed": 0, "n_buys": 0, "win_rate": None, "error": str(exc)})
