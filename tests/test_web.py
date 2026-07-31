@@ -55,6 +55,41 @@ def test_account_script_serves_javascript():
     assert "Mastermind user profile" in r.text
 
 
+def test_static_shells_and_assets_are_short_lived_cacheable():
+    client = _client()
+    for path in ("/", "/research", "/desk", "/self", "/portfolio_desk",
+                 "/market_view", "/agenda"):
+        r = client.get(path)
+        assert r.status_code == 200
+        cache = r.headers.get("cache-control", "")
+        assert "public" in cache
+        assert "max-age=120" in cache
+        assert "stale-while-revalidate=600" in cache
+
+    for path in ("/theme.css", "/theme.js", "/chat.js", "/account.js"):
+        r = client.get(path)
+        assert r.status_code == 200
+        cache = r.headers.get("cache-control", "")
+        assert "public" in cache
+        assert "max-age=300" in cache
+        assert "stale-while-revalidate=3600" in cache
+
+
+def test_read_api_cache_allows_brief_browser_and_edge_reuse(monkeypatch):
+    from app import response_cache
+
+    assert "/api/account" in response_cache._DENY_PREFIXES
+    monkeypatch.setenv("MASTERMIND_RESP_CACHE_TTL", "30")
+    response_cache.clear()
+    r = _client().get("/api/portfolios")
+    assert r.status_code == 200
+    assert r.headers.get("x-mm-cache") == "miss"
+    cache = r.headers.get("cache-control", "")
+    assert "max-age=5" in cache
+    assert "stale-while-revalidate=5" in cache
+    response_cache.clear()
+
+
 def test_market_view_page_serves_html():
     """The E1.2 mirror page (/market_view) is a standalone static page that fetches the artifact
     client-side. Intent-only: assert it serves HTML with the render root, never a market state."""

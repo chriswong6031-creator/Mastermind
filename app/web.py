@@ -254,33 +254,42 @@ def _parse_note(path: Path) -> dict[str, Any] | None:
 # routes
 # ---------------------------------------------------------------------------
 
-# no-cache so a UI update (new chat widget, research-paper changes, etc.) is never masked by
-# the browser's heuristic cache — the page revalidates (etag/last-modified) on every load
-# instead of silently serving a stale index that's missing freshly-added features.
+# The HTML files are application shells; every market/portfolio value is fetched from /api/*
+# after paint.  Keeping a shell for two minutes makes cross-page navigation instant through the
+# edge/browser cache without making investment data stale.  stale-while-revalidate lets an open
+# session keep moving while the edge checks for a newly deployed shell in the background.
+_PAGE_CACHE = {"Cache-Control": "public, max-age=120, stale-while-revalidate=600"}
+
+# Shared CSS/JS changes only on deploy.  A five-minute fresh window removes four edge round-trips
+# from every page transition, while the short max-age bounds how long an unversioned asset can lag
+# a release.  FileResponse still supplies ETag and Last-Modified for revalidation.
+_ASSET_CACHE = {"Cache-Control": "public, max-age=300, stale-while-revalidate=3600"}
+
+# Stateful downloads and data artifacts keep their existing revalidation semantics.
 _NOCACHE = {"Cache-Control": "no-cache"}
 
 
 @router.get("/", include_in_schema=False)
 def dashboard() -> FileResponse:
-    return FileResponse(_STATIC / "index.html", media_type="text/html", headers=_NOCACHE)
+    return FileResponse(_STATIC / "index.html", media_type="text/html", headers=_PAGE_CACHE)
 
 
 @router.get("/research", include_in_schema=False)
 def research_page() -> FileResponse:
     """The Research page — same SPA; the client opens the Research view from this path."""
-    return FileResponse(_STATIC / "index.html", media_type="text/html", headers=_NOCACHE)
+    return FileResponse(_STATIC / "index.html", media_type="text/html", headers=_PAGE_CACHE)
 
 
 @router.get("/self", include_in_schema=False)
 def self_directed_page() -> FileResponse:
     """The Self-Directed book — same SPA; the client opens that view from this path."""
-    return FileResponse(_STATIC / "index.html", media_type="text/html", headers=_NOCACHE)
+    return FileResponse(_STATIC / "index.html", media_type="text/html", headers=_PAGE_CACHE)
 
 
 @router.get("/desk", include_in_schema=False)
 def desk_page() -> FileResponse:
     """The Desk observability page — same SPA; the client opens the Desk view from this path."""
-    return FileResponse(_STATIC / "index.html", media_type="text/html", headers=_NOCACHE)
+    return FileResponse(_STATIC / "index.html", media_type="text/html", headers=_PAGE_CACHE)
 
 
 @router.get("/market_view", include_in_schema=False)
@@ -289,7 +298,7 @@ def market_view_page() -> FileResponse:
     artifact (data/market_view/latest.json): the planes table, the label-vs-planes banner,
     the deterministic brief, and the top rotation pairs. Its own standalone static page
     (not the SPA) so it can be shared/bookmarked; fetches /api/market_view client-side."""
-    return FileResponse(_STATIC / "market_view.html", media_type="text/html", headers=_NOCACHE)
+    return FileResponse(_STATIC / "market_view.html", media_type="text/html", headers=_PAGE_CACHE)
 
 
 @router.get("/agenda", include_in_schema=False)
@@ -298,36 +307,35 @@ def agenda_page() -> FileResponse:
     artifact (data/agenda/<date>.json): the ranked items, each with its evidence, suggested fix,
     fix_type, and owner. Its own standalone static page (not the SPA) so a maintenance session can
     bookmark it; fetches /api/agenda client-side. This view sizes/changes nothing — advisory only."""
-    return FileResponse(_STATIC / "agenda.html", media_type="text/html", headers=_NOCACHE)
+    return FileResponse(_STATIC / "agenda.html", media_type="text/html", headers=_PAGE_CACHE)
 
 
 @router.get("/theme.css", include_in_schema=False)
 def theme_css() -> FileResponse:
     """Serve the macro design-system stylesheet the dashboard links."""
-    return FileResponse(_STATIC / "theme.css", media_type="text/css", headers=_NOCACHE)
+    return FileResponse(_STATIC / "theme.css", media_type="text/css", headers=_ASSET_CACHE)
 
 
 @router.get("/theme.js", include_in_schema=False)
 def theme_js() -> FileResponse:
     """Serve the macro theme toggle script (optional; dark renders without it)."""
-    return FileResponse(_STATIC / "theme.js", media_type="application/javascript", headers=_NOCACHE)
+    return FileResponse(_STATIC / "theme.js", media_type="application/javascript",
+                        headers=_ASSET_CACHE)
 
 
 @router.get("/chat.js", include_in_schema=False)
 def chat_js() -> FileResponse:
     """Serve the live advisor chat widget (the floating Brain popup).
-
-    no-cache so a widget update is never masked by the browser's heuristic cache.
     """
     return FileResponse(_STATIC / "chat.js", media_type="application/javascript",
-                        headers={"Cache-Control": "no-cache"})
+                        headers=_ASSET_CACHE)
 
 
 @router.get("/account.js", include_in_schema=False)
 def account_js() -> FileResponse:
     """Serve the shared account/profile panel loaded by the dashboard shell."""
     return FileResponse(_STATIC / "account.js", media_type="application/javascript",
-                        headers={"Cache-Control": "no-cache"})
+                        headers=_ASSET_CACHE)
 
 
 def _company_meta(ticker: str) -> dict:
@@ -2255,4 +2263,4 @@ def portfolio_desk_page() -> FileResponse:
     """The Portfolio Risk Desk — operator's held-position ledger with live quotes and
     evidence-lane risk context (W1 base; risk grid added by W2). Standalone static page;
     session-auth-gated by the same middleware as the rest of the app."""
-    return FileResponse(_STATIC / "portfolio.html", media_type="text/html", headers=_NOCACHE)
+    return FileResponse(_STATIC / "portfolio.html", media_type="text/html", headers=_PAGE_CACHE)

@@ -28,7 +28,17 @@ _MAX_ENTRIES = 512
 # Never cache: live per-request lookups keyed off user-supplied query text, and the interactive
 # Portfolio Desk (/api/pfolio/*) where a just-added position must show immediately (not after the TTL).
 _DENY_PREFIXES = ("/api/self_directed/search", "/api/self_directed/quote", "/api/pfolio/",
+                  "/api/account",        # per-user Supabase profile — never shared/public
                   "/api/mastermind_ai")  # W-AI admin surface — always fresh, never mirror-cached
+
+# The origin already holds these read-only responses for ``MASTERMIND_RESP_CACHE_TTL`` seconds.
+# Let the browser/edge reuse a response for five seconds too, then serve it for at most another
+# five seconds while revalidating.
+# This removes repeated global edge latency during one dashboard switch without changing the
+# origin's freshness budget or caching any interactive/operator endpoint.
+_CLIENT_CACHE_HEADERS = {
+    "Cache-Control": "public, max-age=5, stale-while-revalidate=5",
+}
 
 
 def _ttl() -> float:
@@ -63,7 +73,7 @@ def install(app) -> None:
         hit = _CACHE.get(key)
         if hit is not None and hit[0] > now:
             return Response(content=hit[1], status_code=200, media_type=hit[2],
-                            headers={"x-mm-cache": "hit"})
+                            headers={"x-mm-cache": "hit", **_CLIENT_CACHE_HEADERS})
 
         resp = await call_next(request)
         # Read the streamed body ONCE (the original iterator is then consumed), cache it, and hand back
@@ -77,7 +87,7 @@ def install(app) -> None:
             if len(_CACHE) < _MAX_ENTRIES:
                 _CACHE[key] = (now + ttl, body, media)
             return Response(content=body, status_code=200, media_type=media,
-                            headers={"x-mm-cache": "miss"})
+                            headers={"x-mm-cache": "miss", **_CLIENT_CACHE_HEADERS})
         return resp
 
     return None

@@ -11,7 +11,7 @@
      local dev, previews and the admin tool never pollute the property. Set
      GA4_ID to '' to disable site-wide. */
   var GA4_ID = 'G-BZTZ9W1BBB';
-  (function loadGA4() {
+  function loadGA4() {
     if (!GA4_ID || window.__ga4_loaded) return;
     var h = location.hostname;
     if (!h || h === 'localhost' || h === '127.0.0.1' || h === '[::1]') return;
@@ -25,7 +25,14 @@
     s.async = true;
     s.src = 'https://www.googletagmanager.com/gtag/js?id=' + GA4_ID;
     document.head.appendChild(s);
-  })();
+  }
+  // Analytics must never compete with the portfolio/API burst that makes the first screen useful.
+  // Queue it for idle time (with a bounded fallback) after the page has begun painting.
+  if (window.requestIdleCallback) {
+    window.requestIdleCallback(loadGA4, { timeout: 3000 });
+  } else {
+    window.setTimeout(loadGA4, 1500);
+  }
 
   /* ---- Plotly charts: re-theme to the active theme -------------------------
      Charts are built transparent with neutral-grey axes (build_site.py); here we
