@@ -74,10 +74,17 @@ def test_dashboard_uses_san_francisco_with_inter_fallback() -> None:
 
 
 def test_dashboard_defers_noncritical_analytics_and_prefetches_workspaces() -> None:
-    assert "window.requestIdleCallback(loadGA4" in THEME_JS
-    assert "window.setTimeout(loadGA4, 1500)" in THEME_JS
+    assert "window.setTimeout(function ()" in THEME_JS
+    assert "window.requestIdleCallback(loadGA4, { timeout: 2500 })" in THEME_JS
+    assert "}, 4000)" in THEME_JS
     for path in ("/portfolio_desk", "/market_view", "/agenda"):
-        assert f'<link rel="prefetch" href="{path}" as="document">' in HTML
+        assert f'<link rel="prefetch" href="{path}" as="document">' not in HTML
+        assert f"'{path}'" in HTML
+    assert "function _scheduleWorkspacePrefetch()" in HTML
+    assert "}, 5000)" in HTML
+    for page in (PORTFOLIO_DESK_HTML, MARKET_VIEW_HTML, AGENDA_HTML):
+        assert '<link rel="prefetch"' not in page
+    assert "}, 6000)" in THEME_JS
 
 
 def test_portfolio_switches_paint_cached_data_before_live_revalidation() -> None:
@@ -88,7 +95,7 @@ def test_portfolio_switches_paint_cached_data_before_live_revalidation() -> None
     assert "Date.now() - cached.cachedAt > PORTFOLIO_SNAPSHOT_MAX_AGE_MS" in HTML
     assert "var cached = _portfolioDataCache[id]" in HTML
     set_portfolio = HTML.index("window.setPortfolio = function(id)")
-    cached_paint = HTML.index("if (cached) _paintPortfolioSnapshot(cached)", set_portfolio)
+    cached_paint = HTML.index("if (cached) _paintPortfolioSnapshot(cached, false)", set_portfolio)
     revalidate = HTML.index("fetchAll({ scopedOnly: true, showBar: !cached })", set_portfolio)
     assert cached_paint < revalidate
 
@@ -102,6 +109,27 @@ def test_hidden_histories_are_lazy_and_dom_bounded() -> None:
     assert "window.showMorePapers" in HTML
     assert "if (_currentView === 'research')" in HTML
     assert "_safeRender('researchPapers', renderResearchPapers)" in HTML
+    assert "function _ensureRuns()" in HTML
+    assert "function _ensureResearchPapers()" in HTML
+    assert "function _ensureCalibration()" in HTML
+
+
+def test_live_marks_replace_around_the_clock_full_dashboard_polling() -> None:
+    assert 'id="live-marks-status"' in HTML
+    assert "fetch('/api/live_marks?portfolio='" in HTML
+    assert "cache: 'no-store'" in HTML
+    assert "_scheduleLiveMarks(data.poll_after_seconds)" in HTML
+    assert "document.addEventListener('visibilitychange'" in HTML
+    assert "setInterval(fetchAll, 60000)" not in HTML
+    assert "setInterval(loadPortfolios, 60000)" not in HTML
+    assert "if (document.hidden)" in HTML
+
+
+def test_initial_loadbar_finishes_after_scoped_portfolio_paints() -> None:
+    paint = HTML.index("_paintPortfolioSnapshot(scopedSnapshot)")
+    done = HTML.index("loadBarDone(); barFinished = true", paint)
+    shared = HTML.index("var s = await sharedPromise", paint)
+    assert paint < done < shared
 
 
 def test_institutional_shell_is_shared_across_supporting_workspaces() -> None:
