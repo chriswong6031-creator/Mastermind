@@ -30,6 +30,19 @@ filterwarnings = ["ignore::Warning"]
 addopts = "-q"
 testpaths = ["tests"]          # never recurse into vendor/macro's own test suite
 
+[tool.setuptools.packages.find]
+include = [
+    "app*",
+    "bot*",
+    "brain*",
+    "bridge*",
+    "control_plane*",
+    "data_layer*",
+    "loop*",
+    "portfolio*",
+    "scripts*",
+]
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
