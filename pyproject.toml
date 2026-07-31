@@ -26,25 +26,29 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=8"]
+dev = [
+    "pytest>=8,<10",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+    "app",
+    "bot",
+    "brain",
+    "bridge",
+    "control_plane",
+    "data_layer",
+    "loop",
+    "portfolio",
+    "scripts",
+]
+namespaces = false
 
 [tool.pytest.ini_options]
 filterwarnings = ["ignore::Warning"]
 addopts = "-q"
 testpaths = ["tests"]          # never recurse into vendor/macro's own test suite
-
-[tool.setuptools.packages.find]
-include = [
-    "app*",
-    "bot*",
-    "brain*",
-    "bridge*",
-    "control_plane*",
-    "data_layer*",
-    "loop*",
-    "portfolio*",
-    "scripts*",
-]
 
 [build-system]
 requires = ["setuptools>=68"]
