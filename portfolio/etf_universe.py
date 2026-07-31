@@ -39,11 +39,11 @@ _DEFAULT_GROUPS: dict[str, list[str]] = {
     "cash":        ["SGOV", "BIL", "SHV", "SHY"],
     "diversifier": ["GLD"],
 }
-# Canonical labels for every allowlisted ETF. Macro's per-ticker snapshots cover
-# most of these names, but cash-equivalent funds such as SGOV are deliberately
-# absent from that stock-oriented surface. Keeping the fixed universe's names
-# beside its membership metadata guarantees a local, non-blocking display
-# fallback for positions, decisions, orders, and historical trades.
+# Canonical labels for every allowlisted ETF plus ETFs retained in archived
+# portfolio history. Macro's per-ticker snapshots cover most of these names,
+# but cash-equivalent funds such as SGOV and former holdings such as KRE can be
+# absent from that stock-oriented surface. Membership remains controlled only
+# by GROUPS/ALL; this map is a local, non-blocking display fallback.
 _NAMES: dict[str, str] = {
     "SPY": "SPDR S&P 500 ETF Trust",
     "QQQ": "Invesco QQQ Trust",
@@ -78,6 +78,7 @@ _NAMES: dict[str, str] = {
     "SHV": "iShares Short Treasury Bond ETF",
     "SHY": "iShares 1-3 Year Treasury Bond ETF",
     "GLD": "SPDR Gold Shares",
+    "KRE": "SPDR S&P Regional Banking ETF",
 }
 _DEFAULT_DEFENSIVE_EXTRA = ["USMV", "XLP", "XLU"]
 _DEFAULT_GUARDRAILS = {"max_single_weight": 0.35, "min_trade": 0.015,
@@ -253,7 +254,7 @@ def group_of(ticker) -> str | None:
 
 
 def name_of(ticker) -> str | None:
-    """Canonical human label for an allowlisted ETF, or ``None`` off-list."""
+    """Canonical label for a known current or historical ETF, else ``None``."""
     if not isinstance(ticker, str):
         return None
     return _NAMES.get(ticker.upper().strip())

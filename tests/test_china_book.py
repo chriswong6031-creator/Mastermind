@@ -451,6 +451,7 @@ def test_us_display_name_recovers_etf_and_placeholder_company_names(monkeypatch)
 
     monkeypatch.setattr(china_intake, "_read", fake_read)
     assert china_intake.display_name("SGOV") == "iShares 0-3 Month Treasury Bond ETF"
+    assert china_intake.display_name("KRE") == "SPDR S&P Regional Banking ETF"
     assert china_intake.display_name("GATX") == "GATX Corporation"
     china_intake.clear_name_cache()
 

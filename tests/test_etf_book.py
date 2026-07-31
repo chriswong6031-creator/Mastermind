@@ -51,6 +51,8 @@ def test_universe_membership_and_buckets():
 def test_every_etf_universe_member_has_a_canonical_name():
     assert set(etf_universe.ALL) <= set(etf_universe._NAMES)
     assert etf_universe.name_of("sgov") == "iShares 0-3 Month Treasury Bond ETF"
+    assert etf_universe.name_of("KRE") == "SPDR S&P Regional Banking ETF"
+    assert not etf_universe.is_etf("KRE")  # historical display metadata does not widen the mandate
     assert etf_universe.name_of("AAPL") is None
     assert etf_universe.name_of(None) is None
 
