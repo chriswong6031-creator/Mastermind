@@ -25,6 +25,26 @@ dependencies = [
     "yfinance==1.5.2",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<10",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+    "app",
+    "bot",
+    "brain",
+    "bridge",
+    "control_plane",
+    "data_layer",
+    "loop",
+    "portfolio",
+    "scripts",
+]
+namespaces = false
+
 [tool.pytest.ini_options]
 filterwarnings = ["ignore::Warning"]
 addopts = "-q"
