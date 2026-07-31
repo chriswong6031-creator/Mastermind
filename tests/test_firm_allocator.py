@@ -342,14 +342,14 @@ def test_tilt_positive_for_extreme_winner():
 
 
 # ---------------------------------------------------------------------------
-# 9. regional caveat flag
+# 9. regional native benchmarks need no proxy caveat
 # ---------------------------------------------------------------------------
 
-def test_regional_books_get_proxy_bogey_flag():
+def test_regional_books_do_not_get_proxy_bogey_flag():
     lc = _lifecycle(states={"china": "active", "hk": "active"}, grades={})
     art = FA._compute(lc, _EMPTY_BENCH, _EMPTY_PKTS, book_ids=["china", "hk"])
-    assert "proxy_bogey:active_return_z_uncertain" in art["books"]["china"]["flags"]
-    assert "proxy_bogey:active_return_z_uncertain" in art["books"]["hk"]["flags"]
+    assert "proxy_bogey:active_return_z_uncertain" not in art["books"]["china"]["flags"]
+    assert "proxy_bogey:active_return_z_uncertain" not in art["books"]["hk"]["flags"]
 
 
 def test_non_regional_books_no_proxy_flag():

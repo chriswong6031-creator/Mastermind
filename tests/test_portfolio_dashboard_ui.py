@@ -126,6 +126,7 @@ def test_live_marks_replace_around_the_clock_full_dashboard_polling() -> None:
     assert "var holdingsComplete = !data.error" in HTML
     assert "sleeve: 'account'" in HTML
     assert "if (holdingsComplete) _book.positions = reconciled" in HTML
+    assert "_safeRender('auto-banner-live', renderAutoBanner)" in HTML
 
 
 def test_initial_loadbar_finishes_before_live_and_deferred_hydration() -> None:
@@ -277,3 +278,12 @@ def test_hk_security_names_follow_the_active_language() -> None:
     assert "var holdingName = securityName(h)" in HTML
     assert "var selfPosName = securityName(p)" in HTML
     assert "var selfTradeName = securityName(r)" in HTML
+
+
+def test_performance_card_uses_each_books_native_benchmark() -> None:
+    assert 'id="perf-bench-label"' in HTML
+    assert '<span class="l-en">vs benchmark</span>' in HTML
+    assert "p.benchmark_name || benchmarkSymbol" in HTML
+    assert "p.vs_benchmark_pct != null ? p.vs_benchmark_pct : p.vs_spy_pct" in HTML
+    assert "'<span class=\"l-en\">vs ' + esc(benchmarkName)" in HTML
+    assert "bench + ' (' + benchSymbol + ')'" in HTML

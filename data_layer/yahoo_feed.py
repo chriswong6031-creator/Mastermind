@@ -32,6 +32,8 @@ _CACHE: dict[str, float] = {}      # SYMBOL -> latest Close quote in its local c
 _OPEN_CACHE: dict[str, float] = {} # SYMBOL -> today's session Open price (cleared daily, same TTL)
 _TS: dict[str, float] = {}         # SYMBOL -> monotonic ts of its last fetch (drives the intraday TTL)
 _ASOF: dict[str, str] = {}         # SYMBOL -> wall-clock UTC fetch time (display/provenance)
+_HISTORY_CACHE: dict[tuple[str, str], object] = {}  # (SYMBOL, period) -> native-currency close Series
+_HISTORY_TS: dict[tuple[str, str], float] = {}
 _FETCHED_DAY: str | None = None    # the calendar day the cache was populated for (cleared when it rolls)
 
 # Serialise blocking fetches so concurrent callers dedup onto ONE batched download (kills the
@@ -50,6 +52,14 @@ def _ttl() -> float:
         return 120.0
 
 
+def _history_ttl() -> float:
+    """Seconds before a benchmark-history series is refreshed (default 30 minutes)."""
+    try:
+        return max(60.0, float(os.environ.get("YAHOO_HISTORY_TTL_SEC", "1800")))
+    except (TypeError, ValueError):
+        return 1800.0
+
+
 def _today() -> str:
     try:
         return date.today().isoformat()
@@ -59,10 +69,10 @@ def _today() -> str:
 
 def _reset_if_stale() -> None:
     """Drop the cache when the calendar day rolls so a long-lived server re-fetches each day."""
-    global _FETCHED_DAY, _CACHE, _OPEN_CACHE, _TS, _ASOF
+    global _FETCHED_DAY, _CACHE, _OPEN_CACHE, _TS, _ASOF, _HISTORY_CACHE, _HISTORY_TS
     d = _today()
     if _FETCHED_DAY != d:
-        _CACHE, _OPEN_CACHE, _TS, _ASOF = {}, {}, {}, {}
+        _CACHE, _OPEN_CACHE, _TS, _ASOF, _HISTORY_CACHE, _HISTORY_TS = {}, {}, {}, {}, {}, {}
         _FETCHED_DAY = d
 
 
@@ -207,6 +217,46 @@ def price_cached(ticker: str) -> float | None:
     return None
 
 
+def history_local(ticker: str, period: str = "2y"):
+    """Native-currency daily close history for a Yahoo symbol, cached in-process.
+
+    The vendored Macro parquet does not currently carry the CSI 300 or Hang Seng indexes. This
+    narrow fallback gives regional performance charts their real index history without refetching
+    it on every portfolio switch. Calls for different books serialize through the same Yahoo lock,
+    preventing the cold-start request stampede that previously slowed the dashboard.
+    """
+    _reset_if_stale()
+    symbol = (ticker or "").upper().strip()
+    if not symbol:
+        return None
+    key = (symbol, str(period))
+    now = time.monotonic()
+    cached = _HISTORY_CACHE.get(key)
+    if cached is not None and (now - _HISTORY_TS.get(key, 0.0)) <= _history_ttl():
+        return cached.copy()
+
+    with _LOCK:
+        cached = _HISTORY_CACHE.get(key)
+        if cached is not None and (time.monotonic() - _HISTORY_TS.get(key, 0.0)) <= _history_ttl():
+            return cached.copy()
+        try:
+            import yfinance as yf
+            df = yf.download(symbol, period=period, progress=False,
+                             auto_adjust=False, threads=False)
+            close = df["Close"]
+            if hasattr(close, "columns"):
+                close = close[symbol] if symbol in close.columns else close.iloc[:, 0]
+            series = close.astype(float).dropna()
+            if len(series) == 0:
+                return None
+            _HISTORY_CACHE[key] = series.copy()
+            _HISTORY_TS[key] = time.monotonic()
+            return series.copy()
+        except Exception as exc:  # noqa: BLE001
+            log.debug("yahoo_feed history failed for %s (%s)", symbol, exc)
+            return cached.copy() if cached is not None else None
+
+
 def quote_cached(ticker: str) -> dict | None:
     """Cache-only quote plus freshness/provenance metadata; never touches the network."""
     _reset_if_stale()
@@ -262,6 +312,6 @@ def feed_healthy(probe: str | None = None) -> bool | None:
 
 def clear_cache() -> None:
     """Drop the per-process price memo (tests / a forced refresh)."""
-    global _CACHE, _OPEN_CACHE, _TS, _FETCHED_DAY
-    _CACHE, _OPEN_CACHE, _TS = {}, {}, {}
+    global _CACHE, _OPEN_CACHE, _TS, _ASOF, _HISTORY_CACHE, _HISTORY_TS, _FETCHED_DAY
+    _CACHE, _OPEN_CACHE, _TS, _ASOF, _HISTORY_CACHE, _HISTORY_TS = {}, {}, {}, {}, {}, {}
     _FETCHED_DAY = None

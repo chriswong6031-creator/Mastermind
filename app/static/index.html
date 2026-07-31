@@ -2679,9 +2679,9 @@ html[data-theme="light"] body.page-mm {
         <div class="mm-perf-stat-value neu" id="perf-ret">+0.00%</div>
         <div class="mm-perf-stat-sub" id="perf-since"><span class="l-en">since inception</span><span class="l-zh">自成立以来</span></div>
       </div>
-      <!-- vs SPY -->
+      <!-- versus the active book's configured benchmark -->
       <div class="mm-perf-stat">
-        <div class="mm-perf-stat-label"><span class="l-en">vs SPY</span><span class="l-zh">相对标普500</span></div>
+        <div class="mm-perf-stat-label" id="perf-bench-label"><span class="l-en">vs benchmark</span><span class="l-zh">相对基准</span></div>
         <div class="mm-perf-stat-value neu" id="perf-spy">+0.00%</div>
         <div class="mm-perf-stat-sub"><span class="l-en">alpha vs benchmark</span><span class="l-zh">相对基准超额</span></div>
       </div>
@@ -3762,6 +3762,9 @@ var fmtPctSign = function(v) {
 function renderPerformance() {
   var p = _perf;
   if (!p) return;
+  var benchmarkSymbol = p.benchmark || 'SPY';
+  var benchmarkName = p.benchmark_name || benchmarkSymbol;
+  var benchmarkNameZh = p.benchmark_name_zh || benchmarkName;
 
   // NAV
   var navEl = E('perf-nav');
@@ -3783,10 +3786,17 @@ function renderPerformance() {
     ? t('perf.since') + ' ' + fmtDate(p.inception_date)
     : t('perf.since_inception');
 
-  // vs SPY
+  // Versus the active book's own benchmark (SPY / CSI 300 / Hang Seng).
+  var benchmarkLabelEl = E('perf-bench-label');
+  if (benchmarkLabelEl) {
+    benchmarkLabelEl.innerHTML =
+      '<span class="l-en">vs ' + esc(benchmarkName) + '</span>' +
+      '<span class="l-zh">相对' + esc(benchmarkNameZh) + '</span>';
+  }
   var spyEl = E('perf-spy');
   if (spyEl) {
-    var s = fmtPctSign(p.vs_spy_pct);
+    var relativeReturn = p.vs_benchmark_pct != null ? p.vs_benchmark_pct : p.vs_spy_pct;
+    var s = fmtPctSign(relativeReturn);
     spyEl.textContent = s.text;
     spyEl.className = 'mm-perf-stat-value ' + s.cls;
   }
@@ -3824,10 +3834,10 @@ function renderEquityCurve() {
   var p = _perf;
   var series = (p && p.series) || [];
   var isZhEc = document.documentElement.getAttribute('data-lang') === 'zh';
-  // benchmark symbol is book-specific (SPY for US books, FXI for the all-China book, …). The
-  // backend emits it as .benchmark; use it for the legend + tooltip instead of a hardcoded "SPY"
-  // so the China/HK books don't mislabel their comparison line as the S&P 500.
-  var bench = (p && p.benchmark) || 'SPY';
+  // The backend emits both the data symbol and human label; use the native index name in the UI.
+  var benchSymbol = (p && p.benchmark) || 'SPY';
+  var bench = (p && (isZhEc ? p.benchmark_name_zh : p.benchmark_name)) || benchSymbol;
+  var benchDisplay = bench === benchSymbol ? bench : bench + ' (' + benchSymbol + ')';
 
   // Update legend label with realized_since date
   var legPortEl = E('ec-leg-portfolio');
@@ -3836,7 +3846,7 @@ function renderEquityCurve() {
     legPortEl.textContent = t('ec.portfolio_live') + ' ' + rsDate + (isZhEc ? '）' : ')');
   }
   var legBenchEl = E('ec-leg-bench');
-  if (legBenchEl) legBenchEl.textContent = bench + (isZhEc ? '（$1M参考）' : ' ($1M ref)');
+  if (legBenchEl) legBenchEl.textContent = benchDisplay + (isZhEc ? '（$1M参考）' : ' ($1M ref)');
 
   // Range label
   var rangeEl = E('ec-range-label');
@@ -3975,7 +3985,7 @@ function renderEquityCurve() {
 
   svg += '<g clip-path="url(#clip-inner-' + uid + ')">';
 
-  // SPY dashed reference line (always shows real SPY movement)
+  // Dashed native-benchmark reference line.
   var spyPath = pathStr(spyVals, 0, n-1);
   svg += '<path d="' + spyPath + '" fill="none" stroke="var(--muted)" stroke-width="1.5" stroke-dasharray="5 3" opacity="0.5"/>';
 
@@ -6301,7 +6311,11 @@ function renderAutoBanner() {
     var parts = [];
     if (p.current_nav != null) parts.push('NAV ' + _ccySym() + Number(p.current_nav).toLocaleString(undefined, { maximumFractionDigits: 0 }));
     if (p.total_return_pct != null) parts.push((isZh ? '回报 ' : 'Return ') + _fmtPctSigned(p.total_return_pct));
-    if (p.vs_spy_pct != null) parts.push('vs SPY ' + _fmtPctSigned(p.vs_spy_pct));
+    var relative = p.vs_benchmark_pct != null ? p.vs_benchmark_pct : p.vs_spy_pct;
+    var benchmarkLabel = isZh
+      ? (p.benchmark_name_zh || p.benchmark_name || p.benchmark || 'SPY')
+      : (p.benchmark_name || p.benchmark || 'SPY');
+    if (relative != null) parts.push((isZh ? '相对 ' : 'vs ') + benchmarkLabel + ' ' + _fmtPctSigned(relative));
     if (b.cash != null) parts.push((isZh ? '现金 ' : 'Cash ') + pctInt(b.cash));
     if (b.as_of) parts.push((isZh ? '截至 ' : 'as of ') + fmtDateShort(b.as_of));
     metaEl.innerHTML = parts.map(esc).join(' <span style="opacity:.4">·</span> ');
@@ -6974,7 +6988,9 @@ function renderSizingScorecard() {
   }
   sec.style.display = '';
   var isZh = document.documentElement.getAttribute('data-lang') === 'zh';
-  var bench = (_perf && _perf.benchmark) || 'SPY';
+  var bench = (_perf && (isZh
+    ? (_perf.benchmark_name_zh || _perf.benchmark_name || _perf.benchmark)
+    : (_perf.benchmark_name || _perf.benchmark))) || 'SPY';
   var h2 = '<h2><span class="l-en">Sizing Scorecard</span><span class="l-zh">仓位评分卡</span>' +
     ' <span style="font-weight:400;font-size:11px;color:var(--muted);margin-left:6px">' +
     (isZh ? ('是否把赢家仓位放大？ — 相对 ' + esc(bench) + ' 前瞻评分') :
@@ -7251,6 +7267,7 @@ function _mergeLiveMarks(data) {
     Object.assign(_perf, data.performance || {});
     _safeRender('performance-live', renderPerformance);
     _safeRender('positions-live', renderPositions);
+    _safeRender('auto-banner-live', renderAutoBanner);
   }
   var meta = (_portfolios || []).find(function(p) { return p.id === _portfolio; });
   if (meta) {

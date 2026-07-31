@@ -12,8 +12,8 @@ This is the prerequisite for self-learning: without realized outcomes, the Brier
 never leave "building (n=0)". Pure data + arithmetic, no LLM. Best-effort: a thesis whose
 price history isn't available stays `unresolved` rather than raising.
 
-Price source: the macro yahoo parquet store (local, covers SPY + the tracked universe) with a
-Polygon daily-aggregates fallback for single names the store doesn't carry.
+Price source: the macro yahoo parquet store (local, covers SPY + the tracked universe), cached
+Yahoo native-index history for CSI 300 / Hang Seng, then Polygon daily aggregates for other gaps.
 """
 from __future__ import annotations
 
@@ -43,6 +43,16 @@ def _closes(ticker: str, start: str, end: str, cache: bool = True) -> dict:
             return {d.strftime("%Y-%m-%d"): float(v) for d, v in s.items() if v == v and v > 0}
     except Exception:  # noqa: BLE001 — ticker not in the local store; fall through to Polygon
         pass
+    if t in {"000300.SS", "^HSI"}:
+        try:
+            from data_layer import yahoo_feed
+            s = yahoo_feed.history_local(t)
+            s = s[(s.index >= pd.Timestamp(start)) & (s.index <= pd.Timestamp(end))]
+            if len(s) >= 2:
+                return {d.strftime("%Y-%m-%d"): float(v)
+                        for d, v in s.items() if v == v and v > 0}
+        except Exception:  # noqa: BLE001 — native index miss; retain unresolved honesty
+            return {}
     try:
         from data_layer import polygon
         return polygon.daily_closes(t, start, end, cache=cache)

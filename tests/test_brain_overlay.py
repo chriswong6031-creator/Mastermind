@@ -7,7 +7,7 @@ PACKAGE ATTRIBUTES (not sys.modules alone) per the combined-run hang lesson.
 We prove:
   * `_book_reliability` builds a multiplier from synthetic holdings + canned outcomes (de-confidence
     only: it shrinks toward realized hit-rate, clamps to [FLOOR, 1.0]), grades each book vs its OWN
-    benchmark (SPY for US/autonomous + heavyweight, FXI for china + hk),
+    benchmark (SPY for US, CSI 300 for China, Hang Seng for Hong Kong),
   * the four books are registered in `calibration.compute()`,
   * `self_mirror.inject` is the IDENTITY when MASTERMIND_SELF_MIRROR is OFF (byte-identical persona),
   * `self_mirror.inject` APPENDS the book's digest when the flag is ON and the book is `scoring`.
@@ -23,7 +23,12 @@ from brain import calibration as C
 from brain import self_mirror as SM
 
 _ASOF = date(2026, 6, 23)
-_BOOKS = [("autonomous", "SPY"), ("heavyweight", "SPY"), ("china", "FXI"), ("hk", "FXI")]
+_BOOKS = [
+    ("autonomous", "SPY"),
+    ("heavyweight", "SPY"),
+    ("china", "000300.SS"),
+    ("hk", "^HSI"),
+]
 
 
 def _write_decisions(portfolios_dir, portfolio_id, rows):
@@ -66,7 +71,7 @@ def test_book_reliability_produces_multiplier(monkeypatch, tmp_path):
 
 
 def test_book_reliability_grades_vs_correct_benchmark(monkeypatch, tmp_path):
-    """The benchmark passed through reaches _label_name's `vs` arg (SPY for US, FXI for CN/HK)."""
+    """The benchmark passed through reaches _label_name's native-index `vs` arg."""
     monkeypatch.setattr(C, "_PORTFOLIOS", tmp_path)
     seen = []
 
@@ -76,8 +81,8 @@ def test_book_reliability_grades_vs_correct_benchmark(monkeypatch, tmp_path):
 
     monkeypatch.setattr(C, "_label_name", _spy_capture)
     _write_decisions(tmp_path, "china", _decision_rows())
-    C._book_reliability(_ASOF, "china", "FXI")
-    assert seen and all(v == "FXI" for _t, v in seen)
+    C._book_reliability(_ASOF, "china", "000300.SS")
+    assert seen and all(v == "000300.SS" for _t, v in seen)
 
 
 def test_book_reliability_cold_start_inert(monkeypatch, tmp_path):
@@ -145,6 +150,8 @@ def test_inject_on_appends_digest(monkeypatch, tmp_path):
         assert out.startswith(persona + "\n\n"), book
         assert "YOUR TRACK RECORD" in out, book
 
-    # china/hk digests quote their FXI benchmark in the miss lines, not SPY
+    # China/HK digests quote their respective native benchmarks, not SPY.
     cn = SM.inject(_PERSONAS["china"], "china", _ASOF)
-    assert "vs FXI" in cn and "vs SPY" not in cn
+    hk = SM.inject(_PERSONAS["hk"], "hk", _ASOF)
+    assert "vs 000300.SS" in cn and "vs SPY" not in cn
+    assert "vs ^HSI" in hk and "vs SPY" not in hk

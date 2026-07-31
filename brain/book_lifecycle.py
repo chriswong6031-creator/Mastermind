@@ -72,9 +72,8 @@ REFERENCE_BOOK = "flagship"
 # P6). Hard-coded here and asserted in the tests so no future edit can quietly make it killable.
 EXEMPT_BOOKS = frozenset({"self_directed"})
 
-# Regional books — graded against their proxy bogey (FXI) under a separate lifecycle frame.
-# They are NOT in the US orthogonality matrix (different clocks, different instruments).  Their
-# bogey rows carry bogey_is_proxy=True so every recommendation cites the caveat.
+# Regional books — graded against their native indexes under a separate lifecycle frame.
+# They are NOT in the US orthogonality matrix (different clocks, different instruments).
 REGIONAL_BOOKS = ["china", "hk"]
 
 # lifecycle states (append-only progression; a human resets a book to active by executing/declining)
@@ -677,15 +676,14 @@ def latest() -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# REGIONAL LIFECYCLE — china / hk graded against their proxy bogeys
+# REGIONAL LIFECYCLE — china / hk graded against their native market indexes
 # ─────────────────────────────────────────────────────────────────────────────
 # China and HK are governance orphans: they are outside the US orthogonality frame and were never
-# graded against any bogey.  This section adds the same honest-at-paper-n discipline the US frame
+# graded against any bogey. This section adds the same honest-at-paper-n discipline the US frame
 # applies, with three key differences:
 #
-#   1. The bogey is PROXY-FLAGGED (bogey_is_proxy=True): FXI is NOT CSI300 / Hang Seng; every grade
-#      row and every recommendation cites bogey_is_proxy so a probation/retire rec cannot be acted
-#      on without human acknowledgement of the proxy caveat.
+#   1. Each book uses its native index: CSI 300 for mainland China, Hang Seng for Hong Kong.
+#      Legacy FXI-ledger rows are excluded so a proxy return is never relabeled as a native index.
 #   2. Regional books are NOT in the US orthogonality matrix — different instruments, different clocks.
 #      A separate CN/HK pairwise correlation is computed instead (advisory; display-only).
 #   3. KILL IS STILL NOT AUTOMATED and the recommendation system is display/advisory only — same as
@@ -710,14 +708,26 @@ def _regional_bench_history(book_id: str) -> list[dict]:
 def _regional_review_history(book_id: str, ledgers: list[dict] | None = None) -> list[dict]:
     """Derive a per-review review_history from the regional benchmark ledgers for `book_id`.
 
-    The regional ledger has a 'regional' bogey (the FXI proxy) and a 'leaderboard'.  We extract
+    The regional ledger has a native-index 'regional' bogey and a 'leaderboard'. We extract
     per-review increments from the cumulative return_pct in each snapshot, matching the format that
     _active_series() and _loss_significance() consume.  Each row: {date, books:{book_id: r},
     bogeys:{regional: r}}.  Best-effort; [] on missing data."""
     hist = ledgers if ledgers is not None else _regional_bench_history(book_id)
     rows: list[tuple[str, dict]] = []
+    try:
+        from portfolio import registry
+        expected_benchmark = registry.benchmark(book_id).upper()
+    except Exception:
+        expected_benchmark = ""
     for lg in hist:
         if not isinstance(lg, dict):
+            continue
+        # Migration boundary: old regional ledgers were FXI proxy curves. If a ledger declares its
+        # constituents, accept it only when it is the current native index. Leaderboard-only injected
+        # fixtures remain valid for the pure/test seam.
+        regional_meta = ((lg.get("bogeys") or {}).get("regional") or {})
+        constituents = [str(t).upper() for t in (regional_meta.get("constituents") or [])]
+        if constituents and expected_benchmark and expected_benchmark not in constituents:
             continue
         lb = {r.get("id"): r for r in (lg.get("leaderboard") or []) if isinstance(r, dict)}
         d = str(lg.get("as_of") or "")[:10]
@@ -755,12 +765,12 @@ def _regional_review_history(book_id: str, ledgers: list[dict] | None = None) ->
 
 def grade_regional_book(book_id: str, review_history: list[dict], *,
                         book_curves: dict | None = None,
-                        bogey_is_proxy: bool = True) -> dict:
-    """Grade one regional book (china / hk) against its proxy bogey ('regional' in the history).
+                        bogey_is_proxy: bool = False) -> dict:
+    """Grade one regional book (china / hk) against its native index ('regional' in the history).
 
     Returns the same shape as grade_book() so CIO callers are compatible, plus:
-      · bogey_is_proxy: True (always for regional books today)
-      · proxy_reason: human-readable note on why the proxy is used
+      · benchmark / graded_vs_label: explicit native-index identity
+      · bogey_is_proxy: False
     The active mean is taken vs the 'regional' bogey (not spy / defensive / regime_max — those are
     US-only concepts). Loss significance uses the same HAC/effective_n discipline. Pure; never raises."""
     # active series vs the 'regional' bogey key
@@ -768,20 +778,21 @@ def grade_regional_book(book_id: str, review_history: list[dict], *,
     loss = _loss_significance(series)
     mdd = _max_drawdown((book_curves or {}).get(book_id) or {})
     mdd_watch = (mdd is not None and mdd >= _cf("max_drawdown_watch", _MAX_DD_WATCH))
-    _proxy_reasons = {
-        "china": "FXI (iShares China Large-Cap, USD-listed) is a proxy for CSI300/A-shares; "
-                 "2800.HK and MCHI/ASHR are not in the yahoo parquet store as of 2026-07-03.",
-        "hk":    "FXI is the only China-region ETF in the yahoo parquet store; "
-                 "2800.HK (Tracker Fund of HK) is the canonical HK proxy but is not yet priced.",
-    }
+    try:
+        from portfolio import registry
+        benchmark = registry.benchmark(book_id)
+        benchmark_label = registry.benchmark_name(book_id)
+    except Exception:
+        benchmark = "regional"
+        benchmark_label = "regional index"
     return {
         "book": book_id,
         "exempt": False,
         "graded_vs": "regional",
-        "graded_vs_label": "regional proxy bogey (FXI — see proxy_reason)",
+        "graded_vs_label": f"{benchmark_label} ({benchmark})",
+        "benchmark": benchmark,
         "bogey_is_proxy": bogey_is_proxy,
-        "proxy_reason": _proxy_reasons.get(book_id,
-                                            f"regional proxy bogey for {book_id}; update when canonical instrument is available."),
+        "proxy_reason": None,
         "loss_test": loss,
         "reviews_remaining": loss.get("reviews_remaining", max(0, _ci("min_effective_n", _MIN_EFFECTIVE_N) - len(series))),
         "active_vs_regional": (round(sum(series) / len(series), 6) if series else None),
@@ -793,8 +804,8 @@ def grade_regional_book(book_id: str, review_history: list[dict], *,
 def _cn_hk_pairwise_corr(cn_history: list[dict], hk_history: list[dict]) -> dict:
     """Advisory pairwise active-return correlation between the china and hk books (display-only;
     NOT in the US orthogonality matrix). Returns {corr, n_pairs, status}. Both books' active
-    return is vs their respective 'regional' bogey (same FXI proxy today — so a high corr is
-    expected and is a known artefact of the shared proxy instrument, not evidence of strategy overlap).
+    return is vs its own native 'regional' bogey. The comparison remains advisory because the books
+    trade on different venues and clocks.
     Pure; never raises."""
     min_pairs = _ci("noisy_mirror_min_pairs", _NOISY_MIRROR_MIN_PAIRS)
 
@@ -818,11 +829,11 @@ def _cn_hk_pairwise_corr(cn_history: list[dict], hk_history: list[dict]) -> dict
     n_pairs = len(common)
     if n_pairs < min_pairs:
         return {"corr": None, "n_pairs": n_pairs, "status": "insufficient-n",
-                "note": "shared FXI proxy means corr is not indicative of strategy overlap"}
+                "note": "native-index active returns; insufficient aligned regional observations"}
     corr = _pearson([cn_m[d] for d in common], [hk_m[d] for d in common])
     return {"corr": corr, "n_pairs": n_pairs,
             "status": "scoring" if corr is not None else "undefined",
-            "note": "shared FXI proxy: high corr expected; not indicative of strategy overlap"}
+            "note": "active returns use CSI 300 for China and Hang Seng for Hong Kong"}
 
 
 def regional_review(*, asof: date | None = None,
@@ -831,11 +842,11 @@ def regional_review(*, asof: date | None = None,
                     book_curves: dict | None = None,
                     states: dict | None = None,
                     persist: bool = False) -> dict:
-    """Grade china + hk against their (proxy-flagged) bogeys.
+    """Grade China + HK against their native market-index bogeys.
 
     Same honest-at-paper-n discipline as review(): grades show reviews_remaining, status is
     'insufficient-n' below the effective_n gate, NO recommendation is made until enough reviews
-    exist.  Proxy caveat is prominently labeled on every grade and recommendation.  Pure; the
+    exist. The index identity is carried on every grade. Pure; the
     `states` + `ledgers` inputs are injected (in prod: read from data/benchmark/china/ + data/
     benchmark/hk/). Never raises.
 
@@ -864,12 +875,8 @@ def regional_review(*, asof: date | None = None,
             rec = {**dec["recommendation"],
                    "prev_state": prior.get("state") or STATE_ACTIVE,
                    "new_state": dec["state"]["state"],
-                   # ── PROXY CAVEAT: always propagated onto any recommendation ──
-                   "bogey_is_proxy": True,
-                   "proxy_caveat": grade.get("proxy_reason"),
-                   "note": (dec["recommendation"].get("note") or "") +
-                           " PROXY CAVEAT: bogey is FXI (proxy), not the canonical index. "
-                           "Human must acknowledge proxy before executing any lifecycle action."}
+                   "benchmark": grade.get("benchmark"),
+                   "bogey_is_proxy": False}
             recommendations.append(rec)
 
     pairwise = _cn_hk_pairwise_corr(cn_hist, hk_hist)
@@ -888,9 +895,9 @@ def regional_review(*, asof: date | None = None,
             "scored_books": scored,
             "insufficient_n_books": insufficient,
             "min_effective_n": _ci("min_effective_n", _MIN_EFFECTIVE_N),
-            "note": ("Regional lifecycle is display/advisory only. Proxy bogey (FXI) is NOT "
-                     "the canonical index for either book — any recommendation citing the proxy "
-                     "MUST acknowledge this caveat before execution. KILL IS NEVER AUTOMATED "
+            "note": ("Regional lifecycle is display/advisory only. China is graded versus CSI 300; "
+                     "Hong Kong is graded versus Hang Seng. Legacy FXI proxy ledgers are excluded. "
+                     "KILL IS NEVER AUTOMATED "
                      "(charter P8). At paper-n a book below the effective_n gate is "
                      "'insufficient-n' and gets NO recommendation."),
         },

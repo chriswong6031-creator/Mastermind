@@ -7,7 +7,7 @@ closes), the HK Brain:
      OR web search, its choice,
   3. submits a COMPLETE target book, one rationale per holding (no gate, no research paper),
   4. and the deterministic layer rebalances the paper account to those weights at the latest
-     close, marks NAV in HKD vs FXI (iShares China Large-Cap, marked in HKD), and logs the day.
+     close, marks NAV in HKD vs the Hang Seng Index, and logs the day.
 
 The universe is HONG KONG listed names only: ``*.HK`` tickers quoted in HKD. The book's
 base currency is **HKD**: prices are sourced via Yahoo Finance (``data_layer.yahoo_feed``),
@@ -32,13 +32,13 @@ log = logging.getLogger(__name__)
 
 PORTFOLIO_ID = "hk"
 SLEEVE = "brain"
-BENCHMARK = "FXI"
 _ROOT = Path(__file__).resolve().parent.parent
 _MAX_TURNS = int(os.environ.get("HK_MAX_TURNS", "30"))
 
 # Base currency + tradeable venue are registry-driven (portfolio.registry, id="hk").
 # The HK book is Hong Kong listings ONLY (*.HK), marked natively in HKD — no cross-FX.
 from portfolio import registry as _registry
+BENCHMARK = _registry.benchmark(PORTFOLIO_ID)            # Hang Seng Index (^HSI)
 CURRENCY = _registry.currency(PORTFOLIO_ID)            # "HKD"
 ALLOWED_VENUES = set(_registry.venues(PORTFOLIO_ID))   # {"HK"} — Hong Kong listings only
 
@@ -164,10 +164,9 @@ def run_hk(asof: str | None = None, *, force: bool = False, armed: bool = True,
         except Exception as _pg_exc:
             out["packet_gate_error"] = repr(_pg_exc)[:200]
 
-    # 3. price the universe we might trade (targets ∪ held ∪ benchmark) — all converted to CNY,
-    #    the book's base currency. The shared price store returns USD (A-share/HK already FX'd to
-    #    USD there); we convert that to CNY so A-shares stay native CNY, HK (HKD) and US ADRs (USD)
-    #    are marked at the prevailing rate, and the FXI benchmark is marked in CNY too.
+    # 3. price the universe we might trade (targets ∪ held ∪ benchmark) in the book's HKD base
+    #    currency. The shared accessor returns USD-equivalent marks for Hong Kong symbols; convert
+    #    them back to HKD so holdings and the Hang Seng benchmark stay on one native-currency basis.
     from portfolio import fx
     held = list((paper_account._load_account(PORTFOLIO_ID).get("positions") or {}).keys())
     target = {h["ticker"]: float(h.get("weight") or 0.0)
@@ -208,7 +207,7 @@ def run_hk(asof: str | None = None, *, force: bool = False, armed: bool = True,
     out["market_open"] = _settle.is_open(PORTFOLIO_ID)
     out["skipped_unpriceable"] = skipped
 
-    # 5. mark NAV vs FXI (benchmark auto-resolved per-book from the registry)
+    # 5. mark NAV vs Hang Seng (benchmark auto-resolved per-book from the registry)
     try:
         paper_account.mark(prices, asof, portfolio_id=PORTFOLIO_ID)
     except Exception as e:                       # noqa: BLE001
@@ -284,7 +283,7 @@ _PERSONA = (
     "mcp__hk__submit_book ONCE with your COMPLETE target book for today: every HK name you want to "
     "hold, its weight (fraction of NAV), and a clear one-paragraph rationale for EACH holding. "
     "Anything you currently hold but omit will be SOLD. Be decisive and concrete; this book is "
-    "graded on its realized HKD NAV vs FXI (iShares China Large-Cap, marked in HKD). \n\n"
+    "graded on its realized HKD NAV vs the Hang Seng Index. \n\n"
     "NAMING — in EVERY piece of prose you write (each holding's rationale, the overall summary, the "
     "sold note, and your closing write-up / decision log), refer to a company by its NAME alongside "
     "the ticker, e.g. write 'Tencent (0700.HK)', never a bare '0700.HK'. get_my_book, get_quote, and "
@@ -354,7 +353,7 @@ def _build_prompt(asof: str, inaugural: bool, directive: str | None = None) -> s
         "Do your research now (the in-house China desks and/or the web — your call), then submit "
         "your complete target book for today via mcp__hk__submit_book, with a one-paragraph "
         "rationale per holding. Confirm each name is priceable with get_quote first. Rebalance with "
-        "conviction; you are accountable for the HKD NAV vs FXI.",
+        "conviction; you are accountable for the HKD NAV vs the Hang Seng Index.",
     ]
     return "\n".join(lines)
 

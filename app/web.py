@@ -595,7 +595,8 @@ def api_live_marks(portfolio: str = "flagship") -> JSONResponse:
                 key: performance_full.get(key)
                 for key in (
                     "inception_date", "starting_nav", "current_nav", "cash", "invested",
-                    "total_return_pct", "vs_spy_pct", "benchmark", "day_change_pct",
+                    "total_return_pct", "vs_benchmark_pct", "vs_spy_pct", "benchmark",
+                    "benchmark_name", "benchmark_name_zh", "benchmark_as_of", "day_change_pct",
                     "max_drawdown_pct", "realized_since",
                 )
             }
@@ -673,6 +674,12 @@ def api_portfolio(portfolio: str = "flagship") -> JSONResponse:
         return JSONResponse({"error": "no book yet", "portfolio_id": portfolio}, status_code=404)
     try:
         payload = json.loads(path.read_text())
+        from portfolio import registry
+        # Runtime registry is authoritative: persisted book contracts may predate a benchmark
+        # migration and must never make CSI 300 / Hang Seng appear as FXI or SPY in the UI.
+        payload["benchmark"] = registry.benchmark(portfolio)
+        payload["benchmark_name"] = registry.benchmark_name(portfolio)
+        payload["benchmark_name_zh"] = registry.benchmark_name_zh(portfolio)
 
         # ------------------------------------------------------------------
         # Live marks: attach current price + unrealized P&L to each position
@@ -698,6 +705,9 @@ def api_portfolio(portfolio: str = "flagship") -> JSONResponse:
                 "invested": round(max(0.0, float(account_nav) - cash), 2),
                 "total_return_pct": round((float(account_nav) / starting_nav - 1.0) * 100, 4)
                 if starting_nav > 0 else None,
+                "benchmark": registry.benchmark(portfolio),
+                "benchmark_name": registry.benchmark_name(portfolio),
+                "benchmark_name_zh": registry.benchmark_name_zh(portfolio),
             }
             published_tickers: set[str] = set()
             for pos in payload.get("positions", []):
@@ -838,7 +848,8 @@ def _portfolio_status(meta: dict) -> dict:
     benchmark history), so callers run these concurrently across books."""
     from portfolio import paper_account, registry
     pid = meta["id"]
-    status: dict[str, Any] = {"nav": None, "total_return_pct": None, "vs_spy_pct": None,
+    status: dict[str, Any] = {"nav": None, "total_return_pct": None,
+                              "vs_benchmark_pct": None, "vs_spy_pct": None,
                               "day_change_pct": None, "holdings": 0, "cash_pct": None, "as_of": None}
     # the self-directed book has its own engine (not paper_account) — read its NAV/return directly
     if pid == "self_directed":
@@ -872,11 +883,14 @@ def _portfolio_status(meta: dict) -> dict:
             own_ret = status.get("total_return_pct")
             if own_ret is not None and spy_ret is not None:
                 status["vs_spy_pct"] = round(own_ret - spy_ret, 4)
+                status["vs_benchmark_pct"] = status["vs_spy_pct"]
             if own_ret is not None and def_ret is not None:
                 status["vs_defensive_pct"] = round(own_ret - def_ret, 4)
         except Exception:  # noqa: BLE001
             pass
-        return {**{k: meta.get(k) for k in ("id", "name", "tagline", "kind", "manager", "benchmark", "currency")},
+        return {**{k: meta.get(k) for k in (
+                    "id", "name", "tagline", "kind", "manager", "benchmark",
+                    "benchmark_name", "benchmark_name_zh", "currency")},
                 "status": status}
     try:
         # The switcher is navigation metadata, not a reason to live-fetch every book at once.
@@ -886,6 +900,7 @@ def _portfolio_status(meta: dict) -> dict:
         status.update({
             "nav": perf.get("current_nav"),
             "total_return_pct": perf.get("total_return_pct"),
+            "vs_benchmark_pct": perf.get("vs_benchmark_pct"),
             "vs_spy_pct": perf.get("vs_spy_pct"),
             "day_change_pct": perf.get("day_change_pct"),
             "cash_pct": round((perf.get("cash") or 0) / nav * 100, 1) if nav else None,
@@ -901,14 +916,16 @@ def _portfolio_status(meta: dict) -> dict:
             status["as_of"] = d.get("as_of") or status["as_of"]
     except Exception:
         pass
-    return {**{k: meta.get(k) for k in ("id", "name", "tagline", "kind", "manager", "benchmark", "currency")},
+    return {**{k: meta.get(k) for k in (
+                "id", "name", "tagline", "kind", "manager", "benchmark",
+                "benchmark_name", "benchmark_name_zh", "currency")},
             "status": status}
 
 
 @router.get("/api/portfolios")
 def api_portfolios() -> JSONResponse:
     """The set of portfolios the dashboard switches between, each with a quick status
-    (NAV, return, vs-SPY, holdings) for the tab labels. The flagship is the gated engine
+    (NAV, return, versus-book-benchmark, holdings) for the tab labels. The flagship is the gated engine
     book; the autonomous book is managed free-form by the shared-provider Mastermind AI.
 
     Each book's status is I/O-bound (live marks + benchmark history); we price them concurrently

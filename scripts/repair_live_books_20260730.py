@@ -285,7 +285,7 @@ def _repair_china(*, apply: bool) -> dict[str, Any]:
 
     yahoo_feed.warm(sorted(held))
     prices: dict[str, float] = {}
-    for ticker in sorted(held | {"FXI"}):
+    for ticker in sorted(held | {registry.benchmark("china")}):
         usd = paper_account._current_price(ticker)
         local = fx.usd_to(usd, "CNY")
         if local is not None and local > 0:

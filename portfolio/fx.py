@@ -39,6 +39,8 @@ _RATE_CACHE: dict[str, tuple[float, str]] = {}
 def currency_of(ticker: str) -> str:
     """The quote currency implied by a ticker's venue suffix."""
     t = (ticker or "").upper().strip()
+    if t == "^HSI":
+        return "HKD"
     if t.endswith(".SS") or t.endswith(".SZ"):
         return "CNY"
     if t.endswith(".HK"):

@@ -78,7 +78,9 @@ PORTFOLIOS: list[dict] = [
                                   # ONLY mainland A-shares (*.SS / *.SZ), marked natively in CNY (bot/china.py).
         "manager": "brain",
         "starting_nav": 1_000_000.0,
-        "benchmark": "FXI",       # iShares China Large-Cap — comparison line (marked in the book ccy)
+        "benchmark": "000300.SS", # CSI 300 — broad Shanghai/Shenzhen A-share benchmark
+        "benchmark_name": "CSI 300",
+        "benchmark_name_zh": "沪深300",
         "currency": "CNY",        # base currency — A-shares quote CNY
         "venues": ["A-share"],    # tradeable universe: mainland A-shares (Shanghai / Shenzhen) only
         "legacy": False,
@@ -91,7 +93,9 @@ PORTFOLIOS: list[dict] = [
                                   # listed names (*.HK), marked natively in HKD (no cross-FX — bot/hk.py).
         "manager": "brain",
         "starting_nav": 1_000_000.0,
-        "benchmark": "FXI",       # iShares China Large-Cap — comparison line (marked in the book ccy)
+        "benchmark": "^HSI",      # Hang Seng Index — native Hong Kong market benchmark
+        "benchmark_name": "Hang Seng",
+        "benchmark_name_zh": "恒生指数",
         "currency": "HKD",        # base currency — HK names quote HKD, so no cross-currency conversion
         "venues": ["HK"],         # tradeable universe: Hong Kong listings only
         "legacy": False,
@@ -153,6 +157,18 @@ def starting_nav(portfolio_id: str | None = None) -> float:
 def benchmark(portfolio_id: str | None = None) -> str:
     """The equity-curve comparison symbol for a book (default 'SPY' for the US books)."""
     return str(get(portfolio_id).get("benchmark") or _DEFAULT_BENCHMARK)
+
+
+def benchmark_name(portfolio_id: str | None = None) -> str:
+    """Human-readable benchmark label, falling back to the configured symbol."""
+    meta = get(portfolio_id)
+    return str(meta.get("benchmark_name") or meta.get("benchmark") or _DEFAULT_BENCHMARK)
+
+
+def benchmark_name_zh(portfolio_id: str | None = None) -> str:
+    """Chinese benchmark label, falling back to the English display name."""
+    meta = get(portfolio_id)
+    return str(meta.get("benchmark_name_zh") or benchmark_name(portfolio_id))
 
 
 def currency(portfolio_id: str | None = None) -> str:

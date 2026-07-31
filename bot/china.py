@@ -7,7 +7,7 @@ A-share close), the China Brain:
      OR web search, its choice,
   3. submits a COMPLETE target book, one rationale per holding (no gate, no research paper),
   4. and the deterministic layer rebalances the paper account to those weights at the latest
-     close, marks NAV in CNY vs FXI (iShares China Large-Cap, marked in CNY), and logs the day.
+     close, marks NAV in CNY vs the CSI 300, and logs the day.
 
 The universe is ALL of Greater China: mainland A-shares (``*.SS`` / ``*.SZ``, quoted CNY), Hong
 Kong (``*.HK``, HKD), and US-listed China ADRs (USD). The book's base currency is **CNY**:
@@ -32,13 +32,13 @@ log = logging.getLogger(__name__)
 
 PORTFOLIO_ID = "china"
 SLEEVE = "brain"
-BENCHMARK = "FXI"
 _ROOT = Path(__file__).resolve().parent.parent
 _MAX_TURNS = int(os.environ.get("CHINA_MAX_TURNS", "30"))
 
 # Base currency + tradeable venue are registry-driven so the HK sibling (bot/hk.py) shares this code
 # unchanged. The China book is mainland A-shares ONLY, marked natively in CNY (no cross-FX).
 from portfolio import registry as _registry
+BENCHMARK = _registry.benchmark(PORTFOLIO_ID)            # CSI 300 (000300.SS)
 CURRENCY = _registry.currency(PORTFOLIO_ID)            # "CNY"
 ALLOWED_VENUES = set(_registry.venues(PORTFOLIO_ID))   # {"A-share"} — empty set = unrestricted
 
@@ -166,7 +166,7 @@ def run_china(asof: str | None = None, *, force: bool = False, armed: bool = Tru
     # 3. price the universe we might trade (targets ∪ held ∪ benchmark) — all converted to CNY,
     #    the book's base currency. The shared price store returns USD (A-share/HK already FX'd to
     #    USD there); we convert that to CNY so A-shares stay native CNY, HK (HKD) and US ADRs (USD)
-    #    are marked at the prevailing rate, and the FXI benchmark is marked in CNY too.
+    #    are marked at the prevailing rate, and the CSI 300 benchmark is marked in CNY too.
     from portfolio import fx
     held = list((paper_account._load_account(PORTFOLIO_ID).get("positions") or {}).keys())
     target = {h["ticker"]: float(h.get("weight") or 0.0)
@@ -207,7 +207,7 @@ def run_china(asof: str | None = None, *, force: bool = False, armed: bool = Tru
     out["market_open"] = _settle.is_open(PORTFOLIO_ID)
     out["skipped_unpriceable"] = skipped
 
-    # 5. mark NAV vs FXI (benchmark auto-resolved per-book from the registry)
+    # 5. mark NAV vs CSI 300 (benchmark auto-resolved per-book from the registry)
     try:
         paper_account.mark(prices, asof, portfolio_id=PORTFOLIO_ID)
     except Exception as e:                       # noqa: BLE001
@@ -283,7 +283,7 @@ _PERSONA = (
     "mcp__china__submit_book ONCE with your COMPLETE target book for today: every A-share you want to "
     "hold, its weight (fraction of NAV), and a clear one-paragraph rationale for EACH holding. "
     "Anything you currently hold but omit will be SOLD. Be decisive and concrete; this book is "
-    "graded on its realized CNY NAV vs FXI (iShares China Large-Cap, marked in CNY). \n\n"
+    "graded on its realized CNY NAV vs the CSI 300. \n\n"
     "NAMING — in EVERY piece of prose you write (each holding's rationale, the overall summary, the "
     "sold note, and your closing write-up / decision log), refer to a company by its NAME alongside "
     "the ticker, e.g. write '贵州茅台 (600519.SS)', never a bare '600519.SS'. get_my_book, get_quote, "
@@ -353,7 +353,7 @@ def _build_prompt(asof: str, inaugural: bool, directive: str | None = None) -> s
         "Do your research now (the in-house China desks and/or the web — your call), then submit "
         "your complete target book for today via mcp__china__submit_book, with a one-paragraph "
         "rationale per holding. Confirm each name is priceable with get_quote first. Rebalance with "
-        "conviction; you are accountable for the CNY NAV vs FXI.",
+        "conviction; you are accountable for the CNY NAV vs the CSI 300.",
     ]
     return "\n".join(lines)
 
