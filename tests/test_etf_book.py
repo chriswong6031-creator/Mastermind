@@ -48,6 +48,13 @@ def test_universe_membership_and_buckets():
     assert etf_universe.group_of("SGOV") == "cash"
 
 
+def test_every_etf_universe_member_has_a_canonical_name():
+    assert set(etf_universe.ALL) <= set(etf_universe._NAMES)
+    assert etf_universe.name_of("sgov") == "iShares 0-3 Month Treasury Bond ETF"
+    assert etf_universe.name_of("AAPL") is None
+    assert etf_universe.name_of(None) is None
+
+
 def test_price_falls_back_to_paper_account(iso, monkeypatch):
     # yfinance is stubbed off in conftest → etf_universe.price degrades to paper_account._current_price
     monkeypatch.setattr(paper_account, "_current_price", lambda t: {"SPY": 740.0}.get(t))

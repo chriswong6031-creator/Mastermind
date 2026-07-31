@@ -434,6 +434,27 @@ def test_display_name_by_venue(monkeypatch):
     china_intake.clear_name_cache()
 
 
+def test_us_display_name_recovers_etf_and_placeholder_company_names(monkeypatch):
+    """US rows resolve when Macro omits an ETF snapshot or publishes a ticker placeholder."""
+    from brain import china_intake
+    china_intake.clear_name_cache()
+
+    def fake_read(rel):
+        if rel == "stockdata/GATX.json":
+            return {
+                "name": "GATX",
+                "profile": {
+                    "description": "GATX Corporation is a railcar lessor operating worldwide.",
+                },
+            }
+        return None
+
+    monkeypatch.setattr(china_intake, "_read", fake_read)
+    assert china_intake.display_name("SGOV") == "iShares 0-3 Month Treasury Bond ETF"
+    assert china_intake.display_name("GATX") == "GATX Corporation"
+    china_intake.clear_name_cache()
+
+
 def test_hk_display_name_has_english_and_native_chinese_variants(monkeypatch):
     """HK names resolve from the bilingual market universe without machine translation."""
     from brain import china_intake

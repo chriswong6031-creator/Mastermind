@@ -39,6 +39,46 @@ _DEFAULT_GROUPS: dict[str, list[str]] = {
     "cash":        ["SGOV", "BIL", "SHV", "SHY"],
     "diversifier": ["GLD"],
 }
+# Canonical labels for every allowlisted ETF. Macro's per-ticker snapshots cover
+# most of these names, but cash-equivalent funds such as SGOV are deliberately
+# absent from that stock-oriented surface. Keeping the fixed universe's names
+# beside its membership metadata guarantees a local, non-blocking display
+# fallback for positions, decisions, orders, and historical trades.
+_NAMES: dict[str, str] = {
+    "SPY": "SPDR S&P 500 ETF Trust",
+    "QQQ": "Invesco QQQ Trust",
+    "IWM": "iShares Russell 2000 ETF",
+    "DIA": "SPDR Dow Jones Industrial Average ETF Trust",
+    "VTI": "Vanguard Total Stock Market ETF",
+    "RSP": "Invesco S&P 500 Equal Weight ETF",
+    "XLK": "Technology Select Sector SPDR Fund",
+    "XLF": "Financial Select Sector SPDR Fund",
+    "XLE": "Energy Select Sector SPDR Fund",
+    "XLV": "Health Care Select Sector SPDR Fund",
+    "XLU": "Utilities Select Sector SPDR Fund",
+    "XLI": "Industrial Select Sector SPDR Fund",
+    "XLP": "Consumer Staples Select Sector SPDR Fund",
+    "XLY": "Consumer Discretionary Select Sector SPDR Fund",
+    "XLB": "Materials Select Sector SPDR Fund",
+    "XLC": "Communication Services Select Sector SPDR Fund",
+    "XLRE": "Real Estate Select Sector SPDR Fund",
+    "SMH": "VanEck Semiconductor ETF",
+    "IGV": "iShares Expanded Tech-Software Sector ETF",
+    "XBI": "SPDR S&P Biotech ETF",
+    "XOP": "SPDR S&P Oil & Gas Exploration & Production ETF",
+    "MTUM": "iShares MSCI USA Momentum Factor ETF",
+    "QUAL": "iShares MSCI USA Quality Factor ETF",
+    "USMV": "iShares MSCI USA Min Vol Factor ETF",
+    "VLUE": "iShares MSCI USA Value Factor ETF",
+    "SIZE": "iShares MSCI USA Size Factor ETF",
+    "TLT": "iShares 20+ Year Treasury Bond ETF",
+    "IEF": "iShares 7-10 Year Treasury Bond ETF",
+    "SGOV": "iShares 0-3 Month Treasury Bond ETF",
+    "BIL": "SPDR Bloomberg 1-3 Month T-Bill ETF",
+    "SHV": "iShares Short Treasury Bond ETF",
+    "SHY": "iShares 1-3 Year Treasury Bond ETF",
+    "GLD": "SPDR Gold Shares",
+}
 _DEFAULT_DEFENSIVE_EXTRA = ["USMV", "XLP", "XLU"]
 _DEFAULT_GUARDRAILS = {"max_single_weight": 0.35, "min_trade": 0.015,
                        "offensive_cap": {"stressed": 0.55, "elevated": 0.80}}
@@ -210,6 +250,13 @@ def group_of(ticker) -> str | None:
         if t in names:
             return g
     return None
+
+
+def name_of(ticker) -> str | None:
+    """Canonical human label for an allowlisted ETF, or ``None`` off-list."""
+    if not isinstance(ticker, str):
+        return None
+    return _NAMES.get(ticker.upper().strip())
 
 
 # ── ETF-aware pricing ───────────────────────────────────────────────────────
