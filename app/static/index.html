@@ -3661,6 +3661,8 @@ var _pfFetchSeq = 0;              // monotonic token per fetchAll: a faster-reso
                                   // from a previous tab must NOT clobber the current book's render
 var _sharedLoaded = false;        // true once engine-level (shared) endpoints have loaded once,
                                   // so a portfolio SWITCH only refetches the 5 scoped endpoints
+var _sharedLoad = null;           // singleton deferred hydration; a fast tab switch must neither
+                                  // duplicate it nor cancel it before shared panels become ready
 var _portfolioDataCache = {};     // stale-while-revalidate snapshots: instant paint, live refresh
 var _portfolioPrefetches = {};    // one in-flight prefetch per book
 var _portfolioPrefetchStarted = false;
@@ -4532,9 +4534,12 @@ function renderPositions() {
   positions.forEach(function(p, i) {
     var isConv = p.sleeve === 'conviction';
     var isBrain = p.sleeve === 'brain';
+    var isAccount = p.sleeve === 'account';
     var sleeveClass = (isConv || isBrain) ? 'conv' : 'lead';
     var sleeveName = isBrain ? (document.documentElement.getAttribute('data-lang') === 'zh' ? '大脑' : 'Brain')
-                   : (isConv ? t('alloc.conviction') : t('alloc.leadership'));
+                   : (isConv ? t('alloc.conviction')
+                   : (isAccount ? '<span class="l-en">Account</span><span class="l-zh">账户</span>'
+                   : t('alloc.leadership')));
     var verdict = (p.verdict || 'hold').toLowerCase();
     var tf = p.thesis_full || {};
     var heldStr = '';
@@ -7214,13 +7219,36 @@ function _mergeLiveMarks(data) {
   } else {
     var byTicker = {};
     (data.positions || []).forEach(function(row) { byTicker[row.ticker] = row; });
-    if (_book && _book.positions) {
-      _book.positions.forEach(function(row) {
+    if (_book) {
+      var published = _book.positions || [];
+      var seen = {};
+      var reconciled = [];
+      published.forEach(function(row) {
         var mark = byTicker[row.ticker];
-        if (mark) Object.assign(row, mark);
+        if (mark) {
+          seen[row.ticker] = true;
+          reconciled.push(Object.assign(row, mark));
+        } else if (row.pending) {
+          reconciled.push(row);
+        }
       });
+      // The paper account is the source of truth for actual holdings. A daily strategy snapshot can
+      // legitimately contain no position rows while its account still owns live lots; show those
+      // lots explicitly as Account holdings instead of silently hiding their price and P&L.
+      (data.positions || []).forEach(function(mark) {
+        if (!seen[mark.ticker]) {
+          reconciled.push(Object.assign({
+            ticker: mark.ticker, sleeve: 'account', verdict: 'hold', stage: null, live_only: true
+          }, mark));
+        }
+      });
+      var pricing = data.pricing || {};
+      var holdingsComplete = !data.error &&
+        Number(pricing.total_positions || 0) === (data.positions || []).length;
+      if (holdingsComplete) _book.positions = reconciled;
     }
-    if (_perf) Object.assign(_perf, data.performance || {});
+    if (!_perf) _perf = { series: [] };
+    Object.assign(_perf, data.performance || {});
     _safeRender('performance-live', renderPerformance);
     _safeRender('positions-live', renderPositions);
   }
@@ -7262,26 +7290,63 @@ function refreshLiveMarks() {
     });
 }
 
-function _fetchPortfolioSnapshot(id) {
-  if (_portfolioPrefetches[id]) return _portfolioPrefetches[id];
+function _fetchPortfolioCritical(id) {
+  var pf = '?portfolio=' + encodeURIComponent(id);
+  if (id === 'self_directed') {
+    return fetch('/api/self_directed', { cache: 'no-cache' })
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .catch(function() { return null; })
+      .then(function(book) {
+        return { portfolio: id, self: book, cachedAt: Date.now(), complete: false };
+      });
+  }
+  return fetch('/api/portfolio' + pf)
+    .then(function(r) { return r.ok ? r.json() : null; })
+    .catch(function() { return null; })
+    .then(function(book) {
+      var snapshot = { portfolio: id, book: book, cachedAt: Date.now(), complete: false };
+      if (book && book.account_preview) {
+        snapshot.performance = Object.assign({ series: [] }, book.account_preview);
+      }
+      return snapshot;
+    });
+}
+
+function _fetchPortfolioDetails(id, base) {
+  if (id === 'self_directed') {
+    return fetch('/api/self_directed/history')
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .catch(function() { return null; })
+      .then(function(history) {
+        return Object.assign({}, base, {
+          selfHistory: history, cachedAt: Date.now(), complete: true
+        });
+      });
+  }
   var pf = '?portfolio=' + encodeURIComponent(id);
   var request = Promise.allSettled([
-    fetch('/api/portfolio' + pf).then(function(r) { return r.ok ? r.json() : null; }).catch(function() { return null; }),
     fetch('/api/trades' + pf).then(function(r)    { return r.ok ? r.json() : null; }).catch(function() { return null; }),
     fetch('/api/performance' + pf).then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
     fetch('/api/decisions' + pf).then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
     fetch('/api/risk' + pf).then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
   ]).then(function(res) {
-    var dec = (res[3] && res[3].status === 'fulfilled' ? res[3].value : null) || {};
-    return {
-      portfolio: id,
-      book: res[0] && res[0].status === 'fulfilled' ? res[0].value : null,
-      trades: res[1] && res[1].status === 'fulfilled' ? res[1].value : null,
-      performance: res[2] && res[2].status === 'fulfilled' ? res[2].value : null,
+    var dec = (res[2] && res[2].status === 'fulfilled' ? res[2].value : null) || {};
+    return Object.assign({}, base, {
+      trades: res[0] && res[0].status === 'fulfilled' ? res[0].value : null,
+      performance: res[1] && res[1].status === 'fulfilled' ? res[1].value : null,
       decisions: dec.decisions || [],
-      risk: res[4] && res[4].status === 'fulfilled' ? res[4].value : null,
+      risk: res[3] && res[3].status === 'fulfilled' ? res[3].value : null,
       cachedAt: Date.now(),
-    };
+      complete: true,
+    });
+  });
+  return request;
+}
+
+function _fetchPortfolioSnapshot(id) {
+  if (_portfolioPrefetches[id]) return _portfolioPrefetches[id];
+  var request = _fetchPortfolioCritical(id).then(function(base) {
+    return _fetchPortfolioDetails(id, base);
   });
   _portfolioPrefetches[id] = request;
   request.then(function() { delete _portfolioPrefetches[id]; },
@@ -7291,11 +7356,13 @@ function _fetchPortfolioSnapshot(id) {
 
 function _applyPortfolioSnapshot(snapshot) {
   if (!snapshot) return;
-  _decisions = snapshot.decisions || [];
-  _book = snapshot.book;
-  _trades = snapshot.trades;
-  _perf = snapshot.performance;
-  _risk = snapshot.risk;
+  if (Object.prototype.hasOwnProperty.call(snapshot, 'decisions')) _decisions = snapshot.decisions || [];
+  if (Object.prototype.hasOwnProperty.call(snapshot, 'book')) _book = snapshot.book;
+  if (Object.prototype.hasOwnProperty.call(snapshot, 'trades')) _trades = snapshot.trades;
+  if (Object.prototype.hasOwnProperty.call(snapshot, 'performance')) _perf = snapshot.performance;
+  if (Object.prototype.hasOwnProperty.call(snapshot, 'risk')) _risk = snapshot.risk;
+  if (snapshot.self) _self = snapshot.self;
+  if (snapshot.selfHistory) _selfHist = snapshot.selfHistory;
   _rejected = (_book && _book.rejected) ? _book.rejected : [];
 }
 
@@ -7303,8 +7370,7 @@ function _paintPortfolioSnapshot(snapshot, requestLive) {
   _applyPortfolioSnapshot(snapshot);
   _renderScoped();
   applyColl('rejected');
-  if (_portfolio === 'self_directed' && requestLive !== false) refreshSelf();
-  if (requestLive !== false) refreshLiveMarks();
+  return requestLive !== false ? refreshLiveMarks() : Promise.resolve();
 }
 
 // Warm the other books sequentially after the first useful screen. A first visit then paints from
@@ -7352,21 +7418,11 @@ function _scheduleWorkspacePrefetch() {
   }, 5000);
 }
 
-async function fetchAll(opts) {
-  opts = opts || {};
-  // Engine-level endpoints (regime, macro, research feed, shadow books, predictions,
-  // backtests, factor zoo, fundamentals, …) are IDENTICAL across books. After the first full load
-  // a portfolio SWITCH only needs the portfolio-scoped endpoints — this is what makes switching
-  // snappy instead of refetching ~18 endpoints (most of them redundant) every time.
-  var scopedOnly = !!opts.scopedOnly && _sharedLoaded;
-  var mySeq = ++_pfFetchSeq;   // this call's token; a later switch bumps it and supersedes us
-  var barFinished = false;
-  if (opts.showBar) loadBarStart();
-  try {
-    var requestedPortfolio = _portfolio;
-
-    // shared/engine-level fetches — kicked off concurrently, only on a full load
-    var sharedPromise = scopedOnly ? null : Promise.allSettled([
+function _hydrateShared() {
+  if (_sharedLoaded) return Promise.resolve();
+  if (_sharedLoad) return _sharedLoad;
+  _sharedLoad = loadPortfolios().then(function() {
+    return Promise.allSettled([
       fetch('/api/activity').then(function(r)  { return r.ok ? r.json() : [];   }).catch(function() { return []; }),
       fetch('/api/research').then(function(r)  { return r.ok ? r.json() : [];   }).catch(function() { return []; }),
       fetch('/api/shadow_books').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
@@ -7377,44 +7433,65 @@ async function fetchAll(opts) {
       fetch('/api/student').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
       fetch('/api/distill').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
     ]);
+  }).then(function(s) {
+    var actRes = s[0], researchRes = s[1], shadowRes = s[2], predRes = s[3],
+        ebtRes = s[4], fzRes = s[5], fundRes = s[6],
+        studentRes = s[7], distillRes = s[8];
+    _activity    = (actRes.status    === 'fulfilled' ? actRes.value     : null) || [];
+    _research    = (researchRes.status === 'fulfilled' ? researchRes.value : null) || [];
+    _shadowBooks    = shadowRes.status === 'fulfilled' ? shadowRes.value : null;
+    _predictions    = predRes.status   === 'fulfilled' ? predRes.value   : null;
+    _engineBacktest = ebtRes.status    === 'fulfilled' ? ebtRes.value    : null;
+    _factorZoo      = fzRes.status     === 'fulfilled' ? fzRes.value     : null;
+    _fundamentals   = fundRes.status   === 'fulfilled' ? fundRes.value   : null;
+    _student        = studentRes.status === 'fulfilled' ? studentRes.value : null;
+    _distill        = distillRes.status === 'fulfilled' ? distillRes.value : null;
+    _sharedLoaded = true;
+    _renderAll();
+    _schedulePortfolioPrefetch();
+    _scheduleWorkspacePrefetch();
+    if (!_collapsed.runs) _ensureRuns();
+  });
+  _sharedLoad.then(function() { _sharedLoad = null; },
+                   function() { _sharedLoad = null; });
+  return _sharedLoad;
+}
 
-    // Portfolio-scoped fetches — always refreshed. The result is also the stale-while-revalidate
-    // snapshot used to paint an already-visited or idle-prefetched book synchronously.
-    var scopedSnapshot = await _fetchPortfolioSnapshot(requestedPortfolio);
+async function fetchAll(opts) {
+  opts = opts || {};
+  var mySeq = ++_pfFetchSeq;   // this call's token; a later switch bumps it and supersedes us
+  var barFinished = false;
+  if (opts.showBar) loadBarStart();
+  try {
+    var requestedPortfolio = _portfolio;
 
-    // A newer setPortfolio() fired while these were in flight — its fetch owns the render now.
-    // Bailing here is what stops a slow book's late response from clobbering the active tab.
+    // FIRST PAINT: make exactly one state request. On the one-core VPS, launching the old
+    // 15-request burst together made each otherwise-fast read wait 5–11 seconds. The active book
+    // paints first; live NAV, trades/risk, switcher metadata, and shared research hydrate in that
+    // order only after the loading bar is gone.
+    var scopedSnapshot = await _fetchPortfolioCritical(requestedPortfolio);
+
     if (mySeq !== _pfFetchSeq) return;
     _portfolioDataCache[requestedPortfolio] = scopedSnapshot;
-    _paintPortfolioSnapshot(scopedSnapshot);
-    // The useful first screen is ready. Hidden histories and shared research may continue in the
-    // background, but they no longer hold the user's loading indicator open.
+    var liveRequest = _paintPortfolioSnapshot(scopedSnapshot);
     if (opts.showBar) { loadBarDone(); barFinished = true; }
 
-    if (!scopedOnly) {
-      var s = await sharedPromise;
-      // Re-check supersession AFTER the shared await too: the guard above only covers the scoped
-      // fetch; a switch that fires while the (slower) shared bundle is still in flight would
-      // otherwise fall through and clobber the now-active tab with this stale load's data.
-      if (mySeq !== _pfFetchSeq) return;
-      var actRes = s[0], researchRes = s[1], shadowRes = s[2], predRes = s[3],
-          ebtRes = s[4], fzRes = s[5], fundRes = s[6],
-          studentRes = s[7], distillRes = s[8];
-      _activity    = (actRes.status    === 'fulfilled' ? actRes.value     : null) || [];
-      _research    = (researchRes.status === 'fulfilled' ? researchRes.value : null) || [];
-      _shadowBooks    = shadowRes.status === 'fulfilled' ? shadowRes.value : null;
-      _predictions    = predRes.status   === 'fulfilled' ? predRes.value   : null;
-      _engineBacktest = ebtRes.status    === 'fulfilled' ? ebtRes.value    : null;
-      _factorZoo      = fzRes.status     === 'fulfilled' ? fzRes.value     : null;
-      _fundamentals   = fundRes.status   === 'fulfilled' ? fundRes.value   : null;
-      _student        = studentRes.status === 'fulfilled' ? studentRes.value : null;
-      _distill        = distillRes.status === 'fulfilled' ? distillRes.value : null;
-      _sharedLoaded   = true;
-      _renderAll();
-      _schedulePortfolioPrefetch();
-      _scheduleWorkspacePrefetch();
-      if (!_collapsed.runs) _ensureRuns();
-    }
+    // Give the narrow live-NAV request first use of the origin before below-the-fold hydration.
+    await Promise.race([
+      liveRequest,
+      new Promise(function(resolve) { window.setTimeout(resolve, 1000); })
+    ]);
+    if (mySeq !== _pfFetchSeq) return;
+
+    // Active-book details come next. Repaint without issuing a duplicate live request.
+    var detailedSnapshot = await _fetchPortfolioDetails(requestedPortfolio, scopedSnapshot);
+    if (mySeq !== _pfFetchSeq) return;
+    _portfolioDataCache[requestedPortfolio] = detailedSnapshot;
+    _paintPortfolioSnapshot(detailedSnapshot, false);
+
+    // Shared research/navigation hydration owns no portfolio state. Keep it as a singleton so a
+    // switch during cold load cannot cancel it or duplicate the expensive request group.
+    _hydrateShared();
     applyColl('runs');
     applyColl('rejected');
     applyColl('shadow-books');
@@ -7454,11 +7531,10 @@ document.addEventListener('langchange', function() {
 var _path0 = location.pathname.replace(/\/+$/, '');
 if (_path0 === '/research') showView('research');
 else if (_path0 === '/desk') showView('desk');
-// /self is now the Self-Directed portfolio (tab), selected once /api/portfolios loads
-else if (_path0 === '/self') { _pendingSelfSelect = true; }
+// /self can select its book before the deferred switcher metadata arrives.
+else if (_path0 === '/self') { _portfolio = 'self_directed'; _pendingSelfSelect = false; }
 
 applyPortfolioScope();   // default flagship → no-op visually; sets data-portfolio
-loadPortfolios();        // populate the portfolio switcher (async, non-blocking)
 fetchAll({ showBar: true });            // initial full load (shows the loading bar)
 document.addEventListener('visibilitychange', function() {
   if (document.hidden) {
