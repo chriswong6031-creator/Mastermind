@@ -4,9 +4,9 @@
    auto-adapt: dark tint + light text in dark mode, light tint + dark text in
    light mode. Nothing hard-codes a dark background. */
 
-/* San Francisco on Apple platforms, with Inter as the consistent cross-platform
-   fallback. SF Mono carries the same system character into numeric/data UI. */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+/* San Francisco on Apple platforms, with locally installed Inter and native UI
+   fonts as cross-platform fallbacks. Avoid a render-blocking third-party font
+   stylesheet on every dashboard/page transition. */
 :root {
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display",
     Inter, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;

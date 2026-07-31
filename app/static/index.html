@@ -16,8 +16,11 @@ try {
 } catch(e) {}
 </script>
 
-<!-- 2. Design system (imports Inter from Google Fonts internally) -->
+<!-- 2. Design system (system/local fonts; no render-blocking third-party import) -->
 <link rel="stylesheet" href="/theme.css">
+<link rel="prefetch" href="/portfolio_desk" as="document">
+<link rel="prefetch" href="/market_view" as="document">
+<link rel="prefetch" href="/agenda" as="document">
 
 <!-- 3. Page-local styles -->
 <style>
@@ -3618,8 +3621,13 @@ window.researchPage = function(d) {
 };
 var _expandedIdx = null;
 var _perf = null, _runs = [], _rejected = [];
+// Long histories stay in memory but only a bounded window enters the DOM. Hidden/collapsed
+// history used to create tens of thousands of nodes and made every view-class toggle expensive.
+var RUNS_RENDER_CHUNK = 60, _runsVisible = RUNS_RENDER_CHUNK;
 var _risk = null;                 // portfolio safety scorecard (/api/risk) — the risk backtest
 var _papers = [];                 // research papers (the Research page rows)
+var PAPERS_RENDER_CHUNK = 60, _papersVisible = PAPERS_RENDER_CHUNK;
+var _researchRevision = 0, _researchRenderedKey = '';
 var _papersErr = null;            // server-side error from /api/research_papers, surfaced in the empty state
 var _openPaperId = null;          // id of the paper currently shown in the thesis modal (for PDF export)
 var _calib = null;                // outcome ledger (the Calibration sub-page)
@@ -3630,7 +3638,11 @@ var _portfolio = 'flagship';      // active portfolio id (drives every portfolio
 var _pfFetchSeq = 0;              // monotonic token per fetchAll: a faster-resolving stale fetch
                                   // from a previous tab must NOT clobber the current book's render
 var _sharedLoaded = false;        // true once engine-level (shared) endpoints have loaded once,
-                                  // so a portfolio SWITCH only refetches the 4 scoped endpoints
+                                  // so a portfolio SWITCH only refetches the 5 scoped endpoints
+var _portfolioDataCache = {};     // stale-while-revalidate snapshots: instant paint, live refresh
+var _portfolioPrefetches = {};    // one in-flight prefetch per book
+var _portfolioPrefetchStarted = false;
+var PORTFOLIO_SNAPSHOT_MAX_AGE_MS = 30000; // never extend the origin's 30-second freshness budget
 var _pendingSelfSelect = false;   // set when loaded at /self — auto-select that tab once portfolios load
 var _portfolios = [];             // [{id,name,tagline,kind,manager,status}] from /api/portfolios
 var _decisions = [];              // autonomous Brain daily decision log (/api/decisions)
@@ -4072,10 +4084,11 @@ function renderRuns() {
   }
 
   var isZh = document.documentElement.getAttribute('data-lang') === 'zh';
+  var shownRuns = runs.slice(0, _runsVisible);
   var html = runsH2();
   html += '<div class="mm-run-list">';
 
-  runs.forEach(function(r, ri) {
+  shownRuns.forEach(function(r, ri) {
     var kindCls = runKindClass(r.kind);
     var costStr = r.cost_usd != null ? ' · $' + r.cost_usd.toFixed(4) : '';
     var stepsStr = r.n_steps != null ? (r.n_steps + (isZh ? ' 步' : ' steps')) : '—';
@@ -4100,8 +4113,20 @@ function renderRuns() {
   });
 
   html += '</div>';
+  if (shownRuns.length < runs.length) {
+    html += '<div class="mm-dec-more-wrap"><button class="mm-dec-more" type="button" ' +
+      'onclick="showMoreRuns()"><span class="l-en">Show older activity (' +
+      (runs.length - shownRuns.length) + ' remaining)</span><span class="l-zh">显示更早活动（剩余 ' +
+      (runs.length - shownRuns.length) + '）</span></button></div>';
+  }
   el.innerHTML = html;
 }
+
+window.showMoreRuns = function() {
+  _runsVisible = Math.min((_runs || []).length, _runsVisible + RUNS_RENDER_CHUNK);
+  renderRuns();
+  applyColl('runs');
+};
 
 window.toggleRun = function(ri, runId) {
   var stepsEl = E('run-steps-' + ri);
@@ -4890,12 +4915,21 @@ function _scoreCell(n) { return n == null ? '—' : n; }
 function renderResearchPapers() {
   var host = E('rp-host');
   if (!host) return;
+  var renderKey = [
+    _researchRevision,
+    _papersVisible,
+    document.documentElement.getAttribute('data-lang') || 'en',
+    _papersErr || '',
+  ].join('|');
+  if (_researchRenderedKey === renderKey) return;
+  _researchRenderedKey = renderKey;
   if (!_papers.length) {
     host.innerHTML = '<div class="mm-empty"><span class="mm-empty-icon">○</span>' + t('rp.empty')
       + (_papersErr ? '<div style="margin-top:8px;font-size:11.5px;color:var(--down)">' + esc(String(_papersErr)) + '</div>' : '')
       + '</div>';
     return;
   }
+  var shownPapers = _papers.slice(0, _papersVisible);
   var html = '<div class="mm-rp-wrap"><table class="mm-rp-table"><thead><tr>' +
     '<th class="l">' + t('rp.col_ticker') + '</th>' +
     '<th class="l">' + t('rp.col_time') + '</th>' +
@@ -4906,7 +4940,7 @@ function renderResearchPapers() {
     '<th class="l">' + t('rp.col_viability') + '</th>' +
     '<th></th>' +
     '</tr></thead><tbody>';
-  _papers.forEach(function(p) {
+  shownPapers.forEach(function(p) {
     var am = _actionMeta(p.action);
     var modeTag = p.mode === 'llm' ? '<span class="mm-mode-tag" title="full Claude report">AI</span>'
                                    : '<span class="mm-mode-tag" title="engine-only report">ENG</span>';
@@ -4924,8 +4958,19 @@ function renderResearchPapers() {
     '</tr>';
   });
   html += '</tbody></table></div>';
+  if (shownPapers.length < _papers.length) {
+    html += '<div class="mm-dec-more-wrap"><button class="mm-dec-more" type="button" ' +
+      'onclick="showMorePapers()"><span class="l-en">Show older theses (' +
+      (_papers.length - shownPapers.length) + ' remaining)</span><span class="l-zh">显示更早论文（剩余 ' +
+      (_papers.length - shownPapers.length) + '）</span></button></div>';
+  }
   host.innerHTML = html;
 }
+
+window.showMorePapers = function() {
+  _papersVisible = Math.min((_papers || []).length, _papersVisible + PAPERS_RENDER_CHUNK);
+  renderResearchPapers();
+};
 
 // ── CALIBRATION (outcome ledger) ──────────────────────────────────────────────
 // toggle between the Theses sub-page and the Calibration sub-page
@@ -6006,7 +6051,10 @@ window.showView = function(view) {
     history.replaceState(null, '',
       _currentView === 'research' ? '/research' : (_currentView === 'desk' ? '/desk' : '/'));
   } catch (e) {}
-  if (_currentView === 'research') { renderResearchPapers(); renderCalibrationPage(); }
+  if (_currentView === 'research') {
+    renderResearchPapers();
+    if (_researchSub === 'calibration') renderCalibrationPage();
+  }
   if (_currentView === 'desk') { loadDesk(); }   // lazy fetch + render on first/each open
   window.scrollTo(0, 0);
 };
@@ -6094,7 +6142,6 @@ function applyPortfolioScope() {
   // Desk and Research are Flagship artifacts. Never leave a Brain or Self-Directed
   // tab selected while the viewport silently shows Flagship-only data.
   if (!flagship && _currentView !== 'dashboard') showView('dashboard');
-  if (self) refreshSelf();
 }
 
 window.setPortfolio = function(id) {
@@ -6103,7 +6150,12 @@ window.setPortfolio = function(id) {
   _portfolio = id;
   renderPortfolioSwitch();
   applyPortfolioScope();
-  fetchAll({ scopedOnly: true, showBar: true });   // switch = refetch only the portfolio-scoped endpoints
+  // Paint an already-visited/idle-prefetched book now, then refresh it in the background. The
+  // snapshot is display-only and is always revalidated; no trading or persisted state reads it.
+  var cached = _portfolioDataCache[id];
+  if (cached && Date.now() - cached.cachedAt > PORTFOLIO_SNAPSHOT_MAX_AGE_MS) cached = null;
+  if (cached) _paintPortfolioSnapshot(cached);
+  fetchAll({ scopedOnly: true, showBar: !cached });
 };
 
 async function loadPortfolios() {
@@ -6115,6 +6167,7 @@ async function loadPortfolios() {
       if (_pendingSelfSelect && _portfolios.some(function(p){ return p.id === 'self_directed'; })) {
         _pendingSelfSelect = false; setPortfolio('self_directed');
       }
+      _schedulePortfolioPrefetch();
     }
   } catch (e) {}
 }
@@ -6942,23 +6995,37 @@ function renderLearningModels() {
 // Render every section RESILIENTLY: a throw in one section (e.g. a transient/partial data
 // state) is caught + logged so it can't cascade and leave later sections — like Research
 // Papers — stuck on their "Loading…" placeholder (which reads as "empty for some reason").
-function _renderAll() {
+function _safeRender(name, fn) {
+  try { fn(); }
+  catch (e) { try { console.error('[render] ' + name + ' failed:', e); } catch (_) {} }
+}
+
+// Portfolio-scoped data can paint as soon as its five requests complete. It must not wait for
+// multi-megabyte shared histories (runs/research papers) that are irrelevant to the first screen.
+function _renderScoped() {
   var steps = [
     ['performance', renderPerformance], ['equityCurve', renderEquityCurve],
     ['allocation', renderAllocation], ['safety', renderSafety], ['positions', renderPositions],
-    ['trades', renderTrades], ['brainLog', renderBrainLog], ['research', renderResearch],
-    ['runs', renderRuns], ['rejected', renderRejected],
+    ['trades', renderTrades], ['rejected', renderRejected],
+    ['autoBanner', renderAutoBanner], ['decisions', renderDecisions],
+    ['sizingScorecard', renderSizingScorecard], ['footer', renderFooter], ['self', renderSelf],
+  ];
+  for (var i = 0; i < steps.length; i++) _safeRender(steps[i][0], steps[i][1]);
+}
+
+function _renderAll() {
+  _renderScoped();
+  var steps = [
+    ['brainLog', renderBrainLog], ['research', renderResearch], ['runs', renderRuns],
     ['shadowBooks', renderShadowBooks], ['xsec', renderXsec], ['engineBacktest', renderEngineBacktest],
     ['factorZoo', renderFactorZoo], ['fundamentals', renderFundamentals],
     ['learningModels', renderLearningModels],
-    ['autoBanner', renderAutoBanner], ['decisions', renderDecisions],
-    ['sizingScorecard', renderSizingScorecard],
-    ['researchPapers', renderResearchPapers], ['calibration', renderCalibrationPage], ['footer', renderFooter],
-    ['self', renderSelf],
   ];
-  for (var i = 0; i < steps.length; i++) {
-    try { steps[i][1](); }
-    catch (e) { try { console.error('[render] ' + steps[i][0] + ' failed:', e); } catch (_) {} }
+  for (var i = 0; i < steps.length; i++) _safeRender(steps[i][0], steps[i][1]);
+  // Research is a separate view. Do not build its hidden tables into the Dashboard DOM.
+  if (_currentView === 'research') {
+    _safeRender('researchPapers', renderResearchPapers);
+    if (_researchSub === 'calibration') _safeRender('calibration', renderCalibrationPage);
   }
 }
 
@@ -6990,6 +7057,74 @@ function loadBarDone() {
   }, 220);
 }
 
+function _fetchPortfolioSnapshot(id) {
+  if (_portfolioPrefetches[id]) return _portfolioPrefetches[id];
+  var pf = '?portfolio=' + encodeURIComponent(id);
+  var request = Promise.allSettled([
+    fetch('/api/portfolio' + pf).then(function(r) { return r.ok ? r.json() : null; }).catch(function() { return null; }),
+    fetch('/api/trades' + pf).then(function(r)    { return r.ok ? r.json() : null; }).catch(function() { return null; }),
+    fetch('/api/performance' + pf).then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
+    fetch('/api/decisions' + pf).then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
+    fetch('/api/risk' + pf).then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
+  ]).then(function(res) {
+    var dec = (res[3] && res[3].status === 'fulfilled' ? res[3].value : null) || {};
+    return {
+      portfolio: id,
+      book: res[0] && res[0].status === 'fulfilled' ? res[0].value : null,
+      trades: res[1] && res[1].status === 'fulfilled' ? res[1].value : null,
+      performance: res[2] && res[2].status === 'fulfilled' ? res[2].value : null,
+      decisions: dec.decisions || [],
+      risk: res[4] && res[4].status === 'fulfilled' ? res[4].value : null,
+      cachedAt: Date.now(),
+    };
+  });
+  _portfolioPrefetches[id] = request;
+  request.then(function() { delete _portfolioPrefetches[id]; },
+               function() { delete _portfolioPrefetches[id]; });
+  return request;
+}
+
+function _applyPortfolioSnapshot(snapshot) {
+  if (!snapshot) return;
+  _decisions = snapshot.decisions || [];
+  _book = snapshot.book;
+  _trades = snapshot.trades;
+  _perf = snapshot.performance;
+  _risk = snapshot.risk;
+  _rejected = (_book && _book.rejected) ? _book.rejected : [];
+}
+
+function _paintPortfolioSnapshot(snapshot) {
+  _applyPortfolioSnapshot(snapshot);
+  _renderScoped();
+  applyColl('rejected');
+  if (_portfolio === 'self_directed') refreshSelf();
+}
+
+// Warm the other books sequentially after the first useful screen. A first visit then paints from
+// memory immediately and revalidates in the background instead of blocking on five edge requests.
+function _schedulePortfolioPrefetch() {
+  if (_portfolioPrefetchStarted || !_sharedLoaded || !_portfolios.length) return;
+  _portfolioPrefetchStarted = true;
+  var ids = _portfolios.map(function(p) { return p.id; })
+    .filter(function(id) { return id && id !== _portfolio; });
+  var i = 0;
+  function next() {
+    if (i >= ids.length) return;
+    var id = ids[i++];
+    _fetchPortfolioSnapshot(id).then(function(snapshot) {
+      _portfolioDataCache[id] = snapshot;
+    }).then(function() {
+      window.setTimeout(next, 180);
+    }, function() {
+      window.setTimeout(next, 180);
+    });
+  }
+  var begin = function() { next(); };
+  if (window.requestIdleCallback) window.requestIdleCallback(begin, { timeout: 1800 });
+  else window.setTimeout(begin, 900);
+}
+
 async function fetchAll(opts) {
   opts = opts || {};
   // Engine-level endpoints (regime, macro, research feed, shadow books, predictions,
@@ -7000,7 +7135,7 @@ async function fetchAll(opts) {
   var mySeq = ++_pfFetchSeq;   // this call's token; a later switch bumps it and supersedes us
   if (opts.showBar) loadBarStart();
   try {
-    var pf = '?portfolio=' + encodeURIComponent(_portfolio);
+    var requestedPortfolio = _portfolio;
 
     // shared/engine-level fetches — kicked off concurrently, only on a full load
     var sharedPromise = scopedOnly ? null : Promise.allSettled([
@@ -7018,19 +7153,15 @@ async function fetchAll(opts) {
       fetch('/api/distill').then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
     ]);
 
-    // portfolio-scoped fetches — always refreshed (these are what actually change on a switch)
-    var scopedRes = await Promise.allSettled([
-      fetch('/api/portfolio' + pf).then(function(r) { return r.ok ? r.json() : null; }).catch(function() { return null; }),
-      fetch('/api/trades' + pf).then(function(r)    { return r.ok ? r.json() : null; }).catch(function() { return null; }),
-      fetch('/api/performance' + pf).then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
-      fetch('/api/decisions' + pf).then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
-      fetch('/api/risk' + pf).then(function(r){ return r.ok ? r.json() : null; }).catch(function() { return null; }),
-    ]);
-    var bookRes = scopedRes[0], tradesRes = scopedRes[1], perfRes = scopedRes[2], decRes = scopedRes[3], riskRes = scopedRes[4];
+    // Portfolio-scoped fetches — always refreshed. The result is also the stale-while-revalidate
+    // snapshot used to paint an already-visited or idle-prefetched book synchronously.
+    var scopedSnapshot = await _fetchPortfolioSnapshot(requestedPortfolio);
 
     // A newer setPortfolio() fired while these were in flight — its fetch owns the render now.
     // Bailing here is what stops a slow book's late response from clobbering the active tab.
     if (mySeq !== _pfFetchSeq) return;
+    _portfolioDataCache[requestedPortfolio] = scopedSnapshot;
+    _paintPortfolioSnapshot(scopedSnapshot);
 
     if (!scopedOnly) {
       var s = await sharedPromise;
@@ -7048,6 +7179,8 @@ async function fetchAll(opts) {
       var _papersResp = (papersRes.status === 'fulfilled' ? papersRes.value : null) || {};
       _papers      = _papersResp.papers || [];
       _papersErr   = _papersResp.error || (papersRes.status === 'rejected' ? String(papersRes.reason || 'fetch failed') : null);
+      _researchRevision += 1;
+      _researchRenderedKey = '';
       _calib       = calibRes.status   === 'fulfilled' ? calibRes.value   : null;
       _shadowBooks    = shadowRes.status === 'fulfilled' ? shadowRes.value : null;
       _predictions    = predRes.status   === 'fulfilled' ? predRes.value   : null;
@@ -7057,19 +7190,9 @@ async function fetchAll(opts) {
       _student        = studentRes.status === 'fulfilled' ? studentRes.value : null;
       _distill        = distillRes.status === 'fulfilled' ? distillRes.value : null;
       _sharedLoaded   = true;
+      _renderAll();
+      _schedulePortfolioPrefetch();
     }
-
-    var _decResp = (decRes && decRes.status === 'fulfilled' ? decRes.value : null) || {};
-    _decisions = _decResp.decisions || [];
-    _book        = bookRes.status    === 'fulfilled' ? bookRes.value    : null;
-    _trades      = tradesRes.status  === 'fulfilled' ? tradesRes.value  : null;
-    _perf        = perfRes.status    === 'fulfilled' ? perfRes.value    : null;
-    _risk        = riskRes.status    === 'fulfilled' ? riskRes.value    : null;
-
-    // extract rejected from portfolio
-    _rejected = (_book && _book.rejected) ? _book.rejected : [];
-
-    _renderAll();
     applyColl('runs');
     applyColl('rejected');
     applyColl('shadow-books');
@@ -7077,7 +7200,6 @@ async function fetchAll(opts) {
     applyColl('engine-bt');
     applyColl('factor-zoo');
     applyColl('fundamentals');
-    refreshSelf();    // self-directed book (decoupled): settles due pending orders + refreshes marks
   } finally {
     // only the owning (newest) fetch clears the bar; a superseded call leaving early must not
     if (opts.showBar && mySeq === _pfFetchSeq) loadBarDone();

@@ -9,6 +9,7 @@ PORTFOLIO_DESK_HTML = (ROOT / "app" / "static" / "portfolio.html").read_text()
 MARKET_VIEW_HTML = (ROOT / "app" / "static" / "market_view.html").read_text()
 AGENDA_HTML = (ROOT / "app" / "static" / "agenda.html").read_text()
 THEME = (ROOT / "app" / "static" / "theme.css").read_text()
+THEME_JS = (ROOT / "app" / "static" / "theme.js").read_text()
 CHAT = (ROOT / "app" / "static" / "chat.js").read_text()
 ACCOUNT = (ROOT / "app" / "static" / "account.js").read_text()
 
@@ -69,6 +70,38 @@ def test_dashboard_uses_san_francisco_with_inter_fallback() -> None:
     assert "Inter" in THEME
     assert "font-family: var(--font-sans" in HTML
     assert "font-family: var(--font-sans" in PORTFOLIO_DESK_HTML
+    assert "fonts.googleapis.com" not in THEME
+
+
+def test_dashboard_defers_noncritical_analytics_and_prefetches_workspaces() -> None:
+    assert "window.requestIdleCallback(loadGA4" in THEME_JS
+    assert "window.setTimeout(loadGA4, 1500)" in THEME_JS
+    for path in ("/portfolio_desk", "/market_view", "/agenda"):
+        assert f'<link rel="prefetch" href="{path}" as="document">' in HTML
+
+
+def test_portfolio_switches_paint_cached_data_before_live_revalidation() -> None:
+    assert "var _portfolioDataCache = {}" in HTML
+    assert "function _fetchPortfolioSnapshot(id)" in HTML
+    assert "function _schedulePortfolioPrefetch()" in HTML
+    assert "var PORTFOLIO_SNAPSHOT_MAX_AGE_MS = 30000" in HTML
+    assert "Date.now() - cached.cachedAt > PORTFOLIO_SNAPSHOT_MAX_AGE_MS" in HTML
+    assert "var cached = _portfolioDataCache[id]" in HTML
+    set_portfolio = HTML.index("window.setPortfolio = function(id)")
+    cached_paint = HTML.index("if (cached) _paintPortfolioSnapshot(cached)", set_portfolio)
+    revalidate = HTML.index("fetchAll({ scopedOnly: true, showBar: !cached })", set_portfolio)
+    assert cached_paint < revalidate
+
+
+def test_hidden_histories_are_lazy_and_dom_bounded() -> None:
+    assert "var RUNS_RENDER_CHUNK = 60" in HTML
+    assert "var shownRuns = runs.slice(0, _runsVisible)" in HTML
+    assert "window.showMoreRuns" in HTML
+    assert "var PAPERS_RENDER_CHUNK = 60" in HTML
+    assert "var shownPapers = _papers.slice(0, _papersVisible)" in HTML
+    assert "window.showMorePapers" in HTML
+    assert "if (_currentView === 'research')" in HTML
+    assert "_safeRender('researchPapers', renderResearchPapers)" in HTML
 
 
 def test_institutional_shell_is_shared_across_supporting_workspaces() -> None:
