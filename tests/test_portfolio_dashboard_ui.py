@@ -45,6 +45,21 @@ def test_daily_decision_log_is_bounded_and_expandable() -> None:
     assert "_decisions.slice(0, DECISION_PREVIEW_COUNT)" in HTML
 
 
+def test_brain_summary_uses_available_width_and_only_discloses_real_overflow() -> None:
+    assert "body.page-mm .mm-auto-sum {" in HTML
+    auto_summary_rule = HTML.index("body.page-mm .mm-auto-sum {")
+    auto_summary_slice = HTML[auto_summary_rule : auto_summary_rule + 180]
+    assert "width: 100%" in auto_summary_slice
+    assert "max-width: none" in auto_summary_slice
+
+    assert 'aria-controls="auto-sum"' in HTML
+    assert "var maxLines = compact ? 4 : 6" in HTML
+    assert "sumEl.scrollHeight > (lineHeight * maxLines) + 2" in HTML
+    assert "if (!needsDisclosure)" in HTML
+    assert "moreEl.style.display = 'none'" in HTML
+    assert "window.addEventListener('resize'" in HTML
+
+
 def test_dashboard_uses_san_francisco_with_inter_fallback() -> None:
     assert "--font-sans:" in THEME
     assert '"SF Pro Text"' in THEME
