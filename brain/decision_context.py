@@ -10,9 +10,10 @@ plane into a governor vote.
 """
 from __future__ import annotations
 
+import calendar
 import json
 import os
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -185,6 +186,23 @@ def _label_direction(regime: dict[str, Any]) -> str | None:
     return None
 
 
+def _is_same_month_period_end(source_asof: str | None, market_asof: str | None) -> bool:
+    """Identify a same-month pandas month-end label, not future evidence."""
+    if not source_asof or not market_asof:
+        return False
+    try:
+        source_day = date.fromisoformat(source_asof)
+        market_day = date.fromisoformat(market_asof)
+    except ValueError:
+        return False
+    return (
+        source_day > market_day
+        and source_day.year == market_day.year
+        and source_day.month == market_day.month
+        and source_day.day == calendar.monthrange(source_day.year, source_day.month)[1]
+    )
+
+
 def _regime_state(regime: dict[str, Any]) -> dict[str, Any]:
     vector = regime.get("quad_vector") if isinstance(regime.get("quad_vector"), dict) else {}
     probabilities = vector.get("p") if isinstance(vector.get("p"), dict) else {}
@@ -212,11 +230,21 @@ def _regime_state(regime: dict[str, Any]) -> dict[str, Any]:
     )
     regime_asof = str(regime.get("date") or "")[:10] or None
     cycle_asof = str(business_cycle.get("asof") or "")[:10] or None
+    cycle_period_end = _is_same_month_period_end(cycle_asof, regime_asof)
     cycle_future_dated = bool(
-        regime_asof and cycle_asof and cycle_asof > regime_asof
+        regime_asof
+        and cycle_asof
+        and cycle_asof > regime_asof
+        and not cycle_period_end
     )
     cycle_detail = {
-        "asof": cycle_asof,
+        "asof": regime_asof if cycle_period_end else cycle_asof,
+        "source_period_end": cycle_asof if cycle_period_end else None,
+        "asof_semantics": (
+            "monthly_period_end_clamped_to_regime_market_asof"
+            if cycle_period_end
+            else "source_observation_date"
+        ),
         "available": business_cycle.get("available"),
         "calibrated": business_cycle.get("calibrated"),
         "phase": business_cycle.get("phase"),
@@ -472,12 +500,29 @@ def assemble(
         temporal_anomalies.append(
             "neural_lobe_asof_after_decision_market_asof:" + ",".join(future_lobes)
         )
+    stale_lobes = sorted(
+        name for name, row in (neural_state.get("lobe_health") or {}).items()
+        if row.get("stale")
+    )
+    neural_web_missing = not bool(neural_web)
     decision_coverage = assembly.get("decision_coverage")
     decision_degraded = (
         decision_coverage is None
         or _as_float(decision_coverage) is None
         or float(decision_coverage) < 1.0
     )
+    degrade_reasons = list(assembly.get("degrade_reasons") or [])
+    if not signals:
+        degrade_reasons.append("market_view_signals_missing")
+    if decision_degraded:
+        degrade_reasons.append("decision_plane_coverage_incomplete")
+    if temporal_anomalies:
+        degrade_reasons.extend(temporal_anomalies)
+    if neural_web_missing:
+        degrade_reasons.append("neural_web_context_missing")
+    elif stale_lobes:
+        degrade_reasons.append("neural_web_stale_lobes:" + ",".join(stale_lobes))
+    degrade_reasons = list(dict.fromkeys(degrade_reasons))
     return {
         "schema_version": _SCHEMA_VERSION,
         "region": region,
@@ -512,12 +557,10 @@ def assemble(
             "availability_coverage": round(present / len(signals), 4) if signals else 0.0,
             "fresh_coverage": round(fresh / len(signals), 4) if signals else 0.0,
             "temporal_anomalies": temporal_anomalies,
-            "degraded": (
-                bool(assembly.get("degraded"))
-                or not signals
-                or decision_degraded
-                or bool(temporal_anomalies)
-            ),
+            "neural_web_available": not neural_web_missing,
+            "neural_web_stale_lobes": stale_lobes,
+            "degrade_reasons": degrade_reasons,
+            "degraded": bool(degrade_reasons),
         },
         "authority_note": (
             "Read-only perception contract. Only fresh validated governor signals may vote; "
