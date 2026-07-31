@@ -457,6 +457,25 @@ def test_hk_display_name_has_english_and_native_chinese_variants(monkeypatch):
     china_intake.clear_name_cache()
 
 
+def test_a_share_display_name_falls_back_to_complete_heatmap(monkeypatch):
+    """A-share holdings resolve natively when optional per-name snapshots are absent."""
+    from brain import china_intake
+    china_intake.clear_name_cache()
+
+    def fake_read(rel):
+        if rel == "marketdata/china_heatmap.json":
+            return {"tiles": [
+                {"t": "600882.SS", "name": "Milkground Food", "name_zh": "妙可蓝多"},
+                {"t": "002020.SZ", "name": "Jingxin Pharma", "name_zh": "京新药业"},
+            ]}
+        return None
+
+    monkeypatch.setattr(china_intake, "_read", fake_read)
+    assert china_intake.display_name("600882.SS") == "妙可蓝多"
+    assert china_intake.display_name("002020.SZ") == "京新药业"
+    china_intake.clear_name_cache()
+
+
 def test_display_name_falls_back_to_board(monkeypatch):
     """A freshly surfaced name with NO per-name `chinastockdata/<T>.json` snapshot still resolves via
     the desk boards (every buy-board / alpha-leader row carries a `name`). Regression for 603301
