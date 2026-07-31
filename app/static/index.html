@@ -5579,8 +5579,9 @@ function renderSelfPositions() {
   pos.forEach(function(p) {
     var u = pnlCell(p.unrealized_pnl, p.unrealized_pct);
     var hasTh = !!(p.thesis && p.thesis.trim());
+    var selfPosName = securityName(p);
     rows += '<tr class="pos-row" onclick="toggleSelfExpand(\'' + esc(p.ticker) + '\')">' +
-      '<td><span class="pos-ticker">' + esc(p.ticker) + '</span>' + (hasTh ? ' <span class="mm-sd-thesis-flag" title="' + t('sd.has_thesis') + '">◆</span>' : '') + '</td>' +
+      '<td><span class="pos-ticker">' + esc(p.ticker) + '</span>' + (hasTh ? ' <span class="mm-sd-thesis-flag" title="' + t('sd.has_thesis') + '">◆</span>' : '') + (selfPosName ? '<span class="pos-name" style="display:block;font-size:11px;color:var(--muted);font-weight:500;line-height:1.2">' + esc(selfPosName) + '</span>' : '') + '</td>' +
       '<td style="font-variant-numeric:tabular-nums">' + fmtShares(p.shares) + '</td>' +
       '<td class="mm-hide-sm" style="font-variant-numeric:tabular-nums">' + (p.avg_cost != null ? '$' + Number(p.avg_cost).toFixed(2) : '—') + '</td>' +
       '<td style="font-variant-numeric:tabular-nums">' + (p.current_price != null ? '$' + Number(p.current_price).toFixed(2) : '—') + '</td>' +
@@ -5672,9 +5673,10 @@ function renderSelfHistory() {
   hist.forEach(function(r) {
     var isBuy = r.action === 'buy', rr = pnlCell(r.realized_pnl, r.realized_pct);
     var queuedTag = r.queued ? ' <span class="mm-sd-thesis-flag" title="' + esc(t('sd.queued_fill')) + '">⧖</span>' : '';
+    var selfTradeName = securityName(r);
     rows += '<tr>' +
       '<td class="l" style="font-variant-numeric:tabular-nums;color:var(--muted)">' + fmtDate(r.date) + '</td>' +
-      '<td><span class="pos-ticker">' + esc(r.ticker || '—') + '</span>' + queuedTag + '</td>' +
+      '<td><span class="pos-ticker">' + esc(r.ticker || '—') + '</span>' + queuedTag + (selfTradeName ? '<span class="pos-name" style="display:block;font-size:11px;color:var(--muted);font-weight:500;line-height:1.2">' + esc(selfTradeName) + '</span>' : '') + '</td>' +
       '<td><span class="mm-side-chip ' + (isBuy ? 'buy' : 'sell') + '">' + (isBuy ? t('trades.buy') : t('trades.sell')) + '</span></td>' +
       '<td class="mm-hide-sm" style="font-variant-numeric:tabular-nums">' + fmtShares(r.shares) + '</td>' +
       '<td style="font-variant-numeric:tabular-nums">' + (r.price != null ? '$' + Number(r.price).toFixed(2) : '—') + '</td>' +

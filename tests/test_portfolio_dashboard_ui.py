@@ -120,3 +120,5 @@ def test_hk_security_names_follow_the_active_language() -> None:
     assert "var tradeName = securityName(r)" in HTML
     assert "var trName = securityName(tr)" in HTML
     assert "var holdingName = securityName(h)" in HTML
+    assert "var selfPosName = securityName(p)" in HTML
+    assert "var selfTradeName = securityName(r)" in HTML

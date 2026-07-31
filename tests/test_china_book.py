@@ -527,14 +527,13 @@ def test_run_china_attaches_names_and_delegates_translation(iso, monkeypatch):
     assert {"a-share core", "A-share moat", "closing note"} <= set(captured.get("texts") or [])
 
 
-def test_api_trades_attaches_region_display_names(iso, monkeypatch):
-    """Trade History rows for the venue books (China A-shares, HK) carry the same display
-    name the Positions panel shows — A-share Chinese, HK English — so the blotter isn't just
-    opaque numeric / HK codes. US books stay code-only (no venues → no attachment)."""
+def test_api_trades_attaches_security_names_for_every_region(iso, monkeypatch):
+    """Trade History rows carry the same canonical display names as Positions."""
     from app import web
     from brain import china_intake
     monkeypatch.setattr(china_intake, "display_name",
-                        lambda t: {"600519.SS": "贵州茅台", "0700.HK": "Tencent"}.get(t, t))
+                        lambda t: {"600519.SS": "贵州茅台", "0700.HK": "Tencent",
+                                   "AAPL": "Apple Inc"}.get(t, t))
     monkeypatch.setattr(china_intake, "display_name_zh",
                         lambda t: {"0700.HK": "腾讯控股"}.get(t, t))
 
@@ -550,14 +549,13 @@ def test_api_trades_attaches_region_display_names(iso, monkeypatch):
         if pid == "hk":
             assert data["history"][0]["name_zh"] == "腾讯控股"
 
-    # a US book has no venue restriction → no name attachment (codes are self-describing).
-    # flagship's blotter resolves through the (conftest-isolated) legacy _FILLS_PATH.
+    # Flagship's blotter resolves through the test-isolated legacy _FILLS_PATH.
     import portfolio.trade_history as th
     th._FILLS_PATH.write_text(
         json.dumps({"date": "2026-06-20", "ticker": "AAPL", "side": "buy",
                     "shares": 10, "price": 100.0, "value": 1000.0}) + "\n")
     us = json.loads(web.api_trades(portfolio="flagship").body)
-    assert us["history"] and "name" not in us["history"][0]
+    assert us["history"][0]["name"] == "Apple Inc"
 
 
 def test_trade_history_uses_account_to_hide_stale_fifo_residue(iso):
@@ -587,15 +585,13 @@ def test_trade_history_uses_account_to_hide_stale_fifo_residue(iso):
     assert buy["unrealized_pnl"] is None
 
 
-def test_api_decisions_attaches_region_display_names(iso, monkeypatch):
-    """Daily Decision Log buy/sell chips AND holding rows for the venue books (China A-shares,
-    HK) carry localized display names, resolved server-side on every read — so even historical
-    entries logged before names were captured (no `name` baked in) backfill. US brain books stay
-    code-only (no venues → no attachment)."""
+def test_api_decisions_attaches_security_names_for_every_region(iso, monkeypatch):
+    """Daily Decision Log trades and holdings backfill names for every Brain book."""
     from app import web
     from brain import china_intake
     monkeypatch.setattr(china_intake, "display_name",
-                        lambda t: {"600519.SS": "贵州茅台", "0700.HK": "Tencent"}.get(t, t))
+                        lambda t: {"600519.SS": "贵州茅台", "0700.HK": "Tencent",
+                                   "AAPL": "Apple Inc"}.get(t, t))
     monkeypatch.setattr(china_intake, "display_name_zh",
                         lambda t: {"0700.HK": "腾讯控股"}.get(t, t))
 
@@ -614,7 +610,6 @@ def test_api_decisions_attaches_region_display_names(iso, monkeypatch):
             assert d["executed"][0]["name_zh"] == "腾讯控股"
             assert d["holdings"][0]["name_zh"] == "腾讯控股"
 
-    # a US brain book has no venue restriction → no name attachment (codes are self-describing).
     adir = registry.data_dir("autonomous")
     adir.mkdir(parents=True, exist_ok=True)
     (adir / "decisions.jsonl").write_text(json.dumps({
@@ -622,7 +617,8 @@ def test_api_decisions_attaches_region_display_names(iso, monkeypatch):
         "executed": [{"ticker": "AAPL", "side": "buy", "shares": 10, "value": 1000.0}],
         "holdings": [{"ticker": "AAPL", "weight": 0.5, "rationale": "core"}]}) + "\n")
     ud = json.loads(web.api_decisions(portfolio="autonomous").body)["decisions"][0]
-    assert "name" not in ud["executed"][0] and "name" not in ud["holdings"][0]
+    assert ud["executed"][0]["name"] == "Apple Inc"
+    assert ud["holdings"][0]["name"] == "Apple Inc"
 
 
 def test_api_decisions_sell_chips_show_pct_and_realized_pnl(iso, monkeypatch):
@@ -697,6 +693,53 @@ def test_api_portfolio_repairs_stale_china_ticker_names(iso, monkeypatch):
 
     position = json.loads(web.api_portfolio(portfolio="china").body)["positions"][0]
     assert position["name"] == "妙可蓝多"
+
+
+def test_api_portfolio_backfills_us_security_names(iso, monkeypatch):
+    """Existing US books get canonical names without waiting for a republish."""
+    from app import web
+    from brain import china_intake
+
+    monkeypatch.setattr(
+        china_intake, "display_name",
+        lambda t: {"LNG": "Cheniere Energy"}.get(t, t),
+    )
+    pdir = registry.data_dir("autonomous")
+    pdir.mkdir(parents=True, exist_ok=True)
+    (pdir / "latest.json").write_text(json.dumps({
+        "portfolio_id": "autonomous",
+        "as_of": "2026-07-30",
+        "kind": "autonomous",
+        "positions": [{"ticker": "LNG", "weight": 0.15}],
+    }))
+
+    position = json.loads(web.api_portfolio(portfolio="autonomous").body)["positions"][0]
+    assert position["name"] == "Cheniere Energy"
+
+
+def test_api_self_directed_backfills_us_security_names(monkeypatch):
+    """Self-Directed positions and history use the same security-name contract."""
+    from app import web
+    from brain import china_intake
+    from portfolio import self_directed
+
+    monkeypatch.setattr(china_intake, "display_name", lambda t: "Apple Inc" if t == "AAPL" else t)
+    monkeypatch.setattr(self_directed, "_load_account", lambda: {"positions": {"AAPL": {}}})
+    monkeypatch.setattr(self_directed, "_load_pending", lambda: [])
+    monkeypatch.setattr(web, "_live_prices", lambda tickers: {})
+    monkeypatch.setattr(
+        self_directed, "book",
+        lambda **kwargs: {"positions": [{"ticker": "AAPL"}], "pending": []},
+    )
+    book = json.loads(web.api_self_directed().body)
+    assert book["positions"][0]["name"] == "Apple Inc"
+
+    monkeypatch.setattr(
+        self_directed, "history",
+        lambda **kwargs: {"history": [{"ticker": "AAPL"}], "pending": []},
+    )
+    history = json.loads(web.api_self_directed_history().body)
+    assert history["history"][0]["name"] == "Apple Inc"
 
 
 def test_api_portfolio_banner_summary_falls_back_to_decision_log(iso):
