@@ -31,6 +31,13 @@
   --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
   --space-5: 20px; --space-6: 24px; --space-8: 32px;
 }
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+html body :where(button, [role="button"], a, input, select, textarea) {
+  touch-action: manipulation;
+}
 html[data-theme="light"] {
   /* Light palette tuned to match the Bitcoin Vector dashboard: airy #F7F8FA
      canvas, white cards on a soft #EAECF0 grid, and the same vivid #285FFF
@@ -820,21 +827,65 @@ html[data-lang="zh"] .lang-toggle .zh-opt { color: #fff; }
   font-size: 12.5px;
   line-height: 1.55;
 }
+.mm-scroll-hint {
+  display: none;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: .025em;
+}
+.mm-scroll-hint::before {
+  content: "↔";
+  color: var(--info);
+  font-size: 13px;
+}
 
 :where(.mm-product-links a, .mm-product-brand):focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
-@media (max-width: 700px) {
-  .mm-product-bar { align-items: flex-start; flex-wrap: wrap; gap: 10px 12px; }
-  .mm-product-context { margin-left: auto; }
+@media (max-width: 820px) {
+  .mm-product-bar {
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    margin-bottom: 18px;
+    padding-bottom: 12px;
+  }
+  .mm-product-brand { min-height: 44px; }
+  .mm-product-context {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    margin-left: auto;
+  }
   .mm-product-links {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     width: 100%;
     margin-left: 0;
-    overflow-x: auto;
-    scrollbar-width: none;
+    gap: 4px;
+    overflow: visible;
   }
-  .mm-product-links::-webkit-scrollbar { display: none; }
-  .mm-product-links a { flex: 1 0 auto; justify-content: center; }
+  .mm-product-links a {
+    min-width: 0;
+    min-height: 44px;
+    justify-content: center;
+    padding: 7px 8px;
+    text-align: center;
+    white-space: normal;
+  }
+  .mm-page-heading { align-items: flex-start; margin-bottom: 18px; }
+  .mm-page-note { max-width: none; margin: 0; }
+  .mm-scroll-hint { display: flex; }
+  html body :where(input, select, textarea) { font-size: 16px; }
+}
+@media (pointer: coarse) {
+  .mm-product-brand,
+  .mm-product-links a { min-height: 44px; }
+  html body :where(input, select, textarea) { font-size: 16px; }
 }

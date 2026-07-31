@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>MASTERMIND — Improvement Agenda</title>
 
 <!-- No-flash theme init — MUST be first, before stylesheets (mirrors market_view.html). -->
@@ -224,9 +224,16 @@ body.page-ag .msg {
   border-radius: 11px;
 }
 @media (max-width: 620px) {
-  body.page-ag { padding: 14px 12px 52px; }
+  body.page-ag {
+    padding:
+      calc(14px + env(safe-area-inset-top))
+      max(12px, env(safe-area-inset-right))
+      calc(56px + env(safe-area-inset-bottom))
+      max(12px, env(safe-area-inset-left));
+  }
   body.page-ag .item { padding: 17px 15px 18px; border-radius: 13px; }
   body.page-ag .summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  body.page-ag :is(.item h2, .evidence li, .fix, .impact, .note) { overflow-wrap: anywhere; }
 }
 </style>
 </head>

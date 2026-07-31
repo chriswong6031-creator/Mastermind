@@ -323,6 +323,13 @@ def chat_js() -> FileResponse:
                         headers={"Cache-Control": "no-cache"})
 
 
+@router.get("/account.js", include_in_schema=False)
+def account_js() -> FileResponse:
+    """Serve the shared account/profile panel loaded by the dashboard shell."""
+    return FileResponse(_STATIC / "account.js", media_type="application/javascript",
+                        headers={"Cache-Control": "no-cache"})
+
+
 def _company_meta(ticker: str) -> dict:
     """Company name / sector / current price / fundamentals for the research PDF, merged from
     the vendored macro stockdata (fundamentals) + Polygon (live price, optional description /

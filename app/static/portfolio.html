@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>MASTERMIND — Portfolio Desk</title>
 
 <!-- No-flash theme init — MUST be first, before stylesheets. -->
@@ -233,8 +233,11 @@ body.page-pf .pos-table-wrap {
   border: 1px solid var(--pf-hair);
   border-radius: 10px;
   overflow: auto;
+  overscroll-behavior-inline: contain;
+  -webkit-overflow-scrolling: touch;
   background: color-mix(in srgb, var(--panel2) 30%, transparent);
 }
+body.page-pf table.pos-table { min-width: 920px; }
 body.page-pf table.pos-table th {
   padding: 10px;
   border-bottom: 1px solid var(--line);
@@ -307,14 +310,51 @@ body.page-pf :where(.btn, input, select):focus-visible {
 @media (max-width: 900px) {
   body.page-pf .add-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   body.page-pf .add-form .field:last-of-type { grid-column: 1 / -1; }
+  body.page-pf .add-form input,
+  body.page-pf .add-form select { min-height: 48px; font-size: 16px; }
+  body.page-pf .btn { min-height: 44px; }
 }
 @media (max-width: 620px) {
-  body.page-pf { padding: 14px 12px 52px; }
+  body.page-pf.pf-modal-open { overflow: hidden; }
+  body.page-pf {
+    padding:
+      calc(14px + env(safe-area-inset-top))
+      max(12px, env(safe-area-inset-right))
+      calc(56px + env(safe-area-inset-bottom))
+      max(12px, env(safe-area-inset-left));
+  }
   body.page-pf .pf-strip { grid-template-columns: 1fr; }
   body.page-pf .pf-strip-kv { min-height: 72px; }
   body.page-pf .panel { padding: 17px 14px; border-radius: 13px; }
   body.page-pf .add-form { grid-template-columns: 1fr; }
   body.page-pf .add-form .field:last-of-type { grid-column: auto; }
+  body.page-pf .add-form input,
+  body.page-pf .add-form select { min-height: 48px; font-size: 16px; }
+  body.page-pf .btn { min-height: 44px; }
+  body.page-pf .btn.sm { min-height: 44px; padding-inline: 13px; }
+  body.page-pf #edit-modal {
+    align-items: flex-end !important;
+    padding-top: env(safe-area-inset-top);
+  }
+  body.page-pf #edit-modal > .panel {
+    width: 100% !important;
+    max-width: none !important;
+    max-height: calc(100vh - env(safe-area-inset-top));
+    max-height: calc(100dvh - env(safe-area-inset-top));
+    margin: 0;
+    padding-bottom: calc(17px + env(safe-area-inset-bottom));
+    border-radius: 18px 18px 0 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  body.page-pf #edit-modal .edit-actions {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr;
+  }
+  body.page-pf #edit-modal .edit-actions .danger {
+    grid-column: 1 / -1;
+    margin-left: 0 !important;
+  }
 }
 </style>
 </head>
@@ -391,6 +431,7 @@ body.page-pf :where(.btn, input, select):focus-visible {
   <!-- positions panel -->
   <div id="pf-positions-panel" class="panel" style="display:none">
     <h2>Positions</h2>
+    <div class="mm-scroll-hint" aria-hidden="true">Swipe horizontally to view all position fields</div>
     <div class="pos-table-wrap">
       <table class="pos-table">
         <thead>
@@ -440,7 +481,7 @@ body.page-pf :where(.btn, input, select):focus-visible {
           <label for="edit-notes">Notes (optional)</label>
           <input type="text" id="edit-notes" placeholder="thesis, context…">
         </div>
-        <div style="display:flex; gap:8px; margin-top:8px">
+        <div class="edit-actions" style="display:flex; gap:8px; margin-top:8px">
           <button class="btn primary" type="button" onclick="submitEdit()">Save</button>
           <button class="btn" type="button" onclick="closeEditModal()">Cancel</button>
           <button class="btn sm danger" type="button" onclick="closePosition()" style="margin-left:auto">Close position</button>
@@ -814,9 +855,12 @@ function openEditModal(id) {
   hideError("edit-error");
   var modal = document.getElementById("edit-modal");
   modal.style.display = "flex";
+  document.body.classList.add("pf-modal-open");
+  setTimeout(function() { document.getElementById("edit-shares").focus(); }, 0);
 }
 function closeEditModal() {
   document.getElementById("edit-modal").style.display = "none";
+  document.body.classList.remove("pf-modal-open");
 }
 function submitEdit() {
   var id = document.getElementById("edit-id").value;
@@ -918,6 +962,8 @@ window.openEditModal = function(id) {
   document.getElementById("edit-notes").value = row.notes || "";
   hideError("edit-error");
   document.getElementById("edit-modal").style.display = "flex";
+  document.body.classList.add("pf-modal-open");
+  setTimeout(function() { document.getElementById("edit-shares").focus(); }, 0);
 };
 window.closeEditModal = closeEditModal;
 window.submitEdit = submitEdit;
@@ -937,6 +983,14 @@ document.getElementById("pos-tbody").addEventListener("click", function(evt) {
   } else if (btn.classList.contains("pf-del-btn")) {
     var ticker = btn.dataset.ticker || "";
     deletePosition(id, ticker);
+  }
+});
+document.getElementById("edit-modal").addEventListener("click", function(evt) {
+  if (evt.target === evt.currentTarget) closeEditModal();
+});
+document.addEventListener("keydown", function(evt) {
+  if (evt.key === "Escape" && document.getElementById("edit-modal").style.display !== "none") {
+    closeEditModal();
   }
 });
 

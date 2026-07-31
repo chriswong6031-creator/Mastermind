@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>MASTERMIND — Portfolio Dashboard</title>
 
 <!-- 1. No-flash theme init — MUST be first script, before stylesheets.
@@ -2238,29 +2238,61 @@ html[data-theme="light"] body.page-mm {
   body.page-mm .mm-perf-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   body.page-mm .mm-perf-nav { grid-column: span 4; }
 }
-@media (max-width: 760px) {
-  body.page-mm { padding: 14px 12px 54px; }
+@media (max-width: 820px) {
+  body.page-mm {
+    padding:
+      calc(14px + env(safe-area-inset-top))
+      max(12px, env(safe-area-inset-right))
+      calc(82px + env(safe-area-inset-bottom))
+      max(12px, env(safe-area-inset-left));
+  }
   body.page-mm #mm-nav { gap: 9px; margin-bottom: 15px; }
   body.page-mm .mm-nav-brand { flex: 1; }
   body.page-mm .mm-nav-tabs {
     order: 5;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     width: 100%;
     margin-left: 0;
-    overflow-x: auto;
-    scrollbar-width: none;
+    gap: 4px;
+    overflow: visible;
   }
-  body.page-mm .mm-nav-tabs::-webkit-scrollbar { display: none; }
-  body.page-mm .mm-nav-tab { flex: 1 0 auto; justify-content: center; text-align: center; }
+  body.page-mm .mm-nav-tab {
+    width: 100%;
+    min-height: 44px;
+    padding-inline: 9px;
+    justify-content: center;
+    text-align: center;
+  }
   body.page-mm .mm-nav-spacer { display: none; }
+  body.page-mm .mm-nav-ctrls :is(.theme-switch, .lang-toggle, .mmacc-trigger) {
+    min-height: 44px;
+  }
+  body.page-mm .theme-switch { height: 44px; }
+  body.page-mm .theme-switch .knob { top: 10px; }
+  body.page-mm .lang-toggle .opt {
+    min-height: 36px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
   body.page-mm .mm-pf-switch {
     display: flex;
     gap: 5px;
+    padding-inline: 2px;
     overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    scroll-padding-inline: 2px;
     scroll-snap-type: x proximity;
     scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
   }
   body.page-mm .mm-pf-switch::-webkit-scrollbar { display: none; }
-  body.page-mm .mm-pf-tab { flex: 0 0 154px; scroll-snap-align: start; }
+  body.page-mm .mm-pf-tab {
+    flex: 0 0 154px;
+    min-height: 50px;
+    scroll-snap-align: center;
+  }
   body.page-mm .panel { padding: 17px 15px; border-radius: 13px; }
   body.page-mm .panel > h2 { font-size: 15px; }
   body.page-mm .mm-perf-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -2270,6 +2302,81 @@ html[data-theme="light"] body.page-mm {
   body.page-mm .mm-ec-wrap { min-height: 210px; }
   body.page-mm .mm-ec-range { width: 100%; margin-left: 0; }
   body.page-mm .mm-sd-ticket { grid-template-columns: 1fr; }
+  body.page-mm .mm-rsub-bar { width: 100%; }
+  body.page-mm .mm-rsub-tab { flex: 1; min-height: 44px; }
+  body.page-mm :is(.mm-table-wrap, .mm-rp-wrap) {
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  body.page-mm .mm-table-wide table { min-width: 660px; }
+  body.page-mm :is(.mm-sd-input, .mm-sd-thesis-ta) {
+    min-height: 48px;
+    font-size: 16px;
+  }
+  body.page-mm .mm-sd-unit { width: 100%; }
+  body.page-mm .mm-sd-unit-btn {
+    flex: 1;
+    min-width: 44px;
+    min-height: 44px;
+  }
+  body.page-mm .mm-sd-result { min-height: 44px; align-items: center; }
+  body.page-mm :is(.mm-sd-btn, .mm-sd-qbtn, .mm-sd-save, .mm-auto-more,
+    .mm-dec-more, .mm-rp-view, .mm-pager-btn) {
+    min-height: 44px;
+  }
+  body.page-mm .mm-sd-pend-chip .x {
+    min-width: 44px;
+    min-height: 44px;
+    margin-block: -10px;
+  }
+  body.page-mm #mm-thesis-modal {
+    align-items: stretch;
+    padding: 0;
+    overflow: hidden;
+  }
+  body.page-mm .mm-modal-card {
+    min-height: 100vh;
+    min-height: 100dvh;
+    max-width: none;
+    border-width: 0;
+    border-radius: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  body.page-mm .mm-modal-head {
+    top: 0;
+    padding:
+      calc(12px + env(safe-area-inset-top))
+      max(14px, env(safe-area-inset-right))
+      12px
+      max(14px, env(safe-area-inset-left));
+    border-radius: 0;
+    z-index: 2;
+  }
+  body.page-mm .mm-modal-head .t {
+    flex: 1 1 calc(100% - 120px);
+    min-width: 0;
+    font-size: 16px;
+  }
+  body.page-mm :is(.mm-modal-close, .mm-pdf-btn) { min-height: 44px; }
+  body.page-mm .mm-modal-close { width: 44px; }
+  body.page-mm .mm-pdf-btn { margin-left: 0; }
+  body.page-mm .mm-modal-scores {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    padding: 13px 15px;
+  }
+  body.page-mm .mm-modal-body {
+    padding:
+      10px max(15px, env(safe-area-inset-right))
+      calc(28px + env(safe-area-inset-bottom))
+      max(15px, env(safe-area-inset-left));
+    overflow-wrap: anywhere;
+  }
+  body.page-mm .mm-posture { max-width: 100%; }
+  body.page-mm .mm-posture-pop { left: 0; right: auto; max-width: calc(100vw - 54px); }
 }
 @media (max-width: 440px) {
   body.page-mm .mm-logo-word { font-size: 12px; letter-spacing: .11em; }
@@ -2279,6 +2386,21 @@ html[data-theme="light"] body.page-mm {
   body.page-mm .mm-perf-nav-value { font-size: 30px; }
   body.page-mm .mm-perf-stat-value { font-size: 18px; }
   body.page-mm .mm-th-summary { display: grid; grid-template-columns: 1fr 1fr; }
+}
+@media (pointer: coarse) {
+  body.page-mm .mm-nav-tab,
+  body.page-mm .mm-rsub-tab,
+  body.page-mm :is(.mm-sd-btn, .mm-sd-qbtn, .mm-sd-save, .mm-auto-more,
+    .mm-dec-more, .mm-rp-view, .mm-pager-btn) { min-height: 44px; }
+  body.page-mm .theme-switch { height: 44px; }
+  body.page-mm .theme-switch .knob { top: 10px; }
+  body.page-mm .lang-toggle .opt {
+    min-height: 36px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  body.page-mm :is(.mm-sd-input, .mm-sd-thesis-ta) { font-size: 16px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -5026,7 +5148,8 @@ function renderDeskScheduler() {
       + '<td style="padding:4px 8px;font-size:11px;color:var(--muted)">' + esc(nextStr) + '</td>'
       + '</tr>';
   });
-  host.innerHTML = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">'
+  host.innerHTML = '<div class="mm-scroll-hint" aria-hidden="true">Swipe horizontally to view the full schedule</div>'
+    + '<div class="mm-table-wrap mm-table-wide"><table style="width:100%;border-collapse:collapse">'
     + '<thead><tr style="border-bottom:1px solid var(--line)">'
     + '<th style="text-align:left;padding:4px 8px 6px 0;font-size:11px;color:var(--muted);font-weight:600">Job</th>'
     + '<th style="padding:4px 8px 6px;font-size:11px;color:var(--muted);font-weight:600">State</th>'
@@ -5920,6 +6043,19 @@ function renderPortfolioSwitch() {
       '<span class="mm-pf-name"><span class="mm-pf-dot ' + (p.kind === 'autonomous' ? 'autonomous' : (p.kind === 'heavyweight' ? 'heavyweight' : (p.kind === 'china_brain' ? 'china' : (p.kind === 'hk_brain' ? 'hk' : (p.kind === 'etf_brain' ? 'etf' : 'gated'))))) + '"></span>' + esc(_pfLabel(p)) + '</span>' +
       '<span class="mm-pf-sub">' + sub + '</span></button>';
   }).join('');
+  if (window.requestAnimationFrame) window.requestAnimationFrame(revealActivePortfolioTab);
+  else setTimeout(revealActivePortfolioTab, 0);
+}
+
+function revealActivePortfolioTab() {
+  var host = E('pf-switch');
+  var active = host && host.querySelector('.mm-pf-tab.active');
+  if (!host || !active || !window.matchMedia('(max-width: 820px)').matches) return;
+  if (host.scrollWidth <= host.clientWidth) return;
+  var target = Math.max(0, active.offsetLeft - (host.clientWidth - active.offsetWidth) / 2);
+  var reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (typeof host.scrollTo === 'function') host.scrollTo({ left: target, behavior: reduce ? 'auto' : 'smooth' });
+  else host.scrollLeft = target;
 }
 
 // A "Brain book" (autonomous / heavyweight / china / hk / etf) is the decision-log style: no
