@@ -25,13 +25,13 @@ from brain import autonomous_mcp, bot_mcp, china_intake
 
 SERVER_NAME = "hk"
 PORTFOLIO_ID = "hk"
-BENCHMARK = "FXI"
 
 # Registry-driven so the HK desk (brain/hk_mcp.py) reuses this contract: the China book is HKD /
 # A-shares-only; the HK book is HKD / HK-only. ALLOWED_VENUES empty = unrestricted.
 from portfolio import registry as _registry
+BENCHMARK = _registry.benchmark(PORTFOLIO_ID)
 CURRENCY = _registry.currency(PORTFOLIO_ID)            # "HKD"
-ALLOWED_VENUES = set(_registry.venues(PORTFOLIO_ID))   # {"A-share"}
+ALLOWED_VENUES = set(_registry.venues(PORTFOLIO_ID))   # {"HK"}
 
 # Marker the builder / streaming layer can scan a tool result for (shared with the autonomous desk).
 BOOK_MARKER = autonomous_mcp.BOOK_MARKER

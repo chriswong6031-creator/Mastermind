@@ -50,11 +50,14 @@ def test_registry_registers_china():
 
 
 def test_benchmark_resolution():
-    assert registry.benchmark("china") == "FXI"
+    assert registry.benchmark("china") == "000300.SS"
+    assert registry.benchmark("hk") == "^HSI"
+    assert registry.benchmark_name("china") == "CSI 300"
+    assert registry.benchmark_name("hk") == "Hang Seng"
     # the US books stay on SPY (back-compat) — unknown / None too
     for pid in ("flagship", "autonomous", "heavyweight", None, "nope"):
         assert registry.benchmark(pid) == "SPY"
-    assert paper_account._benchmark_for("china") == "FXI"
+    assert paper_account._benchmark_for("china") == "000300.SS"
     assert paper_account._benchmark_for("flagship") == "SPY"
 
 
@@ -214,6 +217,33 @@ def test_yahoo_feed_hk_warm_and_cache(monkeypatch):
     yahoo_feed.clear_cache()
 
 
+def test_yahoo_feed_native_index_history_is_cached(monkeypatch):
+    import sys, types
+    import pandas as pd
+    from data_layer import yahoo_feed
+
+    yahoo_feed.clear_cache()
+    calls = {"n": 0}
+
+    def fake_download(ticker, **kw):
+        calls["n"] += 1
+        idx = pd.to_datetime(["2026-06-18", "2026-06-19", "2026-06-22"])
+        cols = pd.MultiIndex.from_product([["Close"], [ticker]])
+        return pd.DataFrame({("Close", ticker): [4_000.0, 4_050.0, 4_100.0]},
+                            index=idx, columns=cols)
+
+    fake_yf = types.ModuleType("yfinance")
+    fake_yf.download = fake_download
+    monkeypatch.setitem(sys.modules, "yfinance", fake_yf)
+
+    first = yahoo_feed.history_local("000300.SS")
+    second = yahoo_feed.history_local("000300.SS")
+    assert list(first.astype(float)) == [4_000.0, 4_050.0, 4_100.0]
+    assert list(second.astype(float)) == list(first.astype(float))
+    assert calls["n"] == 1
+    yahoo_feed.clear_cache()
+
+
 def test_live_price_prefers_tushare_else_snapshot(tmp_path, monkeypatch):
     """A-shares mark to the live Tushare CNY close; HK marks via Yahoo and falls back to the
     vendored snapshot when Yahoo returns nothing (here: yfinance is stubbed off in tests)."""
@@ -241,14 +271,16 @@ def test_live_price_hk_prefers_yahoo(monkeypatch):
 
 
 def test_mark_uses_per_book_benchmark(iso, monkeypatch):
-    """A china mark initialises the benchmark shares from FXI (not SPY); spy_nav tracks FXI."""
-    monkeypatch.setattr(paper_account, "_current_price", lambda t: {"FXI": 30.0}.get(t))
-    paper_account.mark({"FXI": 30.0}, "2026-06-22", portfolio_id="china")
+    """A China mark initializes the benchmark shares from CSI 300 (not SPY)."""
+    monkeypatch.setattr(paper_account, "_current_price", lambda t: {"000300.SS": 4_000.0}.get(t))
+    paper_account.mark({"000300.SS": 4_000.0}, "2026-06-22", portfolio_id="china")
     rows = [json.loads(l) for l in
             (registry.data_dir("china") / "nav_history.jsonl").read_text().splitlines() if l.strip()]
-    assert rows[-1]["spy_nav"] == pytest.approx(1_000_000.0)   # FXI normalised to $1M at inception
+    assert rows[-1]["spy_nav"] == pytest.approx(1_000_000.0)
+    assert rows[-1]["benchmark"] == "000300.SS"
     acct = json.loads((registry.data_dir("china") / "account.json").read_text())
-    assert acct["spy_inception_price"] == 30.0                 # the FXI mark, in the benchmark slot
+    assert acct["spy_inception_price"] == 4_000.0
+    assert acct["benchmark_symbol"] == "000300.SS"
 
 
 # --------------------------------------------------------------------------- #
@@ -341,19 +373,19 @@ def test_get_quote_reports_cny_and_venue(iso, monkeypatch):
 # run_china builder — offline + simulated multi-venue submission
 # --------------------------------------------------------------------------- #
 def test_run_china_offline_inaugural(iso, monkeypatch):
-    monkeypatch.setattr(paper_account, "_current_price", lambda t: {"FXI": 30.0}.get(t))
+    monkeypatch.setattr(paper_account, "_current_price", lambda t: {"000300.SS": 4_000.0}.get(t))
     from bot import china
     out = china.run_china(asof="2026-06-22", armed=False)
     assert out["inaugural"] is True and out["decided"] is False
     assert out["nav"] == 1_000_000.0
     latest = json.loads((registry.data_dir("china") / "latest.json").read_text())
     assert latest["portfolio_id"] == "china" and latest["schema"] == "portfolio.v1"
-    assert latest["benchmark"] == "FXI" and latest["currency"] == "CNY"
+    assert latest["benchmark"] == "000300.SS" and latest["currency"] == "CNY"
 
 
 def test_run_china_rejects_offvenue_and_executes_a_shares(iso, monkeypatch):
     # two A-shares (one priceable, one not) + an off-venue HK name the A-share book must reject
-    prices = {"600519.SS": 100.0, "300750.SZ": 200.0, "FXI": 30.0}   # 688981.SS deliberately unpriceable
+    prices = {"600519.SS": 100.0, "300750.SZ": 200.0, "000300.SS": 4_000.0}  # 688981.SS unpriceable
     monkeypatch.setattr(paper_account, "_current_price", lambda t: prices.get(t))
     from bot import china
     from brain import china_mcp
@@ -400,7 +432,8 @@ def test_run_china_marks_in_cny(iso, monkeypatch):
     from brain import china_mcp
     from portfolio import fx
     monkeypatch.setattr(fx, "rate_per_usd", lambda cur: {"CNY": 7.0, "HKD": 7.8}.get(cur, 1.0))
-    monkeypatch.setattr(paper_account, "_current_price", lambda t: {"600519.SS": 100.0, "FXI": 30.0}.get(t))  # USD
+    monkeypatch.setattr(paper_account, "_current_price",
+                        lambda t: {"600519.SS": 100.0, "000300.SS": 4_000.0}.get(t))  # USD
 
     def fake_brain(asof, inaugural):
         china_mcp.submission_path().parent.mkdir(parents=True, exist_ok=True)
@@ -526,7 +559,8 @@ def test_run_china_attaches_names_and_delegates_translation(iso, monkeypatch):
     """Every holding carries a display name, and the report is auto-translated via the Haiku tier."""
     from bot import china
     from brain import china_intake, china_mcp, translate
-    monkeypatch.setattr(paper_account, "_current_price", lambda t: {"600519.SS": 100.0, "FXI": 30.0}.get(t))
+    monkeypatch.setattr(paper_account, "_current_price",
+                        lambda t: {"600519.SS": 100.0, "000300.SS": 4_000.0}.get(t))
     monkeypatch.setattr(china_intake, "display_name", lambda t: {"600519.SS": "贵州茅台"}.get(t, t))
     captured: dict = {}
     monkeypatch.setattr(translate, "translate_and_cache",
@@ -813,7 +847,8 @@ def test_run_china_carries_unpriceable_held_position(iso, monkeypatch):
             {"ticker": "601318.SS", "weight": 0.2, "rationale": "c"}]
     # Day 1 — everything priceable, book gets built
     monkeypatch.setattr(paper_account, "_current_price",
-                        lambda t: {"600519.SS": 100.0, "300750.SZ": 50.0, "601318.SS": 105.0, "FXI": 30.0}.get(t))
+                        lambda t: {"600519.SS": 100.0, "300750.SZ": 50.0,
+                                   "601318.SS": 105.0, "000300.SS": 4_000.0}.get(t))
     monkeypatch.setattr(china, "_run_brain",
                         lambda a, i: (_submit(book, "init"), {"ok": True, "model": "m"})[1])
     china.run_china(asof="2026-06-22", armed=True)
@@ -821,7 +856,8 @@ def test_run_china_carries_unpriceable_held_position(iso, monkeypatch):
 
     # Day 2 — 300750.SZ is UNPRICEABLE this run but STILL in the submission → must be carried
     monkeypatch.setattr(paper_account, "_current_price",
-                        lambda t: {"600519.SS": 100.0, "601318.SS": 105.0, "FXI": 30.0}.get(t))   # no 300750.SZ
+                        lambda t: {"600519.SS": 100.0, "601318.SS": 105.0,
+                                   "000300.SS": 4_000.0}.get(t))   # no 300750.SZ
     monkeypatch.setattr(china, "_run_brain",
                         lambda a, i: (_submit(book, "hold"), {"ok": True, "model": "m"})[1])
     out = china.run_china(asof="2026-06-23", armed=True)
@@ -1093,7 +1129,7 @@ def test_run_china_aborts_on_tushare_feed_outage(iso, monkeypatch):
     tushare_feed.clear_cache()
     monkeypatch.setattr(tushare_feed, "_token", lambda: "tok")
     monkeypatch.setattr(tushare_feed, "_call", lambda api, params, fields: {"items": []})  # OUTAGE
-    monkeypatch.setattr(paper_account, "_current_price", lambda t: {"FXI": 30.0}.get(t))
+    monkeypatch.setattr(paper_account, "_current_price", lambda t: {"000300.SS": 4_000.0}.get(t))
 
     ran = {"brain": False}
 
@@ -1129,7 +1165,7 @@ def test_run_china_force_overrides_feed_gate(iso, monkeypatch):
     monkeypatch.setattr(tushare_feed, "_token", lambda: "tok")
     monkeypatch.setattr(tushare_feed, "_call", lambda api, params, fields: {"items": []})  # down
     monkeypatch.setattr(paper_account, "_current_price",
-                        lambda t: {"600519.SS": 100.0, "FXI": 30.0}.get(t))
+                        lambda t: {"600519.SS": 100.0, "000300.SS": 4_000.0}.get(t))
 
     def fake_brain(asof, inaugural):
         china_mcp.submission_path().parent.mkdir(parents=True, exist_ok=True)

@@ -282,6 +282,18 @@ def _fetch_price_series(ticker: str) -> "pd.Series | None":
     except Exception:
         pass
 
+    # The vendored Macro store does not yet include these native regional indexes. Keep the live
+    # fallback deliberately narrow so ordinary single-name reads remain offline/deterministic while
+    # every benchmark consumer (performance, calibration, risk views) can resolve the same indexes.
+    if (ticker or "").upper().strip() in {"000300.SS", "^HSI"}:
+        try:
+            from data_layer import yahoo_feed
+            s = yahoo_feed.history_local(ticker)
+            if s is not None and len(s) > 0:
+                return s
+        except Exception:
+            pass
+
     return None
 
 
@@ -291,7 +303,7 @@ def _live_price(ticker: str) -> float | None:
     Dispatches by venue suffix:
       * ``*.SS`` / ``*.SZ`` → the LIVE Tushare A-share close (CNY) when available, else the vendored
                               ``chinastockdata/`` snapshot → USD
-      * ``*.HK``            → the LIVE Yahoo close (HKD) when available, else the vendored
+      * ``*.HK`` / ``^HSI`` → the LIVE Yahoo close (HKD) when available, else the vendored
                               ``hkstockdata/`` snapshot → USD
       * else                → ``stockdata/``     (USD, incl. US-listed China ADRs)
     The China/HK legs convert their LOCAL quote to USD via ``portfolio.fx`` so the paper account's
@@ -301,7 +313,7 @@ def _live_price(ticker: str) -> float | None:
     t = (ticker or "").upper().strip()
     if t.endswith(".SS") or t.endswith(".SZ"):
         sub, convert = "chinastockdata", True
-    elif t.endswith(".HK"):
+    elif t.endswith(".HK") or t == "^HSI":
         sub, convert = "hkstockdata", True
     else:
         sub, convert = "stockdata", False
@@ -323,7 +335,7 @@ def _live_price(ticker: str) -> float | None:
                 local = tushare_feed.price_local(t)
             except Exception:
                 local = None
-    elif t.endswith(".HK"):
+    elif t.endswith(".HK") or t == "^HSI":
         try:
             from data_layer import yahoo_feed
             local = yahoo_feed.price_local(t)
@@ -377,8 +389,7 @@ def _current_price(ticker: str) -> float | None:
 
 
 def _benchmark_for(portfolio_id: str | None) -> str:
-    """The equity-curve comparison symbol for a book (registry-resolved; 'SPY' fallback for
-    the US books, 'FXI' for the all-China book)."""
+    """The registry-resolved equity-curve comparison symbol (SPY / CSI 300 / Hang Seng)."""
     try:
         from portfolio import registry
         return registry.benchmark(portfolio_id)
@@ -1021,19 +1032,29 @@ def mark(prices: dict[str, float], asof: str, portfolio_id: str | None = None,
          benchmark: str | None = None) -> None:
     """Snapshot NAV to nav_history.jsonl. Also initialises the benchmark shares on first call.
 
-    The benchmark symbol is registry-resolved per book ('SPY' for the US books, 'FXI' for the
-    all-China book); its inception shares are stored in the back-compat ``spy_shares`` slot, so
-    ``spy_nav`` in the history is the comparison line for whichever benchmark the book uses."""
+    The benchmark symbol is registry-resolved per book. Its normalized shares remain in the
+    back-compat ``spy_shares`` slot, while ``benchmark_symbol`` records which index those shares
+    belong to so a benchmark change can never reuse the old instrument's scale."""
     state = _load_account(portfolio_id)
     bench = benchmark or _benchmark_for(portfolio_id)
 
     nav_path = _paths(portfolio_id)["nav"]
 
-    # initialise the benchmark on first mark
+    # Initialise the benchmark on first mark. Regional books historically used FXI without storing
+    # the symbol; infer that legacy state once, then reset the normalized benchmark at $1M when the
+    # configured instrument changes to CSI 300 / Hang Seng. Portfolio NAV and holdings are untouched.
     spy_px = prices.get(bench)
-    if state.get("spy_shares") is None and spy_px and spy_px > 0:
+    stored_benchmark = state.get("benchmark_symbol")
+    if stored_benchmark is None and state.get("spy_shares") is not None:
+        stored_benchmark = "FXI" if portfolio_id in {"china", "hk"} else "SPY"
+    if spy_px and spy_px > 0 and (
+            state.get("spy_shares") is None or stored_benchmark != bench):
         state["spy_shares"] = _STARTING_NAV / spy_px
         state["spy_inception_price"] = spy_px
+        state["benchmark_symbol"] = bench
+        _save_account(state, portfolio_id)
+    elif spy_px and spy_px > 0 and state.get("benchmark_symbol") is None:
+        state["benchmark_symbol"] = bench
         _save_account(state, portfolio_id)
 
     # ADDITIVE: persist each held position's latest mark onto the account so non-mark readers
@@ -1068,6 +1089,7 @@ def mark(prices: dict[str, float], asof: str, portfolio_id: str | None = None,
         "cash": round(state["cash"], 2),
         "invested": round(invested, 2),
         "spy_nav": round(spy_nav, 2) if spy_nav is not None else None,
+        "benchmark": bench,
     }
     # idempotent per date: keep exactly one NAV row per calendar date (replace, don't
     # append) so repeated book builds on the same day don't pile up duplicate points.
@@ -1089,7 +1111,7 @@ def mark(prices: dict[str, float], asof: str, portfolio_id: str | None = None,
 
 
 # ---------------------------------------------------------------------------
-# SPY history loader (used by performance() for the comparison line only)
+# benchmark history loader (used by performance() for the comparison line only)
 # ---------------------------------------------------------------------------
 
 def _load_spy_history(window: int = 91, symbol: str = "SPY") -> "list[tuple[str, float]] | list":
@@ -1117,8 +1139,8 @@ def performance(portfolio_id: str | None = None,
     """Assemble the /api/performance contract.
 
     Series is HONEST:
-      - spy_nav = real SPY history normalised to $1,000,000 at the first date
-        of the window (S&P actual up/down, scaled to a $1M start).
+      - spy_nav = the configured benchmark's real history normalised to $1,000,000 at the first
+        date of the window (legacy field name retained for existing chart/API consumers).
       - nav (our portfolio) = $1,000,000 FLAT for every date before
         inception_date; from inception onward it uses the real marked NAV from
         nav_history.jsonl.  No hypothetical repricing of our allocation ever.
@@ -1132,6 +1154,15 @@ def performance(portfolio_id: str | None = None,
 
     Returns a safe minimal payload on error.
     """
+    bench = _benchmark_for(portfolio_id)
+    try:
+        from portfolio import registry
+        bench_name = registry.benchmark_name(portfolio_id)
+        bench_name_zh = registry.benchmark_name_zh(portfolio_id)
+    except Exception:
+        bench_name = bench
+        bench_name_zh = bench
+
     _base: dict[str, Any] = {
         "inception_date": _INCEPTION_DATE,
         "starting_nav": _STARTING_NAV,
@@ -1139,7 +1170,12 @@ def performance(portfolio_id: str | None = None,
         "cash": _STARTING_NAV,
         "invested": 0.0,
         "total_return_pct": 0.0,
-        "vs_spy_pct": 0.0,
+        "vs_benchmark_pct": None,
+        "vs_spy_pct": None,  # backward-compatible key; value is always versus ``benchmark``
+        "benchmark": bench,
+        "benchmark_name": bench_name,
+        "benchmark_name_zh": bench_name_zh,
+        "benchmark_as_of": None,
         "day_change_pct": 0.0,
         "max_drawdown_pct": 0.0,
         "realized_since": _INCEPTION_DATE,
@@ -1150,7 +1186,6 @@ def performance(portfolio_id: str | None = None,
     try:
         state = _load_account(portfolio_id)
         realized_rows = _load_jsonl(_paths(portfolio_id)["nav"])
-        bench = _benchmark_for(portfolio_id)
 
         inception_date = state.get("inception_date", _INCEPTION_DATE)
 
@@ -1189,11 +1224,30 @@ def performance(portfolio_id: str | None = None,
 
         total_return_pct = (current_nav - _STARTING_NAV) / _STARTING_NAV * 100
 
-        # vs_spy_pct: compare our return SINCE INCEPTION vs SPY since inception
-        vs_spy_pct: float = 0.0
-        if spy_nav_latest:
-            spy_return = (float(spy_nav_latest) - _STARTING_NAV) / _STARTING_NAV * 100
-            vs_spy_pct = round(total_return_pct - spy_return, 4)
+        # Compare like-for-like SINCE INCEPTION using the currently configured benchmark's own
+        # history. This avoids relabeling persisted FXI rows as CSI 300 / Hang Seng during the
+        # migration. The legacy spy_nav path is retained only when it is provably the same symbol.
+        benchmark_history = _load_spy_history(504, bench)
+        benchmark_since = [
+            (d, px) for d, px in benchmark_history
+            if d >= inception_date and (not today_iso or d <= today_iso) and px > 0
+        ]
+        vs_benchmark_pct: float | None = None
+        if benchmark_since:
+            benchmark_return = (
+                float(benchmark_since[-1][1]) / float(benchmark_since[0][1]) - 1.0
+            ) * 100
+            vs_benchmark_pct = round(total_return_pct - benchmark_return, 4)
+        elif spy_nav_latest:
+            latest_benchmark = realized_rows[-1].get("benchmark") if realized_rows else None
+            persisted_matches = (
+                latest_benchmark == bench or (latest_benchmark is None and bench == "SPY")
+            )
+            if persisted_matches:
+                benchmark_return = (
+                    float(spy_nav_latest) - _STARTING_NAV
+                ) / _STARTING_NAV * 100
+                vs_benchmark_pct = round(total_return_pct - benchmark_return, 4)
 
         # day-over-day change. With a live mark, compare to the last daily close STRICTLY before
         # today (so we don't divide by today's own frozen snapshot); otherwise the prior row.
@@ -1219,13 +1273,13 @@ def performance(portfolio_id: str | None = None,
             max_drawdown_pct = round(float(drawdowns.min()), 4)
 
         # ---- build series ----
-        # Load the benchmark history for the chart window (the comparison line).
-        spy_history = _load_spy_history(91, bench)  # list of (date_str, close)
+        # Use the tail for the chart; the full history above is reserved for since-inception alpha.
+        spy_history = benchmark_history[-91:]
 
         series: list[dict] = []
 
         if spy_history:
-            # Normalise SPY so spy_nav == $1M at the first date of the window
+            # Normalise the configured benchmark so spy_nav == $1M at the window's first date.
             spy0 = spy_history[0][1]
             spy_scale = _STARTING_NAV / spy0 if spy0 > 0 else 1.0
 
@@ -1259,15 +1313,23 @@ def performance(portfolio_id: str | None = None,
                         "kind": "realized",
                     })
         else:
-            # No SPY data (fully offline / price store empty): emit realized rows only
+            # No current benchmark history: emit realized rows, but never relabel legacy FXI values
+            # as a native regional index. Unlabelled legacy rows are accepted only for SPY books.
             for r in realized_rows:
                 nav_val = float(r["nav"])
                 if live_nav is not None and today_iso and r.get("date") == today_iso:
                     nav_val = current_nav      # live-mark today's point
+                row_benchmark = r.get("benchmark")
+                benchmark_matches = (
+                    row_benchmark == bench or (row_benchmark is None and bench == "SPY")
+                )
                 series.append({
                     "date": r["date"],
                     "nav": nav_val,
-                    "spy_nav": float(r["spy_nav"]) if r.get("spy_nav") is not None else None,
+                    "spy_nav": (
+                        float(r["spy_nav"])
+                        if benchmark_matches and r.get("spy_nav") is not None else None
+                    ),
                     "kind": "realized",
                 })
 
@@ -1284,8 +1346,12 @@ def performance(portfolio_id: str | None = None,
             "cash": round(cash, 2),
             "invested": round(invested, 2),
             "total_return_pct": round(total_return_pct, 4),
-            "vs_spy_pct": vs_spy_pct,
+            "vs_benchmark_pct": vs_benchmark_pct,
+            "vs_spy_pct": vs_benchmark_pct,
             "benchmark": bench,
+            "benchmark_name": bench_name,
+            "benchmark_name_zh": bench_name_zh,
+            "benchmark_as_of": benchmark_history[-1][0] if benchmark_history else None,
             "day_change_pct": day_change_pct,
             "max_drawdown_pct": max_drawdown_pct,
             "realized_since": inception_date,

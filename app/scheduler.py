@@ -1125,15 +1125,15 @@ def _build_benchmark_ledger(asof: str, union_usd: dict) -> None:
     defensive basket. We accumulate today's marks into data/benchmark/_series.json (a small
     {ticker:{date:px}} store) so the renorm has a real window; the ledger then renorms every bogey
     to growth-of-$1 and ranks them.  After the US build, build the two regional ledgers (china / hk)
-    with the same series store (FXI is the proxy for both).  Best-effort throughout; never raises.
-    Regime read is the live risk frame (degrades to plain-SPY / plain-proxy if absent)."""
+    with the same series store using CSI 300 for China and Hang Seng for Hong Kong. Best-effort
+    throughout; never raises. Regime read is the live risk frame."""
     import json as _json
     from brain import benchmark_ledger
     from control_plane import run_events as _re
     # Use the benchmark_ledger module's _BENCH_DIR so monkeypatching in tests redirects writes
     # to the sandbox (rather than the live data/benchmark/ tree).
     series_path = benchmark_ledger._BENCH_DIR / "_series.json"
-    # US build: accumulate SPY + defensive basket + FXI (also needed by regional bogeys)
+    # Accumulate the US bogeys plus each native regional index.
     want = [benchmark_ledger.SPY, *benchmark_ledger.DEFENSIVE_BASKET,
             *benchmark_ledger.CN_BOGEY, *benchmark_ledger.HK_BOGEY]
     want = list(dict.fromkeys(want))  # deduplicate, preserve order
@@ -1141,8 +1141,27 @@ def _build_benchmark_ledger(asof: str, union_usd: dict) -> None:
         series = _json.loads(series_path.read_text()) if series_path.exists() else {}
     except Exception:  # noqa: BLE001
         series = {}
+    native_indexes = set(benchmark_ledger.CN_BOGEY + benchmark_ledger.HK_BOGEY)
     for t in want:
-        px = union_usd.get(t)
+        px = None
+        if t in native_indexes:
+            # The Macro parquet does not carry these indexes. Seed/refresh their local-point
+            # history through the cached Yahoo seam; renormalization makes currency irrelevant.
+            try:
+                from data_layer import yahoo_feed
+                history = yahoo_feed.history_local(t)
+                if history is not None:
+                    latest_for_asof = None
+                    for idx, value in history.items():
+                        day = idx.date().isoformat()
+                        if day <= asof and value and float(value) > 0:
+                            series.setdefault(t, {})[day] = round(float(value), 6)
+                            latest_for_asof = float(value)
+                    px = latest_for_asof
+            except Exception:  # noqa: BLE001
+                px = None
+        else:
+            px = union_usd.get(t)
         if px and px > 0:
             series.setdefault(t, {})[asof] = round(float(px), 6)
     try:
@@ -1159,26 +1178,11 @@ def _build_benchmark_ledger(asof: str, union_usd: dict) -> None:
     benchmark_ledger.build(series, asof=asof, regime=regime)
 
     # Regional bogeys (china + hk) — best-effort; a miss MUST NOT abort the US build.
-    # Each bogey row carries bogey_is_proxy=True + proxy_reason so any lifecycle rec that cites
-    # this bogey is honest about the instrument (FXI ≠ CSI300 / Hang Seng).
-    # proxy_meta is passed INTO build_regional so the flags are stamped BEFORE the artifact is
-    # persisted to disk — the on-disk JSON is the source of truth, not just the in-memory return.
-    _proxy_reasons = {
-        "china": "FXI (iShares China Large-Cap) is a USD-listed proxy for CSI300/A-shares; "
-                 "000300.SS and MCHI/ASHR are not in the yahoo parquet store as of 2026-07-03.",
-        "hk":    "FXI is the only China-region ETF in the yahoo parquet store; "
-                 "2800.HK (Tracker Fund of HK) is the canonical HK proxy but is not yet priced.",
-    }
     for _book_id in benchmark_ledger.BOOK_BOGEY_OVERRIDES:
         try:
-            _proxy_reason = _proxy_reasons.get(
-                _book_id,
-                f"constituent list {benchmark_ledger.BOOK_BOGEY_OVERRIDES[_book_id]} is a proxy; "
-                "update BOOK_BOGEY_OVERRIDES when a canonical instrument is available.",
-            )
             result = benchmark_ledger.build_regional(
                 series, _book_id, asof=asof,
-                proxy_meta={"bogey_is_proxy": True, "proxy_reason": _proxy_reason},
+                proxy_meta={"bogey_is_proxy": False, "source": "native_index"},
             )
             _bogey = (result.get("bogeys") or {}).get("regional") or {}
             _re.append({
@@ -1187,8 +1191,8 @@ def _build_benchmark_ledger(asof: str, union_usd: dict) -> None:
                 "book": _book_id,
                 "step": "build_regional",
                 "status": "ok",
-                "bogey_is_proxy": True,
-                "proxy_reason": _proxy_reason,
+                "bogey_is_proxy": False,
+                "benchmark": benchmark_ledger.BOOK_BOGEY_OVERRIDES[_book_id],
                 "n_points": _bogey.get("n_points"),
                 "actor": "system",
             })

@@ -222,7 +222,8 @@ def test_performance_contract_shape(tmp_account: None) -> None:
     # required top-level keys
     required_keys = {
         "inception_date", "starting_nav", "current_nav", "cash", "invested",
-        "total_return_pct", "vs_spy_pct", "day_change_pct", "max_drawdown_pct",
+        "total_return_pct", "vs_benchmark_pct", "vs_spy_pct", "benchmark",
+        "benchmark_name", "benchmark_as_of", "day_change_pct", "max_drawdown_pct",
         "realized_since", "series", "note",
     }
     assert required_keys.issubset(perf.keys()), f"missing keys: {required_keys - perf.keys()}"
@@ -245,6 +246,75 @@ def test_performance_contract_shape(tmp_account: None) -> None:
     # realized rows are tagged correctly (we have 3 mark() calls above, d1/d2/d3)
     realized = [s for s in perf["series"] if s["kind"] == "realized"]
     assert len(realized) >= 3
+
+
+def test_regional_benchmark_migration_preserves_account_and_resets_only_baseline(
+        tmp_path: Path, monkeypatch) -> None:
+    """A legacy FXI-normalized regional account switches to CSI 300 without touching capital."""
+    from portfolio import paper_account, registry
+
+    regional = tmp_path / "china"
+    monkeypatch.setattr(registry, "data_dir", lambda portfolio_id=None: regional)
+    legacy = {
+        "inception_date": "2026-07-01",
+        "starting_nav": 1_000_000.0,
+        "cash": 500_000.0,
+        "positions": {"600519.SS": {"shares": 1_000.0, "avg_cost": 500.0}},
+        "spy_shares": 1_000_000.0 / 30.0,
+        "spy_inception_price": 30.0,
+    }
+    paper_account._save_account(legacy, "china")
+
+    paper_account.mark(
+        {"600519.SS": 500.0, "000300.SS": 4_000.0},
+        "2026-07-02",
+        portfolio_id="china",
+    )
+
+    migrated = paper_account._load_account("china")
+    row = paper_account._load_jsonl(paper_account._paths("china")["nav"])[-1]
+    assert migrated["cash"] == legacy["cash"]
+    assert migrated["positions"]["600519.SS"]["shares"] == 1_000.0
+    assert migrated["benchmark_symbol"] == "000300.SS"
+    assert migrated["spy_inception_price"] == 4_000.0
+    assert migrated["spy_shares"] == pytest.approx(250.0)
+    assert row["nav"] == pytest.approx(1_000_000.0)
+    assert row["spy_nav"] == pytest.approx(1_000_000.0)
+    assert row["benchmark"] == "000300.SS"
+
+
+def test_china_performance_uses_native_index_history_not_legacy_fxi(
+        tmp_path: Path, monkeypatch) -> None:
+    from portfolio import paper_account, registry
+
+    regional = tmp_path / "china"
+    monkeypatch.setattr(registry, "data_dir", lambda portfolio_id=None: regional)
+    paper_account._save_account({
+        "inception_date": "2026-07-01",
+        "starting_nav": 1_000_000.0,
+        "cash": 1_000_000.0,
+        "positions": {},
+        "spy_shares": 1_000_000.0 / 30.0,  # legacy FXI normalization
+        "spy_inception_price": 30.0,
+    }, "china")
+    nav_path = paper_account._paths("china")["nav"]
+    nav_path.write_text(json.dumps({
+        "date": "2026-07-01", "nav": 1_000_000.0, "cash": 1_000_000.0,
+        "spy_nav": 1_100_000.0,  # deliberately misleading legacy FXI value
+    }) + "\n")
+    history = [("2026-07-01", 4_000.0), ("2026-07-02", 4_200.0)]
+    monkeypatch.setattr(paper_account, "_load_spy_history",
+                        lambda window=91, symbol="SPY": history if symbol == "000300.SS" else [])
+
+    perf = paper_account.performance("china")
+
+    assert perf["benchmark"] == "000300.SS"
+    assert perf["benchmark_name"] == "CSI 300"
+    assert perf["benchmark_as_of"] == "2026-07-02"
+    assert perf["total_return_pct"] == 0.0
+    assert perf["vs_benchmark_pct"] == pytest.approx(-5.0)
+    assert perf["vs_spy_pct"] == perf["vs_benchmark_pct"]  # compatibility alias
+    assert perf["series"][-1]["spy_nav"] == pytest.approx(1_050_000.0)
 
 
 def test_no_hypothetical_series_points(tmp_account: None) -> None:

@@ -2,7 +2,7 @@
 
 Covers:
   · build_regional wiring in scheduler._build_benchmark_ledger (SPY spy + regional books)
-  · proxy flags present on regional bogey rows after the scheduler step
+  · native-index identity present on regional bogey rows after the scheduler step
   · regional lifecycle recs honest (insufficient-n until enough reviews)
   · backfill script fixtures (idempotency, no-overwrite, labels)
   · reviews_remaining math
@@ -52,8 +52,16 @@ def _make_nav_history(tmp_path: Path, book_id: str, rows: list[dict]) -> Path:
 def _spy_series() -> dict:
     return {
         "SPY": {"2026-06-18": 530.0, "2026-06-19": 535.0, "2026-06-20": 528.0},
-        "FXI": {"2026-06-18": 30.0, "2026-06-19": 31.0, "2026-06-20": 29.5},
+        "000300.SS": {"2026-06-18": 4_000.0, "2026-06-19": 4_050.0,
+                      "2026-06-20": 3_980.0},
+        "^HSI": {"2026-06-18": 20_000.0, "2026-06-19": 20_200.0,
+                 "2026-06-20": 19_900.0},
     }
+
+
+def _native_history(symbol: str) -> pd.Series:
+    values = _spy_series()[symbol]
+    return pd.Series(values.values(), index=pd.to_datetime(list(values)))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -63,24 +71,25 @@ def _spy_series() -> dict:
 class TestBuildRegionalWiring:
     """Verify that _build_benchmark_ledger now calls build_regional for china and hk."""
 
-    def test_fxi_accumulated_in_series_store(self, tmp_path, monkeypatch):
-        """After _build_benchmark_ledger, FXI must be in the series store (needed by regional)."""
+    def test_native_indexes_accumulated_in_series_store(self, tmp_path, monkeypatch):
+        """The scheduler hydrates both native indexes into the rolling series store."""
         import app.scheduler as S
         monkeypatch.setattr(S, "_build_benchmark_ledger", S._build_benchmark_ledger)
-        # Supply FXI in union_usd — the function should write it to the store
         from app.scheduler import _build_benchmark_ledger
-        import app.scheduler as _sched
         # patch the benchmark dir to tmp
         monkeypatch.setattr(B, "_BENCH_DIR", tmp_path)
         # also patch run_events to a no-op to avoid touching the real governance ledger
         import control_plane.run_events as _re
         monkeypatch.setattr(_re, "append", lambda ev: None)
-        union_usd = {"SPY": 530.0, "XLU": 55.0, "XLV": 150.0, "XLF": 42.0, "XLP": 77.0, "FXI": 30.0}
+        from data_layer import yahoo_feed
+        monkeypatch.setattr(yahoo_feed, "history_local", _native_history)
+        union_usd = {"SPY": 530.0, "XLU": 55.0, "XLV": 150.0, "XLF": 42.0, "XLP": 77.0}
         _build_benchmark_ledger("2026-06-18", union_usd)
         series_path = tmp_path / "_series.json"
         assert series_path.exists(), "_series.json must be written"
         series = json.loads(series_path.read_text())
-        assert "FXI" in series, "FXI must be in the series store after _build_benchmark_ledger"
+        assert "000300.SS" in series
+        assert "^HSI" in series
         assert "SPY" in series
 
     def test_regional_ledger_files_created(self, tmp_path, monkeypatch):
@@ -89,39 +98,40 @@ class TestBuildRegionalWiring:
         monkeypatch.setattr(B, "_BENCH_DIR", tmp_path)
         import control_plane.run_events as _re
         monkeypatch.setattr(_re, "append", lambda ev: None)
-        union_usd = {"SPY": 530.0, "XLU": 55.0, "XLV": 150.0, "XLF": 42.0, "XLP": 77.0, "FXI": 30.0}
+        from data_layer import yahoo_feed
+        monkeypatch.setattr(yahoo_feed, "history_local", _native_history)
+        union_usd = {"SPY": 530.0, "XLU": 55.0, "XLV": 150.0, "XLF": 42.0, "XLP": 77.0}
         # need at least 1 prior data point for inception to work
         series_path = tmp_path / "_series.json"
         tmp_path.mkdir(parents=True, exist_ok=True)
-        series_path.write_text(json.dumps({
-            "FXI": {"2026-06-18": 29.0},
-        }))
+        series_path.write_text(json.dumps({}))
         _build_benchmark_ledger("2026-06-19", union_usd)
         assert (tmp_path / "china").is_dir(), "china benchmark dir must be created"
         assert (tmp_path / "hk").is_dir(), "hk benchmark dir must be created"
         assert list((tmp_path / "china").glob("*.json")), "china benchmark file must exist"
         assert list((tmp_path / "hk").glob("*.json")), "hk benchmark file must exist"
 
-    def test_proxy_flags_present_on_regional_bogey(self, tmp_path, monkeypatch):
-        """The regional bogey in the persisted file must carry bogey_is_proxy=True."""
+    def test_native_flags_present_on_regional_bogey(self, tmp_path, monkeypatch):
+        """The regional bogey is explicitly marked as a native index, not a proxy."""
         from app.scheduler import _build_benchmark_ledger
         monkeypatch.setattr(B, "_BENCH_DIR", tmp_path)
         import control_plane.run_events as _re
         captured = []
         monkeypatch.setattr(_re, "append", lambda ev: captured.append(ev))
+        from data_layer import yahoo_feed
+        monkeypatch.setattr(yahoo_feed, "history_local", _native_history)
         series_path = tmp_path / "_series.json"
         tmp_path.mkdir(parents=True, exist_ok=True)
-        series_path.write_text(json.dumps({
-            "FXI": {"2026-06-18": 29.0},
-        }))
-        union_usd = {"SPY": 530.0, "XLU": 55.0, "XLV": 150.0, "XLF": 42.0, "XLP": 77.0, "FXI": 30.0}
+        series_path.write_text(json.dumps({}))
+        union_usd = {"SPY": 530.0, "XLU": 55.0, "XLV": 150.0, "XLF": 42.0, "XLP": 77.0}
         _build_benchmark_ledger("2026-06-19", union_usd)
-        # check the emitted run_events for proxy flags
         regional_events = [e for e in captured if e.get("kind") == "build_regional_benchmark"]
         assert len(regional_events) == 2, f"expected 2 regional events, got {regional_events}"
         for ev in regional_events:
-            assert ev["bogey_is_proxy"] is True, f"bogey_is_proxy must be True: {ev}"
-            assert ev["proxy_reason"], "proxy_reason must be non-empty"
+            assert ev["bogey_is_proxy"] is False
+        assert {tuple(e["benchmark"]) for e in regional_events} == {
+            ("000300.SS",), ("^HSI",),
+        }
 
     def test_regional_miss_does_not_abort_us_build(self, tmp_path, monkeypatch):
         """Even when build_regional raises, the US benchmark file must still be written."""
@@ -129,9 +139,11 @@ class TestBuildRegionalWiring:
         monkeypatch.setattr(B, "_BENCH_DIR", tmp_path)
         import control_plane.run_events as _re
         monkeypatch.setattr(_re, "append", lambda ev: None)
+        from data_layer import yahoo_feed
+        monkeypatch.setattr(yahoo_feed, "history_local", _native_history)
         # make build_regional always raise
         monkeypatch.setattr(B, "build_regional", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")))
-        union_usd = {"SPY": 530.0, "XLU": 55.0, "XLV": 150.0, "XLF": 42.0, "XLP": 77.0, "FXI": 30.0}
+        union_usd = {"SPY": 530.0, "XLU": 55.0, "XLV": 150.0, "XLF": 42.0, "XLP": 77.0}
         _build_benchmark_ledger("2026-06-19", union_usd)
         # the US build still produced a ledger file
         us_files = list(tmp_path.glob("20*.json"))
@@ -143,7 +155,7 @@ class TestBuildRegionalWiring:
 # ─────────────────────────────────────────────────────────────────────────────
 
 class TestRegionalLifecycle:
-    """Grade cards show insufficient-n at paper-n; proxy flags always present."""
+    """Grade cards show insufficient-n at paper-n and name their native index."""
 
     def _ledgers(self, n: int, *, book_id: str,
                  book_ret: float = 0.01, bogey_ret: float = 0.005) -> list[dict]:
@@ -200,17 +212,15 @@ class TestRegionalLifecycle:
             assert actual == expected, (
                 f"have={have}, expected reviews_remaining={expected}, got {actual}")
 
-    def test_proxy_flag_always_present_on_grade(self):
-        """bogey_is_proxy must be True on every regional grade."""
+    def test_native_index_identity_on_every_grade(self):
         cn_ledgers = self._ledgers(2, book_id="china")
         rep = BL.regional_review(cn_ledgers=cn_ledgers, hk_ledgers=[])
-        for grade in rep["grades"]:
-            assert grade.get("bogey_is_proxy") is True, (
-                f"bogey_is_proxy must be True on all regional grades: {grade['book']}")
-            assert grade.get("proxy_reason"), "proxy_reason must be non-empty"
+        grades = {grade["book"]: grade for grade in rep["grades"]}
+        assert grades["china"]["benchmark"] == "000300.SS"
+        assert grades["hk"]["benchmark"] == "^HSI"
+        assert all(grade.get("bogey_is_proxy") is False for grade in grades.values())
 
-    def test_proxy_caveat_on_recommendation(self):
-        """Any recommendation that fires must carry bogey_is_proxy + proxy_caveat."""
+    def test_native_benchmark_on_recommendation(self):
         min_n = BL._ci("min_effective_n", BL._MIN_EFFECTIVE_N)
         t_min = BL._cf("hac_t_min", BL._HAC_T_MIN)
         streak = BL._ci("losing_reviews_to_probation", BL._LOSING_REVIEWS_TO_PROBATION)
@@ -221,8 +231,8 @@ class TestRegionalLifecycle:
         states = {"china": {"state": BL.STATE_ACTIVE, "losing_streak": streak - 1, "since": "2026-06-18"}}
         rep = BL.regional_review(cn_ledgers=cn_ledgers, hk_ledgers=[], states=states)
         for rec in rep["recommendations"]:
-            assert rec.get("bogey_is_proxy") is True, "recommendation must carry bogey_is_proxy"
-            assert rec.get("proxy_caveat"), "recommendation must carry proxy_caveat"
+            assert rec.get("bogey_is_proxy") is False
+            assert rec.get("benchmark") == "000300.SS"
 
     def test_regional_books_not_in_us_orthogonality_matrix(self):
         """china and hk must never appear in the US orthogonality matrix."""
@@ -317,7 +327,7 @@ class TestBackfillScript:
         pdir = tmp_path / "parquet"
         pdir.mkdir(exist_ok=True)
         for ticker, base in [("SPY", 530.0), ("XLU", 55.0), ("XLV", 150.0),
-                              ("XLF", 42.0), ("XLP", 77.0), ("FXI", 30.0)]:
+                              ("XLF", 42.0), ("XLP", 77.0)]:
             rows = {
                 "2026-06-18": base,
                 "2026-06-19": base * 1.01,

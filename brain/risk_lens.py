@@ -38,7 +38,10 @@ _V = _ROOT / "vendor" / "macro"
 _MACRO_OFFICER = _ROOT / "data" / "risk_officer" / "macro" / "latest.json"
 
 # per-book benchmark — used for the dealer-gamma read + crowded-leader framing.
-_BENCHMARK = {"autonomous": "SPY", "heavyweight": "SPY", "etf": "SPY", "china": "FXI", "hk": "FXI"}
+_BENCHMARK = {
+    "autonomous": "SPY", "heavyweight": "SPY", "etf": "SPY",
+    "china": "000300.SS", "hk": "^HSI",
+}
 # the free-form books share one mandate; Heavyweight governs concentration instead of gross.
 _FREEFORM = {"autonomous", "china", "hk", "etf"}
 

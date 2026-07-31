@@ -412,8 +412,9 @@ def _risk_reliability(asof: date) -> dict:
 # ───────────────────── BRAIN BOOKS: free-form per-book self-grading ─────────────────────
 # The free-form Brain books (US/autonomous, china, hk, heavyweight) submit a COMPLETE target book
 # each trading day, logged to data/portfolios/<id>/decisions.jsonl. We grade each book's own held
-# names forward — every holding's rel_return vs the book's benchmark (SPY for US books, FXI for the
-# China/HK books) over the same 21-business-day horizon, leakage-free via `_label_name`. A holding is
+# names forward — every holding's rel_return vs the book's benchmark (SPY for US books; CSI 300 /
+# Hang Seng for the regional books) over the same 21-business-day horizon, leakage-free via
+# `_label_name`. A holding is
 # "right" iff it beat its benchmark (rel_return >= 0); confidence is the brain's stated `conviction`
 # if numeric, else 1.0. Same _summarize/_mult math, identical FLOOR/MIN_N, cold-start inert.
 
@@ -454,7 +455,7 @@ def _book_reliability(asof: date, portfolio_id: str, benchmark: str) -> dict:
 
     L5a: the binary beat-benchmark outcome is CONDITIONAL for the SPY-benchmarked US books — when the
     entry regime was NOT risk_on the bar rises to max(SPY, defensive) (`_conditional_beat`). For a
-    non-SPY benchmark (FXI books) the bogey is left as the raw benchmark (the defensive-basket sleeve
+    non-SPY benchmark (regional books) the bogey is left as the raw benchmark (the defensive-basket sleeve
     is a US construct). Rows are regime-tagged so the seat carries a `by_regime` split. The POOLED
     multiplier is unchanged in shape; only the beat-definition tightens in down-tapes."""
     tagged: list[tuple[int, float, str | None]] = []
@@ -476,7 +477,7 @@ def _book_reliability(asof: date, portfolio_id: str, benchmark: str) -> dict:
                 if not (lab and lab.get("resolved") and lab.get("rel_return") is not None):
                     continue
                 r = float(lab["rel_return"])
-                # conditional bogey only for SPY-benchmarked (US) books; FXI books keep the raw bar
+                # conditional bogey only for SPY-benchmarked (US) books; regional books keep the raw bar
                 outcome = _conditional_beat(r, d_iso, state, asof) if spy_bench else (1 if r >= 0 else 0)
                 tagged.append((outcome, _conviction_conf(h.get("conviction")), state))
     except Exception:  # noqa: BLE001 — calibration never fatal
@@ -762,11 +763,11 @@ def compute(asof: date | None = None) -> dict:
                        "timing": _fast_arm(lambda a: _summarize([]), _universe_timing),
                        "gate": _safe(_gate_reliability),
                        "risk": _safe(_risk_reliability),
-                       # free-form Brain books — graded vs their own benchmark (SPY / FXI)
+                       # free-form Brain books — graded vs their own native benchmark
                        "autonomous": _safe(lambda d: _book_reliability(d, "autonomous", "SPY")),
                        "heavyweight": _safe(lambda d: _book_reliability(d, "heavyweight", "SPY")),
-                       "china": _safe(lambda d: _book_reliability(d, "china", "FXI")),
-                       "hk": _safe(lambda d: _book_reliability(d, "hk", "FXI"))}}
+                       "china": _safe(lambda d: _book_reliability(d, "china", "000300.SS")),
+                       "hk": _safe(lambda d: _book_reliability(d, "hk", "^HSI"))}}
 
 
 def persist(asof: date | None = None) -> dict:

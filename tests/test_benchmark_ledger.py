@@ -134,9 +134,14 @@ def test_build_degrades_on_empty_series(sandbox):
 class TestRegionalBogeys:
     """Guards for the CN/HK per-book bogey overrides (W6 T4)."""
 
-    def _fxi_series(self) -> dict:
-        """Minimal FXI price series (growth curve)."""
-        return {"FXI": {"2026-01-02": 30.0, "2026-01-03": 31.5, "2026-01-04": 29.0}}
+    def _native_series(self) -> dict:
+        """Minimal native-index series for both regional books."""
+        return {
+            "000300.SS": {"2026-01-02": 4_000.0, "2026-01-03": 4_200.0,
+                          "2026-01-04": 3_900.0},
+            "^HSI": {"2026-01-02": 20_000.0, "2026-01-03": 20_500.0,
+                     "2026-01-04": 19_800.0},
+        }
 
     def test_book_bogey_overrides_are_declared(self):
         assert "china" in B.BOOK_BOGEY_OVERRIDES
@@ -145,38 +150,37 @@ class TestRegionalBogeys:
         assert "flagship" not in B.BOOK_BOGEY_OVERRIDES
         assert "autonomous" not in B.BOOK_BOGEY_OVERRIDES
 
-    def test_cn_bogey_constituent_is_priceable_proxy(self):
-        """CN bogey uses FXI (the only China-region ETF in the parquet store).  The test
-        asserts the constituent is named, not that 2800.HK or 000300.SS is used (those are
-        unpriceable today)."""
-        assert B.CN_BOGEY == ["FXI"]
-        assert B.HK_BOGEY == ["FXI"]   # same proxy until 2800.HK lands in the store
+    def test_regional_bogeys_are_native_indexes(self):
+        assert B.CN_BOGEY == ["000300.SS"]
+        assert B.HK_BOGEY == ["^HSI"]
 
     def test_build_regional_china_produces_regional_bogey(self, sandbox):
-        series = self._fxi_series()
+        series = self._native_series()
         result = B.build_regional(series, "china", asof="2026-01-04")
         assert "regional" in result["bogeys"]
         curve = result["bogeys"]["regional"]["curve"]
-        assert curve, "regional curve must be non-empty when FXI is priced"
+        assert curve, "regional curve must be non-empty when CSI 300 is priced"
+        assert result["bogeys"]["regional"]["constituents"] == ["000300.SS"]
         assert curve[min(curve)] == pytest.approx(1.0, abs=1e-5)  # inception = 1.0
         assert result["book_id"] == "china"
 
     def test_build_regional_hk_produces_regional_bogey(self, sandbox):
-        series = self._fxi_series()
+        series = self._native_series()
         result = B.build_regional(series, "hk", asof="2026-01-04")
         assert "regional" in result["bogeys"]
         curve = result["bogeys"]["regional"]["curve"]
         assert curve
+        assert result["bogeys"]["regional"]["constituents"] == ["^HSI"]
         assert result["book_id"] == "hk"
 
-    def test_build_regional_degrades_on_missing_fxi(self, sandbox):
-        """When FXI has no price data the regional bogey degrades to an empty curve (P2)."""
+    def test_build_regional_degrades_on_missing_native_index(self, sandbox):
+        """When the native index has no data the regional bogey degrades to empty (P2)."""
         result = B.build_regional({}, "china", asof="2026-01-04")
         assert result["bogeys"]["regional"]["curve"] == {}
         assert result["leaderboard"] == []   # nothing to rank
 
     def test_build_regional_leaderboard_contains_regional(self, sandbox):
-        series = self._fxi_series()
+        series = self._native_series()
         result = B.build_regional(series, "china", asof="2026-01-04")
         ids = {r["id"] for r in result["leaderboard"]}
         assert "regional" in ids
@@ -191,7 +195,7 @@ class TestRegionalBogeys:
 
     def test_build_regional_persists_under_book_subdir(self, sandbox, monkeypatch):
         monkeypatch.setattr(B, "_BENCH_DIR", sandbox)
-        series = self._fxi_series()
+        series = self._native_series()
         B.build_regional(series, "china", asof="2026-01-04")
         # file should be at sandbox/china/2026-01-04.json (NOT at sandbox/2026-01-04.json)
         assert (sandbox / "china" / "2026-01-04.json").exists()
@@ -200,7 +204,7 @@ class TestRegionalBogeys:
     def test_defensive_basket_not_imposed_on_cn_book(self, sandbox):
         """The CN/HK bogeys must NOT include the US defensive basket (XLU/XLV/XLF/XLP).
         Imposing a US sector-ETF bogey on a CNY-denominated book is category error."""
-        series = self._fxi_series()
+        series = self._native_series()
         result = B.build_regional(series, "china", asof="2026-01-04")
         for bogey in result["bogeys"].values():
             for c in bogey.get("constituents") or []:
@@ -213,7 +217,7 @@ class TestRegionalBogeys:
         hoc onto the in-memory dict AFTER persist() had already written to disk, so the on-disk
         artifact lacked bogey_is_proxy / proxy_reason."""
         import json as _json
-        series = self._fxi_series()
+        series = self._native_series()
         proxy_meta = {"bogey_is_proxy": True, "proxy_reason": "FXI proxy test"}
         B.build_regional(series, "china", asof="2026-01-04", proxy_meta=proxy_meta)
         artifact = _json.loads((sandbox / "china" / "2026-01-04.json").read_text())

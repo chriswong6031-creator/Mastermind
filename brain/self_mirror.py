@@ -160,7 +160,10 @@ def _pm_rows(asof: date) -> list[dict]:
 # recent picks went right/wrong. One row per (held name, decision date) whose window has elapsed:
 # outcome = beat benchmark, conf = stated conviction, rel = rel_return vs benchmark. Best-effort → [].
 
-_BOOK_BENCHMARK = {"autonomous": "SPY", "heavyweight": "SPY", "china": "FXI", "hk": "FXI"}
+_BOOK_BENCHMARK = {
+    "autonomous": "SPY", "heavyweight": "SPY",
+    "china": "000300.SS", "hk": "^HSI",
+}
 
 
 def _book_rows(portfolio_id: str, benchmark: str, asof: date) -> list[dict]:
@@ -199,11 +202,11 @@ def _heavyweight_rows(asof: date) -> list[dict]:
 
 
 def _china_rows(asof: date) -> list[dict]:
-    return _book_rows("china", "FXI", asof)
+    return _book_rows("china", "000300.SS", asof)
 
 
 def _hk_rows(asof: date) -> list[dict]:
-    return _book_rows("hk", "FXI", asof)
+    return _book_rows("hk", "^HSI", asof)
 
 
 _ROW_BUILDERS = {

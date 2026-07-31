@@ -57,11 +57,9 @@ Step 5 — MANDATE BREACH PENALTY
   If the book's latest mandate packet has len(breaches) > 0, apply a penalty
   factor of BREACH_PENALTY = 0.80 per breach (capped at 0.50 total).
 
-Step 6 — REGIONAL CAVEAT FLAG
-  china and hk books are included with a "proxy_bogey" flag because their active
-  returns are measured against FXI (a proxy, not the canonical index), so the
-  tilt computed for them carries additional uncertainty.  This is noted in the
-  output flags but does not change the arithmetic.
+Step 6 — REGIONAL BENCHMARKS
+  china and hk active returns arrive from their native-index lifecycle ledgers
+  (CSI 300 and Hang Seng respectively). They require no proxy-uncertainty flag.
 
 Step 7 — NORMALIZE
   weights = tilt / sum(tilt); guaranteed to sum to 1.0 over eligible books.
@@ -358,7 +356,7 @@ def _compute(
             penalty = max(_BREACH_PENALTY_FLOOR, penalty)
             tilt[bid] = tilt.get(bid, 1.0) * penalty
 
-    # ── Step 6 is informational (regional flag added to output below) ──────
+    # ── Step 6 is informational (regional lifecycle already uses native indexes) ──
 
     # ── Step 7: normalize ─────────────────────────────────────────────────
     total_tilt = sum(tilt[bid] for bid in eligible)
@@ -386,8 +384,6 @@ def _compute(
         flags: list[str] = []
         if lifecycle_missing:
             flags.append("lifecycle_artifact_missing:equal_weight_fallback")
-        if bid in _REGIONAL:
-            flags.append("proxy_bogey:active_return_z_uncertain")
         if book_states.get(bid) == STATE_PROBATION:
             flags.append("probation:half_weight_penalty")
         if book_states.get(bid) == STATE_RETIRE_REC:

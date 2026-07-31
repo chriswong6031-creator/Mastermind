@@ -9,8 +9,9 @@ This script is run MANUALLY by the orchestrator in production when the benchmark
 Two backfill actions, both idempotent and labeled:
 
   (A) PRICE SERIES BACKFILL — fills data/benchmark/_series.json with historical close prices
-      for SPY + the defensive basket (XLU/XLV/XLF/XLP) + FXI (the regional proxy), sourced from
-      the vendored yahoo parquet files at vendor/macro/data/yahoo/*.parquet.  Only dates between
+      for SPY + the defensive basket (XLU/XLV/XLF/XLP), sourced from the vendored Yahoo parquet
+      files. Native CSI 300 / Hang Seng history is hydrated by the scheduler's cached Yahoo seam
+      because those indexes are not in the parquet store. Only dates between
       ``INCEPTION`` and yesterday are backfilled; any date already present in the store is SKIPPED
       (the live-collected row is never overwritten — R8).  Each new row is tagged in a parallel
       ``data/benchmark/_series_meta.json`` file: {ticker: {date: source}} where source is
@@ -51,8 +52,8 @@ _PORTFOLIO_DIR = _ROOT / "data" / "portfolios"
 # named input from the program start).  Pass --inception to override.
 INCEPTION_DEFAULT = "2026-06-18"
 
-# All tickers the series store needs: SPY + defensive basket + FXI (regional proxy).
-_SERIES_TICKERS = ["SPY", "XLU", "XLV", "XLF", "XLP", "FXI"]
+# Parquet-backed tickers. Native regional indexes are hydrated by app.scheduler from Yahoo.
+_SERIES_TICKERS = ["SPY", "XLU", "XLV", "XLF", "XLP"]
 
 # Per-book benchmark ticker (mirrors paper_account._benchmark_for).
 _BOOK_BENCHMARK = {
@@ -60,8 +61,8 @@ _BOOK_BENCHMARK = {
     "autonomous":  "SPY",
     "heavyweight": "SPY",
     "etf":         "SPY",
-    "china":       "FXI",
-    "hk":          "FXI",
+    "china":       "000300.SS",
+    "hk":          "^HSI",
 }
 
 SOURCE_YAHOO = "backfill-yahoo-parquet"
@@ -186,6 +187,17 @@ def _derive_active_returns(book_id: str, portfolio_dir: Path | None = None) -> l
     rows = _nav_history(book_id, portfolio_dir)
     if not rows:
         return []
+    benchmark = _BOOK_BENCHMARK.get(book_id, "SPY")
+
+    def _matches_benchmark(row: dict) -> bool:
+        row_benchmark = row.get("benchmark")
+        # Unlabelled history is legacy SPY only. Regional rows without a symbol are old FXI proxy
+        # observations and must never be backfilled under a native-index label.
+        return row_benchmark == benchmark or (row_benchmark is None and benchmark == "SPY")
+
+    rows = [row for row in rows if _matches_benchmark(row)]
+    if not rows:
+        return []
     # find inception row (first row with both nav and spy_nav)
     inc_nav: Optional[float] = None
     inc_bench: Optional[float] = None
@@ -221,6 +233,7 @@ def _derive_active_returns(book_id: str, portfolio_dir: Path | None = None) -> l
             "book_id": book_id,
             "book_nav_norm": book_norm,
             "benchmark_nav_norm": bench_norm,
+            "benchmark": benchmark,
             "active_return": active,
             "source": SOURCE_NAV,
         })

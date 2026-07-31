@@ -17,16 +17,14 @@ Four bogeys for the US books, renormalized to **$1.00 at a common inception** on
                       So a cash-hoarding book in a calm up-tape still *loses* to the market (it can't
                       hide behind "but defense would have won" when defense was the wrong call).
 
-**Per-book regional bogey overrides (W6 T4)** — the CN and HK books compare against a China-market
-index proxy, NOT the US defensive basket (imposing XLV on a CNY-denominated A-share book is wrong):
+**Per-book regional bogey overrides (W6 T4)** — the CN and HK books compare against their native
+market indexes, NOT the US defensive basket (imposing XLV on a CNY-denominated A-share book is wrong):
 
-  ``china`` book → ``CN_BOGEY`` constituents (FXI, iShares China Large-Cap).
-  ``hk``    book → ``HK_BOGEY`` constituents (FXI — the only China-region ETF in the parquet store;
-                   2800.HK Tracker is not currently priced in the store).
+  ``china`` book → CSI 300 (``000300.SS``).
+  ``hk``    book → Hang Seng Index (``^HSI``).
 
-Proxy choice rationale: as of 2026-07-03 only FXI has a populated yahoo parquet history.  Both the
-china and hk registry entries already carry ``benchmark: "FXI"``.  When 2800.HK becomes priceable
-(or MCHI/ASHR are added), update ``HK_BOGEY`` here; tests guard the degrade path.
+The vendored parquet currently lacks both indexes, so the scheduler hydrates their native point
+history through the cached Yahoo benchmark-history seam before this deterministic ledger runs.
 
 ``build_regional(price_series, book_id, asof, ...)`` assembles the two bogeys relevant to a
 regional book (``regional`` + ``do_nothing``).  ``BOOK_BOGEY_OVERRIDES`` maps book_id →
@@ -55,15 +53,10 @@ DEFENSIVE_BASKET = ["XLU", "XLV", "XLF", "XLP"]
 SPY = "SPY"
 
 # ── Regional bogey constituents (W6 T4) ─────────────────────────────────────────────────────
-# CN bogey: FXI (iShares China Large-Cap, USD-listed).  The registry.benchmark("china") is also
-#   FXI.  000300.SS (CSI300 index) and MCHI/ASHR are NOT in the yahoo parquet store as of
-#   2026-07-03 — update if/when they are added.
-CN_BOGEY = ["FXI"]
-
-# HK bogey: 2800.HK (Tracker Fund of Hong Kong) is the canonical Hang Seng proxy, but it is NOT
-#   in the parquet store.  FXI is the only priceable China-region ETF today, so we fall back.
-#   When 2800.HK is added to the store update HK_BOGEY = ["2800.HK"] here.
-HK_BOGEY = ["FXI"]   # NOTE: ideally 2800.HK; update when the store carries it
+# Native regional indexes. Values are index points in their local market; the ledger renormalizes
+# each to growth-of-$1, so index level and book currency never contaminate relative performance.
+CN_BOGEY = ["000300.SS"]
+HK_BOGEY = ["^HSI"]
 
 # Mapping of book_id → regional bogey constituents.  US books have no entry (they use the
 # standard spy/defensive/regime_max suite).  Callers can inspect or override.
@@ -245,10 +238,10 @@ def build_regional(price_series: dict, book_id: str, *, asof: str,
                    proxy_meta: dict | None = None) -> dict:
     """Assemble the TWO-bogey ledger for a regional book (china / hk).
 
-    Regional books compare against their own market index proxy (``BOOK_BOGEY_OVERRIDES``), not
+    Regional books compare against their own market index (``BOOK_BOGEY_OVERRIDES``), not
     the US defensive basket.  The ledger has two bogeys:
 
-      ``regional``   — the book's market-index proxy (e.g. FXI), growth-of-$1.
+      ``regional``   — the book's native market index, growth-of-$1.
       ``do_nothing`` — the carry shadow (same semantics as in ``build``); only present when
                        ``book_curves`` supplies a ``"do_nothing"`` curve.
 
@@ -269,8 +262,8 @@ def build_regional(price_series: dict, book_id: str, *, asof: str,
     asof = str(asof)[:10]
     constituents = BOOK_BOGEY_OVERRIDES[book_id]
     label_map = {
-        "china": f"China regional bogey ({', '.join(constituents)}) — FXI proxy for CSI300",
-        "hk":    f"HK regional bogey ({', '.join(constituents)}) — FXI proxy pending 2800.HK",
+        "china": f"China regional benchmark — CSI 300 ({', '.join(constituents)})",
+        "hk":    f"HK regional benchmark — Hang Seng Index ({', '.join(constituents)})",
     }
     label = label_map.get(book_id, f"Regional bogey ({', '.join(constituents)})")
 

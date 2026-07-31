@@ -161,7 +161,7 @@ def test_daily_mark_job_one_failure_does_not_abort_others(tmp_books: Path, monke
     from portfolio import paper_account
 
     _seed_held_book("autonomous", {"AAPL": 200.0, "SPY": 500.0}, "2026-01-02")
-    _seed_held_book("china", {"AAPL": 200.0, "FXI": 30.0}, "2026-01-02")
+    _seed_held_book("china", {"AAPL": 200.0, "000300.SS": 4_000.0}, "2026-01-02")
 
     real_mark = paper_account.mark
 
@@ -171,7 +171,8 @@ def test_daily_mark_job_one_failure_does_not_abort_others(tmp_books: Path, monke
         return real_mark(prices, asof, portfolio_id=portfolio_id, benchmark=benchmark)
 
     monkeypatch.setattr(paper_account, "_current_price",
-                        lambda t: {"AAPL": 250.0, "SPY": 520.0, "FXI": 31.0}.get(t))
+                        lambda t: {"AAPL": 250.0, "SPY": 520.0,
+                                   "000300.SS": 4_100.0}.get(t))
     monkeypatch.setattr(paper_account, "mark", _flaky_mark)
     monkeypatch.setattr(scheduler, "_today_iso", lambda: "2026-01-03")
 
