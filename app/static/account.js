@@ -504,11 +504,13 @@
   function open() {
     if (!state.loaded) { render(); load(); } else render();
     scrim.classList.add('open'); panel.classList.add('open');
+    document.body.classList.add('mmacc-open');
     document.addEventListener('keydown', onEsc);
   }
   function close() {
     if (_mode !== 'standalone') return;
     scrim.classList.remove('open'); panel.classList.remove('open');
+    document.body.classList.remove('mmacc-open');
     document.removeEventListener('keydown', onEsc);
   }
   function onEsc(e) { if (e.key === 'Escape') close(); }
@@ -684,7 +686,26 @@
   '.mmacc-signin-title{font-size:15px;font-weight:800;color:var(--text,var(--ink))}' +
   '.mmacc-signin-sub{font-size:12px;color:var(--muted,var(--ink-3));line-height:1.5;margin:5px 0 12px}' +
   '.mmacc-loading{padding:26px;text-align:center;color:var(--muted,var(--ink-3))}' +
-  '@media (max-width:560px){.mmacc{top:auto;bottom:0;left:0;right:0;width:100%;max-width:none;max-height:88vh;border-radius:18px 18px 0 0;transform-origin:bottom center;transform:translateY(16px)}.mmacc.open{transform:none}.mmacc-scrim.open{background:color-mix(in srgb,var(--bg,#0f1115) 52%,transparent)}}' +
+  '@media (max-width:820px){' +
+    '.mmacc-trigger{width:44px;height:44px}' +
+    '.mmacc-x{width:44px;height:44px}' +
+    '.mmacc-input{min-height:48px;font-size:16px}' +
+    '.mmacc-mini,.mmacc-btn{min-height:44px}' +
+  '}' +
+  '@media (max-width:560px),(pointer:coarse) and (max-height:600px){' +
+    'body.mmacc-open{overflow:hidden}' +
+    'body.mmacc-open #bc-launch{opacity:0;pointer-events:none}' +
+    '.mmacc-trigger{width:44px;height:44px}' +
+    '.mmacc{top:max(12px,env(safe-area-inset-top));bottom:0;left:0;right:0;width:100%;max-width:none;max-height:calc(100dvh - max(12px,env(safe-area-inset-top)));border-radius:18px 18px 0 0;transform-origin:bottom center;transform:translateY(16px)}' +
+    '.mmacc.open{transform:none}' +
+    '.mmacc-scrim.open{background:color-mix(in srgb,var(--bg,#0f1115) 52%,transparent)}' +
+    '.mmacc-head{padding:13px max(14px,env(safe-area-inset-right)) 12px max(14px,env(safe-area-inset-left))}' +
+    '.mmacc-x{width:44px;height:44px}' +
+    '.mmacc-body{padding:12px max(15px,env(safe-area-inset-right)) calc(16px + env(safe-area-inset-bottom)) max(15px,env(safe-area-inset-left))}' +
+    '.mmacc-input{min-height:48px;font-size:16px}' +
+    '.mmacc-mini,.mmacc-btn{min-height:44px}' +
+    '.mmacc-btnrow{align-items:stretch}.mmacc-btnrow .mmacc-btn{flex:1}' +
+  '}' +
   '@media (prefers-reduced-motion:reduce){.mmacc{transition:opacity .15s ease,visibility 0s linear .15s;transform:none}.mmacc.open{transform:none;transition:opacity .15s ease}.mmacc-field{transition:none}}';
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);

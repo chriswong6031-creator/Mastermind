@@ -9,6 +9,8 @@ PORTFOLIO_DESK_HTML = (ROOT / "app" / "static" / "portfolio.html").read_text()
 MARKET_VIEW_HTML = (ROOT / "app" / "static" / "market_view.html").read_text()
 AGENDA_HTML = (ROOT / "app" / "static" / "agenda.html").read_text()
 THEME = (ROOT / "app" / "static" / "theme.css").read_text()
+CHAT = (ROOT / "app" / "static" / "chat.js").read_text()
+ACCOUNT = (ROOT / "app" / "static" / "account.js").read_text()
 
 
 def test_dashboard_omits_macro_readiness_posture_and_provenance_clutter() -> None:
@@ -78,6 +80,61 @@ def test_institutional_shell_is_shared_across_supporting_workspaces() -> None:
 
     assert ".mm-product-bar" in THEME
     assert ".mm-page-heading" in THEME
+
+
+def test_every_page_uses_safe_area_aware_mobile_viewport() -> None:
+    for page in (HTML, PORTFOLIO_DESK_HTML, MARKET_VIEW_HTML, AGENDA_HTML):
+        assert 'viewport-fit=cover' in page
+
+
+def test_mobile_navigation_fits_without_clipped_horizontal_rails() -> None:
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in THEME
+    assert ".mm-product-links a {" in THEME
+    assert "min-height: 44px" in THEME
+
+    institutional = HTML.index("/* Command rail: deliberately in document flow.")
+    mobile_nav = HTML.index("@media (max-width: 820px)", institutional)
+    mobile_slice = HTML[mobile_nav : mobile_nav + 2600]
+    assert "body.page-mm .mm-nav-tabs" in mobile_slice
+    assert "display: grid" in mobile_slice
+    assert "grid-template-columns: repeat(2, minmax(0, 1fr))" in mobile_slice
+    assert "body.page-mm .mm-nav-tab" in mobile_slice
+    assert "min-height: 44px" in mobile_slice
+
+
+def test_mobile_portfolio_switch_reveals_the_active_book() -> None:
+    assert "function revealActivePortfolioTab()" in HTML
+    assert "host.querySelector('.mm-pf-tab.active')" in HTML
+    assert "active.offsetLeft - (host.clientWidth - active.offsetWidth) / 2" in HTML
+    assert "requestAnimationFrame(revealActivePortfolioTab)" in HTML
+
+
+def test_mobile_forms_dialogs_and_tables_are_touch_ready() -> None:
+    assert "body.page-mm #mm-thesis-modal" in HTML
+    assert "min-height: 100dvh" in HTML
+    assert "body.page-mm .mm-sd-unit-btn" in HTML
+    assert "min-width: 44px" in HTML
+    assert "Swipe horizontally to view the full schedule" in HTML
+
+    assert "Swipe horizontally to view all position fields" in PORTFOLIO_DESK_HTML
+    assert "table.pos-table { min-width: 920px; }" in PORTFOLIO_DESK_HTML
+    assert "body.page-pf.pf-modal-open { overflow: hidden; }" in PORTFOLIO_DESK_HTML
+    assert 'evt.target === evt.currentTarget' in PORTFOLIO_DESK_HTML
+
+    assert "Swipe horizontally to inspect every signal field" in MARKET_VIEW_HTML
+    assert "-webkit-overflow-scrolling: touch" in MARKET_VIEW_HTML
+
+
+def test_mobile_overlays_respect_safe_areas_and_touch_targets() -> None:
+    assert "height:100dvh" in CHAT
+    assert "#bc-hd button,#bc-sheet .sh-top button{width:44px;height:44px;}" in CHAT
+    assert "env(safe-area-inset-bottom)" in CHAT
+    assert "#bc-in{min-height:32px;font-size:16px;}" in CHAT
+
+    assert ".mmacc-trigger{width:44px;height:44px}" in ACCOUNT
+    assert ".mmacc-x{width:44px;height:44px}" in ACCOUNT
+    assert ".mmacc-input{min-height:48px;font-size:16px}" in ACCOUNT
+    assert "document.body.classList.add('mmacc-open')" in ACCOUNT
 
 
 def test_manual_ledger_is_portfolio_focused() -> None:

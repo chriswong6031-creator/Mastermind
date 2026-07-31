@@ -47,6 +47,14 @@ def test_dashboard_serves_html():
     assert "MASTERMIND" in r.text
 
 
+def test_account_script_serves_javascript():
+    client = _client()
+    r = client.get("/account.js")
+    assert r.status_code == 200
+    assert "application/javascript" in r.headers.get("content-type", "")
+    assert "Mastermind user profile" in r.text
+
+
 def test_market_view_page_serves_html():
     """The E1.2 mirror page (/market_view) is a standalone static page that fetches the artifact
     client-side. Intent-only: assert it serves HTML with the render root, never a market state."""
