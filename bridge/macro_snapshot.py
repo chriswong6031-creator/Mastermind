@@ -30,6 +30,38 @@ LIVE_URL = "http://localhost:8000"
 # rejected list, but the static snapshot only needs a representative head + the count.
 _REJECTED_HEAD = 20
 
+# RUL-CL-6b BRIDGE law (macro repo config/ruling_graph.yml site_privacy_tokens) bans
+# held-book/fill economics on any public site/ path, and the macro FB-R13 guard
+# (scripts/check_private_boundary.py) key-scans the shipped snapshot on every CI run.
+# The public snapshot shows the book's composition and reasoning — tickers, weights,
+# verdicts, theses, lifecycle metadata — never fill economics (cost basis, entry/current
+# prices, dollar values, share counts). Those stay on the authenticated live dashboard.
+# WHITELIST, not blacklist, so upstream latest.json additions stay private by default.
+# (37 cost_basis keys sat on the public macro main for weeks before macro PR #4209
+# surfaced them, 2026-08-01 — the projection below is the source-side fix.)
+_PUBLIC_POSITION_KEYS = (
+    "ticker", "name", "theme_id", "sleeve", "group", "venue", "stage",
+    "weight", "verdict", "conviction", "rationale", "rs_pctile",
+    "opened_at", "held_days", "pending",
+    "thesis_id", "thesis_full", "research", "confluence", "size_stage",
+    "retained", "time_stop_by", "entry_levels",
+)
+
+# Pending orders queue real share counts (portfolio/paper_account.py); only the
+# intent is public.
+_PUBLIC_PENDING_ORDER_KEYS = (
+    "ticker", "name", "side", "status", "sleeve", "verdict", "note",
+)
+
+
+def _project(rows: Any, keys: tuple[str, ...]) -> list[dict]:
+    """Project a list of dicts onto a public key whitelist (RUL-CL-6b)."""
+    out: list[dict] = []
+    for row in rows if isinstance(rows, list) else []:
+        if isinstance(row, dict):
+            out.append({k: row[k] for k in keys if k in row})
+    return out
+
 
 def _default_dest() -> Path:
     """The macro repo's site/ dir, reached via the vendor/macro symlink (or pinned clone)."""
@@ -75,9 +107,9 @@ def _book(portfolio_id: str) -> dict | None:
         "cash": latest.get("cash"),
         "regime": latest.get("regime"),
         "sleeves": latest.get("sleeves"),
-        "positions": latest.get("positions") or [],
+        "positions": _project(latest.get("positions"), _PUBLIC_POSITION_KEYS),
         "decisions": latest.get("decisions") or [],
-        "pending_orders": latest.get("pending_orders") or [],
+        "pending_orders": _project(latest.get("pending_orders"), _PUBLIC_PENDING_ORDER_KEYS),
         "research_held": latest.get("research_held") or [],
         "track_record": latest.get("track_record"),
         "rejected": rejected[:_REJECTED_HEAD],
